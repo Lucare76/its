@@ -155,6 +155,8 @@ type MedmarPreflightResult = {
     | "unsupported_passenger_type"
     // Fase 2B.5: bambino/infant classificati e prezzati correttamente, ma emissione volutamente ancora bloccata (vedi passengers/ticket_breakdown sotto).
     | "passenger_payload_pending_verification"
+    // Fase 2B.8: controllo temporale ITS proprio (corsa già partita / ordine A/R stesso giorno) — vedi rendering leg sotto.
+    | "course_already_departed" | "invalid_same_day_return_order"
     | "medmar_unavailable" | "medmar_auth_expired" | "error";
   customer_name: string | null;
   pratica: string | null;
@@ -1256,10 +1258,15 @@ export default function BigliettiMedmarPage() {
               {([["outward", "Andata"], ["return", "Ritorno"]] as const).map(([field, label]) => {
                 const leg = verifyModal.result[field];
                 if (!leg) return null;
+                const alreadyDeparted = verifyModal.result.warnings.some((w) => w.code === "course_already_departed" && w.leg === field);
                 return (
-                  <div key={field} className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs">
+                  <div key={field} className={`rounded-lg border px-3 py-2 text-xs ${alreadyDeparted ? "bg-rose-50 border-rose-200" : "bg-slate-50 border-slate-200"}`}>
                     <p className="font-semibold text-slate-700">{label} — {leg.route ? `${leg.route.from} → ${leg.route.to}` : "tratta non determinata"}</p>
-                    <p className="text-slate-500">{leg.date} · richiesto {leg.requested_time ?? "—"} · corsa {leg.matched_departure_time ?? "non confermata"}{leg.vessel ? ` · ${leg.vessel}` : ""}</p>
+                    {alreadyDeparted ? (
+                      <p className="font-semibold text-rose-700">Corsa già partita</p>
+                    ) : (
+                      <p className="text-slate-500">{leg.date} · richiesto {leg.requested_time ?? "—"} · corsa {leg.matched_departure_time ?? "non confermata"}{leg.vessel ? ` · ${leg.vessel}` : ""}</p>
+                    )}
                     {leg.id_corsa != null && <p className="text-slate-400">id_corsa: {leg.id_corsa} {leg.source === "local_fallback" && "(fallback locale, solo diagnostico)"}</p>}
                   </div>
                 );

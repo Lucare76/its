@@ -21,6 +21,10 @@ export type MedmarPreflightStatus =
    * passengers/ticket_breakdown per i dati comunque disponibili.
    */
   | "passenger_payload_pending_verification"
+  /** Fase 2B.8 — una o entrambe le gambe risolte hanno partenza_datetime (Europe/Rome) <= now(): mai emettibile, indipendentemente da vendibile/flag_chiuso/flag_sospeso Medmar. */
+  | "course_already_departed"
+  /** Fase 2B.8 — A/R nello stesso giorno con ritorno non strettamente successivo all'andata (orario nave, non pickup): mai emettibile. */
+  | "invalid_same_day_return_order"
   | "medmar_unavailable"
   | "medmar_auth_expired"
   /** MEDMAR_EMAIL/MEDMAR_PASSWORD (o, in compatibilità, MEDMAR_SESSION_TOKEN) assenti o a metà configurati: mai un crash, sempre can_issue=false. */

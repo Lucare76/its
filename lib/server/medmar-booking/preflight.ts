@@ -16,6 +16,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { matchCourseByRouteAndTime } from "./course-matcher";
+import { romeDateTimeToUtc, formatItalianDateTime } from "./departure-datetime";
 import { resolveLegRouteCode } from "./port-resolution";
 import { mapTariffFromTicketMemory } from "./ticket-mapper";
 import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode } from "./route-mapping";
@@ -205,7 +206,7 @@ function findStructuralMismatches(c: CorsaMedmarRaw, routeCode: MedmarTicketRout
   return mismatches;
 }
 
-type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "route_mismatch" | "manual_review" | "medmar_unavailable" | "medmar_auth_expired" | "medmar_auth_not_configured";
+type LiveLegStatus = "ok" | "no_match" | "ambiguous" | "route_mismatch" | "manual_review" | "already_departed" | "medmar_unavailable" | "medmar_auth_expired" | "medmar_auth_not_configured";
 
 /**
  * Fase 2B.6 — vero solo per il "modello single-row" (vedi commento su
@@ -238,7 +239,8 @@ function hasEmbeddedReturnData(row: MedmarPreflightServiceRow): boolean {
  */
 async function resolveEmbeddedReturnLeg(
   row: MedmarPreflightServiceRow,
-  warnings: MedmarPreflightWarning[]
+  warnings: MedmarPreflightWarning[],
+  now: Date
 ): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
   if (row.booking_service_kind === "formula_medmar_pozzuoli") {
     warnings.push({
@@ -282,13 +284,14 @@ async function resolveEmbeddedReturnLeg(
     orario_barca: row.orario_barca ?? row.return_time ?? null,
   };
 
-  return resolveLegLive(syntheticDepartureRow, "return", warnings);
+  return resolveLegLive(syntheticDepartureRow, "return", warnings, now);
 }
 
 async function resolveLegLive(
   row: MedmarPreflightServiceRow,
   direction: "outward" | "return",
-  warnings: MedmarPreflightWarning[]
+  warnings: MedmarPreflightWarning[],
+  now: Date
 ): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
   const resolution = resolveLegRouteCode({
     bookingServiceKind: row.booking_service_kind,
@@ -432,6 +435,19 @@ async function resolveLegLive(
       });
     }
 
+    // Fase 2B.8 — controllo temporale ITS proprio: mai fidarsi solo di
+    // vendibile=1/flag_chiuso/flag_sospeso Medmar. Usa SEMPRE l'orario nave
+    // Medmar risolto (only.partenza_ora), mai un orario di pickup/transfer.
+    const departureDatetime = romeDateTimeToUtc(row.date, only.partenza_ora ?? requestedFerryTime.normalized);
+    if (departureDatetime && departureDatetime.getTime() <= now.getTime()) {
+      warnings.push({
+        code: "course_already_departed",
+        leg: direction,
+        message: `La corsa Medmar delle ${formatItalianDateTime(row.date, only.partenza_ora ?? requestedFerryTime.normalized)} è già partita.`,
+      });
+      return { leg, liveStatus: "already_departed" };
+    }
+
     return { leg, liveStatus: "ok" };
   } catch (err) {
     if (err instanceof MedmarNotConfiguredError) {
@@ -456,7 +472,8 @@ async function resolveLegLive(
 export async function runMedmarPreflight(
   admin: SupabaseClient,
   tenantId: string,
-  serviceIds: string[]
+  serviceIds: string[],
+  now: Date = new Date()
 ): Promise<MedmarPreflightResult> {
   const warnings: MedmarPreflightWarning[] = [];
 
@@ -532,11 +549,11 @@ export async function runMedmarPreflight(
   const embeddedReturnRow =
     rows.length === 1 && arrivalRow && !departureRow && hasEmbeddedReturnData(arrivalRow) ? arrivalRow : null;
 
-  const outwardOutcome = arrivalRow ? await resolveLegLive(arrivalRow, "outward", warnings) : null;
+  const outwardOutcome = arrivalRow ? await resolveLegLive(arrivalRow, "outward", warnings, now) : null;
   const returnOutcome = departureRow
-    ? await resolveLegLive(departureRow, "return", warnings)
+    ? await resolveLegLive(departureRow, "return", warnings, now)
     : embeddedReturnRow
-      ? await resolveEmbeddedReturnLeg(embeddedReturnRow, warnings)
+      ? await resolveEmbeddedReturnLeg(embeddedReturnRow, warnings, now)
       : null;
 
   const legStatuses = [outwardOutcome?.liveStatus, returnOutcome?.liveStatus].filter((s): s is LiveLegStatus => Boolean(s));
@@ -569,6 +586,37 @@ export async function runMedmarPreflight(
     });
   }
 
+  // Fase 2B.8 — Regola 2: il ritorno deve partire strettamente dopo l'andata
+  // (orario nave Medmar risolto, mai il pickup). Valutato solo quando
+  // ENTRAMBE le gambe sono "ok" (una gamba already_departed non ha
+  // matched_departure_time qui, quindi il confronto è naturalmente saltato).
+  // La data prevale sull'orario: return.date > outward.date è sempre valido
+  // senza confrontare gli orari; return.date < outward.date è un ordine
+  // impossibile (bloccante) indipendentemente dagli orari; return.date ===
+  // outward.date richiede il confronto orario stretto (> outward).
+  let returnOrderInvalid = false;
+  if (outwardOutcome?.liveStatus === "ok" && returnOutcome?.liveStatus === "ok") {
+    const outwardDate = outwardOutcome.leg.date;
+    const returnDate = returnOutcome.leg.date;
+    if (returnDate < outwardDate) {
+      returnOrderInvalid = true;
+      warnings.push({
+        code: "invalid_same_day_return_order",
+        message: `Il ritorno del ${returnDate} precede la data di andata del ${outwardDate}: ordine impossibile.`,
+      });
+    } else if (returnDate === outwardDate) {
+      const outwardDeparture = romeDateTimeToUtc(outwardDate, outwardOutcome.leg.matched_departure_time);
+      const returnDeparture = romeDateTimeToUtc(returnDate, returnOutcome.leg.matched_departure_time);
+      if (outwardDeparture && returnDeparture && returnDeparture.getTime() <= outwardDeparture.getTime()) {
+        returnOrderInvalid = true;
+        warnings.push({
+          code: "invalid_same_day_return_order",
+          message: `Il ritorno delle ${formatItalianDateTime(returnDate, returnOutcome.leg.matched_departure_time).split(" del ")[0]} precede l'andata delle ${formatItalianDateTime(outwardDate, outwardOutcome.leg.matched_departure_time).split(" del ")[0]}.`,
+        });
+      }
+    }
+  }
+
   let status: MedmarPreflightResult["status"];
   if (legStatuses.includes("medmar_auth_not_configured")) status = "medmar_auth_not_configured";
   else if (legStatuses.includes("medmar_auth_expired")) status = "medmar_auth_expired";
@@ -577,6 +625,8 @@ export async function runMedmarPreflight(
   else if (legStatuses.includes("no_match")) status = "no_match";
   else if (legStatuses.includes("ambiguous")) status = "ambiguous";
   else if (legStatuses.includes("manual_review")) status = "manual_review";
+  else if (legStatuses.includes("already_departed")) status = "course_already_departed";
+  else if (returnOrderInvalid) status = "invalid_same_day_return_order";
   else if (legRouteMismatch) status = "manual_review";
   else status = "ok";
 

@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { matchCourseByRouteAndTime } from "@/lib/server/medmar-booking/course-matcher";
 import * as medmarClient from "@/lib/server/medmar-booking/client";
 import * as routeMapping from "@/lib/server/medmar-booking/route-mapping";
 import { MedmarNotConfiguredError, MedmarAuthFailedError } from "@/lib/server/medmar-booking/auth";
+import { romeDateTimeToUtc } from "@/lib/server/medmar-booking/departure-datetime";
 
 const TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SVC_ARR = "s1111111-1111-4111-8111-111111111111";
@@ -123,12 +124,23 @@ function tassaSbarcoRow(overrides: Row = {}): Row {
 const AR_TARIFF_ROW = arTariffRow();
 const TASSA_SBARCO_ROW = tassaSbarcoRow();
 
+// Fase 2B.8 — orologio globale congelato PRIMA di tutte le date fixture del
+// file (la più vecchia è 2026-08-18): il nuovo controllo "corsa già partita"
+// usa `now = new Date()` di default in runMedmarPreflight, quindi senza
+// questo freeze i test esistenti (che non passano `now` esplicitamente)
+// diventerebbero fragili rispetto al passare del tempo reale.
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-17T10:00:00+02:00"));
   vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReset();
   vi.mocked(routeMapping.getExpectedPortsForRouteCode).mockReset().mockReturnValue(null);
   vi.mocked(routeMapping.isMirrorRouteCode).mockReset().mockReturnValue(true);
   vi.mocked(medmarClient.fetchCorseReadOnly).mockReset();
   vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockReset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("course-matcher — matchCourseByRouteAndTime (solo diagnostico in Fase 1.5)", () => {
@@ -710,6 +722,45 @@ describe("runMedmarPreflight — Fase 2G: A/R con porto isolano diverso tra le g
     expect(result.status).toBe("manual_review");
     expect(result.can_issue).toBe(false);
     expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(true);
+  });
+
+  it("7. stesso mainland, porto isolano diverso, MA ritorno prima dell'andata (stesso giorno) -> resta bloccato (invalid_same_day_return_order ha priorità sulla relaxation)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 53 : route === "ischia_pozzuoli" ? 14 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 53 ? [corsa(53, 713, "2026-08-25", "17:00", 44, 2, "POZZUOLI", "CASAMICCIOLA")]
+        : idTratta === 14 ? [corsa(14, 714, "2026-08-25", "08:00", 41, 44, "ISCHIA", "POZZUOLI")]
+        : []
+    );
+    const now = new Date("2026-08-24T06:00:00.000Z");
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-25", time: "17:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Ischia Porto", date: "2026-08-25", time: "10:00", orario_barca: "08:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP], now
+    );
+    expect(result.status).toBe("invalid_same_day_return_order");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("8. stesso mainland, porto isolano diverso, MA corsa di andata già partita -> resta bloccato (course_already_departed ha priorità sulla relaxation)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 53 : route === "ischia_pozzuoli" ? 14 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 53 ? [corsa(53, 715, "2026-08-25", "08:00", 44, 2, "POZZUOLI", "CASAMICCIOLA")]
+        : idTratta === 14 ? [corsa(14, 716, "2026-08-28", "17:00", 41, 44, "ISCHIA", "POZZUOLI")]
+        : []
+    );
+    const now = new Date("2026-08-25T20:00:00.000Z"); // dopo le 08:00 del 25/08 -> andata già partita
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Ischia Porto", date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP], now
+    );
+    expect(result.status).toBe("course_already_departed");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "course_already_departed")).toBe(true);
   });
 });
 
@@ -1426,5 +1477,233 @@ describe("runMedmarPreflight — nessuna chiamata mutativa", () => {
   it("sensitivity: nessun path contenente 'prenotazioni' è mai raggiungibile tramite assertReadOnlyPath", () => {
     expect(() => medmarClient.assertReadOnlyPath("/prenotazioni")).toThrow(medmarClient.MedmarMutationBlockedError);
     expect(() => medmarClient.assertReadOnlyPath("/prenotazioni/lock-disponibilita")).toThrow(medmarClient.MedmarMutationBlockedError);
+  });
+});
+
+// Fase 2B.8 — MEDMAR VALIDAZIONE TEMPORALE CORSE: corse già partite + ordine
+// A/R stesso giorno. `now` è sempre passato esplicitamente a
+// runMedmarPreflight (4° argomento) cosi' ogni test è deterministico e
+// indipendente dall'orologio reale della macchina che esegue la suite.
+describe("runMedmarPreflight — Fase 2B.8 Regola 1: corsa già partita", () => {
+  function napoliCorsa(overrides: Row = {}): Row {
+    return {
+      id_corsa: 900100, id_tratta: 59, partenza_data: "2026-08-19", partenza_ora: "08:40",
+      flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41,
+      porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA",
+      ...overrides,
+    };
+  }
+
+  it("1. oggi, corsa futura -> OK (can_issue true, nessun warning course_already_departed)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([napoliCorsa()]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const now = romeDateTimeToUtc("2026-08-19", "08:00")!;
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ date: "2026-08-19", time: "08:40" })]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "course_already_departed")).toBe(false);
+  });
+
+  it("2. oggi, corsa già partita -> BLOCCO (status/can_issue/warning/messaggio corretti)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    // flag_chiuso=0/flag_sospeso=0 (corsa "vendibile" secondo Medmar): il
+    // blocco deve arrivare SOLO dal controllo temporale ITS, non da questi flag.
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([napoliCorsa()]);
+
+    const now = romeDateTimeToUtc("2026-08-19", "20:00")!;
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ date: "2026-08-19", time: "08:40" })]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("course_already_departed");
+    expect(result.can_issue).toBe(false);
+    const warn = result.warnings.find((w) => w.code === "course_already_departed");
+    expect(warn?.leg).toBe("outward");
+    expect(warn?.message).toBe("La corsa Medmar delle 08:40 del 19/08/2026 è già partita.");
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("3. oggi, corsa esattamente all'ora corrente (departure_datetime === now, confine <=) -> BLOCCO", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([napoliCorsa()]);
+
+    const now = romeDateTimeToUtc("2026-08-19", "08:40:00")!;
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ date: "2026-08-19", time: "08:40" })]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("course_already_departed");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("4. corsa domani con lo stesso orario di oggi -> OK", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([napoliCorsa({ partenza_data: "2026-08-20" })]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const now = romeDateTimeToUtc("2026-08-19", "08:40")!;
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ date: "2026-08-20", time: "08:40" })]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+  });
+});
+
+describe("runMedmarPreflight — Fase 2B.8 Regola 2: ordine A/R (stesso giorno e giorni diversi)", () => {
+  function corsaFor(idTratta: 59 | 47, date: string, time: string): Row {
+    return idTratta === 59
+      ? { id_corsa: 900200, id_tratta: 59, partenza_data: date, partenza_ora: time, flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" }
+      : { id_corsa: 900300, id_tratta: 47, partenza_data: date, partenza_ora: time, flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 41, id_porto_arrivo: 1, porto_partenza: "ISCHIA", porto_arrivo: "NAPOLI", nave: "MEDMAR GIULIA" };
+  }
+
+  function setupLegs(outward: { date: string; time: string }, ret: { date: string; time: string }) {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59 ? [corsaFor(59, outward.date, outward.time)] : idTratta === 47 ? [corsaFor(47, ret.date, ret.time)] : []
+    );
+    return fakeAdmin([
+      arrivalRow({ date: outward.date, time: outward.time }),
+      departureRow({ date: ret.date, time: ret.time, orario_barca: ret.time, booking_service_kind: "formula_medmar_napoli", meeting_point: null }),
+    ]);
+  }
+
+  it("5. andata 08:40 / ritorno 10:35 (stesso giorno) -> OK", async () => {
+    const admin = setupLegs({ date: "2026-08-19", time: "08:40" }, { date: "2026-08-19", time: "10:35" });
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const now = romeDateTimeToUtc("2026-08-19", "06:00")!;
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP], now);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "invalid_same_day_return_order")).toBe(false);
+  });
+
+  it("6. andata 10:35 / ritorno 08:40 (stesso giorno, ritorno prima dell'andata) -> BLOCCO", async () => {
+    const admin = setupLegs({ date: "2026-08-19", time: "10:35" }, { date: "2026-08-19", time: "08:40" });
+
+    const now = romeDateTimeToUtc("2026-08-19", "06:00")!;
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP], now);
+
+    expect(result.status).toBe("invalid_same_day_return_order");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "invalid_same_day_return_order")).toBe(true);
+  });
+
+  it("7. andata 10:35 / ritorno 10:35 (stesso orario, stesso giorno) -> BLOCCO", async () => {
+    const admin = setupLegs({ date: "2026-08-19", time: "10:35" }, { date: "2026-08-19", time: "10:35" });
+
+    const now = romeDateTimeToUtc("2026-08-19", "06:00")!;
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP], now);
+
+    expect(result.status).toBe("invalid_same_day_return_order");
+    expect(result.can_issue).toBe(false);
+  });
+
+  it("8. andata 08:40 / ritorno 23:59 (stesso giorno) -> OK", async () => {
+    const admin = setupLegs({ date: "2026-08-19", time: "08:40" }, { date: "2026-08-19", time: "23:59" });
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const now = romeDateTimeToUtc("2026-08-19", "06:00")!;
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP], now);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+  });
+
+  it("9. andata oggi 17:00 / ritorno domani 08:40 (giorni diversi, la data prevale sull'orario) -> OK", async () => {
+    const admin = setupLegs({ date: "2026-08-19", time: "17:00" }, { date: "2026-08-20", time: "08:40" });
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    const now = romeDateTimeToUtc("2026-08-19", "06:00")!;
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP], now);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "invalid_same_day_return_order")).toBe(false);
+  });
+
+  it("10. andata domani / ritorno oggi -> BLOCCO perché ordine date impossibile (nessun confronto orario, la data basta)", async () => {
+    const admin = setupLegs({ date: "2026-08-20", time: "08:40" }, { date: "2026-08-19", time: "17:00" });
+
+    const now = romeDateTimeToUtc("2026-08-19", "06:00")!;
+    const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR, SVC_DEP], now);
+
+    expect(result.status).toBe("invalid_same_day_return_order");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "invalid_same_day_return_order")).toBe(true);
+  });
+});
+
+describe("runMedmarPreflight — Fase 2B.8: timezone Europe/Rome (nessun confronto UTC naïve)", () => {
+  it("11. corsa a cavallo di mezzanotte (00:30 del 20/08 a Roma = 22:30 UTC del 19/08): 30 minuti prima -> OK", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { id_corsa: 900400, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "00:30", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
+    ]);
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+
+    // Istante UTC reale e corretto della corsa (00:30 CEST = 22:30 UTC del giorno prima): 2026-08-19T22:30:00Z.
+    const now = new Date("2026-08-19T22:00:00.000Z"); // 30 minuti PRIMA dell'istante corretto
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ date: "2026-08-20", time: "00:30" })]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+  });
+
+  it("12. stessa corsa a cavallo di mezzanotte: 30 minuti dopo l'istante UTC corretto -> BLOCCO (un confronto UTC naïve sul solo campo 'data' darebbe invece OK, per errore)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { id_corsa: 900401, id_tratta: 59, partenza_data: "2026-08-20", partenza_ora: "00:30", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
+    ]);
+
+    // 23:00Z del 19/08: successivo all'istante UTC corretto (22:30Z) ma
+    // ANTECEDENTE a "2026-08-20T00:30:00Z" — il valore che si otterrebbe
+    // trattando erroneamente data+ora come se fossero già UTC. Solo
+    // un'implementazione Europe/Rome-aware (non naïve) blocca qui.
+    const now = new Date("2026-08-19T23:00:00.000Z");
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ date: "2026-08-20", time: "00:30" })]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("course_already_departed");
+    expect(result.can_issue).toBe(false);
+  });
+});
+
+describe("runMedmarPreflight — Fase 2B.8: usa l'orario nave Medmar, mai il pickup", () => {
+  it("13. pickup 13:15 / nave 15:00 -> il controllo temporale usa 15:00 (orario Medmar live, con secondi), non l'orario richiesto ITS troncato", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { id_corsa: 900500, id_tratta: 59, partenza_data: "2026-08-19", partenza_ora: "15:00:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
+    ]);
+
+    // services.time = "15:00" qui rappresenta l'orario nave richiesto (mai il
+    // pickup: vedi commento su MedmarPreflightServiceRow.time in preflight.ts).
+    const row = arrivalRow({ date: "2026-08-19", time: "15:00" });
+    const now = romeDateTimeToUtc("2026-08-19", "16:00")!; // dopo le 15:00 -> già partita
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR], now);
+
+    expect(result.status).toBe("course_already_departed");
+    const warn = result.warnings.find((w) => w.code === "course_already_departed");
+    // Il messaggio riflette l'orario Medmar live risolto (only.partenza_ora), non un valore diverso.
+    expect(warn?.message).toBe("La corsa Medmar delle 15:00 del 19/08/2026 è già partita.");
+  });
+
+  it("14. modificare un campo non di nave (meeting_point, tipo 'pickup') non cambia l'esito della validazione nave", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([
+      { id_corsa: 900600, id_tratta: 59, partenza_data: "2026-08-19", partenza_ora: "15:00:00", flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: 1, id_porto_arrivo: 41, porto_partenza: "NAPOLI", porto_arrivo: "ISCHIA", nave: "MEDMAR GIULIA" },
+    ]);
+    const now = romeDateTimeToUtc("2026-08-19", "16:00")!;
+
+    const rowA = arrivalRow({ date: "2026-08-19", time: "15:00", meeting_point: "Hotel Central, ore 13:15" });
+    const resultA = await runMedmarPreflight(fakeAdmin([rowA]), TENANT_A, [SVC_ARR], now);
+
+    const rowB = arrivalRow({ date: "2026-08-19", time: "15:00", meeting_point: "Molo Beverello, ore 13:45" });
+    const resultB = await runMedmarPreflight(fakeAdmin([rowB]), TENANT_A, [SVC_ARR], now);
+
+    expect(resultA.status).toBe("course_already_departed");
+    expect(resultB.status).toBe("course_already_departed");
+    expect(resultA.warnings.find((w) => w.code === "course_already_departed")?.message).toBe(
+      resultB.warnings.find((w) => w.code === "course_already_departed")?.message
+    );
   });
 });
