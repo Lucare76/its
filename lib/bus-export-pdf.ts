@@ -81,18 +81,21 @@ function stopOrderMap(stops: BusPdfStop[] = []) {
 }
 
 function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = [], direction: Direction = "arrival") {
+  const orders = stopOrderMap(stops);
   if (direction === "departure") {
     return [...allocations].sort((a, b) => {
-      const timeA = time5(a.hotel_pickup_time);
-      const timeB = time5(b.hotel_pickup_time);
-      if (timeA !== timeB) return timeA.localeCompare(timeB);
+      const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
+      const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      const stopA = a.stop_name.toUpperCase();
+      const stopB = b.stop_name.toUpperCase();
+      if (stopA !== stopB) return stopA.localeCompare(stopB, "it");
       const hotelA = (a.hotel_name ?? "").toUpperCase();
       const hotelB = (b.hotel_name ?? "").toUpperCase();
       if (hotelA !== hotelB) return hotelA.localeCompare(hotelB);
       return a.customer_name.localeCompare(b.customer_name, "it");
     });
   }
-  const orders = stopOrderMap(stops);
   return [...allocations].sort((a, b) => {
     const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
     const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
@@ -104,7 +107,8 @@ function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] 
   });
 }
 
-function groupKey(alloc: BusPdfAllocation) {
+function groupKey(alloc: BusPdfAllocation, direction: Direction) {
+  if (direction === "departure") return alloc.stop_name.toUpperCase();
   return `${time5(alloc.stop_pickup_time || alloc.hotel_pickup_time)}|${alloc.stop_name.toUpperCase()}`;
 }
 
@@ -116,7 +120,7 @@ function buildRows(input: BusPdfInput) {
   return {
     totalPax: sorted.reduce((sum, alloc) => sum + alloc.pax_assigned, 0),
     rows: sorted.map((alloc, index) => {
-      const key = groupKey(alloc);
+      const key = groupKey(alloc, input.direction);
       const shouldRenderStop = key !== previousKey;
       previousKey = key;
       total += alloc.pax_assigned;
@@ -132,6 +136,11 @@ function buildRows(input: BusPdfInput) {
 
 function buildDepartureUnloadRows(input: BusPdfInput) {
   if (input.direction !== "departure") return "";
+  const paxByStop = new Map<string, number>();
+  for (const alloc of input.allocations) {
+    const key = alloc.stop_name.toUpperCase();
+    paxByStop.set(key, (paxByStop.get(key) ?? 0) + alloc.pax_assigned);
+  }
   const usedStopNames = new Set(input.allocations.map((alloc) => alloc.stop_name.toUpperCase()));
   const stops = (input.stops ?? [])
     .filter((stop) => usedStopNames.has(stop.stop_name.toUpperCase()))
@@ -141,7 +150,8 @@ function buildDepartureUnloadRows(input: BusPdfInput) {
 
   const rows = stops.map((stop) => {
     const label = stop.pickup_note ? `${stop.stop_name} - ${stop.pickup_note}` : stop.stop_name;
-    return `<tr class="unload-row"><td colspan="8">${escapeHtml(label)}</td></tr>`;
+    const pax = paxByStop.get(stop.stop_name.toUpperCase()) ?? 0;
+    return `<tr class="unload-row"><td colspan="8"><div class="unload-line"><span>${escapeHtml(label)}</span><strong>${pax} pax</strong></div></td></tr>`;
   }).join("");
 
   return `<tr class="spacer-row"><td colspan="8"></td></tr><tr class="unload-title"><td colspan="8">SCARICO</td></tr>${rows}`;
@@ -291,6 +301,27 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
       font-weight: 700;
       text-align: left;
       background: #f8fff9;
+    }
+    .unload-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+    }
+    .unload-line span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .unload-line strong {
+      min-width: 48px;
+      border-radius: 999px;
+      background: #dcfce7;
+      color: #047857;
+      padding: 3px 8px;
+      text-align: center;
+      font-size: 10px;
+      white-space: nowrap;
     }
     .footer {
       display: grid;

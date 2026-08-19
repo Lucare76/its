@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     // Passeggeri ordinati per stop_order
     const { data: allocs } = await auth.admin
       .from("bus_ischia_dist_allocations")
-      .select("customer_name, hotel_name, pax_assigned, stop_order")
+      .select("customer_name, hotel_name, hotel_zone, pax_assigned, stop_order")
       .eq("dist_bus_id", distBusId)
       .eq("tenant_id", tenantId)
       .order("stop_order");
@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
     const passengers = (allocs ?? []) as Array<{
       customer_name: string;
       hotel_name: string;
+      hotel_zone: string;
       pax_assigned: number;
       stop_order: number;
     }>;
@@ -77,7 +78,7 @@ export async function GET(request: NextRequest) {
     ws.addRow([]);
 
     // Intestazione tabella passeggeri
-    const headerRow = ws.addRow(["#", "Cognome / Nome", "Hotel / Fermata", "Pax"]);
+    const headerRow = ws.addRow(["#", "Cognome / Nome", "Hotel / Zona", "Pax"]);
     headerRow.eachCell(cell => {
       cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
@@ -85,7 +86,7 @@ export async function GET(request: NextRequest) {
       cell.border = { bottom: { style: "thin", color: { argb: "FFCBD5E1" } } };
     });
 
-    // Righe passeggeri raggruppate per hotel (stesso stop_order = stessa fermata)
+    // Righe passeggeri raggruppate per zona e hotel
     const stopGroups = new Map<number, typeof passengers>();
     for (const p of passengers) {
       const g = stopGroups.get(p.stop_order) ?? [];
@@ -96,21 +97,40 @@ export async function GET(request: NextRequest) {
     let rowNum = 1;
     const sortedStops = [...stopGroups.entries()].sort((a, b) => a[0] - b[0]);
     for (const [, group] of sortedStops) {
-      const isEven = rowNum % 2 === 0;
-      const bg = isEven ? "FFF8FAFC" : "FFFFFFFF";
-      for (const p of group) {
-        const dataRow = ws.addRow([rowNum, p.customer_name, p.hotel_name, p.pax_assigned]);
-        dataRow.eachCell(cell => {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
-          cell.border = { bottom: { style: "hair", color: { argb: "FFE2E8F0" } } };
-          cell.alignment = { horizontal: "left" };
-        });
-        dataRow.getCell(1).alignment = { horizontal: "center" };
-        dataRow.getCell(4).alignment = { horizontal: "center" };
-        rowNum++;
+      const hotels = new Map<string, typeof passengers>();
+      for (const passenger of group) {
+        const hotelKey = (passenger.hotel_name || "Hotel N/D").trim().toUpperCase();
+        const list = hotels.get(hotelKey) ?? [];
+        list.push(passenger);
+        hotels.set(hotelKey, list);
       }
-      // Separatore visivo tra fermate diverse
-      ws.addRow([]); rowNum++;
+
+      for (const [hotelName, hotelPassengers] of [...hotels.entries()].sort((a, b) => a[0].localeCompare(b[0], "it"))) {
+        const hotelPax = hotelPassengers.reduce((sum, passenger) => sum + passenger.pax_assigned, 0);
+        const zone = hotelPassengers[0]?.hotel_zone || bus.zone || "";
+        const hotelRow = ws.addRow(["", hotelName, zone, hotelPax]);
+        hotelRow.eachCell(cell => {
+          cell.font = { bold: true, color: { argb: "FF0F172A" } };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF6FF" } };
+          cell.border = { bottom: { style: "thin", color: { argb: "FFCBD5E1" } } };
+        });
+        hotelRow.getCell(4).alignment = { horizontal: "center" };
+
+        for (const p of hotelPassengers.sort((a, b) => a.customer_name.localeCompare(b.customer_name, "it"))) {
+          const isEven = rowNum % 2 === 0;
+          const bg = isEven ? "FFF8FAFC" : "FFFFFFFF";
+          const dataRow = ws.addRow([rowNum, p.customer_name, p.hotel_name, p.pax_assigned]);
+          dataRow.eachCell(cell => {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+            cell.border = { bottom: { style: "hair", color: { argb: "FFE2E8F0" } } };
+            cell.alignment = { horizontal: "left" };
+          });
+          dataRow.getCell(1).alignment = { horizontal: "center" };
+          dataRow.getCell(4).alignment = { horizontal: "center" };
+          rowNum++;
+        }
+        ws.addRow([]);
+      }
     }
 
     // Colonne larghezze

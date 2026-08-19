@@ -2304,8 +2304,8 @@ export default function BusNetworkPage() {
                                   </div>
                                   <div className="flex items-center gap-1.5">
                                     <button
-                                      title="Scarica lista autista (Excel)"
-                                      className="text-slate-400 hover:text-emerald-400 text-xs disabled:opacity-30"
+                                      title="Scarica lista smistamento Ischia (Excel)"
+                                      className="rounded bg-white/15 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-white/25 disabled:opacity-30"
                                       disabled={saving}
                                       onClick={async () => {
                                         const token = await getToken();
@@ -2321,7 +2321,7 @@ export default function BusNetworkPage() {
                                         const match = cd.match(/filename="([^"]+)"/);
                                         a.href = url; a.download = match?.[1] ?? `lista_autista_${bus.date}.xlsx`;
                                         a.click(); URL.revokeObjectURL(url);
-                                      }}>📥</button>
+                                      }}>Lista</button>
                                     <button
                                       title="Clona bus"
                                       onClick={() => void post("clone_dist_bus", { dist_bus_id: bus.id })}
@@ -2432,8 +2432,29 @@ export default function BusNetworkPage() {
                                 {busAllocs.length === 0 && (
                                   <p className="py-4 text-center text-xs text-slate-300">Trascina qui i passeggeri</p>
                                 )}
-                                {[...busAllocs].sort((a, b) => (a.stop_order ?? 0) - (b.stop_order ?? 0)).map((alloc) => (
+                                {[...busAllocs]
+                                  .sort((a, b) => {
+                                    const stopDelta = (a.stop_order ?? 0) - (b.stop_order ?? 0);
+                                    if (stopDelta !== 0) return stopDelta;
+                                    const hotelDelta = (a.hotel_name ?? "").localeCompare(b.hotel_name ?? "", "it");
+                                    if (hotelDelta !== 0) return hotelDelta;
+                                    return a.customer_name.localeCompare(b.customer_name, "it");
+                                  })
+                                  .map((alloc, index, sortedAllocs) => {
+                                    const hotelName = alloc.hotel_name || "Hotel N/D";
+                                    const previous = sortedAllocs[index - 1];
+                                    const isNewHotelGroup = !previous || (previous.hotel_name || "Hotel N/D") !== hotelName;
+                                    const hotelPax = sortedAllocs
+                                      .filter((item) => (item.hotel_name || "Hotel N/D") === hotelName)
+                                      .reduce((sum, item) => sum + item.pax_assigned, 0);
+                                    return (
                                   <div key={alloc.id}>
+                                    {isNewHotelGroup && (
+                                      <div className="mb-1 mt-2 flex items-center justify-between rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-[10px] font-black uppercase text-emerald-900 first:mt-0">
+                                        <span className="truncate">{hotelName}</span>
+                                        <span className="ml-2 shrink-0 rounded-full bg-emerald-600 px-2 py-0.5 text-white">{hotelPax} pax</span>
+                                      </div>
+                                    )}
                                     {/* Indicatore visivo di inserimento sopra questa card */}
                                     {dragReorderTargetId === alloc.id && dragDistAllocId && busAllocs.some(a => a.id === dragDistAllocId) && (
                                       <div className="h-0.5 w-full rounded-full bg-violet-500 mb-1" />
@@ -2521,7 +2542,8 @@ export default function BusNetworkPage() {
                                       );
                                     })()}
                                   </div>
-                                ))}
+                                    );
+                                  })}
                               </div>
                             </div>
                           );
