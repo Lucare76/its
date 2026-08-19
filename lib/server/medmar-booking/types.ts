@@ -130,7 +130,7 @@ export type BigliettoVendibileRaw = {
   collegati: unknown;
 };
 
-export type MedmarPreflightWarning = { code: string; message: string };
+export type MedmarPreflightWarning = { code: string; message: string; leg?: "outward" | "return" };
 
 export type MedmarPreflightLeg = {
   direction: "outward" | "return";

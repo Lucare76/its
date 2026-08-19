@@ -243,6 +243,7 @@ async function resolveEmbeddedReturnLeg(
   if (row.booking_service_kind === "formula_medmar_pozzuoli") {
     warnings.push({
       code: "embedded_return_island_port_ambiguous",
+      leg: "return",
       message:
         "Ritorno imbarcato nella stessa riga services (modello single-row) su tratta Pozzuoli: il porto isolano del ritorno non è determinabile da un campo distinto (l'unico meeting_point disponibile è quello dell'andata) — nessun fallback verso Ischia/Casamicciola, revisione manuale richiesta.",
     });
@@ -267,6 +268,7 @@ async function resolveEmbeddedReturnLeg(
 
   warnings.push({
     code: "embedded_return_leg_used",
+    leg: "return",
     message:
       "Ritorno ricostruito dai campi departure_date/departure_time/orario_barca della stessa riga services (modello single-row, nessuna seconda riga direction=\"departure\" collegata).",
   });
@@ -310,6 +312,7 @@ async function resolveLegLive(
   if (resolution.status === "unknown") {
     warnings.push({
       code: "route_not_determined",
+      leg: direction,
       message: `Tratta Medmar non determinabile in modo affidabile dai dati del servizio (motivo: ${resolution.reason}; booking_service_kind=${row.booking_service_kind ?? "null"}; meeting_point=${row.meeting_point ?? "null"}). Nessun porto viene assunto per default: revisione manuale richiesta.`,
     });
     return { leg, liveStatus: "manual_review" };
@@ -323,6 +326,7 @@ async function resolveLegLive(
   };
   warnings.push({
     code: "island_port_resolved",
+    leg: direction,
     message: `Porto isolano risolto = ${resolution.islandPort} (porto terraferma = ${resolution.mainlandPort}), da dati strutturati booking_service_kind + meeting_point.`,
   });
 
@@ -330,6 +334,7 @@ async function resolveLegLive(
   if (idTratta == null) {
     warnings.push({
       code: "route_not_mapped",
+      leg: direction,
       message: `Nessun id_tratta Medmar verificato per la tratta ${leg.route.from} → ${leg.route.to}: revisione manuale richiesta (nessun ID inventato).`,
     });
     return { leg, liveStatus: "manual_review" };
@@ -340,6 +345,7 @@ async function resolveLegLive(
   if (!requestedFerryTime.raw) {
     warnings.push({
       code: "booked_ferry_time_missing",
+      leg: direction,
       message: `Orario nave prenotato mancante per ${direction === "outward" ? "andata" : "ritorno"}: revisione manuale richiesta.`,
     });
     return { leg, liveStatus: "manual_review" };
@@ -347,6 +353,7 @@ async function resolveLegLive(
   if (!requestedFerryTime.normalized) {
     warnings.push({
       code: "booked_ferry_time_invalid",
+      leg: direction,
       message: `Orario nave prenotato non valido per ${direction === "outward" ? "andata" : "ritorno"}: revisione manuale richiesta.`,
     });
     return { leg, liveStatus: "manual_review" };
@@ -357,6 +364,7 @@ async function resolveLegLive(
     if (local.status === "matched") {
       warnings.push({
         code: "local_schedule_diagnostic",
+        leg: direction,
         message: `Orario locale noto compatibile: ${local.matchedTime} (solo diagnostico, non usato per determinare can_issue).`,
       });
       return local.matchedTime;
@@ -381,7 +389,7 @@ async function resolveLegLive(
       else structuralWarnings.push(...mismatches);
     }
     if (structurallyValid.length === 0) {
-      warnings.push(...structuralWarnings);
+      warnings.push(...structuralWarnings.map((w) => ({ ...w, leg: direction })));
       leg.candidate_count = 0;
       return { leg, liveStatus: "route_mismatch" };
     }
@@ -398,6 +406,7 @@ async function resolveLegLive(
     if (exactTimeMatches.length > 1) {
       warnings.push({
         code: "course_ambiguous",
+        leg: direction,
         message: `Più corse Medmar live compatibili per ${direction === "outward" ? "andata" : "ritorno"}: revisione manuale richiesta.`,
       });
       return { leg, liveStatus: "ambiguous" };
@@ -414,6 +423,7 @@ async function resolveLegLive(
     if (localMatchedTime && only.partenza_ora && normalizeMedmarClockTime(localMatchedTime) !== normalizeMedmarClockTime(only.partenza_ora)) {
       warnings.push({
         code: "local_schedule_mismatch",
+        leg: direction,
         message: `L'orario Medmar live (${only.partenza_ora}) differisce dall'orario noto localmente (${localMatchedTime}).`,
       });
     }
@@ -428,6 +438,7 @@ async function resolveLegLive(
     }
     warnings.push({
       code: "medmar_live_unavailable",
+      leg: direction,
       message: err instanceof MedmarNotAvailableError || err instanceof MedmarBadResponseError || err instanceof MedmarAuthFailedError
         ? err.message
         : "Errore imprevisto nella chiamata Medmar live.",
@@ -601,7 +612,7 @@ export async function runMedmarPreflight(
           tariff: fallback.tariff,
           expected_total_cents: fallback.expectedTotalCents,
           is_live: false,
-          warnings: [...warnings, ...fallback.warnings, { code: "ar_tariff_not_found_live", message: `Tariffa AR non trovata nella risposta Medmar live per la gamba di ${legLabel}: usata memoria ticket come riferimento diagnostico (non sufficiente per emissione).` }],
+          warnings: [...warnings, ...fallback.warnings, { code: "ar_tariff_not_found_live", leg: leg.direction, message: `Tariffa AR non trovata nella risposta Medmar live per la gamba di ${legLabel}: usata memoria ticket come riferimento diagnostico (non sufficiente per emissione).` }],
         };
       }
 
@@ -609,7 +620,7 @@ export async function runMedmarPreflight(
         return {
           ...baseResult,
           status: "unsupported_passenger_type",
-          warnings: [...warnings, { code: "unsupported_passenger_type", message: `Trovato un biglietto AR compatibile per descrizione ma con id_tipologia_passeggero=${selection.row.id_tipologia_passeggero} non mappato (atteso adulto) sulla gamba di ${legLabel}: revisione manuale richiesta.` }],
+          warnings: [...warnings, { code: "unsupported_passenger_type", leg: leg.direction, message: `Trovato un biglietto AR compatibile per descrizione ma con id_tipologia_passeggero=${selection.row.id_tipologia_passeggero} non mappato (atteso adulto) sulla gamba di ${legLabel}: revisione manuale richiesta.` }],
         };
       }
 
@@ -617,7 +628,7 @@ export async function runMedmarPreflight(
         return {
           ...baseResult,
           status: "manual_review",
-          warnings: [...warnings, { code: "ar_tariff_ambiguous", message: `Più righe candidate per la tariffa AR adulto nella risposta Medmar live sulla gamba di ${legLabel}: nessuna scelta arbitraria, revisione manuale richiesta.` }],
+          warnings: [...warnings, { code: "ar_tariff_ambiguous", leg: leg.direction, message: `Più righe candidate per la tariffa AR adulto nella risposta Medmar live sulla gamba di ${legLabel}: nessuna scelta arbitraria, revisione manuale richiesta.` }],
         };
       }
 
@@ -627,7 +638,7 @@ export async function runMedmarPreflight(
         // è comunque stata identificata correttamente (stessa regex sulla
         // label secondaria), ma il caso è raro/inatteso e va segnalato per
         // diagnostica — non blocca can_issue.
-        warnings.push({ code: "ar_label_from_nome", message: `Etichetta della tariffa AR risolta dal campo 'nome' sulla gamba di ${legLabel} (campo 'descrizione' assente o vuoto sulla riga): verificare se atteso.` });
+        warnings.push({ code: "ar_label_from_nome", leg: leg.direction, message: `Etichetta della tariffa AR risolta dal campo 'nome' sulla gamba di ${legLabel} (campo 'descrizione' assente o vuoto sulla riga): verificare se atteso.` });
       }
 
       // Prezzo live mancante, nullo o incoerente: mai can_issue=true su dati incompleti.
@@ -635,7 +646,7 @@ export async function runMedmarPreflight(
         return {
           ...baseResult,
           status: "manual_review",
-          warnings: [...warnings, { code: "ticket_data_incomplete", message: `Prezzo della tariffa AR mancante o non numerico nella risposta Medmar live sulla gamba di ${legLabel}: dati insufficienti per l'emissione.` }],
+          warnings: [...warnings, { code: "ticket_data_incomplete", leg: leg.direction, message: `Prezzo della tariffa AR mancante o non numerico nella risposta Medmar live sulla gamba di ${legLabel}: dati insufficienti per l'emissione.` }],
         };
       }
 
@@ -647,6 +658,7 @@ export async function runMedmarPreflight(
             ...warnings,
             {
               code: "ticket_data_incomplete",
+              leg: leg.direction,
               message: (taxIssue === "ambiguous"
                 ? "Più righe TASSA DI SBARCO trovate nella risposta Medmar live"
                 : "Tassa di sbarco individuata ma senza prezzo nella risposta Medmar live") + ` sulla gamba di ${legLabel}: impossibile calcolare il totale con certezza.`,
@@ -686,13 +698,13 @@ export async function runMedmarPreflight(
 
       if (hasMinors) {
         if (passengerSelection.child.kind === "ambiguous" || passengerSelection.infant.kind === "ambiguous") {
-          warnings.push({ code: "child_issue_payload_not_verified", message: `Più righe candidate per bambino/infant nella risposta Medmar live sulla gamba di ${legLabel}: revisione manuale richiesta oltre al blocco emissione minori.` });
+          warnings.push({ code: "child_issue_payload_not_verified", leg: leg.direction, message: `Più righe candidate per bambino/infant nella risposta Medmar live sulla gamba di ${legLabel}: revisione manuale richiesta oltre al blocco emissione minori.` });
         }
         if (passengers.children > 0 && passengerSelection.child.kind !== "found") {
-          warnings.push({ code: "child_ticket_not_found_live", message: `Bambino presente nel gruppo ma nessun biglietto BAMBINO corrispondente trovato nella risposta Medmar live sulla gamba di ${legLabel}.` });
+          warnings.push({ code: "child_ticket_not_found_live", leg: leg.direction, message: `Bambino presente nel gruppo ma nessun biglietto BAMBINO corrispondente trovato nella risposta Medmar live sulla gamba di ${legLabel}.` });
         }
         if (passengers.infants > 0 && passengerSelection.infant.kind !== "found") {
-          warnings.push({ code: "infant_ticket_not_found_live", message: `Infant presente nel gruppo ma nessun biglietto INFANT corrispondente trovato nella risposta Medmar live sulla gamba di ${legLabel}.` });
+          warnings.push({ code: "infant_ticket_not_found_live", leg: leg.direction, message: `Infant presente nel gruppo ma nessun biglietto INFANT corrispondente trovato nella risposta Medmar live sulla gamba di ${legLabel}.` });
         }
       }
 

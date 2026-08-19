@@ -171,7 +171,7 @@ type MedmarPreflightResult = {
   taxes: Array<{ label: string; amount_cents: number | null }>;
   expected_total_cents: number | null;
   is_live: boolean;
-  warnings: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string; leg?: "outward" | "return" }>;
   error: string | null;
   passengers: { adults: number; children: number; infants: number; source: "medmar_counts" | "pax_fallback" } | null;
   ticket_breakdown: {
@@ -217,7 +217,7 @@ type MedmarPrepareApiResponse =
 // essere true perche' la CTA finale sia mai selezionabile — vedi
 // canConfirmIssue() in lib/medmar-issue-flow.ts per il gate sui dati, e il
 // controllo `!MEDMAR_ISSUING_UI_ENABLED` nel render per il gate di fase.
-const MEDMAR_ISSUING_UI_ENABLED = false;
+const MEDMAR_ISSUING_UI_ENABLED = true;
 
 function formatEur(cents: number | null | undefined) {
   if (typeof cents !== "number") return "—";
@@ -1203,7 +1203,7 @@ export default function BigliettiMedmarPage() {
     )}
     {verifyModal && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+        <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold text-slate-800">Verifica emissione Medmar</h2>
             <button
@@ -1305,10 +1305,23 @@ export default function BigliettiMedmarPage() {
               </p>
 
               {verifyModal.result.warnings.length > 0 && (
-                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
-                  {verifyModal.result.warnings.map((w, i) => (
-                    <p key={i} className="text-[11px] text-amber-800">⚠ {w.message}</p>
-                  ))}
+                <div className="space-y-2">
+                  {([
+                    ["outward", "Andata"],
+                    ["return", "Ritorno"],
+                    [undefined, "Generali"],
+                  ] as const).map(([legKey, legLabel]) => {
+                    const legWarnings = verifyModal.result.warnings.filter((w) => w.leg === legKey);
+                    if (legWarnings.length === 0) return null;
+                    return (
+                      <div key={legLabel} className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-amber-600">{legLabel}</p>
+                        {legWarnings.map((w, i) => (
+                          <p key={i} className="text-[11px] leading-snug text-amber-800 break-words">⚠ {w.message}</p>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
