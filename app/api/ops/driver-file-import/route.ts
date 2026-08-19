@@ -5,6 +5,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { resolveHotelMatch } from "@/lib/server/hotel-matching";
 import { extractFeatures, logAssignmentChange, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
+import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
@@ -423,7 +424,12 @@ export async function POST(request: NextRequest) {
         tenant_id: auth.membership.tenant_id,
         created_by_user_id: auth.user.id,
         is_draft: false,
-        status: "assigned",
+        // Data Integrity Sprint 7: nasce "new", non più "assigned" — lo
+        // status passa ad "assigned" solo dopo che assignments.insert() è
+        // confermato riuscito (vedi sotto), altrimenti un fallimento del
+        // secondo insert lascerebbe service.status='assigned' senza alcun
+        // assignment corrispondente (invariante violata).
+        status: "new",
         date: payload.data.service_date,
         time: row.time,
         direction,
@@ -505,8 +511,68 @@ export async function POST(request: NextRequest) {
 
       const { error: assignmentsError } = await auth.admin.from("assignments").insert(assignmentsPayload);
       if (assignmentsError) {
+        // Data Integrity Sprint 7: i services sono già stati inseriti sopra,
+        // ma con status "new" (non più "assigned") — nessun mismatch,
+        // restano semplicemente non assegnati. Nessuna compensating delete:
+        // cancellare righe services appena create rischierebbe di rompere
+        // riferimenti non ancora auditati (Fase 5 dello sprint), mentre
+        // restare "new" è uno stato di riposo già valido nel dominio.
+        auditLog({
+          event: "driver_file_import_write_failed",
+          level: "error",
+          tenantId: auth.membership.tenant_id,
+          userId: auth.user.id,
+          details: { step: "assignments_insert", message: assignmentsError.message, serviceCount: insertedIds.length },
+        });
         return NextResponse.json({
-          error: assignmentsError.message,
+          error: "Errore durante il salvataggio delle assegnazioni. Nessun servizio è stato importato.",
+          summary: {
+            total_rows: parsedRows.length,
+            valid_rows: preview.length,
+            invalid_rows: errors.length,
+            imported_rows: 0
+          },
+          preview,
+          errors
+        }, { status: 500 });
+      }
+
+      // Data Integrity Sprint 7: assignments scritti con successo — ora (e
+      // solo ora) lo status passa ad "assigned", con un retry prima di
+      // compensare, stesso pattern già in uso in auto-assign/route.ts e
+      // piano-giorno/trips/route.ts (Sprint 5/6).
+      let statusRes = await auth.admin.from("services").update({ status: "assigned" }).in("id", insertedIds).eq("tenant_id", auth.membership.tenant_id);
+      if (statusRes.error) {
+        statusRes = await auth.admin.from("services").update({ status: "assigned" }).in("id", insertedIds).eq("tenant_id", auth.membership.tenant_id);
+      }
+      if (statusRes.error) {
+        // Assignment scritto ma status non aggiornabile — mai lasciare
+        // "assignment presente + status 'new'" (invariante 2). Questi
+        // assignment sono garantiti nuovi (insertedIds sono service_id
+        // appena generati in questa stessa richiesta, nessuna riga
+        // preesistente può esistere per costruzione): la compensazione è
+        // quindi sempre e solo un delete delle righe appena inserite, mai
+        // un restore (nessun "CASO B" possibile in questo import).
+        const compensateRes = await auth.admin.from("assignments").delete().eq("tenant_id", auth.membership.tenant_id).in("service_id", insertedIds);
+        const compensationFailed = Boolean(compensateRes.error);
+        auditLog({
+          event: "driver_file_import_write_failed",
+          level: "error",
+          tenantId: auth.membership.tenant_id,
+          userId: auth.user.id,
+          details: {
+            step: "status_update",
+            message: statusRes.error.message,
+            serviceCount: insertedIds.length,
+            compensation_deleted_new: !compensationFailed,
+            compensation_failed: compensationFailed,
+            compensation_error: compensateRes.error?.message ?? null,
+          },
+        });
+        return NextResponse.json({
+          error: compensationFailed
+            ? "Errore aggiornamento stato servizi: incoerenza NON risolta automaticamente, richiede verifica manuale."
+            : "Errore aggiornamento stato servizi: assegnazioni annullate, nessun servizio è stato importato.",
           summary: {
             total_rows: parsedRows.length,
             valid_rows: preview.length,

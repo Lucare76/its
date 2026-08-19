@@ -83,7 +83,20 @@ function createTenantAwareSupabase(
   };
 
   const tableErrors: Record<string, { message: string } | undefined> = {};
+  // Data Integrity Sprint 7: coda di errori per operazione (es.
+  // "services.update", "assignments.delete") — a differenza di tableErrors
+  // (blanket, per tabella, tutte le operazioni), qui ogni chiamata consuma
+  // una entry dalla coda: permette di simulare "1° tentativo fallisce, il
+  // retry riesce" o "entrambi falliscono" senza toccare il comportamento
+  // esistente di tableErrors (controllato per primo, invariato).
+  const opErrorQueues: Record<string, Array<{ message: string } | null>> = {};
   let idCounter = 0;
+
+  function nextOpError(opKey: string): { message: string } | null {
+    const queue = opErrorQueues[opKey];
+    if (!queue || queue.length === 0) return null;
+    return queue.shift() ?? null;
+  }
 
   function makeSelectBuilder(table: string) {
     let filtered = tables[table];
@@ -131,6 +144,36 @@ function createTenantAwareSupabase(
     };
   }
 
+  function makeMutateBuilder(table: string, op: "update" | "delete", patch?: Row) {
+    let filtered = tables[table];
+    const builder = {
+      eq(field: string, value: unknown) {
+        filtered = filtered.filter((r) => r[field] === value);
+        return builder;
+      },
+      in(field: string, values: unknown[]) {
+        filtered = filtered.filter((r) => values.includes(r[field]));
+        return builder;
+      },
+      then(resolve: (v: { data: null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
+        const opKey = `${table}.${op}`;
+        const err = tableErrors[table] ?? nextOpError(opKey);
+        if (err) return Promise.resolve({ data: null, error: err }).then(resolve, reject);
+        if (op === "update") {
+          const matched = new Set(filtered);
+          for (const row of tables[table]) {
+            if (matched.has(row)) Object.assign(row, patch);
+          }
+        } else {
+          const toRemove = new Set(filtered);
+          tables[table] = tables[table].filter((r) => !toRemove.has(r));
+        }
+        return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
   const admin = {
     from(table: string) {
       return {
@@ -140,6 +183,12 @@ function createTenantAwareSupabase(
         insert(rowsOrRow: Row | Row[]) {
           const rowsArr = Array.isArray(rowsOrRow) ? rowsOrRow : [rowsOrRow];
           return makeInsertBuilder(table, rowsArr);
+        },
+        update(patch: Row) {
+          return makeMutateBuilder(table, "update", patch);
+        },
+        delete() {
+          return makeMutateBuilder(table, "delete");
         },
       };
     },
@@ -151,6 +200,14 @@ function createTenantAwareSupabase(
     setError(table: string, err: { message: string } | null) {
       tableErrors[table] = err ?? undefined;
     },
+    // Data Integrity Sprint 7: inietta una sequenza di esiti per una singola
+    // operazione (es. "services.update", "assignments.delete") — ogni
+    // chiamata consuma un elemento; `null` = successo, `{message}` =
+    // fallimento. Usato per simulare retry (1° fallisce, 2° riesce) senza
+    // interferire con tableErrors (blanket, usato dai test preesistenti).
+    setOpErrorQueue(table: string, op: "update" | "delete", queue: Array<{ message: string } | null>) {
+      opErrorQueues[`${table}.${op}`] = [...queue];
+    },
   };
 }
 
@@ -158,6 +215,7 @@ const mocks = vi.hoisted(() => ({
   authorizePricingRequest: vi.fn(),
   logAssignmentChange: vi.fn(),
   updateLearnedPatterns: vi.fn(),
+  auditLog: vi.fn(),
 }));
 
 vi.mock("@/lib/server/pricing-auth", () => ({
@@ -172,6 +230,9 @@ vi.mock("@/lib/server/assignment-history", async () => {
 });
 vi.mock("@/lib/server/learned-patterns", () => ({
   updateLearnedPatterns: mocks.updateLearnedPatterns,
+}));
+vi.mock("@/lib/server/ops-audit", () => ({
+  auditLog: mocks.auditLog,
 }));
 
 import { POST } from "@/app/api/ops/driver-file-import/route";
@@ -425,18 +486,25 @@ describe("CONC-07 LOW — storico strutturato (driver_assignment_history) su dri
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
-  it("16. assignment insert error: 500, zero history per l'intero batch (insert singolo bulk, atomico — nessuna riga persistita)", async () => {
+  it("16. assignment insert error: 500, messaggio sanificato (non l'errore raw Supabase), zero history, servizio resta 'new' (non orphan)", async () => {
     const fake = baseSeed();
-    fake.setError("assignments", { message: "assignment insert failed" });
+    fake.setError("assignments", { message: "assignment insert failed: unique_violation on assignments_pkey" });
     authorizeAs(fake);
 
     const res = await callPost();
     const body = await res.json();
 
     expect(res.status).toBe(500);
-    expect(body.error).toBe("assignment insert failed");
+    // Data Integrity Sprint 7: messaggio sanificato — mai l'errore Supabase
+    // grezzo esposto al client.
+    expect(body.error).toBe("Errore durante il salvataggio delle assegnazioni. Nessun servizio è stato importato.");
+    expect(body.summary.imported_rows).toBe(0);
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
     expect(fake.tables.assignments).toHaveLength(0);
+    // Il service era già stato inserito prima del fallimento — ma nasce
+    // "new", non "assigned": nessun mismatch, solo un servizio non assegnato.
+    expect(fake.tables.services).toHaveLength(1);
+    expect(fake.tables.services[0].status).toBe("new");
   });
 
   it("17. partial success: N/A, services.insert e assignments.insert sono ciascuno un'unica INSERT bulk atomica (Postgres) — non esiste un fallimento parziale a livello di singola riga in questo import; il fallimento dell'intero batch è già coperto dai test 15/16", () => {
@@ -488,5 +556,127 @@ describe("CONC-07 LOW — storico strutturato (driver_assignment_history) su dri
     expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
     const entries = lastHistoryEntries();
     expect(entries).toHaveLength(1);
+  });
+});
+
+describe("Data Integrity Sprint 7 — driver-file-import orphan prevention", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logAssignmentChange.mockResolvedValue(undefined);
+    mocks.updateLearnedPatterns.mockResolvedValue({ upserted: 0 });
+  });
+
+  it("22. import riuscito: service.status='assigned', assignment esiste, imported_rows corretto", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.summary.imported_rows).toBe(1);
+    expect(fake.tables.services).toHaveLength(1);
+    expect(fake.tables.services[0].status).toBe("assigned");
+    expect(fake.tables.assignments).toHaveLength(1);
+    expect(fake.tables.status_events).toHaveLength(1);
+  });
+
+  it("23. assignments.insert fallisce: servizio resta 'new' (mai orphan), zero history, zero status_events", async () => {
+    const fake = baseSeed();
+    fake.setError("assignments", { message: "raw db error" });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.summary.imported_rows).toBe(0);
+    expect(fake.tables.services.every((s) => s.status === "new")).toBe(true);
+    expect(fake.tables.assignments).toHaveLength(0);
+    expect(fake.tables.status_events).toHaveLength(0);
+    expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
+  });
+
+  it("24. services.update(status) fallisce al 1° tentativo ma il retry riesce: import riuscito, nessuna compensazione", async () => {
+    const fake = baseSeed();
+    fake.setOpErrorQueue("services", "update", [{ message: "transient" }, null]);
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.summary.imported_rows).toBe(1);
+    expect(fake.tables.services[0].status).toBe("assigned");
+    // Nessuna compensazione: l'assignment scritto resta, non viene cancellato.
+    expect(fake.tables.assignments).toHaveLength(1);
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("25. services.update(status) fallisce sia al 1° tentativo che al retry: compensazione cancella l'assignment appena creato, servizio resta 'new'", async () => {
+    const fake = baseSeed();
+    fake.setOpErrorQueue("services", "update", [{ message: "fail 1" }, { message: "fail 2" }]);
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error).toBe("Errore aggiornamento stato servizi: assegnazioni annullate, nessun servizio è stato importato.");
+    expect(body.summary.imported_rows).toBe(0);
+    // Compensazione: l'assignment appena creato viene cancellato (mai un
+    // restore in questo import — sono garantiti tutti nuovi).
+    expect(fake.tables.assignments).toHaveLength(0);
+    expect(fake.tables.services[0].status).toBe("new");
+    expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
+    expect(fake.tables.status_events).toHaveLength(0);
+  });
+
+  it("26. compensazione fallisce anch'essa: mai un successo silenzioso, messaggio 'richiede verifica manuale'", async () => {
+    const fake = baseSeed();
+    fake.setOpErrorQueue("services", "update", [{ message: "fail 1" }, { message: "fail 2" }]);
+    fake.setOpErrorQueue("assignments", "delete", [{ message: "compensation also fails" }]);
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.ok).toBeUndefined();
+    expect(body.error).toBe("Errore aggiornamento stato servizi: incoerenza NON risolta automaticamente, richiede verifica manuale.");
+    expect(body.summary.imported_rows).toBe(0);
+    expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
+  });
+
+  it("27. audit log: nessuna PII, solo campi tecnici (tenant, service count, step, esito compensazione)", async () => {
+    const fake = baseSeed();
+    fake.setOpErrorQueue("services", "update", [{ message: "fail 1" }, { message: "fail 2" }]);
+    authorizeAs(fake);
+
+    await callPost();
+
+    expect(mocks.auditLog).toHaveBeenCalled();
+    const payload = JSON.stringify(mocks.auditLog.mock.calls);
+    expect(payload).not.toMatch(/Cliente Test/);
+    expect(payload).not.toMatch(/Agenzia XYZ/);
+    expect(payload).not.toMatch(/customer_name/);
+    expect(payload).not.toMatch(/phone/);
+    expect(payload).not.toMatch(/notes/);
+    const lastCall = mocks.auditLog.mock.calls[mocks.auditLog.mock.calls.length - 1][0];
+    expect(lastCall.tenantId).toBe(TENANT_A);
+    expect(lastCall.details.step).toBe("status_update");
+    expect(typeof lastCall.details.serviceCount).toBe("number");
+  });
+
+  it("28. tenant isolation: assignments/services/audit scritti sempre con tenant_id di sessione, mai da input", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    await callPost({ tenant_id: TENANT_B });
+
+    expect(fake.tables.services[0].tenant_id).toBe(TENANT_A);
+    expect(fake.tables.assignments[0].tenant_id).toBe(TENANT_A);
   });
 });
