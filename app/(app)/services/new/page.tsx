@@ -632,24 +632,26 @@ export default function OpsNewBookingPage() {
           {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
         </label>
         {isMedmarKind ? (
-          <div className="md:col-span-2 lg:col-span-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="md:col-span-2 lg:col-span-4 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white p-4 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-bold text-indigo-950">Passeggeri Formula MEDMAR</p>
                 <p className="text-xs text-indigo-700">Indicare i passeggeri suddivisi per fascia di età.</p>
               </div>
-              <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700">Totale {form.pax}</span>
+              <span className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-black text-indigo-700 shadow-sm">Totale {form.pax}</span>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-2">
               {([
                 ["medmar_infant_count", "Infant", "0-4 anni"],
                 ["medmar_child_count", "Bambino", "4-12 anni"],
-                ["medmar_adult_count", "Adulto", "12 anni in poi"],
+                ["medmar_adult_count", "Adulto", "12+ anni"],
               ] as const).map(([field, label, ages]) => (
-                <label key={field} className="rounded-xl border border-indigo-100 bg-white p-3 text-sm">
-                  <span className="block font-bold text-slate-900">{label}</span>
-                  <span className="block text-xs text-slate-500">{ages}</span>
-                  <input type="number" min={0} max={16} className="input-saas mt-2" value={form[field]}
+                <label key={field} className="flex items-center justify-between gap-3 rounded-2xl border border-indigo-100 bg-white px-3 py-2.5 text-sm shadow-sm">
+                  <span className="min-w-0">
+                    <span className="block whitespace-nowrap font-black text-slate-950">{label}</span>
+                    <span className="block whitespace-nowrap text-xs font-semibold text-slate-500">{ages}</span>
+                  </span>
+                  <input type="number" min={0} max={16} className="h-11 w-20 rounded-xl border border-slate-200 bg-slate-50 px-2 text-center text-base font-black text-slate-950 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-100" value={form[field]}
                     onChange={(event) => setForm((prev) => {
                       const next = { ...prev, [field]: event.target.value };
                       const total = Number(next.medmar_infant_count || 0) + Number(next.medmar_child_count || 0) + Number(next.medmar_adult_count || 0);

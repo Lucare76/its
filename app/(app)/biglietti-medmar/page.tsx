@@ -219,6 +219,16 @@ type MedmarPrepareApiResponse =
 // controllo `!MEDMAR_ISSUING_UI_ENABLED` nel render per il gate di fase.
 const MEDMAR_ISSUING_UI_ENABLED = true;
 
+const MEDMAR_TECHNICAL_WARNING_CODES = new Set([
+  "island_port_resolved",
+  "local_schedule_diagnostic",
+  "embedded_return_leg_used",
+]);
+
+function isMedmarTechnicalDiagnostic(warning: { code: string }) {
+  return MEDMAR_TECHNICAL_WARNING_CODES.has(warning.code);
+}
+
 function formatEur(cents: number | null | undefined) {
   if (typeof cents !== "number") return "—";
   return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
@@ -1304,14 +1314,17 @@ export default function BigliettiMedmarPage() {
                 Stato: {verifyModal.result.status} · {verifyModal.result.can_issue ? "dati sufficienti per una futura emissione" : "verifica manuale necessaria"}
               </p>
 
-              {verifyModal.result.warnings.length > 0 && (
+              {verifyModal.result.warnings.length > 0 && (() => {
+                const operatorWarnings = verifyModal.result.warnings.filter((w) => !isMedmarTechnicalDiagnostic(w));
+                const technicalDiagnostics = verifyModal.result.warnings.filter(isMedmarTechnicalDiagnostic);
+                return (
                 <div className="space-y-2">
                   {([
                     ["outward", "Andata"],
                     ["return", "Ritorno"],
                     [undefined, "Generali"],
                   ] as const).map(([legKey, legLabel]) => {
-                    const legWarnings = verifyModal.result.warnings.filter((w) => w.leg === legKey);
+                    const legWarnings = operatorWarnings.filter((w) => w.leg === legKey);
                     if (legWarnings.length === 0) return null;
                     return (
                       <div key={legLabel} className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
@@ -1322,8 +1335,26 @@ export default function BigliettiMedmarPage() {
                       </div>
                     );
                   })}
+                  {operatorWarnings.length === 0 && verifyModal.result.can_issue && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                      Dati verificati: non ci sono avvisi operativi da correggere.
+                    </div>
+                  )}
+                  {technicalDiagnostics.length > 0 && (
+                    <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <summary className="cursor-pointer font-semibold text-slate-700">
+                        Dettagli tecnici verifica Medmar ({technicalDiagnostics.length})
+                      </summary>
+                      <div className="mt-2 space-y-1">
+                        {technicalDiagnostics.map((w, i) => (
+                          <p key={i} className="leading-snug break-words">• {w.message}</p>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
 
