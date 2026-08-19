@@ -978,6 +978,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    // Aggiorna il punto di carico (nota testuale) di una fermata esistente —
+    // finora modificabile solo alla creazione (action "add_stop").
+    if (action === "update_stop_pickup_note") {
+      const parsed = z.object({
+        stop_id: z.string().uuid(),
+        pickup_note: z.string().max(500).nullable()
+      }).parse(body);
+      const { error } = await auth.admin.from("tenant_bus_line_stops")
+        .update({ pickup_note: parsed.pickup_note?.trim() || null })
+        .eq("tenant_id", tenantId).eq("id", parsed.stop_id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
     // Riordina fermate in base al pickup_time (orario crescente)
     if (action === "sort_stops_by_time") {
       const parsed = z.object({

@@ -202,11 +202,13 @@ export default function BusNetworkPage() {
   const [editCardPhoneId, setEditCardPhoneId] = useState<string | null>(null);
   const [editCardPhoneValue, setEditCardPhoneValue] = useState("");
 
-  // Edit stop inline (nome e orario)
+  // Edit stop inline (nome, orario e punto di carico)
   const [editStopTimeId, setEditStopTimeId] = useState<string | null>(null);
   const [editStopTimeValue, setEditStopTimeValue] = useState("");
   const [editStopNameId, setEditStopNameId] = useState<string | null>(null);
   const [editStopNameValue, setEditStopNameValue] = useState("");
+  const [editStopNoteId, setEditStopNoteId] = useState<string | null>(null);
+  const [editStopNoteValue, setEditStopNoteValue] = useState("");
 
   // Geo sort progress
   const [geoSorting, setGeoSorting] = useState(false);
@@ -736,6 +738,11 @@ export default function BusNetworkPage() {
     if (normalizedTime && !isValidClockTime(normalizedTime)) return;
     await post("update_stop_time", { stop_id: stopId, pickup_time: normalizedTime || null });
     setEditStopTimeId(null);
+  }, [post]);
+
+  const saveStopNote = useCallback(async (stopId: string, note: string) => {
+    await post("update_stop_pickup_note", { stop_id: stopId, pickup_note: note.trim() || null });
+    setEditStopNoteId(null);
   }, [post]);
 
   const geoSortStops = useCallback(async () => {
@@ -2802,7 +2809,31 @@ export default function BusNetworkPage() {
                                     {stop.stop_name}
                                   </button>
                                 )}
-                                {editStopNameId !== stop.id && stop.pickup_note && <span className="ml-1 text-xs text-slate-300">· {stop.pickup_note}</span>}
+                                {editStopNameId === stop.id ? null : editStopNoteId === stop.id ? (
+                                  <span className="ml-1 inline-flex items-center gap-1">
+                                    <input
+                                      autoFocus
+                                      value={editStopNoteValue}
+                                      onChange={(e) => setEditStopNoteValue(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") void saveStopNote(stop.id, editStopNoteValue);
+                                        if (e.key === "Escape") setEditStopNoteId(null);
+                                      }}
+                                      placeholder="Punto di carico (es. Largo Mazzoni, fronte negozio Smea)"
+                                      className="w-64 rounded border border-indigo-300 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                                    <button onClick={() => void saveStopNote(stop.id, editStopNoteValue)} disabled={saving}
+                                      className="rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-indigo-700 disabled:opacity-40">✓</button>
+                                    <button onClick={() => setEditStopNoteId(null)}
+                                      className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-300">✕</button>
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => { setEditStopNoteId(stop.id); setEditStopNoteValue(stop.pickup_note ?? ""); }}
+                                    title="Modifica punto di carico"
+                                    className="ml-1 text-xs text-slate-300 hover:text-indigo-500">
+                                    {stop.pickup_note ? `· ${stop.pickup_note}` : "+ punto di carico"}
+                                  </button>
+                                )}
                                 {stop.is_manual && <span className="ml-1 rounded bg-indigo-50 px-1 text-[10px] text-indigo-500">manuale</span>}
                                 {stopAllocs.length > 0 && (
                                   <div className="mt-0.5 space-y-0.5 text-[10px] text-slate-400">
