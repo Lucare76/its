@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as XLSX from "xlsx";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { resolveHotelMatch } from "@/lib/server/hotel-matching";
 import { extractFeatures, buildAssignmentDecisionFeatures, logAssignmentChange } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
@@ -220,6 +221,65 @@ function parseRowsFromSheet(rows: string[][]) {
     .filter((row) => Object.values(row).some((value) => String(value ?? "").trim()));
 }
 
+export type DirectImportWriteResult =
+  | { ok: true; insertedIds: string[] }
+  | {
+      ok: false;
+      step: "SERVICE_INSERT_FAILED" | "ASSIGNMENT_INSERT_FAILED" | "STATUS_UPDATE_FAILED" | "COMPENSATION_FAILED";
+      error: string;
+    };
+
+// Sprint 8: sequenza scrittura estratta da main() per essere testabile senza
+// I/O reale (file system, env, Supabase live) — stessa logica, nessun
+// comportamento nuovo oltre al fix dell'invariante. Riusa esattamente il
+// pattern già validato in Sprint 7 su app/api/ops/driver-file-import/route.ts:
+// services nasce "new" (impostato dal chiamante in `inserts`, non qui) →
+// assignments.insert → se fallisce, i services restano "new" (nessun
+// mismatch, nessuna compensating delete: stato di riposo valido) → se
+// riesce, services.status="assigned" con 1 retry → se fallisce ancora,
+// compensating delete dei soli assignment appena creati in questo batch
+// (sempre e solo delete: nessun assignment può preesistere, gli
+// insertedIds sono service_id appena generati in questa stessa chiamata).
+export async function writeDirectImportServicesAndAssignments(
+  admin: SupabaseClient,
+  tenantId: string,
+  driverUserId: string,
+  inserts: Array<Record<string, unknown>>
+): Promise<DirectImportWriteResult> {
+  const { data: insertedServices, error: insertError } = await admin
+    .from("services")
+    .insert(inserts)
+    .select("id");
+  if (insertError) return { ok: false, step: "SERVICE_INSERT_FAILED", error: insertError.message };
+
+  const insertedIds = (insertedServices ?? []).map((row) => row.id as string);
+  if (insertedIds.length === 0) return { ok: true, insertedIds };
+
+  const { error: assignmentsError } = await admin.from("assignments").insert(
+    insertedIds.map((serviceId) => ({
+      tenant_id: tenantId,
+      service_id: serviceId,
+      driver_user_id: driverUserId,
+      vehicle_label: ""
+    }))
+  );
+  if (assignmentsError) return { ok: false, step: "ASSIGNMENT_INSERT_FAILED", error: assignmentsError.message };
+
+  let statusRes = await admin.from("services").update({ status: "assigned" }).in("id", insertedIds).eq("tenant_id", tenantId);
+  if (statusRes.error) {
+    statusRes = await admin.from("services").update({ status: "assigned" }).in("id", insertedIds).eq("tenant_id", tenantId);
+  }
+  if (statusRes.error) {
+    const compensateRes = await admin.from("assignments").delete().eq("tenant_id", tenantId).in("service_id", insertedIds);
+    if (compensateRes.error) {
+      return { ok: false, step: "COMPENSATION_FAILED", error: `${statusRes.error.message} | compensazione fallita: ${compensateRes.error.message}` };
+    }
+    return { ok: false, step: "STATUS_UPDATE_FAILED", error: statusRes.error.message };
+  }
+
+  return { ok: true, insertedIds };
+}
+
 async function main() {
   loadLocalEnv();
   const [, , fileArg, dateArg, driverNameArg] = process.argv;
@@ -332,7 +392,10 @@ async function main() {
       tenant_id: tenantId,
       created_by_user_id: driverUserId,
       is_draft: false,
-      status: "assigned",
+      // Sprint 8: nasce "new", non più "assigned" — vedi
+      // writeDirectImportServicesAndAssignments() sotto, stesso motivo del
+      // fix Sprint 7 su app/api/ops/driver-file-import/route.ts.
+      status: "new",
       date: serviceDate,
       time: row.time,
       direction,
@@ -370,23 +433,11 @@ async function main() {
     throw new Error(`Nessuna riga valida da importare. Errori: ${errors.length}`);
   }
 
-  const { data: insertedServices, error: insertError } = await admin
-    .from("services")
-    .insert(inserts)
-    .select("id");
-  if (insertError) throw new Error(insertError.message);
-
-  const insertedIds = (insertedServices ?? []).map((row) => row.id as string);
-
-  const { error: assignmentsError } = await admin.from("assignments").insert(
-    insertedIds.map((serviceId) => ({
-      tenant_id: tenantId,
-      service_id: serviceId,
-      driver_user_id: driverUserId,
-      vehicle_label: ""
-    }))
-  );
-  if (assignmentsError) throw new Error(assignmentsError.message);
+  const writeResult = await writeDirectImportServicesAndAssignments(admin, tenantId, driverUserId, inserts);
+  if (!writeResult.ok) {
+    throw new Error(`[${writeResult.step}] ${writeResult.error}`);
+  }
+  const insertedIds = writeResult.insertedIds;
 
   const { error: eventsError } = await admin.from("status_events").insert(
     insertedIds.map((serviceId) => ({
@@ -477,7 +528,14 @@ async function main() {
   }, null, 2));
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+// Sprint 8: guard di entry point — importare questo modulo (es. dal test di
+// writeDirectImportServicesAndAssignments) non deve eseguire main() live
+// (file system reale, env reali, Supabase reale). Esegue solo quando lo
+// script è lanciato direttamente (`pnpm exec tsx scripts/import-driver-file-direct.ts ...`).
+const isDirectRun = Boolean(process.argv[1]) && path.resolve(process.argv[1]!) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  void main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

@@ -6,6 +6,7 @@ import { resolveHotelMatch } from "@/lib/server/hotel-matching";
 import { extractFeatures, logAssignmentChange, type AssignmentHistoryEntry } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
 import { auditLog } from "@/lib/server/ops-audit";
+import { verifyDriverBelongsToTenant, verifyDriverIsOperational } from "@/lib/server/assign-service-core";
 
 export const runtime = "nodejs";
 
@@ -481,6 +482,95 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // Sprint 8: verifica server-side che driver_user_id esista, appartenga
+    // al tenant corrente, sia realmente associato a un driver_profile
+    // valido e sia operativo — riusa gli stessi helper già validati in
+    // assign-service-core.ts (SEC-05/FUNC-03), nessuna nuova regola.
+    // Eseguita PRIMA di qualunque insert (services incluso): un driver non
+    // valido non deve produrre nemmeno service "new" orfani di destinazione.
+    const { data: driverProfileLookup } = await auth.admin
+      .from("driver_profiles")
+      .select("id")
+      .eq("tenant_id", auth.membership.tenant_id)
+      .eq("user_id", payload.data.driver_user_id)
+      .maybeSingle();
+    const driverProfileIdForImport = (driverProfileLookup?.id as string | undefined) ?? null;
+
+    const driverOwnership = await verifyDriverBelongsToTenant(
+      auth.admin,
+      auth.membership.tenant_id,
+      { driverUserId: payload.data.driver_user_id, driverProfileId: driverProfileIdForImport },
+      { userId: auth.user.id }
+    );
+    if (!driverOwnership.ok) {
+      auditLog({
+        event: "driver_file_import_write_failed",
+        level: "error",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        details: { step: "driver_validation", reason: "driver_not_found_or_wrong_tenant" },
+      });
+      return NextResponse.json({
+        error: "Autista non trovato o non appartenente al tenant corrente.",
+        summary: {
+          total_rows: parsedRows.length,
+          valid_rows: preview.length,
+          invalid_rows: errors.length,
+          imported_rows: 0
+        },
+        preview,
+        errors
+      }, { status: 404 });
+    }
+
+    if (!driverProfileIdForImport) {
+      auditLog({
+        event: "driver_file_import_write_failed",
+        level: "error",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        details: { step: "driver_validation", reason: "no_driver_profile" },
+      });
+      return NextResponse.json({
+        error: "L'autista selezionato non ha un profilo autista valido.",
+        summary: {
+          total_rows: parsedRows.length,
+          valid_rows: preview.length,
+          invalid_rows: errors.length,
+          imported_rows: 0
+        },
+        preview,
+        errors
+      }, { status: 409 });
+    }
+
+    const driverOperational = await verifyDriverIsOperational(
+      auth.admin,
+      auth.membership.tenant_id,
+      { driverUserId: payload.data.driver_user_id, driverProfileId: driverProfileIdForImport },
+      { userId: auth.user.id }
+    );
+    if (!driverOperational.ok) {
+      auditLog({
+        event: "driver_file_import_write_failed",
+        level: "error",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.user.id,
+        details: { step: "driver_validation", reason: "driver_not_operational" },
+      });
+      return NextResponse.json({
+        error: "L'autista non è attualmente disponibile per nuove assegnazioni.",
+        summary: {
+          total_rows: parsedRows.length,
+          valid_rows: preview.length,
+          invalid_rows: errors.length,
+          imported_rows: 0
+        },
+        preview,
+        errors
+      }, { status: 409 });
+    }
+
     const { data: insertedServices, error: insertError } = await auth.admin
       .from("services")
       .insert(inserts)
@@ -589,24 +679,15 @@ export async function POST(request: NextRequest) {
       // batch nello stesso ordine di `inserts` (nessuna riga preesistente
       // può comparire: i service_id sono appena generati in questa stessa
       // richiesta) — previous è quindi sempre null per costruzione, nessuna
-      // query di snapshot necessaria. driver_profile_id non è mai popolato da
-      // questo import (solo driver_user_id, non tracciato dallo schema
-      // driver_assignment_history): risolto qui in sola lettura,
-      // best-effort, esclusivamente per arricchire lo storico — non altera
-      // la creazione dell'assignment né la risposta. Riusa il contratto già
-      // validato altrove: changeType "driver_swap" solo se il driver è
-      // risolvibile a un driver_profile_id reale (driverChanged: null →
-      // reale); vehicle_label è sempre "" per questo import (mai "" → ""
-      // reale), quindi non genera mai "vehicle_binding" — nessun evento
-      // inventato quando non c'è alcun segnale tracciabile.
+      // query di snapshot necessaria. Sprint 8: driverProfileIdForImport è
+      // già stato risolto e verificato non-null dal guard di validazione
+      // driver sopra (nessuna nuova query qui, era una lettura duplicata).
+      // Riusa il contratto già validato altrove: changeType "driver_swap"
+      // (driver sempre risolvibile ora, per costruzione del guard sopra);
+      // vehicle_label è sempre "" per questo import (mai "" → "" reale),
+      // quindi non genera mai "vehicle_binding".
       try {
-        const { data: driverProfileRow } = await auth.admin
-          .from("driver_profiles")
-          .select("id")
-          .eq("tenant_id", auth.membership.tenant_id)
-          .eq("user_id", payload.data.driver_user_id)
-          .maybeSingle();
-        const toDriverProfileId = (driverProfileRow?.id as string | undefined) ?? null;
+        const toDriverProfileId = driverProfileIdForImport;
         // vehicle_label per questo import è sempre "" (riga 501): normalizzato
         // a null come da convenzione già in uso in assign-service/swap_vehicle.
         const toVehicleLabel: string | null = null;

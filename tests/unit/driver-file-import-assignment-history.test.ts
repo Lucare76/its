@@ -71,12 +71,17 @@ function singleValidRow(overrides: Partial<{
 
 /** Fake Supabase in-memory, tenant-aware — schema minimo per le tabelle usate da driver-file-import. */
 function createTenantAwareSupabase(
-  seed: Partial<Record<"hotels" | "hotel_aliases" | "driver_profiles" | "services" | "assignments" | "status_events", Row[]>> = {}
+  seed: Partial<Record<"hotels" | "hotel_aliases" | "driver_profiles" | "memberships" | "services" | "assignments" | "status_events", Row[]>> = {}
 ) {
   const tables: Record<string, Row[]> = {
     hotels: [...(seed.hotels ?? [])],
     hotel_aliases: [...(seed.hotel_aliases ?? [])],
     driver_profiles: [...(seed.driver_profiles ?? [])],
+    // Sprint 8: verifyDriverBelongsToTenant/verifyDriverIsOperational
+    // (lib/server/assign-service-core.ts) interrogano memberships — tabella
+    // assente dalla fixture prima di Sprint 8, ora aggiunta con lo stesso
+    // schema minimo già usato da quegli helper altrove nel repo.
+    memberships: [...(seed.memberships ?? [])],
     services: [...(seed.services ?? [])],
     assignments: [...(seed.assignments ?? [])],
     status_events: [...(seed.status_events ?? [])],
@@ -242,6 +247,10 @@ function baseSeed(overrides: Parameters<typeof createTenantAwareSupabase>[0] = {
     hotels: [{ id: HOTEL_1, tenant_id: TENANT_A, name: "Hotel Test", normalized_name: "hotel test" }],
     hotel_aliases: [],
     driver_profiles: [{ id: DRIVER_PROFILE, tenant_id: TENANT_A, user_id: DRIVER_USER, full_name: "Mario Rossi" }],
+    // Sprint 8: membership driver valida di default — richiesta da
+    // verifyDriverBelongsToTenant/verifyDriverIsOperational, altrimenti ogni
+    // test fallirebbe al nuovo guard di validazione driver.
+    memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_USER, role: "driver", suspended: false, full_name: "Mario Rossi" }],
     services: [],
     assignments: [],
     status_events: [],
@@ -434,16 +443,17 @@ describe("CONC-07 LOW — storico strutturato (driver_assignment_history) su dri
     expect(Object.prototype.hasOwnProperty.call(assignment, "assignment_source")).toBe(false);
   });
 
-  it("12. no-op (driver non risolvibile a un driver_profile): zero history, import comunque riuscito", async () => {
+  it("12. [contratto cambiato da Sprint 8] driver senza driver_profile: import rifiutato (409), zero history — prima di Sprint 8 l'import proseguiva senza history; ora la validazione driver è un guard bloccante prima di qualunque scrittura", async () => {
     const fake = baseSeed({ driver_profiles: [] });
     authorizeAs(fake);
 
     const res = await callPost();
     const body = await res.json();
 
-    expect(res.status).toBe(200);
-    expect(body.ok).toBe(true);
-    expect(body.summary.imported_rows).toBe(1);
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("L'autista selezionato non ha un profilo autista valido.");
+    expect(body.summary.imported_rows).toBe(0);
+    expect(fake.tables.services).toHaveLength(0);
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
@@ -459,17 +469,15 @@ describe("CONC-07 LOW — storico strutturato (driver_assignment_history) su dri
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
-  it("14. driver non risolto (nessun driver_profiles.user_id corrispondente): comportamento invariato, import riuscito, zero history", async () => {
+  it("14. [contratto cambiato da Sprint 8] driver non risolto (nessun driver_profiles.user_id corrispondente): import rifiutato (409), nessun assignment scritto — prima di Sprint 8 l'import scriveva comunque l'assignment senza history; ora è bloccato a monte", async () => {
     const fake = baseSeed({ driver_profiles: [] });
     authorizeAs(fake);
 
     const res = await callPost();
     const body = await res.json();
 
-    expect(res.status).toBe(200);
-    expect(body.summary.imported_rows).toBe(1);
-    expect(fake.tables.assignments).toHaveLength(1);
-    expect(fake.tables.assignments[0].driver_user_id).toBe(DRIVER_USER);
+    expect(res.status).toBe(409);
+    expect(fake.tables.assignments).toHaveLength(0);
     expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
   });
 
@@ -678,5 +686,155 @@ describe("Data Integrity Sprint 7 — driver-file-import orphan prevention", () 
 
     expect(fake.tables.services[0].tenant_id).toBe(TENANT_A);
     expect(fake.tables.assignments[0].tenant_id).toBe(TENANT_A);
+  });
+});
+
+describe("Sprint 8 — validazione driver (tenant/ruolo/profilo/operativita) su driver-file-import", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logAssignmentChange.mockResolvedValue(undefined);
+    mocks.updateLearnedPatterns.mockResolvedValue({ upserted: 0 });
+  });
+
+  it("29. driver_user_id di un altro tenant (membership solo in TENANT_B): rifiutato 404, zero scritture", async () => {
+    const fake = baseSeed({
+      driver_profiles: [],
+      memberships: [{ tenant_id: TENANT_B, user_id: DRIVER_USER, role: "driver", suspended: false, full_name: "Mario Rossi" }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toBe("Autista non trovato o non appartenente al tenant corrente.");
+    expect(body.summary.imported_rows).toBe(0);
+    expect(fake.tables.services).toHaveLength(0);
+    expect(fake.tables.assignments).toHaveLength(0);
+    expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
+  });
+
+  it("30. driver_user_id inesistente (nessuna membership in nessun tenant): rifiutato 404, zero scritture", async () => {
+    const fake = baseSeed({ driver_profiles: [], memberships: [] });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toBe("Autista non trovato o non appartenente al tenant corrente.");
+    expect(fake.tables.services).toHaveLength(0);
+  });
+
+  it("31. driver_user_id con membership nel tenant corretto ma ruolo diverso da 'driver': rifiutato 404 (stesso guard SEC-05 di assign-service-core, nessuna regola nuova)", async () => {
+    const fake = baseSeed({
+      driver_profiles: [],
+      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_USER, role: "operator", suspended: false, full_name: "Mario Rossi" }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(fake.tables.services).toHaveLength(0);
+  });
+
+  it("32. driver con membership+ruolo validi ma senza driver_profiles: rifiutato 409 'nessun profilo valido', zero scritture", async () => {
+    const fake = baseSeed({ driver_profiles: [] });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("L'autista selezionato non ha un profilo autista valido.");
+    expect(fake.tables.services).toHaveLength(0);
+    expect(fake.tables.assignments).toHaveLength(0);
+  });
+
+  it("33. driver sospeso (memberships.suspended=true): rifiutato 409 'non disponibile', zero scritture", async () => {
+    const fake = baseSeed({
+      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_USER, role: "driver", suspended: true, full_name: "Mario Rossi" }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("L'autista non è attualmente disponibile per nuove assegnazioni.");
+    expect(fake.tables.services).toHaveLength(0);
+  });
+
+  it("34. driver_profile disattivato (driver_profiles.active=false): rifiutato 409 'non disponibile', zero scritture", async () => {
+    const fake = baseSeed({
+      driver_profiles: [{ id: DRIVER_PROFILE, tenant_id: TENANT_A, user_id: DRIVER_USER, full_name: "Mario Rossi", active: false }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error).toBe("L'autista non è attualmente disponibile per nuove assegnazioni.");
+    expect(fake.tables.services).toHaveLength(0);
+  });
+
+  it("35. driver valido (stesso tenant, ruolo driver, profilo attivo, non sospeso): import invariato, successo esattamente come prima di Sprint 8", async () => {
+    const fake = baseSeed();
+    authorizeAs(fake);
+
+    const res = await callPost();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.summary.imported_rows).toBe(1);
+    expect(fake.tables.services[0].status).toBe("assigned");
+    expect(fake.tables.assignments).toHaveLength(1);
+    expect(mocks.logAssignmentChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("36. history non scritta su rifiuto validazione driver (nessuna delle 4 rejection produce driver_assignment_history)", async () => {
+    const fake = baseSeed({ driver_profiles: [] });
+    authorizeAs(fake);
+
+    await callPost();
+
+    expect(mocks.logAssignmentChange).not.toHaveBeenCalled();
+  });
+
+  it("37. audit log su rifiuto validazione driver: nessuna PII, solo campi tecnici (step, reason, tenant/user id)", async () => {
+    const fake = baseSeed({
+      memberships: [{ tenant_id: TENANT_A, user_id: DRIVER_USER, role: "driver", suspended: true, full_name: "Mario Rossi" }],
+    });
+    authorizeAs(fake);
+
+    await callPost();
+
+    expect(mocks.auditLog).toHaveBeenCalled();
+    const payload = JSON.stringify(mocks.auditLog.mock.calls);
+    expect(payload).not.toMatch(/Cliente Test/);
+    expect(payload).not.toMatch(/Agenzia XYZ/);
+    expect(payload).not.toMatch(/customer_name/);
+    expect(payload).not.toMatch(/phone/);
+    const lastCall = mocks.auditLog.mock.calls[mocks.auditLog.mock.calls.length - 1][0];
+    expect(lastCall.tenantId).toBe(TENANT_A);
+    expect(lastCall.details.step).toBe("driver_validation");
+    expect(lastCall.details.reason).toBe("driver_not_operational");
+  });
+
+  it("38. tenant isolation della validazione driver: driver_profiles/memberships di TENANT_B non abilitano mai un import in TENANT_A", async () => {
+    const fake = baseSeed({
+      driver_profiles: [{ id: "d9999999-9999-4999-8999-999999999999", tenant_id: TENANT_B, user_id: DRIVER_USER, full_name: "Altro" }],
+      memberships: [{ tenant_id: TENANT_B, user_id: DRIVER_USER, role: "driver", suspended: false, full_name: "Altro" }],
+    });
+    authorizeAs(fake);
+
+    const res = await callPost();
+
+    expect(res.status).toBe(404);
+    expect(fake.tables.services).toHaveLength(0);
   });
 });
