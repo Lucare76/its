@@ -18,7 +18,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { matchCourseByRouteAndTime } from "./course-matcher";
 import { resolveLegRouteCode } from "./port-resolution";
 import { mapTariffFromTicketMemory } from "./ticket-mapper";
-import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode, isMirrorRouteCode } from "./route-mapping";
+import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode } from "./route-mapping";
 import type { CorsaMedmarRaw } from "./types";
 import type { MedmarTicketRouteCode } from "@/lib/medmar-ticket-memory";
 import {
@@ -252,6 +252,8 @@ async function resolveEmbeddedReturnLeg(
         direction: "return",
         route_code: null,
         route: null,
+        mainland_port: null,
+        island_port: null,
         date: row.departure_date ?? row.date,
         requested_time: null,
         matched_departure_time: null,
@@ -298,6 +300,8 @@ async function resolveLegLive(
     direction,
     route_code: resolution.status === "resolved" ? resolution.routeCode : null,
     route: null,
+    mainland_port: resolution.status === "resolved" ? (resolution.mainlandPort as "napoli" | "pozzuoli") : null,
+    island_port: resolution.status === "resolved" ? (resolution.islandPort as "ischia" | "casamicciola") : null,
     date: row.date,
     requested_time: null,
     matched_departure_time: null,
@@ -537,19 +541,31 @@ export async function runMedmarPreflight(
 
   const legStatuses = [outwardOutcome?.liveStatus, returnOutcome?.liveStatus].filter((s): s is LiveLegStatus => Boolean(s));
 
-  // Con 6 tratte mappate, andata e ritorno potrebbero risolvere su porti
-  // diversi (es. andata Napoli->Ischia + ritorno Ischia->Pozzuoli): la
-  // tariffa AR è pensata per un vero andata/ritorno sulla stessa coppia di
-  // porti, quindi un gruppo con gambe non speculari richiede revisione
-  // manuale, non un id_corsa di riferimento scelto arbitrariamente.
-  const outwardRouteCode = outwardOutcome?.leg.route_code ?? null;
-  const returnRouteCode = returnOutcome?.leg.route_code ?? null;
+  // Fase 2G — un A/R Medmar è valido se andata e ritorno condividono lo
+  // stesso porto mainland (stessa "famiglia" formula_medmar_napoli /
+  // formula_medmar_pozzuoli): la direzione opposta rispetto al continente è
+  // già garantita per costruzione da resolveLegRouteCode (arrival = sempre
+  // mainland->island, departure = sempre island->mainland), quindi non va
+  // riverificata qui. Il porto ISOLANO può invece differire tra le due gambe
+  // (operatività reale: arrivo su Casamicciola, ripartenza da Ischia, o
+  // viceversa) — non più bloccante, solo un warning informativo per
+  // l'operatore. Resta bloccante SOLO un mainland diverso tra le due gambe
+  // (route non supportata/famiglia diversa — es. Napoli vs Pozzuoli).
+  const outwardMainland = outwardOutcome?.leg.mainland_port ?? null;
+  const returnMainland = returnOutcome?.leg.mainland_port ?? null;
+  const outwardIsland = outwardOutcome?.leg.island_port ?? null;
+  const returnIsland = returnOutcome?.leg.island_port ?? null;
   const legRouteMismatch =
-    outwardRouteCode !== null && returnRouteCode !== null && !isMirrorRouteCode(outwardRouteCode, returnRouteCode);
+    outwardMainland !== null && returnMainland !== null && outwardMainland !== returnMainland;
   if (legRouteMismatch) {
     warnings.push({
       code: "leg_route_mismatch",
-      message: `La tratta di andata (${outwardRouteCode}) e quella di ritorno (${returnRouteCode}) non sono l'una lo specchio dell'altra: revisione manuale richiesta.`,
+      message: `La tratta di andata (${outwardOutcome?.leg.route_code}) e quella di ritorno (${returnOutcome?.leg.route_code}) non condividono lo stesso porto terraferma (${outwardMainland} vs ${returnMainland}): revisione manuale richiesta.`,
+    });
+  } else if (outwardIsland !== null && returnIsland !== null && outwardIsland !== returnIsland) {
+    warnings.push({
+      code: "island_port_differs_between_legs",
+      message: `Il porto isolano di arrivo e quello di ripartenza sono diversi: ${outwardIsland === "casamicciola" ? "Casamicciola" : "Ischia"} → ${returnIsland === "casamicciola" ? "Casamicciola" : "Ischia"}. Verificare che sia voluto.`,
     });
   }
 

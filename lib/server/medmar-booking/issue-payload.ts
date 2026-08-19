@@ -331,11 +331,23 @@ export function buildBookingPayload(input: {
 
     const legFrozenQueue = frozenQueueByCorsa.get(String(leg.id_corsa)) ?? [];
 
+    // Fase 2F — id_gruppo allineato alla logica nativa Medmar (osservata nel
+    // JS del portale: s[e] = s.AR, incrementato per passeggero "esploso",
+    // s.AR = max(s.A, s.R) a fine ciclo — Medmar ricostruisce il pairing A/R
+    // cercando lo stesso id_gruppo sulla gamba opposta). Qui equivale a
+    // riusare lo STESSO groupId (passengerIndex + 1) identico su andata e
+    // ritorno per lo stesso passeggero: la posizione del passeggero nel
+    // gruppo (0..pax-1) è deterministica e identica su entrambe le gambe
+    // (stesso preflight.pax, stesso ordine di consumo dei frozen), quindi
+    // passengerIndex da solo è sufficiente, senza bisogno di un contatore
+    // stateful cross-gamba. La tassa collegata eredita SEMPRE lo stesso
+    // groupId del proprio passeggero padre (id_child_riga la lega comunque).
     for (let passengerIndex = 0; passengerIndex < input.preflight.pax; passengerIndex++) {
       const frozen = legFrozenQueue.shift();
       if (!frozen || String(frozen.id_log) !== String(adult.id_log)) {
         throw new MedmarIssuePayloadError("id_biglietto_congelato adulto mancante per uno o più passeggeri.");
       }
+      const passengerGroupId = passengerIndex + 1;
       const passengerRowId = idRiga;
       dettaglio.push({
         biglietto: adultLabel,
@@ -345,7 +357,7 @@ export function buildBookingPayload(input: {
         flag_targa: 0,
         id_biglietto_congelato: frozen.id_biglietto_congelato,
         id_corsa: leg.id_corsa!,
-        id_gruppo: 1,
+        id_gruppo: passengerGroupId,
         id_iva: adult.id_iva,
         id_log: adult.id_log ?? "",
         id_riga: passengerRowId,
@@ -366,7 +378,7 @@ export function buildBookingPayload(input: {
           flag_targa: 0,
           id_child_riga: passengerRowId,
           id_corsa: leg.id_corsa!,
-          id_gruppo: 1,
+          id_gruppo: passengerGroupId,
           id_iva: tax.id_iva,
           id_log: tax.id_log ?? "",
           id_riga: idRiga,

@@ -291,6 +291,102 @@ describe("issue-payload — tassa di sbarco derivata da collegati[] (Fase 2C, ro
     // 2 righe adulto + 2 righe tassa per l'andata, idem per il ritorno (come nel PDF Piscitelli).
     expect(payload.dettaglio.filter((r) => r.flag_ar === "A")).toHaveLength(4);
     expect(payload.dettaglio.filter((r) => r.flag_ar === "R")).toHaveLength(4);
+
+    // Fase 2F — id_gruppo nativo Medmar: passeggero 1 -> gruppo 1 su A e R (adulto+tassa), passeggero 2 -> gruppo 2 su A e R.
+    // Medmar ricostruisce il pairing A/R cercando lo stesso id_gruppo sulla gamba opposta: mai gruppo diverso tra andata/ritorno dello stesso passeggero, mai gruppo diverso tra adulto e tassa collegata.
+    const outwardRows = payload.dettaglio.filter((r) => r.flag_ar === "A");
+    const returnRows = payload.dettaglio.filter((r) => r.flag_ar === "R");
+    expect(outwardRows.map((r) => r.id_gruppo)).toEqual([1, 1, 2, 2]);
+    expect(returnRows.map((r) => r.id_gruppo)).toEqual([1, 1, 2, 2]);
+    // Stesso passeggero (stesso indice di consumo frozen) -> stesso id_gruppo su A e R.
+    expect(outwardRows[0]!.id_gruppo).toBe(returnRows[0]!.id_gruppo);
+    expect(outwardRows[2]!.id_gruppo).toBe(returnRows[2]!.id_gruppo);
+  });
+
+  it("Fase 2F — 1 adulto A/R -> gruppi [1,1,1,1] (A adulto, A tassa, R adulto, R tassa tutti gruppo 1)", () => {
+    const vendibili = new Map([
+      [String(OUTWARD_CORSA), [adultRowWithNestedTax(OUTWARD_CORSA)]],
+      [String(RETURN_CORSA), [adultRowWithNestedTax(RETURN_CORSA)]],
+    ]);
+    const preflight = preflightResult({
+      pax: 1,
+      outward: leg({ id_corsa: OUTWARD_CORSA, direction: "outward" }),
+      return: leg({ id_corsa: RETURN_CORSA, direction: "return" }),
+    });
+    const frozenAdults = [
+      frozen({ id_corsa: OUTWARD_CORSA, id_biglietto_congelato: 910001 }),
+      frozen({ id_corsa: RETURN_CORSA, id_biglietto_congelato: 910002 }),
+    ];
+
+    const payload = buildBookingPayload({
+      preflight,
+      services: [{ id: "svc-1", tenant_id: "t1", customer_name: "Mario Rossi", customer_email: "m@example.test", customer_phone: "123", pax: 1 }],
+      vendibiliByCorsa: vendibili,
+      frozenAdults,
+      config,
+      sessionContext,
+      technicalEmail: "info@ischiatransferservice.it",
+    });
+
+    expect(payload.dettaglio).toHaveLength(4);
+    expect(payload.dettaglio.map((r) => r.id_gruppo)).toEqual([1, 1, 1, 1]);
+    const adultRows = payload.dettaglio.filter((r) => r.biglietto === "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR");
+    const taxRows = payload.dettaglio.filter((r) => r.biglietto === "TASSA DI SBARCO");
+    expect(adultRows).toHaveLength(2);
+    expect(taxRows).toHaveLength(2);
+    expect(new Set(adultRows.map((r) => r.id_biglietto_congelato)).size).toBe(2);
+    const totale = payload.dettaglio.reduce((sum, r) => sum + r.prezzo, 0);
+    expect(totale).toBe(20.5); // 2 x 10.25 (andata + ritorno)
+  });
+
+  it("Fase 2F — 6 adulti A/R -> gruppi 1..6 riusati identici su andata e ritorno, 24 righe totali", () => {
+    const vendibili = new Map([
+      [String(OUTWARD_CORSA), [adultRowWithNestedTax(OUTWARD_CORSA)]],
+      [String(RETURN_CORSA), [adultRowWithNestedTax(RETURN_CORSA)]],
+    ]);
+    const preflight = preflightResult({
+      pax: 6,
+      outward: leg({ id_corsa: OUTWARD_CORSA, direction: "outward" }),
+      return: leg({ id_corsa: RETURN_CORSA, direction: "return" }),
+    });
+    const frozenAdults = [
+      ...Array.from({ length: 6 }, (_, i) => frozen({ id_corsa: OUTWARD_CORSA, id_biglietto_congelato: 920000 + i })),
+      ...Array.from({ length: 6 }, (_, i) => frozen({ id_corsa: RETURN_CORSA, id_biglietto_congelato: 930000 + i })),
+    ];
+
+    const payload = buildBookingPayload({
+      preflight,
+      services: [{ id: "svc-1", tenant_id: "t1", customer_name: "Beatrice Papa", customer_email: "b@example.test", customer_phone: "123", pax: 6 }],
+      vendibiliByCorsa: vendibili,
+      frozenAdults,
+      config,
+      sessionContext,
+      technicalEmail: "info@ischiatransferservice.it",
+    });
+
+    expect(payload.dettaglio).toHaveLength(24);
+    const outwardRows = payload.dettaglio.filter((r) => r.flag_ar === "A");
+    const returnRows = payload.dettaglio.filter((r) => r.flag_ar === "R");
+    expect(outwardRows).toHaveLength(12);
+    expect(returnRows).toHaveLength(12);
+
+    // gruppi 1..6 sull'andata: [1,1,2,2,3,3,4,4,5,5,6,6] (adulto+tassa per ciascuno dei 6 passeggeri).
+    expect(outwardRows.map((r) => r.id_gruppo)).toEqual([1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
+    // Stessi 6 gruppi riusati identici sul ritorno.
+    expect(returnRows.map((r) => r.id_gruppo)).toEqual([1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
+
+    // Frozen distinti: 12 id_biglietto_congelato tutti diversi (mai condivisi tra passeggeri).
+    const adultRows = payload.dettaglio.filter((r) => r.biglietto === "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR");
+    expect(adultRows).toHaveLength(12);
+    expect(new Set(adultRows.map((r) => r.id_biglietto_congelato)).size).toBe(12);
+
+    // quantita sempre 1, prezzo sempre unitario, mai aggregato.
+    for (const row of payload.dettaglio) expect(row.quantita).toBe(1);
+    for (const row of adultRows) expect(row.prezzo).toBe(10.25);
+
+    // Totale invariato: 12 righe adulto x 10.25 (tassa prezzo=0 nella fixture).
+    const totale = payload.dettaglio.reduce((sum, r) => sum + r.prezzo, 0);
+    expect(totale).toBe(123); // 12 x 10.25
   });
 
   it("buildBookingPayload: taxIssue ambiguous -> throw PRIMA di costruire qualunque riga dettaglio mutativa", () => {
@@ -309,6 +405,47 @@ describe("issue-payload — tassa di sbarco derivata da collegati[] (Fase 2C, ro
         technicalEmail: "info@ischiatransferservice.it",
       })
     ).toThrow(MedmarIssuePayloadError);
+  });
+
+  it("Fase 2F — id_gruppo nativo Medmar: 2 adulti, solo andata -> id_gruppo [1,1,2,2], id_child_riga corretto, frozen distinti, totale invariato", () => {
+    const vendibili = new Map([[String(ID_CORSA), [adultRow(), taxRow()]]]);
+    const preflight = preflightResult({ pax: 2, outward: leg({ id_corsa: ID_CORSA }), return: null });
+    const frozenAdults = [
+      frozen({ id_biglietto_congelato: 900101 }),
+      frozen({ id_biglietto_congelato: 900102 }),
+    ];
+
+    const payload = buildBookingPayload({
+      preflight,
+      services: [{ id: "svc-1", tenant_id: "t1", customer_name: "Test Controllato", customer_email: "t@example.test", customer_phone: "123", pax: 2 }],
+      vendibiliByCorsa: vendibili,
+      frozenAdults,
+      config,
+      sessionContext,
+      technicalEmail: "info@ischiatransferservice.it",
+    });
+
+    const adultRows = payload.dettaglio.filter((r) => r.biglietto === "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR");
+    const taxRows = payload.dettaglio.filter((r) => r.biglietto === "TASSA DI SBARCO");
+
+    expect(adultRows).toHaveLength(2);
+    expect(taxRows).toHaveLength(2);
+    for (const row of payload.dettaglio) expect(row.quantita).toBe(1);
+
+    // id_gruppo: passeggero 1 -> 1 (adulto+tassa), passeggero 2 -> 2 (adulto+tassa). Ordine [adulto,tassa,adulto,tassa].
+    expect(payload.dettaglio.map((r) => r.id_gruppo)).toEqual([1, 1, 2, 2]);
+
+    // id_child_riga collega ogni tassa alla PROPRIA riga adulto (mai incrociata).
+    expect(taxRows[0]!.id_child_riga).toBe(adultRows[0]!.id_riga);
+    expect(taxRows[1]!.id_child_riga).toBe(adultRows[1]!.id_riga);
+
+    // Frozen distinti: 2 id_biglietto_congelato diversi, mai condivisi.
+    expect(adultRows.map((r) => r.id_biglietto_congelato)).toEqual([900101, 900102]);
+
+    // Totale invariato: prezzo per riga resta il prezzo UNITARIO (10.25), mai sommato/aggregato.
+    for (const row of adultRows) expect(row.prezzo).toBe(10.25);
+    const totale = payload.dettaglio.reduce((sum, r) => sum + r.prezzo, 0);
+    expect(totale).toBe(20.5); // 2 x 10.25 (tassa prezzo=0 nella fixture)
   });
 
   it("regressione: fixture precedente corsa 133760 (tassa top-level, adulto senza collegati) -> stessa granularità per-passeggero", () => {

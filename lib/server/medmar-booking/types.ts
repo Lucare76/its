@@ -136,6 +136,15 @@ export type MedmarPreflightLeg = {
   direction: "outward" | "return";
   route_code: MedmarTicketRouteCode | null;
   route: { from: string; to: string } | null;
+  /**
+   * Fase 2G — porto mainland/isolano risolti per QUESTA gamba (da
+   * port-resolution.ts), null se route_code non risolto. Usati per
+   * confrontare la "famiglia" (stesso mainland) tra andata e ritorno senza
+   * richiedere più la rotta esattamente speculare — vedi
+   * island_port_differs_between_legs in preflight.ts.
+   */
+  mainland_port: "napoli" | "pozzuoli" | null;
+  island_port: "ischia" | "casamicciola" | null;
   date: string;
   requested_time: string | null;
   matched_departure_time: string | null;

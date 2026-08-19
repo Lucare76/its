@@ -577,6 +577,142 @@ describe("runMedmarPreflight — coerenza andata/ritorno su 6 tratte", () => {
   });
 });
 
+describe("runMedmarPreflight — Fase 2G: A/R con porto isolano diverso tra le gambe (island_port_differs_between_legs)", () => {
+  function corsa(idTratta: number, idCorsa: number, date: string, ora: string, portoPartenza: number, portoArrivo: number, partenzaLabel: string, arrivoLabel: string): Row {
+    return {
+      id_corsa: idCorsa, id_tratta: idTratta, partenza_data: date, partenza_ora: ora,
+      flag_chiuso: 0, flag_sospeso: 0, id_porto_partenza: portoPartenza, id_porto_arrivo: portoArrivo,
+      porto_partenza: partenzaLabel, porto_arrivo: arrivoLabel, nave: "MEDMAR GIULIA",
+    };
+  }
+
+  it("1. Pozzuoli->Casamicciola + Casamicciola->Pozzuoli (stesso porto isolano) -> ok, nessun warning porto diverso", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 53 : route === "casamicciola_pozzuoli" ? 50 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 53 ? [corsa(53, 701, "2026-08-25", "08:00", 44, 2, "POZZUOLI", "CASAMICCIOLA")]
+        : idTratta === 50 ? [corsa(50, 702, "2026-08-28", "17:00", 2, 44, "CASAMICCIOLA", "POZZUOLI")]
+        : []
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "island_port_differs_between_legs")).toBe(false);
+    expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(false);
+  });
+
+  it("2. Pozzuoli->Casamicciola + Ischia->Pozzuoli (porto isolano diverso, stesso mainland) -> ok, warning island_port_differs_between_legs", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 53 : route === "ischia_pozzuoli" ? 14 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 53 ? [corsa(53, 703, "2026-08-25", "08:00", 44, 2, "POZZUOLI", "CASAMICCIOLA")]
+        : idTratta === 14 ? [corsa(14, 704, "2026-08-28", "17:00", 41, 44, "ISCHIA", "POZZUOLI")]
+        : []
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Ischia Porto", date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(false);
+    const warn = result.warnings.find((w) => w.code === "island_port_differs_between_legs");
+    expect(warn).toBeDefined();
+    expect(warn?.message).toBe("Il porto isolano di arrivo e quello di ripartenza sono diversi: Casamicciola → Ischia. Verificare che sia voluto.");
+  });
+
+  it("3. Pozzuoli->Ischia + Casamicciola->Pozzuoli (porto isolano diverso, stesso mainland) -> ok, warning island_port_differs_between_legs", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_ischia" ? 56 : route === "casamicciola_pozzuoli" ? 50 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 56 ? [corsa(56, 705, "2026-08-25", "08:00", 44, 41, "POZZUOLI", "ISCHIA")]
+        : idTratta === 50 ? [corsa(50, 706, "2026-08-28", "17:00", 2, 44, "CASAMICCIOLA", "POZZUOLI")]
+        : []
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Ischia Porto", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    const warn = result.warnings.find((w) => w.code === "island_port_differs_between_legs");
+    expect(warn).toBeDefined();
+    expect(warn?.message).toBe("Il porto isolano di arrivo e quello di ripartenza sono diversi: Ischia → Casamicciola. Verificare che sia voluto.");
+  });
+
+  it("4. Napoli->Ischia + Ischia->Napoli (stesso porto isolano, unico caso possibile su Napoli) -> ok, nessun warning porto diverso", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59 ? [corsa(59, 707, "2026-08-25", "08:00", 1, 41, "NAPOLI", "ISCHIA")]
+        : idTratta === 47 ? [corsa(47, 708, "2026-08-28", "17:00", 41, 1, "ISCHIA", "NAPOLI")]
+        : []
+    );
+    vi.mocked(medmarClient.fetchBigliettiVendibiliReadOnly).mockResolvedValue([AR_TARIFF_ROW, TASSA_SBARCO_ROW] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_napoli", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_napoli", meeting_point: null, date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("ok");
+    expect(result.can_issue).toBe(true);
+    expect(result.warnings.some((w) => w.code === "island_port_differs_between_legs")).toBe(false);
+  });
+
+  it("5. Napoli->Ischia + Casamicciola->Pozzuoli (mainland diverso, Napoli vs Pozzuoli) -> blocco, leg_route_mismatch", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "casamicciola_pozzuoli" ? 50 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 59 ? [corsa(59, 709, "2026-08-25", "08:00", 1, 41, "NAPOLI", "ISCHIA")]
+        : idTratta === 50 ? [corsa(50, 710, "2026-08-28", "17:00", 2, 44, "CASAMICCIOLA", "POZZUOLI")]
+        : []
+    );
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_napoli", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(true);
+    expect(result.warnings.some((w) => w.code === "island_port_differs_between_legs")).toBe(false);
+    expect(medmarClient.fetchBigliettiVendibiliReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("6. Pozzuoli->Casamicciola + Ischia->Napoli (mainland diverso, Pozzuoli vs Napoli) -> blocco, leg_route_mismatch", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "pozzuoli_casamicciola" ? 53 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockImplementation(async ({ idTratta }) =>
+      idTratta === 53 ? [corsa(53, 711, "2026-08-25", "08:00", 44, 2, "POZZUOLI", "CASAMICCIOLA")]
+        : idTratta === 47 ? [corsa(47, 712, "2026-08-28", "17:00", 41, 1, "ISCHIA", "NAPOLI")]
+        : []
+    );
+    const result = await runMedmarPreflight(
+      fakeAdmin([
+        arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola - Piazza Marina", date: "2026-08-25", time: "08:00" }),
+        departureRow({ booking_service_kind: "formula_medmar_napoli", meeting_point: null, date: "2026-08-28", time: "15:00", orario_barca: "17:00" }),
+      ]),
+      TENANT_A, [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "leg_route_mismatch")).toBe(true);
+  });
+});
+
 describe("runMedmarPreflight — modello single-row (Fase 2B.6: ritorno imbarcato nella stessa riga arrival)", () => {
   it("Modello a due righe (arrival+departure collegate) resta invariato: nessun warning embedded_return_*", async () => {
     vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
