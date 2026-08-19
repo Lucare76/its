@@ -80,7 +80,18 @@ function stopOrderMap(stops: BusPdfStop[] = []) {
   return new Map(stops.map((stop) => [stop.stop_name.toUpperCase(), stop.stop_order]));
 }
 
-function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = []) {
+function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = [], direction: Direction = "arrival") {
+  if (direction === "departure") {
+    return [...allocations].sort((a, b) => {
+      const timeA = time5(a.hotel_pickup_time);
+      const timeB = time5(b.hotel_pickup_time);
+      if (timeA !== timeB) return timeA.localeCompare(timeB);
+      const hotelA = (a.hotel_name ?? "").toUpperCase();
+      const hotelB = (b.hotel_name ?? "").toUpperCase();
+      if (hotelA !== hotelB) return hotelA.localeCompare(hotelB);
+      return a.customer_name.localeCompare(b.customer_name, "it");
+    });
+  }
   const orders = stopOrderMap(stops);
   return [...allocations].sort((a, b) => {
     const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
@@ -98,7 +109,7 @@ function groupKey(alloc: BusPdfAllocation) {
 }
 
 function buildRows(input: BusPdfInput) {
-  const sorted = sortedAllocations(input.allocations, input.stops);
+  const sorted = sortedAllocations(input.allocations, input.stops, input.direction);
   let previousKey = "";
   let total = 0;
 
@@ -119,9 +130,27 @@ function buildRows(input: BusPdfInput) {
   };
 }
 
+function buildDepartureUnloadRows(input: BusPdfInput) {
+  if (input.direction !== "departure") return "";
+  const usedStopNames = new Set(input.allocations.map((alloc) => alloc.stop_name.toUpperCase()));
+  const stops = (input.stops ?? [])
+    .filter((stop) => usedStopNames.has(stop.stop_name.toUpperCase()))
+    .sort((a, b) => a.stop_order - b.stop_order);
+
+  if (stops.length === 0) return "";
+
+  const rows = stops.map((stop) => {
+    const label = stop.pickup_note ? `${stop.stop_name} - ${stop.pickup_note}` : stop.stop_name;
+    return `<tr class="unload-row"><td colspan="8">${escapeHtml(label)}</td></tr>`;
+  }).join("");
+
+  return `<tr class="spacer-row"><td colspan="8"></td></tr><tr class="unload-title"><td colspan="8">SCARICO</td></tr>${rows}`;
+}
+
 export function buildBusLinePdfHtml(input: BusPdfInput) {
   const directionTitle = input.title ?? (input.direction === "arrival" ? "ARRIVI" : "PARTENZE");
   const { rows, totalPax } = buildRows(input);
+  const departureUnloadRows = buildDepartureUnloadRows(input);
   const driver = `${input.driverName || "N/D"}${input.driverPhone ? ` · ${input.driverPhone}` : ""}`;
   const subtitle = `${input.lineName}${input.busLabel ? ` — Bus ${input.busLabel}` : ""} · ${fmtDate(input.dateIso)}`;
   const headerColumns = input.direction === "arrival"
@@ -149,7 +178,7 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
           alloc.pax_assigned,
           alloc.customer_name,
           alloc.customer_phone,
-          alloc.stop_name,
+          stopNote ? `${alloc.stop_name} - ${stopNote}` : alloc.stop_name,
           agency,
           cleanNote,
         ];
@@ -242,6 +271,27 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
       text-align: center;
     }
     .total .value { color: #079669; font-size: 17px; }
+    .spacer-row td {
+      height: 6px;
+      padding: 0;
+      border-left: 0;
+      border-right: 0;
+      background: white;
+    }
+    .unload-title td {
+      background: #d4edda;
+      color: ${BRAND_NAVY};
+      font-size: 12px;
+      font-weight: 900;
+      text-align: left;
+    }
+    .unload-row td {
+      color: ${BRAND_NAVY};
+      font-size: 10.5px;
+      font-weight: 700;
+      text-align: left;
+      background: #f8fff9;
+    }
     .footer {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -314,6 +364,7 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
         <tbody>
           ${bodyRows || `<tr><td colspan="8" class="center">Nessun passeggero assegnato</td></tr>`}
           <tr class="total"><td colspan="2">TOTALE</td><td class="value">${totalPax}</td><td colspan="5"></td></tr>
+          ${departureUnloadRows}
         </tbody>
       </table>
       <footer class="footer">
