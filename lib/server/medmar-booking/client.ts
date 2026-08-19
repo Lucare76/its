@@ -4,8 +4,20 @@
  * Fase 1.5 "Preflight live": 2 endpoint READ-ONLY reali, verificati
  * manualmente sul portale Medmar (risposta HTTP 200):
  *
- *   GET {prefix}/corse/{id_tratta}?partenza_data_dal=YYYY-MM-DD&dopo_le=HH:MM:SS&vendibile=1
+ *   GET {prefix}/corse/{id_tratta}?partenza_data_dal=YYYY-MM-DD&dopo_le=HH:MM:SS
  *   GET {prefix}/biglietti/vendibili/{id_corsa}?id_tariffa=&id_biglietto=
+ *
+ * NOTA vendibile=1: il parametro è stato rimosso dalla ricerca corse (era
+ * inviato in tutte le chiamate precedenti). Verificato live il 2026-08-19 su
+ * NAPOLI->ISCHIA: una corsa reale, aperta e non sospesa (flag_chiuso=false,
+ * flag_sospeso=false) risultava assente dai risultati con vendibile=1 pur
+ * essendo vendibile tramite il canale/ruolo agenzia di Ischia Transfer
+ * Service (campo "ruoli" della corsa) — vendibile=1 riflette solo la
+ * visibilità sul canale pubblico generico, non l'autorizzazione del nostro
+ * account. Il filtro corretto per "corsa candidata" resta flag_chiuso/
+ * flag_sospeso (vedi isCandidateCorsa in preflight.ts); un'eventuale reale
+ * indisponibilità di biglietti emerge comunque a valle, dalla chiamata
+ * biglietti/vendibili per quella corsa.
  *
  * Flusso reale completo osservato manualmente (per contesto — SOLO gli step
  * 1-2 sono implementati qui, gli altri restano bloccati per sempre in questa
@@ -248,7 +260,6 @@ function buildCorsePagePath(params: { idTratta: number; partenzaDataDal: string;
     id_tratta: String(params.idTratta),
     partenza_data_dal: params.partenzaDataDal,
     dopo_le: params.dopoLe,
-    vendibile: "1",
     page: String(page),
   });
   return `${MEDMAR_API_PATH_PREFIX}/corse/${params.idTratta}?${search.toString()}`;
