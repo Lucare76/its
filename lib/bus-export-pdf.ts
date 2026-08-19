@@ -159,7 +159,7 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
 
   const bodyRows = rows.map(({ alloc, index, shouldRenderStop, stopTime, stopNote, hotel, agency, cleanNote }) => {
     const stopBand = shouldRenderStop
-      ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">▣</span><strong>${escapeHtml(stopTime || "—")} ${escapeHtml(alloc.stop_name)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
+      ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">▣</span><strong>${escapeHtml(alloc.stop_name)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
       : "";
     const cells = input.direction === "arrival"
       ? [
