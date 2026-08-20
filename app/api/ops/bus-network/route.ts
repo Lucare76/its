@@ -1731,7 +1731,7 @@ export async function POST(request: NextRequest) {
           .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("active", true).order("stop_order"),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status")
           .eq("tenant_id", tenantId).not("status", "in", '("closed","completed")').order("sort_order"),
-        auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date),
+        auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date).eq("direction", parsed.direction),
         auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId),
       ]);
       if (allStopsRes.error) throw new Error(allStopsRes.error.message);
