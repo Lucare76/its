@@ -2,9 +2,24 @@ import { describe, expect, it } from "vitest";
 import {
   resolveMedmarCardCompact,
   isMedmarDeliveryRetryButtonVisible,
+  buildDeliveryAttemptIndex,
+  lookupDeliveryAttempt,
+  resolveMedmarGroupDelivery,
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
   MEDMAR_DELIVERY_LIST_NON_ACTIONABLE_STATUSES,
 } from "@/lib/medmar-delivery-card";
+
+type TestAttempt = { id: string; service_ids: string[]; status: string };
+
+// Fixture ispirate ai casi reali del bug report (id tecnici reali, status/id sintetici).
+const SENESE_SVC_1 = "954f789f-ff30-422f-babb-acca1302302d";
+const SENESE_SVC_2 = "e4f9fcd3-42b4-476d-b541-fa7249a39163";
+const PIETRO_SVC_1 = "20c2c611-d438-4988-acbd-c7f7c33db54f";
+const PIETRO_SVC_2 = "f2191285-176d-474b-add4-c2e48b796b29";
+const UNRELATED_SVC = "00000000-0000-4000-8000-000000000099";
+
+const SENESE_ATTEMPT: TestAttempt = { id: "attempt-senese", service_ids: [SENESE_SVC_1, SENESE_SVC_2], status: "delivered" };
+const PIETRO_ATTEMPT: TestAttempt = { id: "attempt-pietro", service_ids: [PIETRO_SVC_1, PIETRO_SVC_2], status: "delivered" };
 
 describe("resolveMedmarCardCompact — regola card compatta (biglietti-medmar)", () => {
   it("1. attempt 'delivered' -> card compatta", () => {
@@ -72,5 +87,71 @@ describe("costanti esportate coerenti con l'engine server-side", () => {
     for (const s of MEDMAR_DELIVERY_AUTO_RETRY_STATUSES) {
       expect(MEDMAR_DELIVERY_LIST_NON_ACTIONABLE_STATUSES.has(s)).toBe(false);
     }
+  });
+});
+
+describe("buildDeliveryAttemptIndex / lookupDeliveryAttempt — matching service_ids <-> attempt (bug FASE 2/3)", () => {
+  it("indicizza ogni service_id di ogni attempt", () => {
+    const index = buildDeliveryAttemptIndex([SENESE_ATTEMPT, PIETRO_ATTEMPT]);
+    expect(index.get(SENESE_SVC_1)).toBe(SENESE_ATTEMPT);
+    expect(index.get(SENESE_SVC_2)).toBe(SENESE_ATTEMPT);
+    expect(index.get(PIETRO_SVC_1)).toBe(PIETRO_ATTEMPT);
+    expect(index.get(PIETRO_SVC_2)).toBe(PIETRO_ATTEMPT);
+  });
+
+  it("service_id non collegato a nessun attempt -> lookup undefined", () => {
+    const index = buildDeliveryAttemptIndex([SENESE_ATTEMPT]);
+    expect(lookupDeliveryAttempt(index, [UNRELATED_SVC])).toBeUndefined();
+  });
+
+  it("lookup trova l'attempt anche se solo UNO dei service_ids del gruppo combacia", () => {
+    const index = buildDeliveryAttemptIndex([SENESE_ATTEMPT]);
+    expect(lookupDeliveryAttempt(index, [UNRELATED_SVC, SENESE_SVC_2])).toBe(SENESE_ATTEMPT);
+  });
+
+  it("a parita' di service_id vince il primo attempt nell'array in input (ordine deterministico, indipendente da Postgres)", () => {
+    const stale: TestAttempt = { id: "attempt-stale", service_ids: [SENESE_SVC_1], status: "pdf_not_found" };
+    const fresh: TestAttempt = { id: "attempt-fresh", service_ids: [SENESE_SVC_1], status: "delivered" };
+    expect(buildDeliveryAttemptIndex([stale, fresh]).get(SENESE_SVC_1)).toBe(stale);
+    expect(buildDeliveryAttemptIndex([fresh, stale]).get(SENESE_SVC_1)).toBe(fresh);
+  });
+});
+
+describe("resolveMedmarGroupDelivery — regola compatta end-to-end (matching + compact rule)", () => {
+  it("2. LUCIANO SENESE (736987): attempt delivered con service_ids del gruppo -> compatta", () => {
+    const result = resolveMedmarGroupDelivery([SENESE_SVC_1, SENESE_SVC_2], [SENESE_ATTEMPT, PIETRO_ATTEMPT], "2026-08-20T09:44:46.866Z");
+    expect(result.isCompact).toBe(true);
+    expect(result.attempt).toBe(SENESE_ATTEMPT);
+  });
+
+  it("2b. prenotazione 737817 (PIETRO VITO): attempt delivered con service_ids del gruppo -> compatta", () => {
+    const result = resolveMedmarGroupDelivery([PIETRO_SVC_1, PIETRO_SVC_2], [SENESE_ATTEMPT, PIETRO_ATTEMPT], "2026-08-20T14:57:57.562Z");
+    expect(result.isCompact).toBe(true);
+    expect(result.attempt).toBe(PIETRO_ATTEMPT);
+  });
+
+  it("3. delivered esiste ma NON e' collegato ai service_ids del gruppo -> non compatta (nessun attempt trovato)", () => {
+    const result = resolveMedmarGroupDelivery([UNRELATED_SVC], [SENESE_ATTEMPT, PIETRO_ATTEMPT], null);
+    expect(result.isCompact).toBe(false);
+    expect(result.attempt).toBeUndefined();
+  });
+
+  it("4. nessun attempt collegato ma medmar_ticket_sent_at valorizzato -> fallback compatto", () => {
+    const result = resolveMedmarGroupDelivery([UNRELATED_SVC], [SENESE_ATTEMPT], "2026-08-20T09:44:46.866Z");
+    expect(result.isCompact).toBe(true);
+    expect(result.attempt).toBeUndefined();
+  });
+
+  it("5. attempt collegato ma NON delivered vince sempre sul fallback sentAt", () => {
+    const pending: TestAttempt = { id: "attempt-pending", service_ids: [SENESE_SVC_1], status: "pdf_not_found" };
+    const result = resolveMedmarGroupDelivery([SENESE_SVC_1], [pending], "2026-08-20T09:44:46.866Z");
+    expect(result.isCompact).toBe(false);
+    expect(result.attempt).toBe(pending);
+  });
+
+  it("6. awaiting_pdf -> non compatta", () => {
+    const awaiting: TestAttempt = { id: "attempt-awaiting", service_ids: [SENESE_SVC_1], status: "awaiting_pdf" };
+    const result = resolveMedmarGroupDelivery([SENESE_SVC_1], [awaiting], null);
+    expect(result.isCompact).toBe(false);
   });
 });

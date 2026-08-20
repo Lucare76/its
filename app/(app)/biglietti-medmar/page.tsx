@@ -21,7 +21,7 @@ import {
   type MedmarDeliveryDiagnostics,
 } from "@/lib/medmar-issue-flow";
 import {
-  resolveMedmarCardCompact,
+  resolveMedmarGroupDelivery,
   isMedmarDeliveryRetryButtonVisible,
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
 } from "@/lib/medmar-delivery-card";
@@ -933,31 +933,19 @@ export default function BigliettiMedmarPage() {
     });
   };
 
-  /** service_id -> ultimo delivery attempt che lo include (sola lettura). */
-  const deliveryAttemptByServiceId = useMemo(() => {
-    const map = new Map<string, MedmarDeliveryAttemptRow>();
-    for (const attempt of deliveryAttempts) {
-      for (const sid of attempt.service_ids) map.set(sid, attempt);
-    }
-    return map;
-  }, [deliveryAttempts]);
-
   /**
-   * Regola card compatta (FASE 2): compatta se il delivery attempt e'
-   * 'delivered'; se non esiste alcun attempt (es. legacy pre-migrazione
-   * 0237), fallback difensivo su medmar_ticket_sent_at valorizzato — MAI
-   * compatta se un attempt esiste con uno stato diverso da 'delivered'
-   * (awaiting_pdf, pdf_not_found, delivery_started, errori, revisione).
+   * Stato delivery per card (FASE 2/3/4): matching service_ids -> attempt e
+   * regola compatta delegati a lib/medmar-delivery-card.ts (pure, testato)
+   * — mai calcolato dal solo stato locale post-emissione, sempre dai dati
+   * gia' presenti in DB (deliveryAttempts caricati da loadMedmarDeliveryStatus).
    */
   const groupDeliveryByKey = useMemo(() => {
     const map = new Map<string, { attempt?: MedmarDeliveryAttemptRow; isCompact: boolean }>();
     for (const g of bookingGroups) {
-      const attempt = g.allServiceIds.map((id) => deliveryAttemptByServiceId.get(id)).find((a): a is MedmarDeliveryAttemptRow => !!a);
-      const isCompact = resolveMedmarCardCompact({ attemptStatus: attempt?.status ?? null, sentAt: g.sentAt });
-      map.set(g.key, { attempt, isCompact });
+      map.set(g.key, resolveMedmarGroupDelivery(g.allServiceIds, deliveryAttempts, g.sentAt));
     }
     return map;
-  }, [bookingGroups, deliveryAttemptByServiceId]);
+  }, [bookingGroups, deliveryAttempts]);
 
   return (
     <>
