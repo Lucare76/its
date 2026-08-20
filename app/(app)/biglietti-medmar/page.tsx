@@ -275,6 +275,27 @@ async function apiFetchJson<T>(path: string, token: string, options?: RequestIni
   return body;
 }
 
+const MEDMAR_DELIVERY_STATUS_LABEL: Record<string, string> = {
+  awaiting_pdf: "Biglietto emesso, PDF in attesa",
+  pdf_found: "PDF trovato",
+  pdf_cleaned: "PDF pulito",
+  delivery_started: "Invio in corso",
+  delivered: "Biglietto inviato",
+  pdf_not_found: "Errore: PDF non trovato",
+  pdf_ambiguous: "Errore: PDF ambiguo",
+  pdf_validation_failed: "Errore: PDF non validato",
+  recipient_missing: "Errore: destinatario mancante",
+  delivery_failed: "Errore invio: revisione manuale richiesta",
+  delivery_state_unknown: "Esito invio incerto: revisione manuale richiesta",
+  manual_review: "Revisione manuale richiesta",
+};
+
+function medmarDeliveryStatusLabel(status: string | undefined, recipient: string | null | undefined): string {
+  if (!status) return "—";
+  if (status === "delivered" && recipient) return `Biglietto inviato a ${recipient}`;
+  return MEDMAR_DELIVERY_STATUS_LABEL[status] ?? status;
+}
+
 // ─── Componente ─────────────────────────────────────────────────────────────
 
 export default function BigliettiMedmarPage() {
@@ -295,6 +316,12 @@ export default function BigliettiMedmarPage() {
   const [verifying, setVerifying] = useState<string | null>(null); // key del gruppo in verifica
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const [verifyModal, setVerifyModal] = useState<{ group: BookingGroup; result: MedmarPreflightResult } | null>(null);
+  const [medmarDelivery, setMedmarDelivery] = useState<{
+    phase: "idle" | "sending" | "done";
+    status?: string;
+    error?: string;
+    recipient?: string | null;
+  }>({ phase: "idle" });
   const [medmarPrepareState, dispatchMedmarPrepare] = useReducer(
     medmarPrepareReducer,
     { phase: "idle" } as MedmarPrepareState
@@ -733,6 +760,23 @@ export default function BigliettiMedmarPage() {
       alert("Errore di rete");
     } finally {
       setSending(null);
+    }
+  };
+
+  const handleDeliverMedmarPdf = async (serviceIds: string[]) => {
+    if (!token || medmarDelivery.phase === "sending") return;
+    setMedmarDelivery({ phase: "sending" });
+    try {
+      const res = await fetch("/api/services/medmar-send", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ service_ids: serviceIds }),
+      });
+      const data = (await res.json()) as { ok: boolean; status?: string; error?: string; recipient?: string | null };
+      setMedmarDelivery({ phase: "done", status: data.status, error: data.ok ? undefined : data.error, recipient: data.recipient ?? null });
+      if (data.ok && tenantId) void loadData(tenantId, dateFrom, dateTo);
+    } catch {
+      setMedmarDelivery({ phase: "done", status: "delivery_state_unknown", error: "Errore di rete durante l'invio." });
     }
   };
 
@@ -1220,7 +1264,7 @@ export default function BigliettiMedmarPage() {
             <h2 className="text-base font-semibold text-slate-800">Verifica emissione Medmar</h2>
             <button
               type="button"
-              onClick={() => { setVerifyModal(null); dispatchMedmarPrepare({ type: "RESET" }); }}
+              onClick={() => { setVerifyModal(null); dispatchMedmarPrepare({ type: "RESET" }); setMedmarDelivery({ phase: "idle" }); }}
               className="text-slate-400 hover:text-slate-600 text-xl leading-none"
             >×</button>
           </div>
@@ -1446,16 +1490,34 @@ export default function BigliettiMedmarPage() {
 
               {medmarPrepareState.phase === "issued" && (
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 space-y-0.5">
-                  <p className="font-semibold">Biglietto Medmar emesso{medmarPrepareState.result.existing ? " (emissione gia' esistente)" : ""}</p>
+                  <p className="font-semibold">✅ Biglietto Medmar emesso{medmarPrepareState.result.existing ? " (emissione gia' esistente)" : ""}</p>
                   <p>Codice Medmar: {medmarPrepareState.result.medmar_numero}</p>
                   <p>Prenotazione: {medmarPrepareState.result.medmar_id_prenotazione}</p>
                   <p>Prezzo finale: {formatEur(medmarPrepareState.result.final_total_cents)}</p>
+
+                  <div className="mt-2 border-t border-emerald-200 pt-2 space-y-1">
+                    <p>
+                      Stato invio: {medmarDelivery.phase === "sending" ? "Invio in corso" : medmarDeliveryStatusLabel(medmarDelivery.status, medmarDelivery.recipient)}
+                    </p>
+                    {medmarDelivery.phase === "done" && medmarDelivery.error && (
+                      <p className="text-rose-700">{medmarDelivery.error}</p>
+                    )}
+                    {verifyModal && medmarDelivery.phase !== "sending" && medmarDelivery.status !== "delivered" && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeliverMedmarPdf(verifyModal.group.allServiceIds)}
+                        className="mt-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                      >
+                        Invia biglietto pulito all&apos;agenzia
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
           )}
 
-          <button type="button" onClick={() => { setVerifyModal(null); dispatchMedmarPrepare({ type: "RESET" }); }}
+          <button type="button" onClick={() => { setVerifyModal(null); dispatchMedmarPrepare({ type: "RESET" }); setMedmarDelivery({ phase: "idle" }); }}
             className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
             Chiudi
           </button>
