@@ -284,13 +284,13 @@ async function apiFetchJson<T>(path: string, token: string, options?: RequestIni
 }
 
 const MEDMAR_DELIVERY_STATUS_LABEL: Record<string, string> = {
-  awaiting_pdf: "Biglietto emesso, PDF in attesa",
+  awaiting_pdf: "PDF Medmar non ancora disponibile. Il sistema riproverà automaticamente.",
   pdf_found: "PDF trovato",
   pdf_cleaned: "PDF pulito",
   delivery_started: "Invio automatico in corso",
   delivery_in_progress: "Invio automatico ancora in corso (ricerca PDF lenta): verifica più tardi",
   delivered: "Biglietto inviato",
-  pdf_not_found: "PDF non ancora trovato",
+  pdf_not_found: "PDF Medmar non ancora disponibile. Il sistema riproverà automaticamente.",
   pdf_ambiguous: "Revisione manuale richiesta (PDF ambiguo)",
   pdf_validation_failed: "Revisione manuale richiesta (PDF non validato)",
   recipient_missing: "Revisione manuale richiesta (destinatario mancante)",
@@ -313,6 +313,21 @@ const MEDMAR_DELIVERY_RETRYABLE_STATUSES = new Set([
   "delivery_error",
   "manual_review",
 ]);
+
+/** Stati che il cron di retry automatico (/api/cron/medmar-delivery-retry) ritenta davvero — deve restare identico a RETRYABLE_DELIVERY_STATUSES in delivery-types.ts. */
+const MEDMAR_DELIVERY_AUTO_RETRY_STATUSES = new Set(["awaiting_pdf", "pdf_not_found"]);
+
+function formatDateTimeIt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function addMinutesIso(iso: string, minutes: number): string {
+  const d = new Date(iso);
+  d.setMinutes(d.getMinutes() + minutes);
+  return d.toISOString();
+}
 
 function medmarDeliveryStatusLabel(status: string | undefined, recipient: string | null | undefined): string {
   if (!status) return "—";
@@ -345,6 +360,8 @@ export default function BigliettiMedmarPage() {
     status?: string;
     error?: string;
     recipient?: string | null;
+    attemptCount?: number;
+    lastAttemptAt?: string;
   }>({ phase: "idle" });
   const [medmarPrepareState, dispatchMedmarPrepare] = useReducer(
     medmarPrepareReducer,
@@ -799,8 +816,22 @@ export default function BigliettiMedmarPage() {
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({ service_ids: serviceIds }),
       });
-      const data = (await res.json()) as { ok: boolean; status?: string; error?: string; recipient?: string | null };
-      setMedmarDelivery({ phase: "done", status: data.status, error: data.ok ? undefined : data.error, recipient: data.recipient ?? null });
+      const data = (await res.json()) as {
+        ok: boolean;
+        status?: string;
+        error?: string;
+        recipient?: string | null;
+        attempt_count?: number;
+        last_attempt_at?: string;
+      };
+      setMedmarDelivery({
+        phase: "done",
+        status: data.status,
+        error: data.ok ? undefined : data.error,
+        recipient: data.recipient ?? null,
+        attemptCount: data.attempt_count,
+        lastAttemptAt: data.last_attempt_at,
+      });
       if (data.ok && tenantId) void loadData(tenantId, dateFrom, dateTo);
     } catch {
       setMedmarDelivery({ phase: "done", status: "delivery_state_unknown", error: "Errore di rete durante l'invio." });
@@ -1532,6 +1563,18 @@ export default function BigliettiMedmarPage() {
                     {medmarDelivery.phase === "done" && medmarDelivery.error && medmarDelivery.status !== "delivered" && (
                       <p className="text-rose-700">{medmarDelivery.error}</p>
                     )}
+                    {/* Diagnostica retry automatico: mostrata solo quando disponibile (risposta di /medmar-send),
+                        solo per gli stati che il cron di retry ritenta davvero (awaiting_pdf/pdf_not_found). */}
+                    {medmarDelivery.phase === "done" &&
+                      typeof medmarDelivery.attemptCount === "number" &&
+                      medmarDelivery.status &&
+                      MEDMAR_DELIVERY_AUTO_RETRY_STATUSES.has(medmarDelivery.status) && (
+                        <p className="text-[11px] text-slate-500">
+                          Tentativi: {medmarDelivery.attemptCount} · Ultimo tentativo:{" "}
+                          {medmarDelivery.lastAttemptAt ? formatDateTimeIt(medmarDelivery.lastAttemptAt) : "—"} · Prossimo retry:{" "}
+                          {medmarDelivery.lastAttemptAt ? formatDateTimeIt(addMinutesIso(medmarDelivery.lastAttemptAt, 2)) : "a breve"}
+                        </p>
+                      )}
                     {/* Pulsante manuale = fallback: mai mostrato se già delivered (terminale) o se lo stato è
                         "incerto" (delivery_in_progress/delivery_state_unknown) — nessun retry automatico su ambiguità. */}
                     {verifyModal &&
@@ -1546,7 +1589,7 @@ export default function BigliettiMedmarPage() {
                           className="mt-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
                         >
                           {medmarDelivery.status && MEDMAR_DELIVERY_RETRYABLE_STATUSES.has(medmarDelivery.status)
-                            ? "Riprova invio biglietto pulito"
+                            ? "Riprova ora"
                             : "Invia biglietto pulito"}
                         </button>
                       )}

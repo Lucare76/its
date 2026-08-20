@@ -139,4 +139,23 @@ describe("POST /api/services/medmar-send — wrapper sicuro (Fase delivery)", ()
     expect(json.ok).toBe(false);
     expect(json.status).toBe("pdf_not_found");
   });
+
+  it("15e. la route espone attempt_count/last_attempt_at per popolare la diagnostica retry in UI (letti da outcome.attempt, nessun invio aggiuntivo)", async () => {
+    const servicesUpdateSpy = vi.fn();
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(servicesUpdateSpy, [{ id: ATTEMPT_ID, service_ids: [SVC1, SVC2] }])
+    );
+    mocks.deliverMedmarTicket.mockResolvedValue({
+      ok: false,
+      status: "pdf_not_found",
+      error: "Nessun PDF trovato nella mailbox Medmar per questa prenotazione.",
+      attempt: { attempt_count: 2, updated_at: "2026-08-20T15:00:00.000Z" },
+    });
+
+    const res = await POST(makeRequest({ service_ids: [SVC1, SVC2] }));
+    const json = (await res.json()) as { attempt_count?: number; last_attempt_at?: string };
+
+    expect(json.attempt_count).toBe(2);
+    expect(json.last_attempt_at).toBe("2026-08-20T15:00:00.000Z");
+  });
 });

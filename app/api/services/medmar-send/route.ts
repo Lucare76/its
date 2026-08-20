@@ -94,8 +94,16 @@ export async function POST(request: NextRequest) {
       already_delivered: outcome.already_delivered,
       recipient: outcome.attempt.recipient_email,
       resend_message_id: outcome.attempt.resend_message_id,
+      attempt_count: outcome.attempt.attempt_count,
+      last_attempt_at: outcome.attempt.updated_at,
     });
   }
 
-  return NextResponse.json({ ok: false, status: outcome.status, error: outcome.error }, { status: 409 });
+  return NextResponse.json({
+    ok: false,
+    status: outcome.status,
+    error: outcome.error,
+    attempt_count: "attempt" in outcome ? outcome.attempt.attempt_count : undefined,
+    last_attempt_at: "attempt" in outcome ? outcome.attempt.updated_at : undefined,
+  }, { status: 409 });
 }

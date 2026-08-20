@@ -10,6 +10,7 @@
     { "path": "/api/cron/sla-check",         "schedule": "0 8 * * *"    },
     { "path": "/api/cron/whatsapp-token-check", "schedule": "30 7 * * *" },
     { "path": "/api/cron/whatsapp-info",          "schedule": "0 9 * * *"   },
-    { "path": "/api/cron/whatsapp-convocazioni",  "schedule": "5 11 * * *"  }
+    { "path": "/api/cron/whatsapp-convocazioni",  "schedule": "5 11 * * *"  },
+    { "path": "/api/cron/medmar-delivery-retry",  "schedule": "*/10 * * * *" }
   ]
 }
