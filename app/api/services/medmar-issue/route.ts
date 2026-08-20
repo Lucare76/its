@@ -12,6 +12,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { issueInputSchema } from "@/lib/server/medmar-booking/validation";
 import { createMedmarIssueOrchestrator } from "@/lib/server/medmar-booking/issue-orchestrator";
 import { consumeConfirmationToken, MedmarConfirmationInvalidError } from "@/lib/server/medmar-booking/issue-confirmation";
+import { deliverMedmarTicketWithTimeout } from "@/lib/server/medmar-booking/pdf-delivery";
 
 export const runtime = "nodejs";
 
@@ -74,6 +75,32 @@ export async function POST(request: NextRequest) {
         retry_allowed: "retry_allowed" in result ? result.retry_allowed : undefined,
       },
     });
+
+    // Auto-delivery: SOLO dopo emissione "completed" riuscita, mai su un
+    // esito di emissione non riuscito. Idempotente (deliverMedmarTicket
+    // verifica da solo se è già stato inviato), quindi sicuro da chiamare
+    // anche quando "completed" arriva dal fast-path idempotency (retry
+    // dello stesso click). Un fallimento della delivery non tocca MAI la
+    // risposta di emissione: `result` resta invariato, viene solo
+    // arricchito con un campo `delivery` aggiuntivo.
+    if (result.ok && result.status === "completed") {
+      const delivery = await deliverMedmarTicketWithTimeout({
+        admin,
+        tenantId,
+        userId: auth.user.id,
+        issuingAttemptId: result.attempt_id,
+      });
+      auditLog({
+        event: "medmar_auto_delivery",
+        level: delivery.status === "delivered" ? "info" : delivery.status === "delivery_error" ? "error" : "warn",
+        tenantId,
+        userId: auth.user.id,
+        role: auth.membership.role,
+        outcome: delivery.status,
+        details: { attempt_id: result.attempt_id, warning: delivery.warning ?? undefined },
+      });
+      return NextResponse.json({ ...result, delivery }, { status: 200 });
+    }
 
     const status = result.ok ? 200 : result.status === "already_in_progress" ? 409 : result.status === "feature_disabled" ? 403 : 422;
     return NextResponse.json(result, { status });

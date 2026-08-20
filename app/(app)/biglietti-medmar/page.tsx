@@ -184,6 +184,12 @@ type MedmarPreflightResult = {
   } | null;
 };
 
+type MedmarAutoDeliverySummary = {
+  status: string;
+  warning: string | null;
+  recipient_email: string | null;
+};
+
 type MedmarIssueResult =
   | {
       ok: true;
@@ -192,6 +198,8 @@ type MedmarIssueResult =
       medmar_numero: string;
       final_total_cents: number;
       existing: boolean;
+      /** Presente solo dopo il collegamento auto-delivery (Fase auto-delivery): esito dell'invio automatico tentato subito dopo l'emissione. */
+      delivery?: MedmarAutoDeliverySummary;
     }
   | {
       ok: false;
@@ -279,20 +287,36 @@ const MEDMAR_DELIVERY_STATUS_LABEL: Record<string, string> = {
   awaiting_pdf: "Biglietto emesso, PDF in attesa",
   pdf_found: "PDF trovato",
   pdf_cleaned: "PDF pulito",
-  delivery_started: "Invio in corso",
+  delivery_started: "Invio automatico in corso",
+  delivery_in_progress: "Invio automatico ancora in corso (ricerca PDF lenta): verifica più tardi",
   delivered: "Biglietto inviato",
-  pdf_not_found: "Errore: PDF non trovato",
-  pdf_ambiguous: "Errore: PDF ambiguo",
-  pdf_validation_failed: "Errore: PDF non validato",
-  recipient_missing: "Errore: destinatario mancante",
-  delivery_failed: "Errore invio: revisione manuale richiesta",
-  delivery_state_unknown: "Esito invio incerto: revisione manuale richiesta",
+  pdf_not_found: "PDF non ancora trovato",
+  pdf_ambiguous: "Revisione manuale richiesta (PDF ambiguo)",
+  pdf_validation_failed: "Revisione manuale richiesta (PDF non validato)",
+  recipient_missing: "Revisione manuale richiesta (destinatario mancante)",
+  delivery_failed: "Invio non riuscito",
+  delivery_error: "Invio non riuscito (errore interno)",
+  delivery_state_unknown: "Stato invio incerto: non reinviare automaticamente",
   manual_review: "Revisione manuale richiesta",
+  issuing_attempt_not_found: "Revisione manuale richiesta (emissione non trovata)",
+  issuing_not_completed: "Revisione manuale richiesta (emissione non completata)",
+  remote_state_unknown_blocked: "Stato invio incerto: non reinviare automaticamente",
 };
+
+/** Solo questi stati mostrano il pulsante manuale come fallback: mai per stati terminali o "incerti" (nessun retry automatico su ambiguità). */
+const MEDMAR_DELIVERY_RETRYABLE_STATUSES = new Set([
+  "pdf_not_found",
+  "pdf_ambiguous",
+  "pdf_validation_failed",
+  "recipient_missing",
+  "delivery_failed",
+  "delivery_error",
+  "manual_review",
+]);
 
 function medmarDeliveryStatusLabel(status: string | undefined, recipient: string | null | undefined): string {
   if (!status) return "—";
-  if (status === "delivered" && recipient) return `Biglietto inviato a ${recipient}`;
+  if (status === "delivered" && recipient) return `✅ Biglietto inviato a ${recipient}`;
   return MEDMAR_DELIVERY_STATUS_LABEL[status] ?? status;
 }
 
@@ -443,6 +467,9 @@ export default function BigliettiMedmarPage() {
       });
       if (data.ok) {
         dispatchMedmarPrepare({ type: "ISSUE_SUCCESS", result: data });
+        if (data.delivery) {
+          setMedmarDelivery({ phase: "done", status: data.delivery.status, error: data.delivery.warning ?? undefined, recipient: data.delivery.recipient_email });
+        }
       } else {
         dispatchMedmarPrepare({ type: "ISSUE_FAILURE", status: data.status, error: data.error, retry_allowed: data.retry_allowed });
       }
@@ -1497,20 +1524,32 @@ export default function BigliettiMedmarPage() {
 
                   <div className="mt-2 border-t border-emerald-200 pt-2 space-y-1">
                     <p>
-                      Stato invio: {medmarDelivery.phase === "sending" ? "Invio in corso" : medmarDeliveryStatusLabel(medmarDelivery.status, medmarDelivery.recipient)}
+                      Stato invio:{" "}
+                      {medmarDelivery.phase === "sending"
+                        ? "Invio automatico in corso"
+                        : medmarDeliveryStatusLabel(medmarDelivery.status, medmarDelivery.recipient)}
                     </p>
-                    {medmarDelivery.phase === "done" && medmarDelivery.error && (
+                    {medmarDelivery.phase === "done" && medmarDelivery.error && medmarDelivery.status !== "delivered" && (
                       <p className="text-rose-700">{medmarDelivery.error}</p>
                     )}
-                    {verifyModal && medmarDelivery.phase !== "sending" && medmarDelivery.status !== "delivered" && (
-                      <button
-                        type="button"
-                        onClick={() => void handleDeliverMedmarPdf(verifyModal.group.allServiceIds)}
-                        className="mt-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                      >
-                        Invia biglietto pulito all&apos;agenzia
-                      </button>
-                    )}
+                    {/* Pulsante manuale = fallback: mai mostrato se già delivered (terminale) o se lo stato è
+                        "incerto" (delivery_in_progress/delivery_state_unknown) — nessun retry automatico su ambiguità. */}
+                    {verifyModal &&
+                      medmarDelivery.phase !== "sending" &&
+                      medmarDelivery.status !== "delivered" &&
+                      medmarDelivery.status !== "delivery_in_progress" &&
+                      medmarDelivery.status !== "delivery_state_unknown" &&
+                      medmarDelivery.status !== "remote_state_unknown_blocked" && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeliverMedmarPdf(verifyModal.group.allServiceIds)}
+                          className="mt-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                        >
+                          {medmarDelivery.status && MEDMAR_DELIVERY_RETRYABLE_STATUSES.has(medmarDelivery.status)
+                            ? "Riprova invio biglietto pulito"
+                            : "Invia biglietto pulito"}
+                        </button>
+                      )}
                   </div>
                 </div>
               )}

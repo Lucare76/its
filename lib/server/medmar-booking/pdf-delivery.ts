@@ -535,4 +535,64 @@ export async function previewMedmarDelivery(input: MedmarDeliveryInput, deps?: M
   };
 }
 
+export type MedmarAutoDeliveryStatus = MedmarDeliveryStatus | MedmarDeliveryPreconditionFailure | "delivery_in_progress" | "delivery_error";
+
+export type MedmarAutoDeliverySummary = {
+  status: MedmarAutoDeliveryStatus;
+  warning: string | null;
+  recipient_email: string | null;
+};
+
+/**
+ * Wrapper per l'auto-delivery invocata SUBITO dopo che un'emissione Medmar
+ * risulta "completed" (vedi app/api/services/medmar-issue/route.ts).
+ *
+ * Timeout controllato: se `deliverMedmarTicket` non conclude entro
+ * `timeoutMs`, la risposta HTTP dell'emissione non resta bloccata —
+ * "delivery_in_progress" viene restituito e l'emissione è comunque
+ * riportata come riuscita. La promise di `deliverMedmarTicket` NON viene
+ * annullata: continua in background (nello stesso processo Node) e
+ * aggiornerà comunque `medmar_delivery_attempts`/`services` quando
+ * conclude — ma su un runtime serverless che termina l'istanza alla
+ * risposta HTTP questo può non arrivare a completarsi: in quel caso
+ * l'operatore vede "invio in corso" e il pulsante manuale resta come
+ * fallback per far ripartire (in modo idempotente) la delivery.
+ *
+ * Qualunque eccezione qui è SEMPRE contenuta: un fallimento della delivery
+ * non deve mai far percepire l'emissione (già avvenuta con successo) come
+ * fallita.
+ */
+export async function deliverMedmarTicketWithTimeout(
+  input: MedmarDeliveryInput,
+  timeoutMs = 40_000,
+  deps?: MedmarDeliveryDeps
+): Promise<MedmarAutoDeliverySummary> {
+  try {
+    const timeoutMarker = Symbol("delivery_timeout");
+    const timeout = new Promise<typeof timeoutMarker>((resolve) => {
+      setTimeout(() => resolve(timeoutMarker), timeoutMs);
+    });
+    const raced = await Promise.race([deliverMedmarTicket(input, deps), timeout]);
+    if (raced === timeoutMarker) {
+      return {
+        status: "delivery_in_progress",
+        warning: "Invio biglietto pulito ancora in corso (ricerca PDF nella mailbox lenta): verificare più tardi lo stato o riprovare.",
+        recipient_email: null,
+      };
+    }
+    const outcome = raced as MedmarDeliveryOutcome;
+    if (outcome.ok) {
+      return { status: outcome.status, warning: null, recipient_email: outcome.attempt.recipient_email };
+    }
+    const recipientEmail = "attempt" in outcome ? outcome.attempt.recipient_email : null;
+    return { status: outcome.status, warning: outcome.error, recipient_email: recipientEmail };
+  } catch (err) {
+    return {
+      status: "delivery_error",
+      warning: err instanceof Error ? err.message : "Errore interno durante l'invio automatico del biglietto Medmar.",
+      recipient_email: null,
+    };
+  }
+}
+
 export { MedmarPdfMailboxError };

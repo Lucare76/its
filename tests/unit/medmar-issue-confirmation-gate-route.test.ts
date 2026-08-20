@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   createMedmarIssueOrchestrator: vi.fn(),
   issueMedmar: vi.fn(),
   auditLog: vi.fn(),
+  deliverMedmarTicketWithTimeout: vi.fn(),
 }));
 
 vi.mock("@/lib/server/pricing-auth", () => ({
@@ -26,6 +27,14 @@ vi.mock("@/lib/server/medmar-booking/issue-confirmation", async () => {
 
 vi.mock("@/lib/server/medmar-booking/issue-orchestrator", () => ({
   createMedmarIssueOrchestrator: mocks.createMedmarIssueOrchestrator,
+}));
+
+// Critico: senza questo mock, ogni test qui che restituisce status "completed"
+// (vedi mocks.issueMedmar sotto) innescherebbe una VERA connessione POP3 alla
+// mailbox reale tramite l'auto-delivery collegata alla route — mai accettabile
+// in un test unitario.
+vi.mock("@/lib/server/medmar-booking/pdf-delivery", () => ({
+  deliverMedmarTicketWithTimeout: mocks.deliverMedmarTicketWithTimeout,
 }));
 
 import { POST } from "@/app/api/services/medmar-issue/route";
@@ -65,6 +74,7 @@ describe("POST /api/services/medmar-issue — gate di conferma server-side (Fase
       final_total_cents: 1150,
       existing: false,
     });
+    mocks.deliverMedmarTicketWithTimeout.mockResolvedValue({ status: "delivered", warning: null, recipient_email: "agenzia@example.test" });
   });
 
   it("confirmation_token mancante -> 400, zero orchestrazione", async () => {

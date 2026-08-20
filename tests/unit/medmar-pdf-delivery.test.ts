@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { deliverMedmarTicket, type MedmarDeliveryDeps } from "@/lib/server/medmar-booking/pdf-delivery";
+import { deliverMedmarTicket, deliverMedmarTicketWithTimeout, type MedmarDeliveryDeps } from "@/lib/server/medmar-booking/pdf-delivery";
 import type { DeliveryRepository, MedmarDeliveryAttempt } from "@/lib/server/medmar-booking/delivery-types";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -381,5 +381,42 @@ describe("deliverMedmarTicket — state machine delivery PDF Medmar", () => {
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.already_delivered).toBe(true);
     expect(sendEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverMedmarTicketWithTimeout — wrapper per l'auto-delivery collegata a medmar-issue/route.ts", () => {
+  it("timeout controllato: se deliverMedmarTicket non conclude entro timeoutMs -> 'delivery_in_progress', mai un'eccezione propagata", async () => {
+    const neverResolves = new Promise<never>(() => {}); // simula una mailbox lentissima
+    const summary = await deliverMedmarTicketWithTimeout(
+      { admin: {} as never, tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      50, // timeout brevissimo per il test
+      baseDeps({ repo: makeDeliveryRepo(), findPdf: (() => neverResolves) as never })
+    );
+    expect(summary.status).toBe("delivery_in_progress");
+    expect(summary.warning).toBeTruthy();
+  });
+
+  it("contenimento errori: se una dipendenza lancia un'eccezione -> 'delivery_error', mai propagata al chiamante (l'emissione non deve mai fallire per colpa della delivery)", async () => {
+    const summary = await deliverMedmarTicketWithTimeout(
+      { admin: {} as never, tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      5000,
+      baseDeps({
+        loadIssuingAttempt: (() => {
+          throw new Error("boom: errore interno inatteso");
+        }) as never,
+      })
+    );
+    expect(summary.status).toBe("delivery_error");
+    expect(summary.warning).toContain("boom");
+  });
+
+  it("esito 'delivered' viene propagato correttamente senza alterazioni", async () => {
+    const summary = await deliverMedmarTicketWithTimeout(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      5000,
+      baseDeps({ repo: makeDeliveryRepo(), sendEmail: (async () => ({ kind: "sent", messageId: "resend-msg-wrapper" })) as never })
+    );
+    expect(summary.status).toBe("delivered");
+    expect(summary.recipient_email).toBe("biglietteria@alesteviaggi.it");
   });
 });
