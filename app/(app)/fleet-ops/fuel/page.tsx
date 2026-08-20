@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DateInput, PageHeader, SectionCard } from "@/components/ui";
+import { DateInput, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
 type VehicleOption = {
@@ -67,6 +67,7 @@ const EMPTY_FORM = {
 };
 
 const PLACEHOLDER_FISCAL_DOCUMENT_HOSTS = new Set(["example.com", "example.org", "example.net"]);
+const PAGE_SIZE = 10;
 
 function fmtMoney(value: number | null | undefined) {
   return value != null ? `EUR ${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-";
@@ -74,6 +75,22 @@ function fmtMoney(value: number | null | undefined) {
 
 function fmtNumber(value: number | null | undefined, suffix = "") {
   return value != null ? `${value.toLocaleString("it-IT")}${suffix}` : "-";
+}
+
+function fmtDate(value: string) {
+  return new Date(`${value}T00:00:00`).toLocaleDateString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function fmtUnitPrice(record: FuelRecord) {
+  if (!record.cost || !record.liters) return "-";
+  return (record.cost / record.liters).toLocaleString("it-IT", {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
 }
 
 function normalizeFiscalDocumentUrl(raw: string | null | undefined) {
@@ -100,6 +117,7 @@ export default function FleetFuelPage() {
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [documentModal, setDocumentModal] = useState<FuelDocumentModalState | null>(null);
@@ -110,6 +128,8 @@ export default function FleetFuelPage() {
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<FuelRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState<FuelRecord | null>(null);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
 
@@ -191,6 +211,12 @@ export default function FleetFuelPage() {
     };
   }, [visibleRecords]);
 
+  const totalPages = Math.max(1, Math.ceil(visibleRecords.length / PAGE_SIZE));
+  const paginatedRecords = useMemo(
+    () => visibleRecords.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [currentPage, visibleRecords],
+  );
+
   async function createManualFuelEntry() {
     const token = await accessToken();
     if (!token) return;
@@ -220,6 +246,7 @@ export default function FleetFuelPage() {
       return;
     }
     setForm(EMPTY_FORM);
+    setShowCreateModal(false);
     showToast("Rifornimento aggiunto.", true);
     void load();
   }
@@ -299,6 +326,7 @@ export default function FleetFuelPage() {
     setDocumentModalName("");
     if (documentModal.mode === "approve" && statusFilter === "pending") {
       setStatusFilter("approved");
+      setCurrentPage(1);
       showToast("Rifornimento approvato e spostato nella lista Approvati.", true);
       return;
     }
@@ -400,11 +428,18 @@ export default function FleetFuelPage() {
 
   return (
     <section className="page-section">
-      <PageHeader
-        title="Rifornimenti"
-        subtitle="Coda approvazione QR, inserimento manuale e collegamento documento fiscale."
-        breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Flotta", href: "/fleet-ops" }, { label: "Rifornimenti" }]}
-      />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <nav className="flex items-center gap-1 text-xs text-slate-500" aria-label="Percorso pagina">
+            <a href="/dashboard" className="hover:text-slate-900">Operazioni</a><span>/</span><a href="/fleet-ops" className="hover:text-slate-900">Flotta</a><span>/</span><span>Rifornimenti</span>
+          </nav>
+          <p className="mt-1 text-sm text-slate-600">Controllo consumi, approvazioni e documenti fiscali.</p>
+        </div>
+        <button type="button" onClick={() => setShowCreateModal(true)} className="btn-primary inline-flex min-h-10 items-center justify-center gap-2 px-4 text-sm">
+          <span aria-hidden="true" className="text-lg leading-none">+</span>
+          Nuovo rifornimento
+        </button>
+      </div>
 
       {toast ? (
         <div className={`fixed bottom-6 right-6 z-50 rounded-xl border px-4 py-3 text-sm font-medium shadow-lg ${toast.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
@@ -412,16 +447,19 @@ export default function FleetFuelPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {[
-          { label: "Costo approvato", value: fmtMoney(fuelSummary.totalCost), note: "sul filtro corrente" },
-          { label: "Litri approvati", value: `${fuelSummary.totalLiters.toLocaleString("it-IT", { maximumFractionDigits: 1 })} L`, note: "rifornimenti validati" },
-          { label: "Prezzo medio", value: fuelSummary.averagePrice != null ? `EUR ${fuelSummary.averagePrice.toFixed(3)}/L` : "-", note: "costo / litri" },
-          { label: "Doc. mancanti", value: String(fuelSummary.missingDocuments), note: "approvati senza riferimento" },
+          { label: "Da approvare", value: String(counts.pending), note: "richiedono controllo", tone: "amber" },
+          { label: "Costo approvato", value: fmtMoney(fuelSummary.totalCost), note: "sul filtro corrente", tone: "blue" },
+          { label: "Litri approvati", value: `${fuelSummary.totalLiters.toLocaleString("it-IT", { maximumFractionDigits: 1 })} L`, note: "rifornimenti validati", tone: "emerald" },
+          { label: "Prezzo medio", value: fuelSummary.averagePrice != null ? `EUR ${fuelSummary.averagePrice.toFixed(3)}/L` : "-", note: "costo / litri", tone: "violet" },
         ].map((item) => (
-          <div key={item.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{item.label}</p>
-            <p className="mt-1 text-2xl font-bold text-slate-900">{loading ? "..." : item.value}</p>
+          <div key={item.label} className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${item.tone === "amber" ? "bg-amber-500" : item.tone === "emerald" ? "bg-emerald-500" : item.tone === "violet" ? "bg-violet-500" : "bg-blue-500"}`} />
+              <p className="text-[11px] font-semibold uppercase text-slate-500">{item.label}</p>
+            </div>
+            <p className="mt-2 text-xl font-bold text-slate-950 sm:text-2xl">{loading ? "..." : item.value}</p>
             <p className="mt-1 text-xs text-slate-500">{item.note}</p>
           </div>
         ))}
@@ -589,16 +627,16 @@ export default function FleetFuelPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_420px]">
+      <div>
         <SectionCard
           title="Coda rifornimenti"
           subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}`}
           actions={(
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <input
-                className="input-saas h-8 w-52 text-xs"
+                className="input-saas h-10 min-w-0 basis-full text-xs lg:w-64 lg:basis-auto"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
+                onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }}
                 placeholder="Cerca mezzo, targa, distributore"
               />
               {([
@@ -610,8 +648,8 @@ export default function FleetFuelPage() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setStatusFilter(value)}
-                  className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusFilter === value ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                  onClick={() => { setStatusFilter(value); setCurrentPage(1); }}
+                  className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${statusFilter === value ? "border-violet-600 bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                 >
                   {label}
                 </button>
@@ -624,9 +662,29 @@ export default function FleetFuelPage() {
           ) : visibleRecords.length === 0 ? (
             <p className="text-sm text-slate-400">Nessun rifornimento trovato per il filtro corrente.</p>
           ) : (
-            <div className="space-y-3">
-              {visibleRecords.map((record) => (
-                <article key={record.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <>
+            <div className="hidden overflow-hidden rounded-lg border border-slate-200 lg:block">
+              <div className="grid grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
+                <span>Data</span><span>Mezzo</span><span>Distributore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
+              </div>
+              {paginatedRecords.map((record) => (
+                <button key={record.id} type="button" onClick={() => setSelectedRecord(record)} className="grid w-full grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
+                  <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
+                  <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span></span>
+                  <span className="truncate text-slate-600">{record.station ?? "Non indicato"}</span>
+                  <span className="font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</span>
+                  <span className="font-semibold text-slate-900">{fmtMoney(record.cost)}</span>
+                  <span className="text-slate-600">{fmtUnitPrice(record)}</span>
+                  <span className="text-slate-600">{fmtNumber(record.km_at_fuel)}</span>
+                  <span className={`truncate ${hasFiscalDocument(record) ? "text-blue-700" : "font-medium text-rose-600"}`}>{record.fiscal_document_name ?? "Mancante"}</span>
+                  <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-semibold ${record.approval_status === "approved" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : record.approval_status === "rejected" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{record.approval_status === "approved" ? "Approvato" : record.approval_status === "rejected" ? "Respinto" : "Da approvare"}</span>
+                  <span className="text-lg text-slate-400" aria-hidden="true">›</span>
+                </button>
+              ))}
+            </div>
+            <div className="space-y-3 lg:hidden">
+              {paginatedRecords.map((record) => (
+                <article key={record.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-slate-900">
@@ -649,29 +707,27 @@ export default function FleetFuelPage() {
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Litri</p>
                       <p className="mt-1 text-sm font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Costo</p>
                       <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? `EUR ${record.cost.toFixed(2)}` : "-"}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Km</p>
                       <p className="mt-1 text-sm font-semibold text-slate-700">{record.km_at_fuel != null ? record.km_at_fuel.toLocaleString("it-IT") : "-"}</p>
                     </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                      <p className="text-[11px] uppercase tracking-wide text-slate-400">Documento fiscale</p>
-                      <p className="mt-1 truncate text-sm font-semibold text-slate-700" title={record.fiscal_document_name ?? undefined}>
-                        {record.fiscal_document_name ?? "Non collegato"}
-                      </p>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-wide text-slate-400">EUR/L</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{fmtUnitPrice(record)}</p>
                     </div>
                   </div>
 
                   {record.notes ? <p className="mt-3 text-sm text-slate-500">{record.notes}</p> : null}
 
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="hidden">
                     {currentRole === "admin" ? (
                       <>
                         <button type="button" onClick={() => openEditModal(record)}
@@ -727,13 +783,34 @@ export default function FleetFuelPage() {
                       {documentEditHint(record)}
                     </p>
                   ) : null}
+                  <button type="button" onClick={() => setSelectedRecord(record)} className="mt-3 flex min-h-11 w-full items-center justify-between border-t border-slate-100 pt-3 text-sm font-semibold text-violet-700">
+                    <span className={hasFiscalDocument(record) ? "text-blue-700" : "text-rose-600"}>{record.fiscal_document_name ?? "Documento mancante"}</span>
+                    <span>Dettagli ›</span>
+                  </button>
                 </article>
               ))}
             </div>
+            <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+              <span>{Math.min((currentPage - 1) * PAGE_SIZE + 1, visibleRecords.length)}-{Math.min(currentPage * PAGE_SIZE, visibleRecords.length)} di {visibleRecords.length} risultati</span>
+              <div className="flex items-center gap-2">
+                <button type="button" disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="min-h-10 rounded-lg border border-slate-200 px-3 font-semibold text-slate-700 disabled:opacity-40">Indietro</button>
+                <span className="min-w-16 text-center font-semibold text-slate-700">{currentPage} / {totalPages}</span>
+                <button type="button" disabled={currentPage === totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} className="min-h-10 rounded-lg border border-slate-200 px-3 font-semibold text-slate-700 disabled:opacity-40">Avanti</button>
+              </div>
+            </div>
+            </>
           )}
         </SectionCard>
 
-        <SectionCard title="Nuovo rifornimento ufficio" subtitle="Per inserimenti manuali o correzioni amministrative.">
+        {showCreateModal ? (
+        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/35" role="dialog" aria-modal="true" aria-label="Nuovo rifornimento">
+        <div className="h-full w-full overflow-y-auto bg-white p-4 shadow-2xl sm:max-w-md sm:p-5">
+        <SectionCard
+          title="Nuovo rifornimento ufficio"
+          subtitle="Per inserimenti manuali o correzioni amministrative."
+          className="border-0 p-0 shadow-none"
+          actions={<button type="button" onClick={() => setShowCreateModal(false)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-xl text-slate-500" aria-label="Chiudi">×</button>}
+        >
           <div className="grid gap-3">
             <label className="text-xs font-semibold text-slate-500">
               Mezzo
@@ -787,7 +864,42 @@ export default function FleetFuelPage() {
             </button>
           </div>
         </SectionCard>
+        </div>
+        </div>
+        ) : null}
       </div>
+
+      {selectedRecord ? (
+        <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/25" role="dialog" aria-modal="true" aria-label="Dettaglio rifornimento">
+          <aside className="flex h-full w-full flex-col bg-white shadow-2xl sm:max-w-md">
+            <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div><p className="text-base font-bold text-slate-950">Dettaglio rifornimento</p><p className="mt-0.5 text-xs text-slate-500">{fmtDate(selectedRecord.fuel_date)}</p></div>
+              <button type="button" onClick={() => setSelectedRecord(null)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-xl text-slate-500" aria-label="Chiudi">×</button>
+            </header>
+            <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+              <div><p className="text-lg font-bold text-slate-950">{selectedRecord.vehicle?.label ?? "Veicolo"}</p><p className="text-sm text-slate-500">{selectedRecord.vehicle?.plate ?? "Targa non indicata"}</p></div>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-5 border-y border-slate-100 py-5">
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Litri</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.liters != null ? `${selectedRecord.liters.toFixed(1)} L` : "-"}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Costo totale</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtMoney(selectedRecord.cost)}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Prezzo al litro</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtUnitPrice(selectedRecord)} EUR/L</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Chilometraggio</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtNumber(selectedRecord.km_at_fuel, " km")}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Distributore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.station ?? "Non indicato"}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Provenienza</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.submitted_via_qr ? "QR autista" : "Inserimento ufficio"}</dd></div>
+              </dl>
+              <div><p className="text-[10px] font-bold uppercase text-slate-400">Documento fiscale</p><button type="button" disabled={!selectedRecord.fiscal_document_url} onClick={() => openFiscalDocument(selectedRecord)} className="mt-2 text-left text-sm font-semibold text-blue-700 disabled:text-slate-400">{selectedRecord.fiscal_document_name ?? "Documento non collegato"}</button></div>
+              {selectedRecord.notes ? <div><p className="text-[10px] font-bold uppercase text-slate-400">Note</p><p className="mt-2 text-sm text-slate-600">{selectedRecord.notes}</p></div> : null}
+              {documentEditHint(selectedRecord) ? <p className="text-xs text-slate-400">{documentEditHint(selectedRecord)}</p> : null}
+            </div>
+            <footer className="grid gap-2 border-t border-slate-200 bg-white p-4">
+              {selectedRecord.approval_status !== "approved" ? <button type="button" onClick={() => { setSelectedRecord(null); void updateFuelApproval(selectedRecord, "approved"); }} className="min-h-11 rounded-lg bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700">Approva</button> : null}
+              {selectedRecord.approval_status !== "rejected" ? <button type="button" onClick={() => { setSelectedRecord(null); void updateFuelApproval(selectedRecord, "rejected"); }} className="min-h-11 rounded-lg border border-rose-300 px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">Respingi</button> : null}
+              {selectedRecord.approval_status === "approved" && canInsertFiscalDocument(selectedRecord) ? <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); void updateFuelDocument(record); }} className="min-h-11 rounded-lg border border-blue-200 px-4 text-sm font-semibold text-blue-700">Aggiungi documento fiscale</button> : null}
+              {selectedRecord.approval_status === "approved" && canEditFiscalDocument(selectedRecord) ? <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); void updateFuelDocument(record); }} className="min-h-11 rounded-lg border border-blue-200 px-4 text-sm font-semibold text-blue-700">Modifica documento fiscale</button> : null}
+              {currentRole === "admin" ? <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); openEditModal(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700">Modifica</button><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); setDeleteConfirm(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-rose-700">Elimina</button></div> : null}
+            </footer>
+          </aside>
+        </div>
+      ) : null}
     </section>
   );
 }
