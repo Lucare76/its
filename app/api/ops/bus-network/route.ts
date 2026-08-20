@@ -512,7 +512,7 @@ export async function POST(request: NextRequest) {
               is_manual: stop.is_manual,
               active: true
             })),
-            { onConflict: "bus_line_id,direction,stop_name" }
+            { onConflict: "bus_line_id,direction,stop_name,pickup_note_key" }
           );
         }
         const existingUnits = await auth.admin.from("tenant_bus_units").select("id").eq("tenant_id", tenantId).eq("bus_line_id", line.id);
