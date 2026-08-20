@@ -20,6 +20,11 @@ import {
   type MedmarPrepareState,
   type MedmarDeliveryDiagnostics,
 } from "@/lib/medmar-issue-flow";
+import {
+  resolveMedmarCardCompact,
+  isMedmarDeliveryRetryButtonVisible,
+  MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
+} from "@/lib/medmar-delivery-card";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -314,9 +319,6 @@ const MEDMAR_DELIVERY_RETRYABLE_STATUSES = new Set([
   "manual_review",
 ]);
 
-/** Stati che il cron di retry automatico (/api/cron/medmar-delivery-retry) ritenta davvero — deve restare identico a RETRYABLE_DELIVERY_STATUSES in delivery-types.ts. */
-const MEDMAR_DELIVERY_AUTO_RETRY_STATUSES = new Set(["awaiting_pdf", "pdf_not_found"]);
-
 function formatDateTimeIt(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
@@ -328,6 +330,25 @@ function addMinutesIso(iso: string, minutes: number): string {
   d.setMinutes(d.getMinutes() + minutes);
   return d.toISOString();
 }
+
+/** Riga letta da medmar_delivery_attempts per popolare la card compatta/i dettagli in lista (sola lettura, nessuna mutazione). */
+type MedmarDeliveryAttemptRow = {
+  id: string;
+  issuing_attempt_id: string;
+  service_ids: string[];
+  status: string;
+  medmar_id_prenotazione: string | null;
+  medmar_numero: string | null;
+  recipient_type: string | null;
+  recipient_name: string | null;
+  recipient_email: string | null;
+  resend_message_id: string | null;
+  attempt_count: number;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  delivered_at: string | null;
+  updated_at: string;
+};
 
 function medmarDeliveryStatusLabel(status: string | undefined, recipient: string | null | undefined): string {
   if (!status) return "—";
@@ -367,6 +388,10 @@ export default function BigliettiMedmarPage() {
     medmarPrepareReducer,
     { phase: "idle" } as MedmarPrepareState
   );
+  const [deliveryAttempts, setDeliveryAttempts] = useState<MedmarDeliveryAttemptRow[]>([]);
+  const [issuingFinalTotalById, setIssuingFinalTotalById] = useState<Map<string, number | null>>(new Map());
+  const [expandedDeliveredKeys, setExpandedDeliveredKeys] = useState<Set<string>>(new Set());
+  const [retryingKey, setRetryingKey] = useState<string | null>(null);
   const [ticketMemories, setTicketMemories] = useState<TicketMemoryRecord[]>([]);
   const [ticketSlots, setTicketSlots] = useState<TicketMemorySlot[]>([]);
   const [memoryError, setMemoryError] = useState<string | null>(null);
@@ -396,7 +421,7 @@ export default function BigliettiMedmarPage() {
     setDeleting(g.key);
     await supabase.from("services").delete().in("id", g.allServiceIds).eq("tenant_id", tenantId);
     setDeleting(null);
-    if (tenantId) void loadData(tenantId, dateFrom, dateTo);
+    if (tenantId) void refreshMedmarData(tenantId, dateFrom, dateTo);
   };
 
   const handleVerifyMedmar = async (g: BookingGroup) => {
@@ -507,8 +532,8 @@ export default function BigliettiMedmarPage() {
     });
   };
 
-  const loadData = useCallback(async (tid: string, from?: string, to?: string) => {
-    if (!supabase) return;
+  const loadData = useCallback(async (tid: string, from?: string, to?: string): Promise<Service[]> => {
+    if (!supabase) return [];
     const qFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : todayIso();
     const qTo   = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "")   ? to!   : addDays(todayIso(), 14);
     const [servicesRes, hotelsRes] = await Promise.all([
@@ -524,9 +549,48 @@ export default function BigliettiMedmarPage() {
         .order("time"),
       supabase.from("hotels").select("id, name").eq("tenant_id", tid).limit(500)
     ]);
-    if (servicesRes.error) { setError(servicesRes.error.message); return; }
-    setServices((servicesRes.data ?? []) as Service[]);
+    if (servicesRes.error) { setError(servicesRes.error.message); return []; }
+    const loadedServices = (servicesRes.data ?? []) as Service[];
+    setServices(loadedServices);
     setHotels((hotelsRes.data ?? []) as Hotel[]);
+    return loadedServices;
+  }, []);
+
+  /**
+   * Stato delivery Medmar per la card compatta/dettagli (sola lettura,
+   * FASE 1/2/5): legge medmar_delivery_attempts (RLS gia' limita a
+   * admin/operator/supervisor del tenant) e, per i soli attempt trovati,
+   * medmar_issuing_attempts.final_total_cents da mostrare nei dettagli.
+   * Nessuna scrittura, nessun invio.
+   */
+  const loadMedmarDeliveryStatus = useCallback(async (tid: string, medmarServiceIds: string[]) => {
+    if (!supabase || medmarServiceIds.length === 0) {
+      setDeliveryAttempts([]);
+      setIssuingFinalTotalById(new Map());
+      return;
+    }
+    const attemptsRes = await supabase
+      .from("medmar_delivery_attempts")
+      .select(
+        "id, issuing_attempt_id, service_ids, status, medmar_id_prenotazione, medmar_numero, recipient_type, recipient_name, recipient_email, resend_message_id, attempt_count, last_error_code, last_error_message, delivered_at, updated_at"
+      )
+      .eq("tenant_id", tid)
+      .overlaps("service_ids", medmarServiceIds);
+    const attempts = (attemptsRes.data ?? []) as MedmarDeliveryAttemptRow[];
+    setDeliveryAttempts(attempts);
+
+    const issuingIds = [...new Set(attempts.map((a) => a.issuing_attempt_id))];
+    if (issuingIds.length === 0) {
+      setIssuingFinalTotalById(new Map());
+      return;
+    }
+    const issuingRes = await supabase
+      .from("medmar_issuing_attempts")
+      .select("id, final_total_cents")
+      .eq("tenant_id", tid)
+      .in("id", issuingIds);
+    const rows = (issuingRes.data ?? []) as Array<{ id: string; final_total_cents: number | null }>;
+    setIssuingFinalTotalById(new Map(rows.map((r) => [r.id, r.final_total_cents])));
   }, []);
 
   const loadTicketMemory = useCallback(async (accessToken: string, from?: string, to?: string) => {
@@ -549,6 +613,13 @@ export default function BigliettiMedmarPage() {
     }
   }, []);
 
+  /** Ricarica services + hotels e, a valle, lo stato delivery Medmar (sola lettura) per i service medmar caricati. */
+  const refreshMedmarData = useCallback(async (tid: string, from?: string, to?: string) => {
+    const loadedServices = await loadData(tid, from, to);
+    const medmarIds = loadedServices.filter(isMedmarService).map((s) => s.id);
+    await loadMedmarDeliveryStatus(tid, medmarIds);
+  }, [loadData, loadMedmarDeliveryStatus]);
+
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -559,13 +630,13 @@ export default function BigliettiMedmarPage() {
       }
       setTenantId(session.tenantId);
       setToken(session.accessToken ?? null);
-      await loadData(session.tenantId, dateFrom, dateTo);
+      await refreshMedmarData(session.tenantId, dateFrom, dateTo);
       if (session.accessToken) await loadTicketMemory(session.accessToken, dateFrom, dateTo);
       if (active) setLoading(false);
     };
     void load();
     return () => { active = false; };
-  }, [dateFrom, dateTo, loadData, loadTicketMemory]);
+  }, [dateFrom, dateTo, refreshMedmarData, loadTicketMemory]);
 
   const hotelsById = useMemo(() => new Map(hotels.map((h) => [h.id, h])), [hotels]);
 
@@ -792,7 +863,7 @@ export default function BigliettiMedmarPage() {
       const data = (await res.json()) as { ok: boolean; sent_to?: string | null; error?: string };
       if (data.ok) {
         setSentKeys((prev) => new Set([...prev, g.key]));
-        if (tenantId) void loadData(tenantId, dateFrom, dateTo);
+        if (tenantId) void refreshMedmarData(tenantId, dateFrom, dateTo);
         const msg = data.sent_to
           ? `Email inviata a ${data.sent_to}${pdfFile ? " con biglietto allegato" : ""}`
           : "Marcato come fatto (nessuna email agenzia configurata)";
@@ -832,11 +903,61 @@ export default function BigliettiMedmarPage() {
         attemptCount: data.attempt_count,
         lastAttemptAt: data.last_attempt_at,
       });
-      if (data.ok && tenantId) void loadData(tenantId, dateFrom, dateTo);
+      if (data.ok && tenantId) void refreshMedmarData(tenantId, dateFrom, dateTo);
     } catch {
       setMedmarDelivery({ phase: "done", status: "delivery_state_unknown", error: "Errore di rete durante l'invio." });
     }
   };
+
+  /** Pulsante "Riprova ora" sulla card in lista (FASE 4): richiama lo stesso motore sicuro/idempotente di handleDeliverMedmarPdf, poi ricarica lo stato delivery. */
+  const handleRetryDeliveryFromCard = async (g: BookingGroup) => {
+    if (!token || retryingKey) return;
+    setRetryingKey(g.key);
+    try {
+      await fetch("/api/services/medmar-send", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ service_ids: g.allServiceIds }),
+      });
+      if (tenantId) await refreshMedmarData(tenantId, dateFrom, dateTo);
+    } finally {
+      setRetryingKey(null);
+    }
+  };
+
+  const toggleExpandedDelivered = (key: string) => {
+    setExpandedDeliveredKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  /** service_id -> ultimo delivery attempt che lo include (sola lettura). */
+  const deliveryAttemptByServiceId = useMemo(() => {
+    const map = new Map<string, MedmarDeliveryAttemptRow>();
+    for (const attempt of deliveryAttempts) {
+      for (const sid of attempt.service_ids) map.set(sid, attempt);
+    }
+    return map;
+  }, [deliveryAttempts]);
+
+  /**
+   * Regola card compatta (FASE 2): compatta se il delivery attempt e'
+   * 'delivered'; se non esiste alcun attempt (es. legacy pre-migrazione
+   * 0237), fallback difensivo su medmar_ticket_sent_at valorizzato — MAI
+   * compatta se un attempt esiste con uno stato diverso da 'delivered'
+   * (awaiting_pdf, pdf_not_found, delivery_started, errori, revisione).
+   */
+  const groupDeliveryByKey = useMemo(() => {
+    const map = new Map<string, { attempt?: MedmarDeliveryAttemptRow; isCompact: boolean }>();
+    for (const g of bookingGroups) {
+      const attempt = g.allServiceIds.map((id) => deliveryAttemptByServiceId.get(id)).find((a): a is MedmarDeliveryAttemptRow => !!a);
+      const isCompact = resolveMedmarCardCompact({ attemptStatus: attempt?.status ?? null, sentAt: g.sentAt });
+      map.set(g.key, { attempt, isCompact });
+    }
+    return map;
+  }, [bookingGroups, deliveryAttemptByServiceId]);
 
   return (
     <>
@@ -858,7 +979,7 @@ export default function BigliettiMedmarPage() {
           <button
             type="button"
             onClick={() => {
-              if (tenantId) void loadData(tenantId, dateFrom, dateTo);
+              if (tenantId) void refreshMedmarData(tenantId, dateFrom, dateTo);
               if (token) void loadTicketMemory(token, dateFrom, dateTo);
             }}
             className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700">
@@ -1035,6 +1156,57 @@ export default function BigliettiMedmarPage() {
               const timeFromVessel = partenzaVessel?.match(/(\d{1,2}:\d{2})$/)?.[1] ?? null;
               const partenzaTime = g.partenza?.orario_barca?.slice(0, 5) ?? timeFromVessel ?? null;
               const hasPartenza = !!(partenzaDate || partenzaTime);
+              const deliveryInfo = groupDeliveryByKey.get(g.key);
+              const deliveryAttempt = deliveryInfo?.attempt;
+              const isDeliveredCompact = deliveryInfo?.isCompact ?? false;
+              const isDetailsExpanded = expandedDeliveredKeys.has(g.key);
+
+              // FASE 2/3: card compatta solo quando l'esito e' davvero 'emesso e inviato'
+              // (delivery attempt 'delivered', o fallback difensivo su medmar_ticket_sent_at
+              // quando non esiste alcun attempt — mai quando l'attempt esiste con un altro stato).
+              if (isDeliveredCompact) {
+                const sentAtIso = deliveryAttempt?.delivered_at ?? deliveryAttempt?.updated_at ?? g.sentAt ?? null;
+                const finalTotalCents = deliveryAttempt ? issuingFinalTotalById.get(deliveryAttempt.issuing_attempt_id) ?? null : null;
+                const andataLabel = g.arrivo ? `${g.arrivo.date?.slice(5).split("-").reverse().join("/")} ${(g.arrivo.time ?? "").slice(0, 5)}`.trim() : null;
+                const ritornoLabel = hasPartenza
+                  ? `${partenzaDate ? partenzaDate.slice(5).split("-").reverse().join("/") : "—"} ${partenzaTime ?? ""}`.trim()
+                  : null;
+                return (
+                  <div key={g.key} className="rounded-xl border border-emerald-300 bg-emerald-50 shadow-sm overflow-hidden">
+                    <div className="px-3 py-2 space-y-0.5">
+                      <p className="text-[10px] font-bold text-emerald-700">✅ Emesso e inviato</p>
+                      <p className="text-[12px] font-bold uppercase text-slate-800 truncate">{g.customerName}</p>
+                      <p className="text-[10px] text-slate-500 truncate">{[andataLabel, ritornoLabel].filter(Boolean).join(" / ") || "—"}</p>
+                      {deliveryAttempt?.medmar_numero && (
+                        <p className="text-[10px] text-slate-500 font-mono truncate">Codice: {deliveryAttempt.medmar_numero}</p>
+                      )}
+                      <p className="text-[10px] text-slate-500 truncate">Inviato a: {deliveryAttempt?.recipient_email ?? "—"}</p>
+                      {sentAtIso && <p className="text-[10px] text-slate-400">{formatDateTimeIt(sentAtIso)}</p>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleExpandedDelivered(g.key)}
+                      className="w-full border-t border-emerald-200 bg-white/70 px-3 py-1.5 text-[10px] font-semibold text-emerald-700 hover:bg-white"
+                    >
+                      {isDetailsExpanded ? "Nascondi dettagli" : "Mostra dettagli"}
+                    </button>
+                    {isDetailsExpanded && (
+                      <div className="border-t border-emerald-200 bg-white px-3 py-2 space-y-1 text-[10px] text-slate-600">
+                        <p><span className="font-semibold">ID prenotazione:</span> {deliveryAttempt?.medmar_id_prenotazione ?? "—"}</p>
+                        <p><span className="font-semibold">Codice Medmar:</span> {deliveryAttempt?.medmar_numero ?? "—"}</p>
+                        <p><span className="font-semibold">Prezzo finale:</span> {finalTotalCents != null ? formatEur(finalTotalCents) : "—"}</p>
+                        <p><span className="font-semibold">Destinatario:</span> {deliveryAttempt?.recipient_name ?? "—"} {deliveryAttempt?.recipient_email ? `(${deliveryAttempt.recipient_email})` : ""}</p>
+                        <p><span className="font-semibold">Resend message id:</span> {deliveryAttempt?.resend_message_id ?? "—"}</p>
+                        <p><span className="font-semibold">Delivered at:</span> {deliveryAttempt?.delivered_at ? formatDateTimeIt(deliveryAttempt.delivered_at) : "—"}</p>
+                        <p><span className="font-semibold">medmar_ticket_sent_at:</span> {g.sentAt ? formatDateTimeIt(g.sentAt) : "—"}</p>
+                        <p><span className="font-semibold">Stato delivery:</span> {deliveryAttempt?.status ?? "delivered (fallback: nessun delivery attempt trovato)"}</p>
+                        <p><span className="font-semibold">Service IDs:</span> <span className="font-mono break-all">{g.allServiceIds.join(", ")}</span></p>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
               return (
                 <div key={g.key} className={`flex flex-col rounded-xl border bg-white shadow-sm overflow-hidden ${isSent ? "border-emerald-300" : "border-slate-200"}`}>
                   {/* Header */}
@@ -1049,6 +1221,30 @@ export default function BigliettiMedmarPage() {
                     </div>
                     <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">{g.pax}p</span>
                   </div>
+
+                  {/* FASE 4: stato delivery Medmar quando esiste un attempt ma non e' (ancora) delivered — mai per delivered (compattato sopra). */}
+                  {deliveryAttempt && deliveryAttempt.status !== "delivered" && (
+                    <div className="border-t border-amber-100 bg-amber-50 px-3 py-1.5 space-y-1">
+                      <p className="text-[10px] font-medium text-amber-800">
+                        {MEDMAR_DELIVERY_STATUS_LABEL[deliveryAttempt.status] ?? deliveryAttempt.status}
+                      </p>
+                      {MEDMAR_DELIVERY_AUTO_RETRY_STATUSES.has(deliveryAttempt.status) && (
+                        <p className="text-[9px] text-amber-700">
+                          Tentativi: {deliveryAttempt.attempt_count} · Ultimo: {formatDateTimeIt(deliveryAttempt.updated_at)} · Prossimo retry: {formatDateTimeIt(addMinutesIso(deliveryAttempt.updated_at, 2))}
+                        </p>
+                      )}
+                      {isMedmarDeliveryRetryButtonVisible(deliveryAttempt.status) && (
+                        <button
+                          type="button"
+                          disabled={retryingKey === g.key}
+                          onClick={() => void handleRetryDeliveryFromCard(g)}
+                          className="rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          {retryingKey === g.key ? "Invio..." : "Riprova ora"}
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* Arrivo + Partenza compatti */}
                   <div className="border-t border-slate-100 divide-y divide-slate-100">
