@@ -138,6 +138,49 @@ async function checkAndAlertLowSeats(
 
 export const runtime = "nodejs";
 
+async function findExistingBusCityHotelService(
+  auth: PricingAuthContext,
+  input: {
+    tenantId: string;
+    customerName: string;
+    date: string;
+    direction: "arrival" | "departure";
+    pax: number;
+    city: string;
+    hotelId?: string | null;
+  }
+): Promise<{ id: string; allocated: boolean } | null> {
+  let query = auth.admin
+    .from("services")
+    .select("id, created_at")
+    .eq("tenant_id", input.tenantId)
+    .eq("booking_service_kind", "bus_city_hotel")
+    .eq("date", input.date)
+    .eq("direction", input.direction)
+    .eq("customer_name", input.customerName)
+    .eq("pax", input.pax)
+    .eq("bus_city_origin", input.city)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  query = input.hotelId ? query.eq("hotel_id", input.hotelId) : query.is("hotel_id", null);
+
+  const { data: matches, error } = await query;
+  if (error || !matches?.length) return null;
+
+  const ids = matches.map((row) => row.id as string);
+  const { data: allocations } = await auth.admin
+    .from("tenant_bus_allocations")
+    .select("service_id")
+    .eq("tenant_id", input.tenantId)
+    .in("service_id", ids);
+
+  const allocatedIds = new Set((allocations ?? []).map((row) => row.service_id as string));
+  const allocatedMatch = ids.find((id) => allocatedIds.has(id));
+  if (allocatedMatch) return { id: allocatedMatch, allocated: true };
+  return { id: ids[0], allocated: false };
+}
+
 function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capacity: number; label?: string }>(
   units: T[],
   datePaxMap: Map<string, number>,
@@ -1551,24 +1594,41 @@ export async function POST(request: NextRequest) {
         const bus = pickBus(groupPax, stop.id);
         if (bus) {
           for (const { row } of group) {
-            const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
-              tenant_id: tenantId,
-              customer_name: row.name,
-              phone: row.phone ?? "",
-              direction: parsed.direction,
+            const existing = await findExistingBusCityHotelService(auth, {
+              tenantId,
+              customerName: row.name,
               date: parsed.travel_date,
-              time: "00:00",
-              vessel: "Linea bus",
+              direction: parsed.direction,
               pax: row.pax,
-              bus_city_origin: row.city,
-              booking_service_kind: "bus_city_hotel",
-              status: "new",
-            }).select("id").single();
-            if (svcErr || !svc) { pending++; continue; }
+              city: row.city,
+              hotelId: null,
+            });
+            if (existing?.allocated) continue;
+
+            let createdServiceId: string | null = null;
+            let serviceId = existing?.id ?? null;
+            if (!serviceId) {
+              const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
+                tenant_id: tenantId,
+                customer_name: row.name,
+                phone: row.phone ?? "",
+                direction: parsed.direction,
+                date: parsed.travel_date,
+                time: "00:00",
+                vessel: "Linea bus",
+                pax: row.pax,
+                bus_city_origin: row.city,
+                booking_service_kind: "bus_city_hotel",
+                status: "new",
+              }).select("id").single();
+              if (svcErr || !svc) { pending++; continue; }
+              serviceId = svc.id as string;
+              createdServiceId = serviceId;
+            }
 
             const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
               p_tenant_id: tenantId,
-              p_service_id: svc.id,
+              p_service_id: serviceId,
               p_bus_line_id: parsed.bus_line_id,
               p_bus_unit_id: bus.id,
               p_stop_id: stop.id,
@@ -1578,7 +1638,24 @@ export async function POST(request: NextRequest) {
               p_notes: row.notes ?? null,
               p_created_by_user_id: auth.user.id,
             });
-            if (allocErr) { pending++; continue; }
+            if (allocErr) {
+              if (createdServiceId) await auth.admin.from("services").delete().eq("id", createdServiceId);
+              await auth.admin.from("bus_import_pending").insert({
+                tenant_id: tenantId,
+                bus_line_id: parsed.bus_line_id,
+                direction: parsed.direction,
+                travel_date: parsed.travel_date,
+                passenger_name: row.name,
+                passenger_phone: row.phone ?? null,
+                passenger_email: row.email ?? null,
+                city_original: row.city,
+                pax: row.pax,
+                notes: (row.notes ? row.notes + " | " : "") + `Errore: ${allocErr.message}`,
+                geo_suggested_stop: stop.stop_name,
+              });
+              pending++;
+              continue;
+            }
 
             ensureWhatsAppContact(auth.admin, {
               tenantId,
@@ -1867,30 +1944,48 @@ export async function POST(request: NextRequest) {
         if (bus) {
           for (const { row } of group) {
             const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
-            const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
-              tenant_id: tenantId,
-              customer_name: row.name,
-              phone: row.phone ?? "",
-              direction: parsed.direction,
+            const hotelId = row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? null) : null;
+            const existing = await findExistingBusCityHotelService(auth, {
+              tenantId,
+              customerName: row.name,
               date: parsed.travel_date,
-              time: pickupTime,
-              pickup_time: parsed.direction === "departure" ? pickupTime : null,
-              vessel: "Linea bus",
+              direction: parsed.direction,
               pax: row.pax,
-              bus_city_origin: row.city,
-              booking_service_kind: "bus_city_hotel",
-              status: "new",
-              billing_party_name: row.agency ?? null,
-              hotel_id: row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? undefined) : undefined,
-            }).select("id").single();
-            if (svcErr || !svc) {
-              console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
-              pending2++; continue;
+              city: row.city,
+              hotelId,
+            });
+            if (existing?.allocated) continue;
+
+            let createdServiceId: string | null = null;
+            let serviceId = existing?.id ?? null;
+            if (!serviceId) {
+              const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
+                tenant_id: tenantId,
+                customer_name: row.name,
+                phone: row.phone ?? "",
+                direction: parsed.direction,
+                date: parsed.travel_date,
+                time: pickupTime,
+                pickup_time: parsed.direction === "departure" ? pickupTime : null,
+                vessel: "Linea bus",
+                pax: row.pax,
+                bus_city_origin: row.city,
+                booking_service_kind: "bus_city_hotel",
+                status: "new",
+                billing_party_name: row.agency ?? null,
+                hotel_id: hotelId ?? undefined,
+              }).select("id").single();
+              if (svcErr || !svc) {
+                console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
+                pending2++; continue;
+              }
+              serviceId = svc.id as string;
+              createdServiceId = serviceId;
             }
 
             const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
               p_tenant_id: tenantId,
-              p_service_id: svc.id,
+              p_service_id: serviceId,
               p_bus_line_id: stop.bus_line_id,
               p_bus_unit_id: bus.id,
               p_stop_id: stop.id,
@@ -1902,8 +1997,9 @@ export async function POST(request: NextRequest) {
             });
             if (allocErr) {
               console.error(`[import_excel_auto] allocate_bus_service fallita per "${row.name}" (${row.city}): ${allocErr.message}`);
-              // Elimina il servizio orfano e metti il passeggero in pending
-              await auth.admin.from("services").delete().eq("id", svc.id);
+              // Elimina il servizio appena creato e metti il passeggero in pending.
+              // Se il servizio esisteva già, lo lasciamo intatto per evitare cancellazioni inattese.
+              if (createdServiceId) await auth.admin.from("services").delete().eq("id", createdServiceId);
               await auth.admin.from("bus_import_pending").insert({
                 tenant_id: tenantId,
                 bus_line_id: stop.bus_line_id,

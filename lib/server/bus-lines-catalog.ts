@@ -346,7 +346,7 @@ export const BUS_LINES_2026: BusLineCatalogEntry[] = [
       { city: "CIVITANOVA MARCHE",       time: "07:20", pickupNote: note("Casello autostradale"),                              lat: 43.30, lng: 13.73 },
       { city: "SAN BENEDETTO DEL TRONTO",time: "08:10", pickupNote: note("Casello autostradale"),                              lat: 42.95, lng: 13.88 },
       { city: "GIULIANOVA",              time: "08:30", pickupNote: note("Casello autostradale"),                              lat: 42.75, lng: 13.97 },
-      { city: "PESCARA VILLA NOVA",      time: "09:00", pickupNote: note("Casello autostradale"),                              lat: 42.46, lng: 14.21 },
+      { city: "PESCARA VILLA NOVA",      time: "09:00", pickupNote: note("Casello direzione Via Nazionale"),                   lat: 42.46, lng: 14.21 },
       { city: "SULMONA",                 time: "09:30", pickupNote: note("Casello autostradale"),                              lat: 42.05, lng: 13.92 },
       { city: "AVEZZANO",                time: "10:00", pickupNote: note("Casello autostradale"),                              lat: 41.99, lng: 13.43 },
       { city: "SORA",                    time: "11:00", pickupNote: note("Uscita superstrada"),                                lat: 41.72, lng: 13.61 },
