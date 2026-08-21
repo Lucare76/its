@@ -22,7 +22,7 @@ import {
   type MedmarDeliveryAttempt,
   type MedmarDeliveryStatus,
 } from "./delivery-types";
-import { MedmarPdfMailboxError, findMedmarTicketPdf } from "./pdf-mailbox-lookup";
+import { MedmarPdfMailboxError, findMedmarTicketPdf, findMedmarPdfByUid } from "./pdf-mailbox-lookup";
 import { cleanMedmarPdf, MedmarPdfCleanerError } from "./pdf-cleaner";
 import { validateCleanedMedmarPdf } from "./pdf-validation";
 import { loadAgencyRecipient } from "./recipient-repository";
@@ -47,6 +47,19 @@ export type MedmarDeliveryInput = {
   issuingAttemptId: string;
   /** Timeout (ms) del lookup mailbox POP3, inoltrato a `findMedmarTicketPdf`. Default 30000 se omesso (pulsante manuale/auto-delivery invariati). */
   mailboxTimeoutMs?: number;
+  /**
+   * Retry a due fasi (cron): se true e il PDF non e' ancora stato individuato
+   * in un run precedente (`attempt.pdf_mailbox_message_uid` assente), la
+   * ricerca in mailbox si ferma non appena trovato il PDF — lo salva
+   * (uid/filename/hash) e ritorna, SENZA pulire ne' inviare. Il prossimo run
+   * (con `pdf_mailbox_message_uid` gia' presente) esegue Fase B: fetch
+   * mirato via UID (niente scan completo) + pulizia + validazione + invio.
+   * Ignorato (comportamento invariato, singolo giro end-to-end) se
+   * l'attempt ha gia' un `pdf_mailbox_message_uid` salvato: pulsante
+   * manuale e auto-delivery-post-emissione non lo impostano mai, quindi
+   * restano sempre a singolo giro come oggi.
+   */
+  stopAfterPdfFound?: boolean;
 };
 
 type IssuingAttemptRow = {
@@ -238,31 +251,68 @@ export type MedmarDeliveryDeps = {
   loadIssuingAttempt?: typeof loadIssuingAttempt;
   loadDeliveryServices?: typeof loadDeliveryServices;
   findPdf?: typeof findMedmarTicketPdf;
+  findPdfByUid?: typeof findMedmarPdfByUid;
   cleanPdf?: typeof cleanMedmarPdf;
   validatePdf?: typeof validateCleanedMedmarPdf;
   loadAgencyRecipient?: typeof loadAgencyRecipient;
   sendEmail?: typeof sendMedmarCleanedTicketEmail;
 };
 
-async function resolvePdfForDelivery(
+type PdfLocation = { kind: "ok"; bytes: Buffer; filename: string; messageUid: string; sha256: string } | { kind: "not_found" } | { kind: "ambiguous"; detail: string };
+
+/**
+ * Individua i byte grezzi del PDF, senza pulire ne' validare. Se `knownUid`
+ * e' presente (Fase B del retry a due fasi), prova prima il fetch mirato
+ * (`findPdfByUid`: un solo UIDL-all + un solo RETR, niente scan) — se l'UID
+ * non viene piu' trovato (messaggio spostato/scaduto), ricade sullo scan
+ * completo (`findPdf`) esattamente come se `knownUid` non ci fosse.
+ */
+async function locatePdfBytes(
   idPrenotazione: string,
   medmarNumero: string,
-  deps?: MedmarDeliveryDeps,
-  mailboxTimeoutMs?: number
-): Promise<PdfResolution> {
+  knownUid: string | null,
+  deps: MedmarDeliveryDeps | undefined,
+  mailboxTimeoutMs: number | undefined
+): Promise<PdfLocation> {
   const findPdf = deps?.findPdf ?? findMedmarTicketPdf;
-  const cleanPdf = deps?.cleanPdf ?? cleanMedmarPdf;
-  const validatePdf = deps?.validatePdf ?? validateCleanedMedmarPdf;
+  const findPdfByUid = deps?.findPdfByUid ?? findMedmarPdfByUid;
+
+  if (knownUid) {
+    const byUid = await findPdfByUid({ uid: knownUid, idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs });
+    if (byUid.kind === "found") {
+      return { kind: "ok", bytes: Buffer.from(byUid.pdfBytes), filename: byUid.filename, messageUid: byUid.messageUid, sha256: byUid.sha256 };
+    }
+    if (byUid.kind === "ambiguous") {
+      return { kind: "ambiguous", detail: `${byUid.candidates.length} PDF compatibili trovati: ${byUid.candidates.map((c) => c.filename).join(", ")}` };
+    }
+    // not_found via UID: il messaggio potrebbe essere stato spostato/scaduto lato provider — si ricade sullo scan completo.
+  }
 
   const lookup = await findPdf({ idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs });
   if (lookup.kind === "not_found") return { kind: "not_found" };
   if (lookup.kind === "ambiguous") {
     return { kind: "ambiguous", detail: `${lookup.candidates.length} PDF compatibili trovati: ${lookup.candidates.map((c) => c.filename).join(", ")}` };
   }
+  return { kind: "ok", bytes: Buffer.from(lookup.pdfBytes), filename: lookup.filename, messageUid: lookup.messageUid, sha256: lookup.sha256 };
+}
+
+async function resolvePdfForDelivery(
+  idPrenotazione: string,
+  medmarNumero: string,
+  knownUid: string | null,
+  deps?: MedmarDeliveryDeps,
+  mailboxTimeoutMs?: number
+): Promise<PdfResolution> {
+  const cleanPdf = deps?.cleanPdf ?? cleanMedmarPdf;
+  const validatePdf = deps?.validatePdf ?? validateCleanedMedmarPdf;
+
+  const located = await locatePdfBytes(idPrenotazione, medmarNumero, knownUid, deps, mailboxTimeoutMs);
+  if (located.kind === "not_found") return { kind: "not_found" };
+  if (located.kind === "ambiguous") return { kind: "ambiguous", detail: located.detail };
 
   let cleaned: Uint8Array;
   try {
-    cleaned = await cleanPdf(lookup.pdfBytes);
+    cleaned = await cleanPdf(located.bytes);
   } catch (err) {
     const detail = err instanceof MedmarPdfCleanerError ? err.message : err instanceof Error ? err.message : "Errore sconosciuto nel cleaner.";
     return { kind: "validation_failed", detail };
@@ -278,11 +328,11 @@ async function resolvePdfForDelivery(
 
   return {
     kind: "ok",
-    original: Buffer.from(lookup.pdfBytes),
+    original: located.bytes,
     cleaned,
-    filename: lookup.filename,
-    messageUid: lookup.messageUid,
-    originalSha256: lookup.sha256,
+    filename: located.filename,
+    messageUid: located.messageUid,
+    originalSha256: located.sha256,
     cleanedSha256: createHash("sha256").update(Buffer.from(cleaned)).digest("hex"),
   };
 }
@@ -374,13 +424,41 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
   }
 
   // --- PDF: awaiting_pdf / pdf_found / pdf_cleaned / pdf_not_found (ritentabile) ---
+  const beforePdfStatus = attempt.status;
+  const knownUid = attempt.pdf_mailbox_message_uid ?? null;
+
+  if (input.stopAfterPdfFound && attempt.status !== "pdf_found") {
+    // Fase A del retry a due fasi: individua e salva il riferimento al PDF (uid/filename/hash),
+    // SENZA pulire ne' inviare. Il prossimo run (Fase B, knownUid gia' presente) riprende da qui
+    // con un fetch mirato via UID, non uno scan completo.
+    const located = await locatePdfBytes(issuingAttempt.medmar_id_prenotazione, issuingAttempt.medmar_numero, knownUid, deps, input.mailboxTimeoutMs);
+    if (located.kind === "not_found") {
+      attempt = await repo.updateAttempt(attempt.id, { status: "pdf_not_found", attempt_count: attempt.attempt_count + 1 }, beforePdfStatus);
+      return { ok: false, status: "pdf_not_found", attempt, error: "Nessun PDF trovato nella mailbox Medmar per questa prenotazione." };
+    }
+    if (located.kind === "ambiguous") {
+      attempt = await repo.updateAttempt(
+        attempt.id,
+        { status: "pdf_ambiguous", last_error_code: "pdf_ambiguous", last_error_message: located.detail },
+        beforePdfStatus
+      );
+      return { ok: false, status: "pdf_ambiguous", attempt, error: located.detail };
+    }
+    attempt = await repo.updateAttempt(
+      attempt.id,
+      { status: "pdf_found", pdf_mailbox_message_uid: located.messageUid, pdf_filename: located.filename, pdf_original_sha256: located.sha256 },
+      beforePdfStatus
+    );
+    return { ok: false, status: "pdf_found", attempt, error: "PDF individuato in mailbox: invio rimandato al prossimo ciclo." };
+  }
+
   const pdfResolution = await resolvePdfForDelivery(
     issuingAttempt.medmar_id_prenotazione,
     issuingAttempt.medmar_numero,
+    knownUid,
     deps,
     input.mailboxTimeoutMs
   );
-  const beforePdfStatus = attempt.status;
 
   if (pdfResolution.kind === "not_found") {
     attempt = await repo.updateAttempt(attempt.id, { status: "pdf_not_found", attempt_count: attempt.attempt_count + 1 }, beforePdfStatus);
@@ -517,7 +595,7 @@ export async function previewMedmarDelivery(input: MedmarDeliveryInput, deps?: M
     return { ok: false, status: "issuing_not_completed", error: "id_prenotazione o codice Medmar mancanti." };
   }
 
-  const pdfResolution = await resolvePdfForDelivery(issuingAttempt.medmar_id_prenotazione, issuingAttempt.medmar_numero, deps);
+  const pdfResolution = await resolvePdfForDelivery(issuingAttempt.medmar_id_prenotazione, issuingAttempt.medmar_numero, null, deps);
   if (pdfResolution.kind === "not_found") return { ok: false, status: "pdf_not_found", error: "PDF non trovato in mailbox." };
   if (pdfResolution.kind === "ambiguous") return { ok: false, status: "pdf_ambiguous", error: pdfResolution.detail };
   if (pdfResolution.kind === "validation_failed") return { ok: false, status: "pdf_validation_failed", error: pdfResolution.detail };

@@ -33,6 +33,7 @@ function makeCandidate(overrides: Partial<MedmarDeliveryRetryCandidate> = {}): M
     updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
     medmar_id_prenotazione: MEDMAR_ID_PRENOTAZIONE,
     medmar_numero: MEDMAR_NUMERO,
+    pdf_mailbox_message_uid: null,
     ...overrides,
   };
 }
@@ -236,6 +237,61 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ mailboxTimeoutMs: 12_345 }), undefined);
   });
 
+  it("6c. retry a due fasi: candidato senza pdf_mailbox_message_uid -> deliver chiamato con stopAfterPdfFound:true (Fase A)", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf", pdf_mailbox_message_uid: null });
+    const deliver = vi.fn(async () => deliveredOutcome());
+    await runMedmarDeliveryRetryBatch({} as SupabaseClient, 10, baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver }));
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ stopAfterPdfFound: true }), undefined);
+  });
+
+  it("6d. retry a due fasi: candidato con pdf_mailbox_message_uid gia' salvato -> deliver chiamato con stopAfterPdfFound:false (Fase B, no scan completo)", async () => {
+    const candidate = makeCandidate({ status: "pdf_found", pdf_mailbox_message_uid: "uid-gia-noto" });
+    const deliver = vi.fn(async () => deliveredOutcome());
+    await runMedmarDeliveryRetryBatch({} as SupabaseClient, 10, baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver }));
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ stopAfterPdfFound: false }), undefined);
+  });
+
+  it("6e. Fase A riuscita (PDF trovato, budget quasi finito): outcome.status='pdf_found' -> item.result='pdf_found_deferred', uid/filename salvati, still_pending+1, nessuna escalation, nessun 'delivered'", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf", pdf_mailbox_message_uid: null });
+    const repo = fakeRepo();
+    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
+      ok: false,
+      status: "pdf_found",
+      attempt: makeAttempt({ status: "pdf_found", pdf_mailbox_message_uid: "uid-nuovo", pdf_filename: "Prenotazione738278.pdf" }),
+      error: "PDF individuato in mailbox: invio rimandato al prossimo ciclo.",
+    }));
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, repo })
+    );
+    expect(summary.delivered).toBe(0);
+    expect(summary.still_pending).toBe(1);
+    expect(summary.escalated_to_manual_review).toBe(0);
+    expect(summary.timed_out).toBe(false);
+    expect(summary.items[0]).toMatchObject({
+      result: "pdf_found_deferred",
+      pdf_mailbox_message_uid: "uid-nuovo",
+      pdf_filename: "Prenotazione738278.pdf",
+    });
+    expect(repo.updateAttemptSpy).not.toHaveBeenCalled(); // l'update e' gia' avvenuto dentro deliverMedmarTicket (mockato qui)
+  });
+
+  it("6f. item 'delivered' include pdf_mailbox_message_uid/pdf_filename dell'attempt finale (Fase B completata)", async () => {
+    const candidate = makeCandidate({ status: "pdf_found", pdf_mailbox_message_uid: "uid-noto" });
+    const deliver = vi.fn(async () => deliveredOutcome({ pdf_mailbox_message_uid: "uid-noto", pdf_filename: "Prenotazione738278.pdf" }));
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver })
+    );
+    expect(summary.items[0]).toMatchObject({
+      result: "delivered",
+      pdf_mailbox_message_uid: "uid-noto",
+      pdf_filename: "Prenotazione738278.pdf",
+    });
+  });
+
   it("7. timeout interno non produce doppio invio: il candidato resta intatto, un secondo run (deliver ora veloce) consegna una volta sola", async () => {
     const candidate = makeCandidate({ status: "awaiting_pdf" });
     let calls = 0;
@@ -355,7 +411,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     expect(statusesQueried).not.toContain("delivery_state_unknown");
   });
 
-  it("12. pdf_ambiguous/pdf_validation_failed/recipient_missing/manual_review non vengono mai selezionati dalla query", async () => {
+  it("12. pdf_ambiguous/pdf_validation_failed/recipient_missing/manual_review non vengono mai selezionati dalla query (pdf_found SI', e' Fase B del retry a due fasi)", async () => {
     const inSpy = vi.fn().mockReturnThis();
     const chain = {
       select: vi.fn().mockReturnThis(),
@@ -371,8 +427,8 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     for (const forbidden of ["pdf_ambiguous", "pdf_validation_failed", "recipient_missing", "manual_review", "remote_state_unknown_blocked", "delivery_state_unknown", "delivery_failed", "delivered"]) {
       expect(statusesQueried).not.toContain(forbidden);
     }
-    expect(statusesQueried).toHaveLength(2);
-    expect(statusesQueried).toEqual(expect.arrayContaining(["awaiting_pdf", "pdf_not_found"]));
+    expect(statusesQueried).toHaveLength(3);
+    expect(statusesQueried).toEqual(expect.arrayContaining(["awaiting_pdf", "pdf_not_found", "pdf_found"]));
   });
 
   it("13. max_attempts rispettato: pdf_not_found con attempt_count >= soglia passa a manual_review, item.result='escalated_to_manual_review'", async () => {
@@ -399,7 +455,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
   });
 
-  it("13b. pdf_not_found sotto la soglia NON viene escalato: resta ritentabile (result='pending')", async () => {
+  it("13b. pdf_not_found sotto la soglia NON viene escalato: resta ritentabile (result='pdf_not_found')", async () => {
     const candidate = makeCandidate({ status: "pdf_not_found", attempt_count: 1 });
     const repo = fakeRepo();
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
@@ -415,7 +471,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
     expect(summary.escalated_to_manual_review).toBe(0);
     expect(summary.still_pending).toBe(1);
-    expect(summary.items[0]!.result).toBe("pending");
+    expect(summary.items[0]!.result).toBe("pdf_not_found");
     expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
   });
 

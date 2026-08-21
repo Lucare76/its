@@ -256,6 +256,12 @@ export async function findMedmarTicketPdf(input: MedmarPdfLookupInput): Promise<
 
         candidates.push({ messageNumber, messageUid, filename: attachment.filename, bytes: attachment.bytes, sha256 });
       }
+      // Fermarsi appena trovato un messaggio con almeno un allegato valido: non serve scandire
+      // il resto della finestra (fino a `lower`) per un caso normale — quello che costava caro
+      // su Vercel non era il singolo RETR del match, ma continuare a fare TOP su centinaia di
+      // messaggi piu' vecchi dopo aver gia' trovato il PDF cercato. L'ambiguita' resta comunque
+      // rilevabile SE lo stesso messaggio contiene piu' allegati PDF validi (loop sopra).
+      if (candidates.length > 0) break;
     }
 
     if (candidates.length === 0) return { kind: "not_found" };
@@ -269,6 +275,114 @@ export async function findMedmarTicketPdf(input: MedmarPdfLookupInput): Promise<
     return { kind: "found", pdfBytes: only.bytes, filename: only.filename, messageUid: only.messageUid, sha256: only.sha256 };
   } finally {
     // Chiusura pulita — MAI DELE prima di QUIT: nessuna mutazione della mailbox.
+    session.quit();
+  }
+}
+
+export type MedmarPdfByUidInput = {
+  /** UID gia' salvato da un run precedente (medmar_delivery_attempts.pdf_mailbox_message_uid). */
+  uid: string;
+  idPrenotazione: string;
+  medmarNumero: string;
+  timeoutMs?: number;
+};
+
+/**
+ * Fase B del retry a due fasi: quando l'UID del messaggio e' gia' noto da un
+ * run precedente (`findMedmarTicketPdf`), evita del tutto lo scan
+ * TOP/RETR messaggio-per-messaggio. Un solo `UIDL` senza argomento restituisce
+ * TUTTE le coppie numero/uid in una singola risposta multilinea (un solo
+ * round-trip, indipendentemente dal numero di messaggi in mailbox): da li'
+ * si ricava il numero di messaggio corrente per quell'UID e si fa UN solo
+ * `RETR` mirato. Se l'UID non viene piu' trovato (messaggio spostato/scaduto
+ * lato provider), il chiamante ricade sullo scan completo (`findMedmarTicketPdf`).
+ * Stesse garanzie dell'altra funzione: READ-ONLY, mai `DELE`, nessun log di
+ * contenuto PDF o dati sensibili.
+ */
+export async function findMedmarPdfByUid(input: MedmarPdfByUidInput): Promise<MedmarPdfLookupResult> {
+  const config = readMailboxConfig();
+  if (!config) {
+    throw new MedmarPdfMailboxError(
+      "Configurazione mailbox Medmar mancante (MEDMAR_MAILBOX_HOST/PORT/USER/PASSWORD)."
+    );
+  }
+  const uid = input.uid.trim();
+  const idPrenotazione = input.idPrenotazione.trim();
+  const medmarNumero = input.medmarNumero.trim();
+  if (!uid || !idPrenotazione || !medmarNumero) {
+    throw new MedmarPdfMailboxError("uid, idPrenotazione e medmarNumero sono obbligatori per il fetch mirato del PDF.");
+  }
+
+  const socket = net.connect({ host: config.host, port: config.port });
+  socket.setTimeout(input.timeoutMs ?? 30_000);
+  socket.on("timeout", () => socket.destroy(new Error("Timeout connessione mailbox Medmar.")));
+  const session = new Pop3Session(socket);
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", () => resolve());
+    socket.once("error", reject);
+  });
+
+  try {
+    const greeting = await session.readGreeting();
+    if (!greeting.startsWith("+OK")) {
+      throw new MedmarPdfMailboxError(`Greeting POP3 inatteso: ${greeting}`);
+    }
+    const userResp = await session.cmdLine(`USER ${config.user}`);
+    if (!userResp.startsWith("+OK")) throw new MedmarPdfMailboxError(`USER rifiutato: ${userResp}`);
+    const passResp = await session.cmdLine(`PASS ${config.password}`);
+    if (!passResp.startsWith("+OK")) throw new MedmarPdfMailboxError(`PASS rifiutato: ${passResp}`);
+
+    let uidlAll: string;
+    try {
+      uidlAll = await session.cmdMultiline("UIDL");
+    } catch {
+      // Server non supporta UIDL senza argomento (raro ma possibile): niente fast-path, il chiamante ricadra' sullo scan completo.
+      return { kind: "not_found" };
+    }
+
+    let messageNumber: number | null = null;
+    for (const line of uidlAll.split("\r\n")) {
+      const match = line.match(/^(\d+)\s+(\S+)$/);
+      if (match && match[2] === uid) {
+        messageNumber = parseInt(match[1]!, 10);
+        break;
+      }
+    }
+    if (messageNumber === null) return { kind: "not_found" }; // UID non piu' presente: il chiamante ricade sullo scan completo.
+
+    let fullMessage: string;
+    try {
+      fullMessage = await session.cmdMultiline(`RETR ${messageNumber}`);
+    } catch {
+      return { kind: "not_found" };
+    }
+    // Rivalidazione difensiva: anche con l'UID gia' noto, non ci si fida ciecamente —
+    // stessa doppia condizione (id_prenotazione + codice Medmar) dello scan completo.
+    if (!fullMessage.includes(idPrenotazione) || !fullMessage.includes(medmarNumero)) {
+      return { kind: "not_found" };
+    }
+
+    const attachments = extractPdfAttachments(fullMessage);
+    const candidates: PdfCandidate[] = [];
+    const seenHashes = new Set<string>();
+    for (const attachment of attachments) {
+      const filenameMatchesIdPrenotazione = new RegExp(`Prenotazione0*${idPrenotazione}\\.pdf$`, "i").test(attachment.filename);
+      if (!filenameMatchesIdPrenotazione) continue;
+      const sha256 = createHash("sha256").update(attachment.bytes).digest("hex");
+      if (seenHashes.has(sha256)) continue;
+      seenHashes.add(sha256);
+      candidates.push({ messageNumber, messageUid: uid, filename: attachment.filename, bytes: attachment.bytes, sha256 });
+    }
+    if (candidates.length === 0) return { kind: "not_found" };
+    if (candidates.length > 1) {
+      return {
+        kind: "ambiguous",
+        candidates: candidates.map((c) => ({ filename: c.filename, messageUid: c.messageUid, sha256: c.sha256 })),
+      };
+    }
+    const only = candidates[0]!;
+    return { kind: "found", pdfBytes: only.bytes, filename: only.filename, messageUid: only.messageUid, sha256: only.sha256 };
+  } finally {
     session.quit();
   }
 }

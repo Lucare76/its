@@ -7,7 +7,7 @@
  */
 
 /** Stati che il retry automatico (cron medmar-delivery-retry) ritenta davvero — deve restare identico a RETRYABLE_DELIVERY_STATUSES in lib/server/medmar-booking/delivery-types.ts. */
-export const MEDMAR_DELIVERY_AUTO_RETRY_STATUSES = new Set(["awaiting_pdf", "pdf_not_found"]);
+export const MEDMAR_DELIVERY_AUTO_RETRY_STATUSES = new Set(["awaiting_pdf", "pdf_not_found", "pdf_found"]);
 
 /** Stati in cui il pulsante "Riprova ora" NON va mostrato in lista: terminale (delivered), mid-flight (delivery_started) o incerto (nessun retry automatico su ambiguita'). */
 export const MEDMAR_DELIVERY_LIST_NON_ACTIONABLE_STATUSES = new Set([

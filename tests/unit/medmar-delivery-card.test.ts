@@ -98,8 +98,8 @@ describe("isMedmarManualFallbackVisible — fallback 'Invio manuale PDF', mai ne
 });
 
 describe("costanti esportate coerenti con l'engine server-side", () => {
-  it("MEDMAR_DELIVERY_AUTO_RETRY_STATUSES contiene esattamente awaiting_pdf e pdf_not_found", () => {
-    expect([...MEDMAR_DELIVERY_AUTO_RETRY_STATUSES].sort()).toEqual(["awaiting_pdf", "pdf_not_found"]);
+  it("MEDMAR_DELIVERY_AUTO_RETRY_STATUSES contiene esattamente awaiting_pdf, pdf_found e pdf_not_found", () => {
+    expect([...MEDMAR_DELIVERY_AUTO_RETRY_STATUSES].sort()).toEqual(["awaiting_pdf", "pdf_found", "pdf_not_found"]);
   });
 
   it("MEDMAR_DELIVERY_LIST_NON_ACTIONABLE_STATUSES non include mai gli stati ritentabili", () => {

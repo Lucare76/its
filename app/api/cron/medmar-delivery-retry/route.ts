@@ -88,6 +88,9 @@ export async function GET(request: NextRequest) {
           result: i.result,
           elapsed_ms: i.elapsed_ms,
           budget_ms: i.budget_ms,
+          pdf_mailbox_message_uid: i.pdf_mailbox_message_uid ?? undefined,
+          pdf_filename: i.pdf_filename ?? undefined,
+          resend_message_id: i.resend_message_id ?? undefined,
         })),
       },
     });

@@ -21,8 +21,13 @@ export type MedmarDeliveryStatus =
 /** Stati terminali: nessuna transizione automatica ulteriore prevista. */
 export const TERMINAL_DELIVERY_STATUSES: ReadonlySet<MedmarDeliveryStatus> = new Set(["delivered"]);
 
-/** Unico stato da cui e' sicuro ritentare automaticamente (mailbox non ancora arrivata). */
-export const RETRYABLE_DELIVERY_STATUSES: ReadonlySet<MedmarDeliveryStatus> = new Set(["pdf_not_found", "awaiting_pdf"]);
+/**
+ * Stati da cui e' sicuro ritentare automaticamente. `pdf_found` e' il nuovo
+ * stato intermedio del retry a due fasi: PDF gia' individuato e salvato
+ * (uid/filename/hash) ma non ancora pulito/inviato — il prossimo run lo
+ * riprende con un fetch mirato via UID invece di rifare lo scan completo.
+ */
+export const RETRYABLE_DELIVERY_STATUSES: ReadonlySet<MedmarDeliveryStatus> = new Set(["pdf_not_found", "awaiting_pdf", "pdf_found"]);
 
 /** Stati che richiedono intervento umano esplicito, mai un retry automatico. */
 export const MANUAL_REVIEW_DELIVERY_STATUSES: ReadonlySet<MedmarDeliveryStatus> = new Set([

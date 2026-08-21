@@ -365,6 +365,98 @@ describe("deliverMedmarTicket — state machine delivery PDF Medmar", () => {
     expect(attachmentText).not.toBe("%PDF-ORIGINAL-DUMMY");
   });
 
+  it("15. Fase A (stopAfterPdfFound): PDF trovato -> status pdf_found, uid/filename/hash salvati, cleaner e invio MAI chiamati", async () => {
+    const cleanPdf = vi.fn();
+    const sendEmail = vi.fn();
+    const outcome = await deliverMedmarTicket(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID, stopAfterPdfFound: true },
+      baseDeps({ repo: makeDeliveryRepo(), cleanPdf: cleanPdf as never, sendEmail: sendEmail as never })
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok && "attempt" in outcome) {
+      expect(outcome.status).toBe("pdf_found");
+      expect(outcome.attempt.pdf_mailbox_message_uid).toBe("uid-1");
+      expect(outcome.attempt.pdf_filename).toBe("Prenotazione736987.pdf");
+      expect(outcome.attempt.pdf_original_sha256).toBeTruthy();
+      expect(outcome.attempt.pdf_cleaned_sha256).toBeNull(); // non ancora pulito: quello e' compito della Fase B
+    }
+    expect(cleanPdf).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("16. Fase A (stopAfterPdfFound): PDF non trovato -> pdf_not_found identico al comportamento a giro singolo", async () => {
+    const sendEmail = vi.fn();
+    const outcome = await deliverMedmarTicket(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID, stopAfterPdfFound: true },
+      baseDeps({ repo: makeDeliveryRepo(), findPdf: (async () => ({ kind: "not_found" })) as never, sendEmail: sendEmail as never })
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok && "attempt" in outcome) {
+      expect(outcome.status).toBe("pdf_not_found");
+      expect(outcome.attempt.attempt_count).toBe(1);
+    }
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("17. Fase B: se l'attempt ha gia' pdf_mailbox_message_uid salvato, usa findPdfByUid con quell'UID — findPdf (scan completo) MAI chiamato", async () => {
+    const findPdf = vi.fn();
+    const findPdfByUid = vi.fn(async () => ({
+      kind: "found" as const,
+      pdfBytes: Buffer.from("%PDF-BY-UID"),
+      filename: "Prenotazione736987.pdf",
+      messageUid: "uid-known-1",
+      sha256: "sha-by-uid",
+    }));
+    const existing = makeDeliveryAttempt({ status: "pdf_found", pdf_mailbox_message_uid: "uid-known-1", pdf_filename: "Prenotazione736987.pdf" });
+    const outcome = await deliverMedmarTicket(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      baseDeps({ repo: makeDeliveryRepo(existing), findPdf: findPdf as never, findPdfByUid: findPdfByUid as never })
+    );
+    expect(findPdfByUid).toHaveBeenCalledWith(expect.objectContaining({ uid: "uid-known-1" }));
+    expect(findPdf).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.status).toBe("delivered");
+  });
+
+  it("18. Fase B: se findPdfByUid non trova piu' il messaggio (UID scaduto/spostato), ricade sullo scan completo (findPdf)", async () => {
+    const findPdf = vi.fn(async () => ({
+      kind: "found" as const,
+      pdfBytes: Buffer.from("%PDF-FALLBACK-SCAN"),
+      filename: "Prenotazione736987.pdf",
+      messageUid: "uid-nuovo-2",
+      sha256: "sha-fallback",
+    }));
+    const findPdfByUid = vi.fn(async () => ({ kind: "not_found" as const }));
+    const existing = makeDeliveryAttempt({ status: "pdf_found", pdf_mailbox_message_uid: "uid-vecchio-scaduto", pdf_filename: "Prenotazione736987.pdf" });
+    const outcome = await deliverMedmarTicket(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      baseDeps({ repo: makeDeliveryRepo(existing), findPdf: findPdf as never, findPdfByUid: findPdfByUid as never })
+    );
+    expect(findPdfByUid).toHaveBeenCalledWith(expect.objectContaining({ uid: "uid-vecchio-scaduto" }));
+    expect(findPdf).toHaveBeenCalledTimes(1);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.status).toBe("delivered");
+  });
+
+  it("19. Fase B end-to-end: UID gia' noto, nessun flag stopAfterPdfFound -> pulisce, valida, invia e consegna in un solo giro", async () => {
+    const existing = makeDeliveryAttempt({ status: "pdf_found", pdf_mailbox_message_uid: "uid-known-3", pdf_filename: "Prenotazione736987.pdf" });
+    const sendEmail = vi.fn(async () => ({ kind: "sent" as const, messageId: "resend-msg-19" }));
+    const outcome = await deliverMedmarTicket(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      baseDeps({
+        repo: makeDeliveryRepo(existing),
+        findPdfByUid: (async () => ({ kind: "found" as const, pdfBytes: Buffer.from("%PDF-KNOWN"), filename: "Prenotazione736987.pdf", messageUid: "uid-known-3", sha256: "sha-known" })) as never,
+        sendEmail: sendEmail as never,
+      })
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.status).toBe("delivered");
+      expect(outcome.attempt.resend_message_id).toBe("resend-msg-19");
+    }
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
   it("se un service collegato ha già medmar_ticket_sent_at valorizzato, non reinvia (idempotenza a livello services)", async () => {
     const sendEmail = vi.fn();
     const outcome = await deliverMedmarTicket(

@@ -69,13 +69,15 @@ export type MedmarDeliveryRetryCandidate = {
   updated_at: string;
   medmar_id_prenotazione: string | null;
   medmar_numero: string | null;
+  /** Se gia' presente, il candidato e' in Fase B (PDF gia' individuato in un run precedente): fetch mirato via UID + pulizia + invio, niente scan completo. */
+  pdf_mailbox_message_uid: string | null;
 };
 
 async function loadRetryCandidates(admin: SupabaseClient, limit: number, now: Date): Promise<MedmarDeliveryRetryCandidate[]> {
   const cutoffIso = new Date(now.getTime() - MEDMAR_DELIVERY_RETRY_MIN_INTERVAL_MS).toISOString();
   const result = await admin
     .from("medmar_delivery_attempts")
-    .select("id, tenant_id, issuing_attempt_id, status, attempt_count, updated_at, medmar_id_prenotazione, medmar_numero")
+    .select("id, tenant_id, issuing_attempt_id, status, attempt_count, updated_at, medmar_id_prenotazione, medmar_numero, pdf_mailbox_message_uid")
     .in("status", Array.from(RETRYABLE_DELIVERY_STATUSES))
     .lt("attempt_count", MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS)
     .lte("updated_at", cutoffIso)
@@ -89,9 +91,12 @@ async function loadRetryCandidates(admin: SupabaseClient, limit: number, now: Da
  * Esito osservabile di un candidato nella response del cron — per capire da
  * fuori (cron-job.org, audit) cosa e' successo davvero dietro un 200 OK:
  * - delivered: consegnato ora (o gia' delivered, idempotente);
+ * - pdf_found_deferred: Fase A riuscita — PDF individuato e salvato (uid/filename/hash),
+ *   invio rimandato al prossimo run (Fase B, fetch mirato via UID, niente scan completo);
+ * - pdf_not_found: PDF non ancora in mailbox, resta ritentabile;
  * - timed_out: budget per-candidato scaduto durante il lookup/invio, nessuno stato toccato, ritentabile;
  * - skipped_budget: mai nemmeno iniziato, budget totale del batch gia' esaurito da un candidato precedente;
- * - pending: tentato ma resta in uno stato non terminale non-timeout (es. pdf_not_found sotto soglia, precondizione fallita);
+ * - pending: tentato ma resta in uno stato non terminale non altrimenti classificato (es. precondizione fallita);
  * - escalated_to_manual_review: max tentativi esauriti, passato a revisione manuale;
  * - error: eccezione imprevista, contenuta, nessuno stato toccato.
  */
@@ -102,8 +107,10 @@ export type MedmarDeliveryRetryItemResult = {
   medmar_id_prenotazione: string | null;
   medmar_numero: string | null;
   status_before: MedmarDeliveryStatus;
-  result: "delivered" | "timed_out" | "skipped_budget" | "pending" | "escalated_to_manual_review" | "error";
+  result: "delivered" | "pdf_found_deferred" | "pdf_not_found" | "timed_out" | "skipped_budget" | "pending" | "escalated_to_manual_review" | "error";
   resend_message_id?: string | null;
+  pdf_mailbox_message_uid?: string | null;
+  pdf_filename?: string | null;
   elapsed_ms: number;
   /** Budget (ms) applicato a questo candidato (MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS o l'override dei test) — per leggere elapsed_ms in contesto senza dover conoscere le costanti. */
   budget_ms: number;
@@ -261,6 +268,10 @@ export async function runMedmarDeliveryRetryBatch(
             userId: systemUserId,
             issuingAttemptId: candidate.issuing_attempt_id,
             mailboxTimeoutMs: perCandidateBudgetMs,
+            // Retry a due fasi: senza UID salvato (Fase A) ci si ferma non appena trovato il PDF,
+            // senza pulire/inviare nello stesso giro. Con UID gia' presente (Fase B) si procede
+            // fino in fondo (fetch mirato via UID, niente scan completo — vedi pdf-delivery.ts).
+            stopAfterPdfFound: !candidate.pdf_mailbox_message_uid,
           },
           deps?.deliverDeps
         ),
@@ -286,6 +297,19 @@ export async function runMedmarDeliveryRetryBatch(
           delivery_attempt_id: outcome.attempt.id,
           result: "delivered",
           resend_message_id: outcome.attempt.resend_message_id,
+          pdf_mailbox_message_uid: outcome.attempt.pdf_mailbox_message_uid,
+          pdf_filename: outcome.attempt.pdf_filename,
+          elapsed_ms: elapsedMs,
+        });
+      } else if ("attempt" in outcome && outcome.status === "pdf_found") {
+        // Fase A riuscita: PDF individuato e salvato, invio rimandato al prossimo ciclo (Fase B).
+        stillPending += 1;
+        items.push({
+          ...itemBase,
+          delivery_attempt_id: outcome.attempt.id,
+          result: "pdf_found_deferred",
+          pdf_mailbox_message_uid: outcome.attempt.pdf_mailbox_message_uid,
+          pdf_filename: outcome.attempt.pdf_filename,
           elapsed_ms: elapsedMs,
         });
       } else if ("attempt" in outcome) {
@@ -314,7 +338,12 @@ export async function runMedmarDeliveryRetryBatch(
           }
         } else {
           stillPending += 1;
-          items.push({ ...itemBase, delivery_attempt_id: outcome.attempt.id, result: "pending", elapsed_ms: elapsedMs });
+          items.push({
+            ...itemBase,
+            delivery_attempt_id: outcome.attempt.id,
+            result: outcome.status === "pdf_not_found" ? "pdf_not_found" : "pending",
+            elapsed_ms: elapsedMs,
+          });
         }
       } else {
         // Precondizione fallita (issuing_attempt_not_found / issuing_not_completed / remote_state_unknown_blocked / already_sent):
