@@ -146,3 +146,41 @@ export function ensurePdfjsNodePolyfills(): void {
     };
   }
 }
+
+/**
+ * Registra il `WorkerMessageHandler` di pdfjs-dist su `globalThis.pdfjsWorker`
+ * PRIMA di chiamare `getDocument()`.
+ *
+ * Causa dell'errore "Setting up fake worker failed: Cannot find module
+ * '.../pdf.worker.mjs'" in produzione Vercel: `pdfjs-dist` v5.x, in Node,
+ * disabilita SEMPRE il worker reale (`PDFWorker.#isWorkerDisabled = true`,
+ * hardcoded per `isNodeJS`) e passa al "fake worker", che però deve comunque
+ * caricare la classe `WorkerMessageHandler` da qualche parte: se
+ * `globalThis.pdfjsWorker` non è già popolato, pdfjs esegue un
+ * `import(GlobalWorkerOptions.workerSrc)` A RUNTIME con lo specifier
+ * `"./pdf.worker.mjs"` (relativo al chunk bundlato). Nel bundle serverless di
+ * Next.js/Vercel quel file non esiste più a quel path (la struttura di
+ * `node_modules/pdfjs-dist` non viene preservata), quindi l'import fallisce.
+ *
+ * Fix: importare qui `pdf.worker.mjs` con uno specifier STATICO (letterale),
+ * cosa che permette a webpack/Next di includerlo regolarmente nel bundle
+ * invece di risolverlo a runtime — e assegnarlo a `globalThis.pdfjsWorker`
+ * PRIMA di `getDocument()`. pdfjs, trovando già pronto
+ * `globalThis.pdfjsWorker.WorkerMessageHandler`, salta del tutto l'import
+ * runtime di `workerSrc` (vedi `PDFWorker.#mainThreadWorkerMessageHandler` in
+ * pdf.mjs) — questo è il meccanismo "main thread worker" già previsto da
+ * pdfjs-dist per gli ambienti Node/bundler, non un workaround fragile. Non
+ * introduce dipendenze nuove (pdfjs-dist è già una dipendenza) né richiede di
+ * copiare `pdf.worker.mjs` in `public/`. `pdf.worker.mjs` non fa rendering
+ * canvas: interpreta solo il contenuto PDF (parsing/font), quindi è sicuro da
+ * eseguire sul thread principale per la sola estrazione testo (mai per il
+ * rendering, che qui non usiamo).
+ */
+export async function ensurePdfjsNodeWorkerPolyfill(): Promise<void> {
+  if (typeof window !== "undefined") return; // mai lato browser
+  const g = globalThis as Record<string, unknown>;
+  const existing = g.pdfjsWorker as { WorkerMessageHandler?: unknown } | undefined;
+  if (existing?.WorkerMessageHandler) return; // idempotente: mai re-importare se già pronto
+  const workerModule = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  g.pdfjsWorker = workerModule;
+}

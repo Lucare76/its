@@ -14,7 +14,7 @@
  * usa questo parser interno invece di pdf-parse.
  */
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
-import { ensurePdfjsNodePolyfills } from "./pdfjs-node-polyfill";
+import { ensurePdfjsNodePolyfills, ensurePdfjsNodeWorkerPolyfill } from "./pdfjs-node-polyfill";
 
 /** Etichette testuali da rimuovere sempre, confronto case-insensitive su stringa INTERA (trim). */
 const REDACT_LABELS = new Set(["prezzo", "totale"]);
@@ -260,6 +260,10 @@ export async function extractTextItemsFromPdf(pdfBytes: Uint8Array): Promise<str
   // Va chiamato PRIMA dell'import di pdfjs: il modulo controlla globalThis.DOMMatrix/Path2D/ImageData
   // al proprio caricamento (vedi pdfjs-node-polyfill.ts per il perche' e la sicurezza del polyfill).
   ensurePdfjsNodePolyfills();
+  // Va chiamato PRIMA di getDocument(): evita che pdfjs tenti di importare a runtime
+  // "./pdf.worker.mjs" (path che non esiste nel bundle serverless Vercel) — vedi
+  // pdfjs-node-polyfill.ts per il meccanismo "main thread worker".
+  await ensurePdfjsNodeWorkerPolyfill();
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const loadingTask = (pdfjsLib as unknown as { getDocument: (input: { data: Uint8Array }) => { promise: Promise<unknown> } }).getDocument({
     data: new Uint8Array(pdfBytes),
