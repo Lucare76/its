@@ -12,6 +12,7 @@ import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
 import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 import { resolveFerryScbarcoTime } from "@/lib/server/resolve-ferry-sbarco";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
+import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 
 export const runtime = "nodejs";
 
@@ -512,6 +513,15 @@ export async function POST(request: NextRequest) {
         tenantId: auth.membership.tenant_id,
         serviceId,
         appUrl: appUrlFromRequest(request),
+      });
+      await autoAllocateBusService({
+        admin: auth.admin,
+        tenantId: auth.membership.tenant_id,
+        serviceId,
+        userId: auth.user.id,
+      }).catch((error) => {
+        console.error("Agency bus auto allocation failed:", error);
+        return null;
       });
     }
 

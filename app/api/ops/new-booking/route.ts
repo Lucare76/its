@@ -16,6 +16,7 @@ import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-boo
 import { computeIschiaArrivalTime, findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
+import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 
 export const runtime = "nodejs";
 
@@ -291,6 +292,26 @@ export async function POST(request: NextRequest) {
         serviceId,
         appUrl: appUrlFromRequest(request),
       });
+      await autoAllocateBusService({
+        admin: auth.admin,
+        tenantId,
+        serviceId,
+        userId: auth.user.id,
+      }).catch((error) => {
+        console.error("Bus auto allocation failed:", error);
+        return null;
+      });
+      if (returnServiceId) {
+        await autoAllocateBusService({
+          admin: auth.admin,
+          tenantId,
+          serviceId: returnServiceId,
+          userId: auth.user.id,
+        }).catch((error) => {
+          console.error("Bus return auto allocation failed:", error);
+          return null;
+        });
+      }
     }
 
     auditLog({
