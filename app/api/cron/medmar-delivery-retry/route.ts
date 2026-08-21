@@ -87,6 +87,7 @@ export async function GET(request: NextRequest) {
           status_before: i.status_before,
           result: i.result,
           elapsed_ms: i.elapsed_ms,
+          budget_ms: i.budget_ms,
         })),
       },
     });

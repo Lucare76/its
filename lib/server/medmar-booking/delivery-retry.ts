@@ -39,17 +39,26 @@ export const MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE = 3;
 /**
  * Budget totale (ms) per l'intero batch. cron-job.org taglia a 30s: si
  * lascia margine per l'audit awaited finale + serializzazione JSON, puntando
- * a una response entro ~28-29s (vedi anche MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS).
+ * a una response entro ~29s (vedi anche MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS).
+ *
+ * Storico: 25s poi 28s si sono rivelati insufficienti in produzione — due run
+ * reali (prenotazione 738420, 2026-08-21 11:01 e 11:15 UTC) sono andati in
+ * timed_out a ~26,2-26,3s con PDF gia' presente e valido (confermato da un
+ * lookup diretto fuori Vercel: ~12s). L'elapsed_ms di un item timed_out
+ * misura SEMPRE ~perCandidateBudgetMs (e' quando scatta il setTimeout del
+ * race, non il tempo reale del lookup) quindi non prova che il lookup fosse
+ * "quasi finito": prova solo che serviva piu' margine per il cold start /
+ * la latenza di rete verso il server POP3 da Vercel.
  */
-export const MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS = 28_000;
+export const MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS = 29_000;
 
 /**
  * Budget (ms) per singolo candidato (lookup mailbox incluso): se scade, il
- * candidato resta ritentabile senza essere toccato. Coincide con il timeout
- * del socket POP3 passato a `findMedmarTicketPdf` (mailboxTimeoutMs): allo
+ * candidato resta ritentabile senza essere toccato. Passato anche come
+ * timeout del socket POP3 a `findMedmarTicketPdf` (mailboxTimeoutMs): allo
  * scadere il socket viene chiuso per davvero, non solo abbandonato.
  */
-export const MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS = 26_000;
+export const MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS = 28_000;
 
 export type MedmarDeliveryRetryCandidate = {
   id: string;
@@ -96,6 +105,8 @@ export type MedmarDeliveryRetryItemResult = {
   result: "delivered" | "timed_out" | "skipped_budget" | "pending" | "escalated_to_manual_review" | "error";
   resend_message_id?: string | null;
   elapsed_ms: number;
+  /** Budget (ms) applicato a questo candidato (MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS o l'override dei test) — per leggere elapsed_ms in contesto senza dover conoscere le costanti. */
+  budget_ms: number;
 };
 
 export type MedmarDeliveryRetrySummary = {
@@ -224,6 +235,7 @@ export async function runMedmarDeliveryRetryBatch(
       medmar_id_prenotazione: candidate.medmar_id_prenotazione,
       medmar_numero: candidate.medmar_numero,
       status_before: candidate.status,
+      budget_ms: perCandidateBudgetMs,
     };
 
     if (nowMs() - batchStartMs >= totalBudgetMs) {
