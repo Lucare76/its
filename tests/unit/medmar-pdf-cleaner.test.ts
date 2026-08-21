@@ -237,4 +237,23 @@ describe("pdf-cleaner — cleanMedmarPdf (redazione reale a livello di content-s
       }
     }
   });
+
+  it("12. bug reale 'DOMMatrix is not defined' (prenotazione 738742): la validazione non esplode anche se globalThis.DOMMatrix/Path2D/ImageData sono assenti come su Vercel/Node senza @napi-rs/canvas", async () => {
+    const g = globalThis as Record<string, unknown>;
+    const saved = { DOMMatrix: g.DOMMatrix, Path2D: g.Path2D, ImageData: g.ImageData };
+    delete g.DOMMatrix;
+    delete g.Path2D;
+    delete g.ImageData;
+    try {
+      const original = await buildSyntheticMedmarPdf();
+      const cleaned = await cleanMedmarPdf(original);
+      const result = await validateCleanedMedmarPdf(cleaned, VALIDATION_INPUT);
+      expect(result.ok).toBe(true);
+    } finally {
+      // Non lasciare lo stato globale alterato per gli altri test del file/della suite.
+      if (saved.DOMMatrix === undefined) delete g.DOMMatrix; else g.DOMMatrix = saved.DOMMatrix;
+      if (saved.Path2D === undefined) delete g.Path2D; else g.Path2D = saved.Path2D;
+      if (saved.ImageData === undefined) delete g.ImageData; else g.ImageData = saved.ImageData;
+    }
+  });
 });

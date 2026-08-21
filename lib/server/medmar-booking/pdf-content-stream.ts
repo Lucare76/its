@@ -14,6 +14,7 @@
  * usa questo parser interno invece di pdf-parse.
  */
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
+import { ensurePdfjsNodePolyfills } from "./pdfjs-node-polyfill";
 
 /** Etichette testuali da rimuovere sempre, confronto case-insensitive su stringa INTERA (trim). */
 const REDACT_LABELS = new Set(["prezzo", "totale"]);
@@ -256,6 +257,9 @@ export async function extractAllTextFromPdf(pdfBytes: Uint8Array): Promise<strin
  * NON vanno mai considerate un residuo di redazione).
  */
 export async function extractTextItemsFromPdf(pdfBytes: Uint8Array): Promise<string[]> {
+  // Va chiamato PRIMA dell'import di pdfjs: il modulo controlla globalThis.DOMMatrix/Path2D/ImageData
+  // al proprio caricamento (vedi pdfjs-node-polyfill.ts per il perche' e la sicurezza del polyfill).
+  ensurePdfjsNodePolyfills();
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const loadingTask = (pdfjsLib as unknown as { getDocument: (input: { data: Uint8Array }) => { promise: Promise<unknown> } }).getDocument({
     data: new Uint8Array(pdfBytes),
