@@ -51,15 +51,19 @@ export function isClientDemoMode(): boolean {
 
 export function readStoredSupabaseSession(): { access_token: string; refresh_token: string } | null {
   if (typeof window === "undefined") return null;
-  const key = Object.keys(window.localStorage).find((item) => /^sb-.*-auth-token$/i.test(item));
-  if (!key) return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(key) ?? "null") as StoredSupabaseSession;
-    if (!parsed?.access_token || !parsed?.refresh_token) return null;
-    return { access_token: parsed.access_token, refresh_token: parsed.refresh_token };
-  } catch {
-    return null;
+  for (const storage of [window.sessionStorage, window.localStorage]) {
+    const key = Object.keys(storage).find((item) => /^sb-.*-auth-token$/i.test(item));
+    if (!key) continue;
+    try {
+      const parsed = JSON.parse(storage.getItem(key) ?? "null") as StoredSupabaseSession;
+      if (parsed?.access_token && parsed.refresh_token) {
+        return { access_token: parsed.access_token, refresh_token: parsed.refresh_token };
+      }
+    } catch {
+      // Ignore malformed storage and continue with the other persistence scope.
+    }
   }
+  return null;
 }
 
 export async function ensureSupabaseClientReady(maxAttempts = 20) {

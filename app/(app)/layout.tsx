@@ -25,7 +25,7 @@ import {
   uniqueNavItems
 } from "@/lib/app-shell-nav";
 import { ensureSupabaseClientReady, getE2ETestSessionOverride } from "@/lib/supabase/client-session";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { hasStoredAuthSession, hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { needsInboxReview } from "@/lib/inbox-review";
 import { MotivationalModal } from "@/components/motivational-modal";
 import type { UserRole } from "@/lib/types";
@@ -174,13 +174,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       // client. navigator.locks.request() (used internally by getUser) can block
       // indefinitely when no session exists, causing "Verifica sessione..." to hang.
       // If storage has no auth token we know there is no active session.
-      const hasStoredSession = (() => {
-        try {
-          return Object.keys(localStorage).some(
-            (k) => k.endsWith("-auth-token") && !!localStorage.getItem(k)
-          );
-        } catch { return false; }
-      })();
+      const hasStoredSession = hasStoredAuthSession();
       if (!hasStoredSession) {
         if (!active) return;
         setNeedsOnboarding(false);

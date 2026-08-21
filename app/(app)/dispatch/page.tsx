@@ -2,28 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { formatIsoDateShort, getCustomerFullName } from "@/lib/service-display";
-import { getE2ETestSessionOverride } from "@/lib/supabase/client-session";
+import { getE2ETestSessionOverride, readStoredSupabaseSession } from "@/lib/supabase/client-session";
 import { supabase } from "@/lib/supabase/client";
 import type { Assignment, Hotel, Membership, Service, VehicleRecord } from "@/lib/types";
 
 function suggestedVehicleByPax(pax: number) {
   return pax >= 6 ? "VAN" : "CAR";
-}
-
-function readStoredSupabaseSession() {
-  if (typeof window === "undefined") return null;
-  const key = Object.keys(window.localStorage).find((item) => /^sb-.*-auth-token$/i.test(item));
-  if (!key) return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(key) ?? "null") as {
-      access_token?: string;
-      refresh_token?: string;
-    } | null;
-    if (!parsed?.access_token || !parsed.refresh_token) return null;
-    return { access_token: parsed.access_token, refresh_token: parsed.refresh_token };
-  } catch {
-    return null;
-  }
 }
 
 function readUserIdFromAccessToken(accessToken: string | null) {

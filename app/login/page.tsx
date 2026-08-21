@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { AUTH_PERSISTENCE_KEY, hasSupabaseEnv, setAuthPersistence, supabase } from "@/lib/supabase/client";
 import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 
 function normalizeIdentifier(value: string) {
@@ -10,10 +10,11 @@ function normalizeIdentifier(value: string) {
 
 function clearStoredSupabaseAuth() {
   if (typeof window === "undefined") return;
-  for (const key of Object.keys(window.localStorage)) {
-    if (/^sb-.*-auth-token$/i.test(key)) {
-      window.localStorage.removeItem(key);
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    for (const key of Object.keys(storage)) {
+      if (/^sb-.*-auth-token$/i.test(key)) storage.removeItem(key);
     }
+    storage.removeItem(AUTH_PERSISTENCE_KEY);
   }
 }
 
@@ -27,6 +28,7 @@ export default function LoginPage() {
   const [fullName, setFullName] = useState("");
   const [agencyName, setAgencyName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string>(defaultLoginMessage);
 
@@ -89,6 +91,7 @@ export default function LoginPage() {
         return;
       }
 
+      setAuthPersistence(rememberMe ? "local" : "session");
       const { error } = await supabase.auth.signInWithPassword({ email: resolveBody.email, password });
       if (error) {
         setMessage(`Login non riuscito: ${error.message}`);
@@ -238,6 +241,8 @@ export default function LoginPage() {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
+            name="username"
+            autoComplete={mode === "login" ? "username" : "email"}
             data-no-uppercase
           />
         </label>
@@ -256,6 +261,8 @@ export default function LoginPage() {
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
+                name="password"
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
               />
               <button
                 type="button"
@@ -267,6 +274,20 @@ export default function LoginPage() {
               </button>
             </div>
             {mode === "register" && <PasswordStrengthMeter password={password} />}
+          </label>
+        ) : null}
+        {mode === "login" ? (
+          <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              className="h-4 w-4 accent-violet-600"
+            />
+            <span>
+              <span className="block font-semibold">Resta collegato</span>
+              <span className="block text-xs text-slate-500">Mantieni l&apos;accesso anche dopo aver chiuso il browser.</span>
+            </span>
           </label>
         ) : null}
         <button
