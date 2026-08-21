@@ -80,6 +80,32 @@ function stopOrderMap(stops: BusPdfStop[] = []) {
   return new Map(stops.map((stop) => [stop.stop_name.toUpperCase(), stop.stop_order]));
 }
 
+function normalizeLabel(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function visiblePickupNote(stopName: string, pickupNote: string | null | undefined) {
+  const note = (pickupNote ?? "").trim();
+  if (!note) return "";
+  const normalizedStop = normalizeLabel(stopName);
+  const normalizedNote = normalizeLabel(note);
+  return normalizedNote && normalizedStop.includes(normalizedNote) ? "" : note;
+}
+
+function splitStopAndPickup(stopName: string, pickupNote: string | null | undefined) {
+  const note = (pickupNote ?? "").trim();
+  const parts = stopName.split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2 && note && normalizeLabel(parts.slice(1).join(" ")).includes(normalizeLabel(note))) {
+    return { city: parts[0], pickup: note };
+  }
+  return { city: stopName, pickup: note };
+}
+
 function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = [], direction: Direction = "arrival") {
   const orders = stopOrderMap(stops);
   if (direction === "departure") {
@@ -126,10 +152,16 @@ function buildRows(input: BusPdfInput) {
       total += alloc.pax_assigned;
       const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
       const stopTime = time5(alloc.stop_pickup_time || alloc.hotel_pickup_time);
-      const stopNote = alloc.stop_pickup_note ?? input.stops?.find((s) => s.stop_name.toUpperCase() === alloc.stop_name.toUpperCase())?.pickup_note ?? "";
+      const rawStopNote = alloc.stop_pickup_note ?? input.stops?.find((s) => s.stop_name.toUpperCase() === alloc.stop_name.toUpperCase())?.pickup_note ?? "";
+      const stopNote = visiblePickupNote(alloc.stop_name, rawStopNote);
+      const stopParts = splitStopAndPickup(alloc.stop_name, rawStopNote || stopNote);
+      const hasPickupCell = Boolean(stopParts.pickup);
+      const pickupCellHtml = stopParts.pickup
+        ? `<strong>${escapeHtml(stopParts.city)}</strong><br><span>${escapeHtml(stopParts.pickup)}</span>`
+        : `<strong>${escapeHtml(stopParts.city)}</strong>`;
       const hotel = alloc.hotel_name || hotelFromNotes;
       const agency = alloc.agency_name || agencyFromNotes;
-      return { alloc, index, shouldRenderStop, stopTime, stopNote, hotel, agency, cleanNote, runningTotal: total };
+      return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity: stopParts.city, hasPickupCell, pickupCellHtml, hotel, agency, cleanNote, runningTotal: total };
     }),
   };
 }
@@ -149,7 +181,8 @@ function buildDepartureUnloadRows(input: BusPdfInput) {
   if (stops.length === 0) return "";
 
   const rows = stops.map((stop) => {
-    const label = stop.pickup_note ? `${stop.stop_name} - ${stop.pickup_note}` : stop.stop_name;
+    const pickupNote = visiblePickupNote(stop.stop_name, stop.pickup_note);
+    const label = pickupNote ? `${stop.stop_name} - ${pickupNote}` : stop.stop_name;
     const pax = paxByStop.get(stop.stop_name.toUpperCase()) ?? 0;
     return `<tr class="unload-row"><td colspan="8"><div class="unload-line"><span>${escapeHtml(label)}</span><strong>${pax} pax</strong></div></td></tr>`;
   }).join("");
@@ -167,14 +200,15 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
     ? ["orario", "punto di carico", "n° pax", "nominativo", "cell", "HOTEL", "note", "agenzia"]
     : ["pickup", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"];
 
-  const bodyRows = rows.map(({ alloc, index, shouldRenderStop, stopTime, stopNote, hotel, agency, cleanNote }) => {
-    const stopBand = shouldRenderStop
-      ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">▣</span><strong>${escapeHtml(alloc.stop_name)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
+  const bodyRows = rows.map(({ alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hasPickupCell, pickupCellHtml, hotel, agency, cleanNote }) => {
+    const shouldShowStopBand = shouldRenderStop && !(input.direction === "arrival" && hasPickupCell);
+    const stopBand = shouldShowStopBand
+      ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">▣</span><strong>${escapeHtml(stopCity)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
       : "";
     const cells = input.direction === "arrival"
       ? [
           stopTime,
-          stopNote,
+          shouldRenderStop ? pickupCellHtml : "",
           alloc.pax_assigned,
           alloc.customer_name,
           alloc.customer_phone,
@@ -192,7 +226,11 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
           agency,
           cleanNote,
         ];
-    return `${stopBand}<tr class="${index % 2 === 1 ? "alt" : ""}">${cells.map((cell, cellIndex) => `<td class="${cellIndex === 2 ? "center" : ""}">${escapeHtml(cell)}</td>`).join("")}</tr>`;
+    return `${stopBand}<tr class="${index % 2 === 1 ? "alt" : ""}">${cells.map((cell, cellIndex) => {
+      const isPickupCell = input.direction === "arrival" && cellIndex === 1;
+      const className = isPickupCell ? "pickup-cell" : cellIndex === 2 ? "center" : "";
+      return `<td class="${className}">${isPickupCell ? cell : escapeHtml(cell)}</td>`;
+    }).join("")}</tr>`;
   }).join("");
 
   const logoMarkup = input.logoBase64
@@ -273,6 +311,25 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
     .stop-row span:last-child { margin-left: 12px; color: #31577e; font-size: 9.5px; font-weight: 600; }
     .bus-icon { color: ${BRAND_ORANGE}; margin-right: 8px; }
     .center { text-align: center; font-weight: 700; }
+    .pickup-cell {
+      text-align: center;
+      font-weight: 700;
+      line-height: 1.22;
+    }
+    .pickup-cell strong {
+      display: block;
+      color: ${BRAND_NAVY};
+      font-size: 10.2px;
+      text-transform: uppercase;
+    }
+    .pickup-cell span {
+      display: block;
+      margin-top: 2px;
+      color: #31577e;
+      font-size: 9.2px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
     .total td {
       background: #fff2c8;
       color: ${BRAND_NAVY};
