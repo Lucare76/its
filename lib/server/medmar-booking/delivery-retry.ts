@@ -36,11 +36,20 @@ export const MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE = 1;
 /** Limite massimo consentito per ?limit=, a protezione dello stesso vincolo di timeout esterno. */
 export const MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE = 3;
 
-/** Budget totale (ms) per l'intero batch: resta sotto il timeout di 30s di cron-job.org, con margine. */
-export const MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS = 25_000;
+/**
+ * Budget totale (ms) per l'intero batch. cron-job.org taglia a 30s: si
+ * lascia margine per l'audit awaited finale + serializzazione JSON, puntando
+ * a una response entro ~28-29s (vedi anche MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS).
+ */
+export const MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS = 28_000;
 
-/** Budget (ms) per singolo candidato (lookup mailbox incluso): se scade, il candidato resta ritentabile senza essere toccato. */
-export const MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS = 20_000;
+/**
+ * Budget (ms) per singolo candidato (lookup mailbox incluso): se scade, il
+ * candidato resta ritentabile senza essere toccato. Coincide con il timeout
+ * del socket POP3 passato a `findMedmarTicketPdf` (mailboxTimeoutMs): allo
+ * scadere il socket viene chiuso per davvero, non solo abbandonato.
+ */
+export const MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS = 26_000;
 
 export type MedmarDeliveryRetryCandidate = {
   id: string;
@@ -49,13 +58,15 @@ export type MedmarDeliveryRetryCandidate = {
   status: MedmarDeliveryStatus;
   attempt_count: number;
   updated_at: string;
+  medmar_id_prenotazione: string | null;
+  medmar_numero: string | null;
 };
 
 async function loadRetryCandidates(admin: SupabaseClient, limit: number, now: Date): Promise<MedmarDeliveryRetryCandidate[]> {
   const cutoffIso = new Date(now.getTime() - MEDMAR_DELIVERY_RETRY_MIN_INTERVAL_MS).toISOString();
   const result = await admin
     .from("medmar_delivery_attempts")
-    .select("id, tenant_id, issuing_attempt_id, status, attempt_count, updated_at")
+    .select("id, tenant_id, issuing_attempt_id, status, attempt_count, updated_at, medmar_id_prenotazione, medmar_numero")
     .in("status", Array.from(RETRYABLE_DELIVERY_STATUSES))
     .lt("attempt_count", MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS)
     .lte("updated_at", cutoffIso)
@@ -65,28 +76,44 @@ async function loadRetryCandidates(admin: SupabaseClient, limit: number, now: Da
   return (result.data ?? []) as MedmarDeliveryRetryCandidate[];
 }
 
+/**
+ * Esito osservabile di un candidato nella response del cron — per capire da
+ * fuori (cron-job.org, audit) cosa e' successo davvero dietro un 200 OK:
+ * - delivered: consegnato ora (o gia' delivered, idempotente);
+ * - timed_out: budget per-candidato scaduto durante il lookup/invio, nessuno stato toccato, ritentabile;
+ * - skipped_budget: mai nemmeno iniziato, budget totale del batch gia' esaurito da un candidato precedente;
+ * - pending: tentato ma resta in uno stato non terminale non-timeout (es. pdf_not_found sotto soglia, precondizione fallita);
+ * - escalated_to_manual_review: max tentativi esauriti, passato a revisione manuale;
+ * - error: eccezione imprevista, contenuta, nessuno stato toccato.
+ */
 export type MedmarDeliveryRetryItemResult = {
   delivery_attempt_id: string;
   tenant_id: string;
   issuing_attempt_id: string;
-  before_status: MedmarDeliveryStatus;
-  after_status: string;
-  escalated_to_manual_review: boolean;
-  error: boolean;
+  medmar_id_prenotazione: string | null;
+  medmar_numero: string | null;
+  status_before: MedmarDeliveryStatus;
+  result: "delivered" | "timed_out" | "skipped_budget" | "pending" | "escalated_to_manual_review" | "error";
+  resend_message_id?: string | null;
+  elapsed_ms: number;
 };
 
 export type MedmarDeliveryRetrySummary = {
   candidates_found: number;
   processed: number;
   delivered: number;
+  /** Candidati per cui e' scaduto il budget per-candidato durante il tentativo (result: "timed_out"). */
+  deferred: number;
+  /** Candidati trovati ma mai tentati perche' il budget totale del batch era gia' esaurito (result: "skipped_budget"). */
+  skipped: number;
   still_pending: number;
   escalated_to_manual_review: number;
   errors: number;
-  /** true se il batch e' stato interrotto per esaurimento budget (totale o per-candidato): il cron successivo ritentera'. */
+  /** true se almeno un candidato e' stato deferred/skipped per budget: il cron successivo ritentera'. */
   timed_out: boolean;
   db_query_ms: number;
   total_ms: number;
-  results: MedmarDeliveryRetryItemResult[];
+  items: MedmarDeliveryRetryItemResult[];
 };
 
 /**
@@ -180,20 +207,33 @@ export async function runMedmarDeliveryRetryBatch(
   const candidates = await doLoadCandidates(admin, limit, now);
   const dbQueryMs = nowMs() - dbQueryStartMs;
 
-  const results: MedmarDeliveryRetryItemResult[] = [];
+  const items: MedmarDeliveryRetryItemResult[] = [];
   let delivered = 0;
+  let deferred = 0;
+  let skipped = 0;
   let stillPending = 0;
   let escalated = 0;
   let errors = 0;
-  let timedOut = false;
   const systemUserIdByTenant = new Map<string, string>();
 
   for (const candidate of candidates) {
+    const itemBase = {
+      delivery_attempt_id: candidate.id,
+      tenant_id: candidate.tenant_id,
+      issuing_attempt_id: candidate.issuing_attempt_id,
+      medmar_id_prenotazione: candidate.medmar_id_prenotazione,
+      medmar_numero: candidate.medmar_numero,
+      status_before: candidate.status,
+    };
+
     if (nowMs() - batchStartMs >= totalBudgetMs) {
-      // Budget totale esaurito: i candidati non ancora processati restano ritentabili, il prossimo cron riprovera'.
-      timedOut = true;
-      break;
+      // Budget totale esaurito: questo e ogni candidato successivo restano intatti/ritentabili, il prossimo cron riprovera'.
+      skipped += 1;
+      items.push({ ...itemBase, result: "skipped_budget", elapsed_ms: 0 });
+      continue;
     }
+
+    const candidateStartMs = nowMs();
     try {
       let systemUserId = systemUserIdByTenant.get(candidate.tenant_id);
       if (!systemUserId) {
@@ -203,40 +243,40 @@ export async function runMedmarDeliveryRetryBatch(
 
       const raced = await raceWithTimeout(
         doDeliver(
-          { admin, tenantId: candidate.tenant_id, userId: systemUserId, issuingAttemptId: candidate.issuing_attempt_id },
+          {
+            admin,
+            tenantId: candidate.tenant_id,
+            userId: systemUserId,
+            issuingAttemptId: candidate.issuing_attempt_id,
+            mailboxTimeoutMs: perCandidateBudgetMs,
+          },
           deps?.deliverDeps
         ),
         perCandidateBudgetMs
       );
+      const elapsedMs = nowMs() - candidateStartMs;
 
       if (raced === TIMEOUT_MARKER) {
         // Budget per-candidato esaurito (tipicamente mailbox/PDF lookup lento): nessuno stato toccato,
-        // il candidato resta ritentabile cosi' com'e' al prossimo giro. Si interrompe il batch qui:
-        // il budget totale e' comunque prossimo all'esaurimento se un candidato ha gia' consumato questa quota.
-        timedOut = true;
-        stillPending += 1;
-        results.push({
-          delivery_attempt_id: candidate.id,
-          tenant_id: candidate.tenant_id,
-          issuing_attempt_id: candidate.issuing_attempt_id,
-          before_status: candidate.status,
-          after_status: "timeout",
-          escalated_to_manual_review: false,
-          error: false,
-        });
-        break;
+        // il candidato resta ritentabile cosi' com'e' al prossimo giro. Il socket POP3, se e' li' che
+        // si e' bloccato, viene chiuso per davvero dal suo stesso timeoutMs (vedi pdf-mailbox-lookup.ts).
+        deferred += 1;
+        items.push({ ...itemBase, result: "timed_out", elapsed_ms: elapsedMs });
+        continue;
       }
 
       const outcome = raced;
-      let afterStatus: string = outcome.status;
-      let escalatedNow = false;
-      let attemptId = candidate.id;
 
       if (outcome.ok) {
         delivered += 1;
-        attemptId = outcome.attempt.id;
+        items.push({
+          ...itemBase,
+          delivery_attempt_id: outcome.attempt.id,
+          result: "delivered",
+          resend_message_id: outcome.attempt.resend_message_id,
+          elapsed_ms: elapsedMs,
+        });
       } else if ("attempt" in outcome) {
-        attemptId = outcome.attempt.id;
         if (outcome.status === "pdf_not_found" && outcome.attempt.attempt_count >= MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS) {
           try {
             const escalatedAttempt = await repo.updateAttempt(
@@ -248,55 +288,46 @@ export async function runMedmarDeliveryRetryBatch(
               },
               "pdf_not_found"
             );
-            afterStatus = escalatedAttempt.status;
-            escalatedNow = true;
             escalated += 1;
+            items.push({
+              ...itemBase,
+              delivery_attempt_id: escalatedAttempt.id,
+              result: "escalated_to_manual_review",
+              elapsed_ms: elapsedMs,
+            });
           } catch {
             // Conflitto concorrente (un altro run ha gia' toccato questo attempt nel frattempo): non bloccante, resta ritentabile al prossimo giro.
             stillPending += 1;
+            items.push({ ...itemBase, delivery_attempt_id: outcome.attempt.id, result: "pending", elapsed_ms: elapsedMs });
           }
         } else {
           stillPending += 1;
+          items.push({ ...itemBase, delivery_attempt_id: outcome.attempt.id, result: "pending", elapsed_ms: elapsedMs });
         }
       } else {
         // Precondizione fallita (issuing_attempt_not_found / issuing_not_completed / remote_state_unknown_blocked / already_sent):
         // non e' uno stato del delivery attempt, quindi non e' ritentabile qui — resta fuori dal prossimo batch solo se la causa a monte si risolve.
         stillPending += 1;
+        items.push({ ...itemBase, result: "pending", elapsed_ms: elapsedMs });
       }
-
-      results.push({
-        delivery_attempt_id: attemptId,
-        tenant_id: candidate.tenant_id,
-        issuing_attempt_id: candidate.issuing_attempt_id,
-        before_status: candidate.status,
-        after_status: afterStatus,
-        escalated_to_manual_review: escalatedNow,
-        error: false,
-      });
     } catch {
       errors += 1;
-      results.push({
-        delivery_attempt_id: candidate.id,
-        tenant_id: candidate.tenant_id,
-        issuing_attempt_id: candidate.issuing_attempt_id,
-        before_status: candidate.status,
-        after_status: "error",
-        escalated_to_manual_review: false,
-        error: true,
-      });
+      items.push({ ...itemBase, result: "error", elapsed_ms: nowMs() - candidateStartMs });
     }
   }
 
   return {
     candidates_found: candidates.length,
-    processed: results.length,
+    processed: items.filter((i) => i.result !== "skipped_budget").length,
     delivered,
+    deferred,
+    skipped,
     still_pending: stillPending,
     escalated_to_manual_review: escalated,
     errors,
-    timed_out: timedOut,
+    timed_out: deferred > 0 || skipped > 0,
     db_query_ms: dbQueryMs,
     total_ms: nowMs() - batchStartMs,
-    results,
+    items,
   };
 }

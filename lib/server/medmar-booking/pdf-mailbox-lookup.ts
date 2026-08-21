@@ -54,6 +54,14 @@ export type MedmarPdfLookupInput = {
   medmarNumero: string;
   /** Quanti messaggi recenti scansionare (dal più recente), default 400. */
   maxMessagesToScan?: number;
+  /**
+   * Timeout (ms) del socket POP3, default 30000. Il chiamante retry-cron lo
+   * riduce al proprio budget per-candidato: cosi' se il lookup non risponde
+   * in tempo il socket viene chiuso per davvero (non solo abbandonato dal
+   * chiamante), evitando una connessione POP3 orfana che continua a girare
+   * nell'istanza serverless dopo che la response HTTP e' gia' partita.
+   */
+  timeoutMs?: number;
 };
 
 export type MedmarPdfLookupResult =
@@ -183,7 +191,7 @@ export async function findMedmarTicketPdf(input: MedmarPdfLookupInput): Promise<
   const maxScan = input.maxMessagesToScan ?? 400;
 
   const socket = net.connect({ host: config.host, port: config.port });
-  socket.setTimeout(30_000);
+  socket.setTimeout(input.timeoutMs ?? 30_000);
   socket.on("timeout", () => socket.destroy(new Error("Timeout connessione mailbox Medmar.")));
   const session = new Pop3Session(socket);
   await new Promise<void>((resolve, reject) => {

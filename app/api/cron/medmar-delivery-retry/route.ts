@@ -21,7 +21,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { auditLog } from "@/lib/server/ops-audit";
+import { auditLogAwaited } from "@/lib/server/ops-audit";
 import {
   runMedmarDeliveryRetryBatch,
   MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
@@ -60,36 +60,62 @@ export async function GET(request: NextRequest) {
   try {
     const summary = await runMedmarDeliveryRetryBatch(admin, limit);
 
-    // Nessun dato sensibile nei log: solo conteggi, id e durate, mai email/PDF/allegati.
-    auditLog({
+    // Nessun dato sensibile: conteggi, id, codici prenotazione/Medmar e durate — mai email/PDF/allegati/secret.
+    // Awaited (non fire-and-forget) apposta, e con tenant_id reale del primo candidato del batch: la
+    // colonna e' NOT NULL, un payload senza tenantId fallirebbe sempre l'insert (causa root del fatto
+    // che questo evento non era mai stato scritto in produzione, a prescindere da awaited/fire-and-forget).
+    await auditLogAwaited({
       event: "medmar_delivery_retry_batch",
       level: summary.errors > 0 ? "warn" : "info",
-      outcome: `delivered=${summary.delivered} pending=${summary.still_pending} escalated=${summary.escalated_to_manual_review} errors=${summary.errors} timed_out=${summary.timed_out}`,
+      tenantId: summary.items[0]?.tenant_id ?? null,
+      outcome: `delivered=${summary.delivered} deferred=${summary.deferred} skipped=${summary.skipped} pending=${summary.still_pending} escalated=${summary.escalated_to_manual_review} errors=${summary.errors} timed_out=${summary.timed_out}`,
       details: {
         candidates_found: summary.candidates_found,
         processed: summary.processed,
         delivered: summary.delivered,
+        deferred: summary.deferred,
+        skipped: summary.skipped,
         still_pending: summary.still_pending,
         escalated_to_manual_review: summary.escalated_to_manual_review,
         errors: summary.errors,
         timed_out: summary.timed_out,
         db_query_ms: summary.db_query_ms,
         total_ms: summary.total_ms,
+        items: summary.items.map((i) => ({
+          medmar_id_prenotazione: i.medmar_id_prenotazione,
+          medmar_numero: i.medmar_numero,
+          status_before: i.status_before,
+          result: i.result,
+          elapsed_ms: i.elapsed_ms,
+        })),
       },
     });
 
     return NextResponse.json({
       ok: true,
-      ...summary,
+      candidates_found: summary.candidates_found,
+      processed: summary.processed,
+      delivered: summary.delivered,
       timedOut: summary.timed_out,
-      ...(summary.timed_out ? { message: "Retry deferred because processing budget expired" } : {}),
+      deferred: summary.deferred,
+      skipped: summary.skipped,
+      still_pending: summary.still_pending,
+      escalated_to_manual_review: summary.escalated_to_manual_review,
+      errors: summary.errors,
+      total_ms: summary.total_ms,
+      db_query_ms: summary.db_query_ms,
+      items: summary.items,
     });
   } catch (err) {
-    auditLog({
-      event: "medmar_delivery_retry_batch_failed",
-      level: "error",
-      outcome: err instanceof Error ? err.message : "unknown_error",
-    });
+    try {
+      await auditLogAwaited({
+        event: "medmar_delivery_retry_batch_failed",
+        level: "error",
+        outcome: err instanceof Error ? err.message : "unknown_error",
+      });
+    } catch {
+      // Non nascondere l'errore originale dietro un fallimento di persistenza dell'audit.
+    }
     return NextResponse.json({ ok: false, error: "Errore interno durante il retry delivery Medmar." }, { status: 500 });
   }
 }

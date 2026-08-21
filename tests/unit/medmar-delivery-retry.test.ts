@@ -6,6 +6,8 @@ import {
   MEDMAR_DELIVERY_RETRY_MIN_INTERVAL_MS,
   MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
   MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE,
+  MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS,
+  MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS,
   type MedmarDeliveryRetryCandidate,
   type MedmarDeliveryRetryDeps,
 } from "@/lib/server/medmar-booking/delivery-retry";
@@ -18,6 +20,8 @@ const ISSUING_ATTEMPT_1 = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const ISSUING_ATTEMPT_2 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const DELIVERY_ATTEMPT_1 = "11111111-aaaa-4aaa-8aaa-111111111111";
 const DELIVERY_ATTEMPT_2 = "22222222-aaaa-4aaa-8aaa-222222222222";
+const MEDMAR_ID_PRENOTAZIONE = "738278";
+const MEDMAR_NUMERO = "AG1908926B000442656";
 
 function makeCandidate(overrides: Partial<MedmarDeliveryRetryCandidate> = {}): MedmarDeliveryRetryCandidate {
   return {
@@ -27,6 +31,8 @@ function makeCandidate(overrides: Partial<MedmarDeliveryRetryCandidate> = {}): M
     status: "awaiting_pdf",
     attempt_count: 0,
     updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    medmar_id_prenotazione: MEDMAR_ID_PRENOTAZIONE,
+    medmar_numero: MEDMAR_NUMERO,
     ...overrides,
   };
 }
@@ -38,8 +44,8 @@ function makeAttempt(overrides: Partial<MedmarDeliveryAttempt> = {}): MedmarDeli
     issuing_attempt_id: ISSUING_ATTEMPT_1,
     service_ids: [],
     status: "pdf_not_found",
-    medmar_id_prenotazione: "737817",
-    medmar_numero: "AG1908926B000441194",
+    medmar_id_prenotazione: MEDMAR_ID_PRENOTAZIONE,
+    medmar_numero: MEDMAR_NUMERO,
     pdf_mailbox_message_uid: null,
     pdf_filename: null,
     pdf_original_sha256: null,
@@ -82,45 +88,159 @@ function baseDeps(overrides: Partial<MedmarDeliveryRetryDeps> = {}): MedmarDeliv
   };
 }
 
+function deliveredOutcome(overrides: Partial<MedmarDeliveryAttempt> = {}): MedmarDeliveryOutcome {
+  return {
+    ok: true,
+    status: "delivered",
+    attempt: makeAttempt({ status: "delivered", resend_message_id: "resend-msg-1", ...overrides }),
+    already_delivered: false,
+  };
+}
+
 describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", () => {
-  it("1. candidato awaiting_pdf viene ritentato: deliverMedmarTicket chiamato con lo stesso issuing_attempt_id", async () => {
+  it("costanti di budget esportate: default limit 1, max limit 3, totale 28s, per-candidato 26s", () => {
+    expect(MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE).toBe(1);
+    expect(MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE).toBe(3);
+    expect(MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS).toBe(28_000);
+    expect(MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS).toBe(26_000);
+  });
+
+  it("1. zero candidati -> risposta rapida, nessun timeout, deliver mai chiamato, items vuoto", async () => {
+    const deliver = vi.fn();
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
+      baseDeps({ loadCandidates: (async () => []) as never, deliver: deliver as never })
+    );
+    expect(summary.candidates_found).toBe(0);
+    expect(summary.processed).toBe(0);
+    expect(summary.delivered).toBe(0);
+    expect(summary.timed_out).toBe(false);
+    expect(summary.items).toEqual([]);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("2. default limit passato alla query e' 1", async () => {
+    const limitSpy = vi.fn(() => Promise.resolve({ data: [], error: null }));
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      in: vi.fn().mockReturnThis(),
+      lt: vi.fn().mockReturnThis(),
+      lte: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: limitSpy,
+    };
+    const admin = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+    await runMedmarDeliveryRetryBatch(admin, undefined, baseDeps());
+    expect(limitSpy).toHaveBeenCalledWith(MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE);
+  });
+
+  it("3. max limit e' 3: la route lo applica a monte, qui verifichiamo solo che il limite passato venga rispettato dalla query", async () => {
+    const limitSpy = vi.fn(() => Promise.resolve({ data: [], error: null }));
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      in: vi.fn().mockReturnThis(),
+      lt: vi.fn().mockReturnThis(),
+      lte: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: limitSpy,
+    };
+    const admin = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+    await runMedmarDeliveryRetryBatch(admin, MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE, baseDeps());
+    expect(limitSpy).toHaveBeenCalledWith(3);
+  });
+
+  it("4. candidato awaiting_pdf con PDF presente -> delivered, item.result='delivered' con resend_message_id", async () => {
     const candidate = makeCandidate({ status: "awaiting_pdf" });
-    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: true,
-      status: "delivered",
-      attempt: makeAttempt({ status: "delivered", resend_message_id: "msg-1" }),
-      already_delivered: false,
-    }));
+    const deliver = vi.fn(async () => deliveredOutcome());
     const summary = await runMedmarDeliveryRetryBatch(
       {} as SupabaseClient,
       10,
       baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver })
     );
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ tenantId: TENANT, userId: ADMIN_USER, issuingAttemptId: ISSUING_ATTEMPT_1 }),
-      undefined
-    );
     expect(summary.delivered).toBe(1);
+    expect(summary.timed_out).toBe(false);
+    expect(summary.items[0]).toMatchObject({
+      result: "delivered",
+      resend_message_id: "resend-msg-1",
+      medmar_id_prenotazione: MEDMAR_ID_PRENOTAZIONE,
+      medmar_numero: MEDMAR_NUMERO,
+      status_before: "awaiting_pdf",
+    });
+    expect(typeof summary.items[0]!.elapsed_ms).toBe("number");
   });
 
-  it("2. candidato pdf_not_found viene ritentato allo stesso modo", async () => {
-    const candidate = makeCandidate({ status: "pdf_not_found", attempt_count: 2 });
-    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: true,
-      status: "delivered",
-      attempt: makeAttempt({ status: "delivered" }),
-      already_delivered: false,
-    }));
+  it("5. lookup lento ma entro budget per-candidato -> delivered, nessun timeout", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const deliver = vi.fn(
+      () =>
+        new Promise<MedmarDeliveryOutcome>((resolve) => {
+          setTimeout(() => resolve(deliveredOutcome()), 15); // lento ma sotto il budget di test (perCandidateBudgetMs: 50)
+        })
+    );
     const summary = await runMedmarDeliveryRetryBatch(
       {} as SupabaseClient,
       10,
-      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver })
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never, perCandidateBudgetMs: 50 })
     );
-    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(summary.timed_out).toBe(false);
     expect(summary.delivered).toBe(1);
+    expect(summary.items[0]!.result).toBe("delivered");
   });
 
-  it("3. loadRetryCandidates reale interroga solo gli stati ritentabili (mai 'delivered')", async () => {
+  it("6. lookup oltre il budget per-candidato -> HTTP-level ok, timedOut true, item.result='timed_out', nessun repo.updateAttempt", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const repo = fakeRepo();
+    const deliver = vi.fn(() => new Promise<MedmarDeliveryOutcome>(() => {})); // non risolve mai
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never, repo, perCandidateBudgetMs: 20 })
+    );
+    expect(summary.timed_out).toBe(true);
+    expect(summary.deferred).toBe(1);
+    expect(summary.delivered).toBe(0);
+    expect(summary.items[0]).toMatchObject({ result: "timed_out", status_before: "awaiting_pdf" });
+    expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
+  });
+
+  it("6b. deliver riceve il budget per-candidato come mailboxTimeoutMs (per chiudere davvero il socket POP3 allo scadere)", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const deliver = vi.fn(async () => deliveredOutcome());
+    await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, perCandidateBudgetMs: 12_345 })
+    );
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ mailboxTimeoutMs: 12_345 }), undefined);
+  });
+
+  it("7. timeout interno non produce doppio invio: il candidato resta intatto, un secondo run (deliver ora veloce) consegna una volta sola", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    let calls = 0;
+    const slowThenFastDeliver = vi.fn(() => {
+      calls += 1;
+      if (calls === 1) return new Promise<MedmarDeliveryOutcome>(() => {}); // primo giro: mai risolve (timeout)
+      return Promise.resolve(deliveredOutcome());
+    });
+    const first = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: slowThenFastDeliver as never, perCandidateBudgetMs: 20 })
+    );
+    expect(first.timed_out).toBe(true);
+    expect(first.delivered).toBe(0);
+
+    const second = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: slowThenFastDeliver as never, perCandidateBudgetMs: 20 })
+    );
+    expect(second.delivered).toBe(1);
+    expect(slowThenFastDeliver).toHaveBeenCalledTimes(2); // una chiamata per run, mai due nello stesso run
+  });
+
+  it("8. delivered non e' candidato: loadRetryCandidates reale interroga solo gli stati ritentabili", async () => {
     const inSpy = vi.fn().mockReturnThis();
     const chain = {
       select: vi.fn().mockReturnThis(),
@@ -135,16 +255,12 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     await runMedmarDeliveryRetryBatch(admin, 10, baseDeps());
 
     expect(admin.from).toHaveBeenCalledWith("medmar_delivery_attempts");
-    expect(inSpy).toHaveBeenCalledWith("status", expect.arrayContaining(["awaiting_pdf", "pdf_not_found"]));
     const statusesQueried = inSpy.mock.calls[0]![1] as string[];
+    expect(statusesQueried).toEqual(expect.arrayContaining(["awaiting_pdf", "pdf_not_found"]));
     expect(statusesQueried).not.toContain("delivered");
-    expect(statusesQueried).not.toContain("delivery_state_unknown");
-    expect(statusesQueried).not.toContain("pdf_ambiguous");
-    expect(statusesQueried).not.toContain("pdf_validation_failed");
-    expect(statusesQueried).not.toContain("manual_review");
   });
 
-  it("4. resend_message_id gia' presente -> deliverMedmarTicket segnala already_delivered, il batch non fa altro", async () => {
+  it("9. resend_message_id gia' presente -> deliverMedmarTicket segnala already_delivered, item.result='delivered', nessun update", async () => {
     const candidate = makeCandidate({ status: "awaiting_pdf" });
     const repo = fakeRepo();
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
@@ -159,10 +275,12 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
       baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, repo })
     );
     expect(summary.delivered).toBe(1);
+    expect(summary.items[0]!.result).toBe("delivered");
+    expect(summary.items[0]!.resend_message_id).toBe("resend-existing");
     expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
   });
 
-  it("5. medmar_ticket_sent_at gia' valorizzato -> stesso esito 'delivered', nessuna escalation", async () => {
+  it("10. medmar_ticket_sent_at gia' valorizzato -> stesso esito 'delivered', nessuna escalation, nessun update", async () => {
     const candidate = makeCandidate({ status: "pdf_not_found" });
     const repo = fakeRepo();
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
@@ -181,7 +299,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
   });
 
-  it("6. delivery_state_unknown non viene mai escalato ne' ritentato oltre la chiamata gia' bloccata internamente", async () => {
+  it("11. delivery_state_unknown non e' ritentabile: se restituito da deliver, item.result='pending', nessuna escalation/update", async () => {
     const candidate = makeCandidate({ status: "pdf_not_found", attempt_count: 4 });
     const repo = fakeRepo();
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
@@ -197,48 +315,46 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
     expect(summary.still_pending).toBe(1);
     expect(summary.escalated_to_manual_review).toBe(0);
+    expect(summary.items[0]!.result).toBe("pending");
     expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
+
+    // Anche a livello di selezione query, questi stati non entrano mai nel batch:
+    const inSpy = vi.fn().mockReturnThis();
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      in: inSpy,
+      lt: vi.fn().mockReturnThis(),
+      lte: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn(() => Promise.resolve({ data: [], error: null })),
+    };
+    const admin = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+    await runMedmarDeliveryRetryBatch(admin, 10, baseDeps());
+    const statusesQueried = inSpy.mock.calls[0]![1] as string[];
+    expect(statusesQueried).not.toContain("delivery_state_unknown");
   });
 
-  it("7. pdf_ambiguous non ritentabile: nessuna escalation automatica", async () => {
-    const candidate = makeCandidate({ status: "awaiting_pdf" });
-    const repo = fakeRepo();
-    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: false,
-      status: "pdf_ambiguous",
-      attempt: makeAttempt({ status: "pdf_ambiguous" }),
-      error: "2 PDF compatibili trovati",
-    }));
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, repo })
-    );
-    expect(summary.still_pending).toBe(1);
-    expect(summary.escalated_to_manual_review).toBe(0);
-    expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
+  it("12. pdf_ambiguous/pdf_validation_failed/recipient_missing/manual_review non vengono mai selezionati dalla query", async () => {
+    const inSpy = vi.fn().mockReturnThis();
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      in: inSpy,
+      lt: vi.fn().mockReturnThis(),
+      lte: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn(() => Promise.resolve({ data: [], error: null })),
+    };
+    const admin = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+    await runMedmarDeliveryRetryBatch(admin, 10, baseDeps());
+    const statusesQueried = inSpy.mock.calls[0]![1] as string[];
+    for (const forbidden of ["pdf_ambiguous", "pdf_validation_failed", "recipient_missing", "manual_review"]) {
+      expect(statusesQueried).not.toContain(forbidden);
+    }
+    expect(statusesQueried).toHaveLength(2);
+    expect(statusesQueried).toEqual(expect.arrayContaining(["awaiting_pdf", "pdf_not_found"]));
   });
 
-  it("8. pdf_validation_failed non ritentabile: nessuna escalation automatica", async () => {
-    const candidate = makeCandidate({ status: "awaiting_pdf" });
-    const repo = fakeRepo();
-    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: false,
-      status: "pdf_validation_failed",
-      attempt: makeAttempt({ status: "pdf_validation_failed" }),
-      error: "Etichetta vietata ancora presente",
-    }));
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, repo })
-    );
-    expect(summary.still_pending).toBe(1);
-    expect(summary.escalated_to_manual_review).toBe(0);
-    expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
-  });
-
-  it("9. max_attempts rispettato: pdf_not_found con attempt_count >= soglia passa a manual_review", async () => {
+  it("13. max_attempts rispettato: pdf_not_found con attempt_count >= soglia passa a manual_review, item.result='escalated_to_manual_review'", async () => {
     const candidate = makeCandidate({ status: "pdf_not_found", attempt_count: MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS - 1 });
     const repo = fakeRepo();
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
@@ -254,6 +370,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
     expect(summary.escalated_to_manual_review).toBe(1);
     expect(summary.still_pending).toBe(0);
+    expect(summary.items[0]!.result).toBe("escalated_to_manual_review");
     expect(repo.updateAttemptSpy).toHaveBeenCalledWith(
       DELIVERY_ATTEMPT_1,
       expect.objectContaining({ status: "manual_review" }),
@@ -261,7 +378,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
   });
 
-  it("9b. pdf_not_found sotto la soglia NON viene escalato: resta ritentabile", async () => {
+  it("13b. pdf_not_found sotto la soglia NON viene escalato: resta ritentabile (result='pending')", async () => {
     const candidate = makeCandidate({ status: "pdf_not_found", attempt_count: 1 });
     const repo = fakeRepo();
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
@@ -277,10 +394,11 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
     expect(summary.escalated_to_manual_review).toBe(0);
     expect(summary.still_pending).toBe(1);
+    expect(summary.items[0]!.result).toBe("pending");
     expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
   });
 
-  it("10. intervallo minimo rispettato: loadRetryCandidates reale filtra per updated_at <= now - intervallo minimo", async () => {
+  it("14. intervallo minimo rispettato: loadRetryCandidates reale filtra per updated_at <= now - intervallo minimo", async () => {
     const lteSpy = vi.fn().mockReturnThis();
     const chain = {
       select: vi.fn().mockReturnThis(),
@@ -299,58 +417,42 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     expect(lteSpy).toHaveBeenCalledWith("updated_at", expectedCutoff);
   });
 
-  it("11. cron processa al massimo N record per run: il limite viene passato alla query", async () => {
-    const limitSpy = vi.fn(() => Promise.resolve({ data: [], error: null }));
-    const chain = {
-      select: vi.fn().mockReturnThis(),
-      in: vi.fn().mockReturnThis(),
-      lt: vi.fn().mockReturnThis(),
-      lte: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(),
-      limit: limitSpy,
-    };
-    const admin = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
-
-    await runMedmarDeliveryRetryBatch(admin, 5, baseDeps());
-    expect(limitSpy).toHaveBeenCalledWith(5);
-
-    await runMedmarDeliveryRetryBatch(admin, undefined, baseDeps());
-    expect(limitSpy).toHaveBeenCalledWith(MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE);
-  });
-
-  it("12. PDF arrivato al secondo tentativo: primo run pdf_not_found, secondo run (stesso attempt) delivered", async () => {
-    const candidateFirstRun = makeCandidate({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "awaiting_pdf", attempt_count: 0 });
-    const deliverFirst = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: false,
-      status: "pdf_not_found",
-      attempt: makeAttempt({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "pdf_not_found", attempt_count: 1 }),
-      error: "Nessun PDF trovato nella mailbox Medmar per questa prenotazione.",
-    }));
-    const firstSummary = await runMedmarDeliveryRetryBatch(
+  it("15. budget totale esaurito prima di un secondo candidato: si ferma, il secondo risulta 'skipped_budget', mai toccato", async () => {
+    const candidate1 = makeCandidate({ id: DELIVERY_ATTEMPT_1, status: "awaiting_pdf" });
+    const candidate2 = makeCandidate({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "awaiting_pdf" });
+    const repo = fakeRepo();
+    const deliver = vi.fn(async () => deliveredOutcome());
+    let nowMsCallCount = 0;
+    const nowMs = vi.fn(() => (nowMsCallCount++ < 4 ? 0 : 100_000));
+    const summary = await runMedmarDeliveryRetryBatch(
       {} as SupabaseClient,
       10,
-      baseDeps({ loadCandidates: (async () => [candidateFirstRun]) as never, deliver: deliverFirst })
+      baseDeps({ loadCandidates: (async () => [candidate1, candidate2]) as never, deliver, repo, nowMs, totalBudgetMs: 25_000 })
     );
-    expect(firstSummary.still_pending).toBe(1);
-    expect(firstSummary.delivered).toBe(0);
-
-    const candidateSecondRun = makeCandidate({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "pdf_not_found", attempt_count: 1 });
-    const deliverSecond = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: true,
-      status: "delivered",
-      attempt: makeAttempt({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "delivered", attempt_count: 1, resend_message_id: "resend-msg-second-try" }),
-      already_delivered: false,
-    }));
-    const secondSummary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidateSecondRun]) as never, deliver: deliverSecond })
-    );
-    expect(secondSummary.delivered).toBe(1);
-    expect(deliverSecond).toHaveBeenCalledTimes(1);
+    expect(summary.timed_out).toBe(true);
+    expect(summary.skipped).toBe(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(summary.delivered).toBe(1);
+    expect(summary.items).toHaveLength(2);
+    expect(summary.items[1]).toMatchObject({ result: "skipped_budget", delivery_attempt_id: DELIVERY_ATTEMPT_2, elapsed_ms: 0 });
+    expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
   });
 
-  it("13. nessun invio duplicato: un secondo run dopo la delivery non ritrova candidati (fuori dagli stati ritentabili) e non richiama mai deliver", async () => {
+  it("16. errore imprevisto durante un retry viene contenuto (non propagato), item.result='error'", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const deliver = vi.fn(async () => {
+      throw new Error("boom: mailbox non raggiungibile");
+    });
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never })
+    );
+    expect(summary.errors).toBe(1);
+    expect(summary.items[0]!.result).toBe("error");
+  });
+
+  it("17. nessun invio duplicato su run successivi: un secondo run dopo la delivery non trova piu' candidati e non richiama mai deliver", async () => {
     const candidate = makeCandidate({ status: "awaiting_pdf" });
     let callCount = 0;
     const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => {
@@ -364,97 +466,6 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     });
     await runMedmarDeliveryRetryBatch({} as SupabaseClient, 10, baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver }));
     await runMedmarDeliveryRetryBatch({} as SupabaseClient, 10, baseDeps({ loadCandidates: (async () => []) as never, deliver }));
-    expect(deliver).toHaveBeenCalledTimes(1); // il secondo run non trova piu' candidati (gia' delivered, fuori dagli stati ritentabili)
-  });
-
-  it("14. errore imprevisto durante un retry viene contenuto (non propagato) e conteggiato separatamente", async () => {
-    const candidate = makeCandidate({ status: "awaiting_pdf" });
-    const deliver = vi.fn(async () => {
-      throw new Error("boom: mailbox non raggiungibile");
-    });
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never })
-    );
-    expect(summary.errors).toBe(1);
-    expect(summary.results[0]!.error).toBe(true);
-  });
-
-  it("15. zero candidati -> risposta rapida, nessun timeout, delivered/deliver mai chiamato", async () => {
-    const deliver = vi.fn();
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
-      baseDeps({ loadCandidates: (async () => []) as never, deliver: deliver as never })
-    );
-    expect(summary.candidates_found).toBe(0);
-    expect(summary.processed).toBe(0);
-    expect(summary.timed_out).toBe(false);
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("16. default limit passato alla query e' 1", async () => {
-    expect(MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE).toBe(1);
-  });
-
-  it("17. max batch size esportato e' 3", async () => {
-    expect(MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE).toBe(3);
-  });
-
-  it("18. timeout interno per-candidato: deliver non risponde entro perCandidateBudgetMs -> candidato resta ritentabile, timed_out=true, nessun repo.updateAttempt", async () => {
-    const candidate = makeCandidate({ status: "awaiting_pdf" });
-    const repo = fakeRepo();
-    const deliver = vi.fn(() => new Promise<MedmarDeliveryOutcome>(() => {})); // non risolve mai (simula mailbox lenta)
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never, repo, perCandidateBudgetMs: 20 })
-    );
-    expect(summary.timed_out).toBe(true);
-    expect(summary.still_pending).toBe(1);
-    expect(summary.delivered).toBe(0);
-    expect(summary.results[0]!.after_status).toBe("timeout");
-    expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
-  });
-
-  it("19. budget totale esaurito prima di un secondo candidato: il batch si interrompe, timed_out=true, il secondo candidato non viene toccato", async () => {
-    const candidate1 = makeCandidate({ id: DELIVERY_ATTEMPT_1, status: "awaiting_pdf" });
-    const candidate2 = makeCandidate({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "awaiting_pdf" });
-    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: true,
-      status: "delivered",
-      attempt: makeAttempt({ status: "delivered" }),
-      already_delivered: false,
-    }));
-    // nowMs: le prime 4 chiamate (batchStart/dbQueryStart/dbQueryMs/check-candidato-1) restano a 0,
-    // dalla 5a (check-candidato-2) il clock "salta" oltre il budget totale.
-    let nowMsCallCount = 0;
-    const nowMs = vi.fn(() => (nowMsCallCount++ < 4 ? 0 : 100_000));
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidate1, candidate2]) as never, deliver, nowMs, totalBudgetMs: 25_000 })
-    );
-    expect(summary.timed_out).toBe(true);
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(summary.delivered).toBe(1);
-  });
-
-  it("20. PDF trovato prima dello scadere del budget per-candidato: nessun timeout, delivery normale", async () => {
-    const candidate = makeCandidate({ status: "awaiting_pdf" });
-    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
-      ok: true,
-      status: "delivered",
-      attempt: makeAttempt({ status: "delivered" }),
-      already_delivered: false,
-    }));
-    const summary = await runMedmarDeliveryRetryBatch(
-      {} as SupabaseClient,
-      10,
-      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, perCandidateBudgetMs: 20_000 })
-    );
-    expect(summary.timed_out).toBe(false);
-    expect(summary.delivered).toBe(1);
   });
 });

@@ -45,6 +45,8 @@ export type MedmarDeliveryInput = {
   tenantId: string;
   userId: string;
   issuingAttemptId: string;
+  /** Timeout (ms) del lookup mailbox POP3, inoltrato a `findMedmarTicketPdf`. Default 30000 se omesso (pulsante manuale/auto-delivery invariati). */
+  mailboxTimeoutMs?: number;
 };
 
 type IssuingAttemptRow = {
@@ -242,12 +244,17 @@ export type MedmarDeliveryDeps = {
   sendEmail?: typeof sendMedmarCleanedTicketEmail;
 };
 
-async function resolvePdfForDelivery(idPrenotazione: string, medmarNumero: string, deps?: MedmarDeliveryDeps): Promise<PdfResolution> {
+async function resolvePdfForDelivery(
+  idPrenotazione: string,
+  medmarNumero: string,
+  deps?: MedmarDeliveryDeps,
+  mailboxTimeoutMs?: number
+): Promise<PdfResolution> {
   const findPdf = deps?.findPdf ?? findMedmarTicketPdf;
   const cleanPdf = deps?.cleanPdf ?? cleanMedmarPdf;
   const validatePdf = deps?.validatePdf ?? validateCleanedMedmarPdf;
 
-  const lookup = await findPdf({ idPrenotazione, medmarNumero });
+  const lookup = await findPdf({ idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs });
   if (lookup.kind === "not_found") return { kind: "not_found" };
   if (lookup.kind === "ambiguous") {
     return { kind: "ambiguous", detail: `${lookup.candidates.length} PDF compatibili trovati: ${lookup.candidates.map((c) => c.filename).join(", ")}` };
@@ -367,7 +374,12 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
   }
 
   // --- PDF: awaiting_pdf / pdf_found / pdf_cleaned / pdf_not_found (ritentabile) ---
-  const pdfResolution = await resolvePdfForDelivery(issuingAttempt.medmar_id_prenotazione, issuingAttempt.medmar_numero, deps);
+  const pdfResolution = await resolvePdfForDelivery(
+    issuingAttempt.medmar_id_prenotazione,
+    issuingAttempt.medmar_numero,
+    deps,
+    input.mailboxTimeoutMs
+  );
   const beforePdfStatus = attempt.status;
 
   if (pdfResolution.kind === "not_found") {
