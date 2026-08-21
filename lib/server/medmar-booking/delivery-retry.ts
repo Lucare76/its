@@ -24,8 +24,23 @@ export const MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS = 5;
 /** Intervallo minimo tra due tentativi automatici sullo stesso delivery attempt. */
 export const MEDMAR_DELIVERY_RETRY_MIN_INTERVAL_MS = 2 * 60 * 1000;
 
-/** Numero massimo di delivery attempt processati in un singolo run del cron/recovery. */
-export const MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE = 10;
+/**
+ * Numero massimo di delivery attempt processati in un singolo run del
+ * cron/recovery. Il caller esterno (cron-job.org) ha un timeout FISSO di 30
+ * secondi non modificabile: un solo candidato con mailbox lenta puo' gia'
+ * avvicinarsi al budget totale (vedi MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS),
+ * quindi il default resta a 1 per run.
+ */
+export const MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE = 1;
+
+/** Limite massimo consentito per ?limit=, a protezione dello stesso vincolo di timeout esterno. */
+export const MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE = 3;
+
+/** Budget totale (ms) per l'intero batch: resta sotto il timeout di 30s di cron-job.org, con margine. */
+export const MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS = 25_000;
+
+/** Budget (ms) per singolo candidato (lookup mailbox incluso): se scade, il candidato resta ritentabile senza essere toccato. */
+export const MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS = 20_000;
 
 export type MedmarDeliveryRetryCandidate = {
   id: string;
@@ -67,6 +82,10 @@ export type MedmarDeliveryRetrySummary = {
   still_pending: number;
   escalated_to_manual_review: number;
   errors: number;
+  /** true se il batch e' stato interrotto per esaurimento budget (totale o per-candidato): il cron successivo ritentera'. */
+  timed_out: boolean;
+  db_query_ms: number;
+  total_ms: number;
   results: MedmarDeliveryRetryItemResult[];
 };
 
@@ -100,7 +119,38 @@ export type MedmarDeliveryRetryDeps = {
   deliverDeps?: MedmarDeliveryDeps;
   resolveSystemUserId?: (admin: SupabaseClient, tenantId: string) => Promise<string>;
   now?: () => Date;
+  /** Clock iniettabile per il budget interno (default Date.now) — separato da `now` che fissa solo il cutoff della query candidati. */
+  nowMs?: () => number;
+  /** Budget totale (ms) dell'intero batch. Default MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS. */
+  totalBudgetMs?: number;
+  /** Budget (ms) per singolo candidato. Default MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS. */
+  perCandidateBudgetMs?: number;
 };
+
+const TIMEOUT_MARKER = Symbol("medmar_delivery_retry_candidate_timeout");
+
+/**
+ * Corsa tra `promise` e un timeout di `ms`. Se il timeout vince, la promise
+ * originale NON viene annullata (nessun AbortController fino al socket
+ * POP3): continua in background nello stesso processo, stesso pattern gia'
+ * accettato in `deliverMedmarTicketWithTimeout` (pdf-delivery.ts) per
+ * l'auto-delivery post-emissione.
+ */
+function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMEOUT_MARKER> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(TIMEOUT_MARKER), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 /**
  * Esegue un batch di retry controllato. Per ogni candidato ritentabile
@@ -121,17 +171,29 @@ export async function runMedmarDeliveryRetryBatch(
   const doDeliver = deps?.deliver ?? deliverMedmarTicket;
   const doResolveSystemUserId = deps?.resolveSystemUserId ?? defaultResolveSystemUserId;
   const repo = deps?.repo ?? createDeliveryRepository(admin);
+  const nowMs = deps?.nowMs ?? Date.now;
+  const totalBudgetMs = deps?.totalBudgetMs ?? MEDMAR_DELIVERY_RETRY_TOTAL_BUDGET_MS;
+  const perCandidateBudgetMs = deps?.perCandidateBudgetMs ?? MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS;
 
+  const batchStartMs = nowMs();
+  const dbQueryStartMs = nowMs();
   const candidates = await doLoadCandidates(admin, limit, now);
+  const dbQueryMs = nowMs() - dbQueryStartMs;
 
   const results: MedmarDeliveryRetryItemResult[] = [];
   let delivered = 0;
   let stillPending = 0;
   let escalated = 0;
   let errors = 0;
+  let timedOut = false;
   const systemUserIdByTenant = new Map<string, string>();
 
   for (const candidate of candidates) {
+    if (nowMs() - batchStartMs >= totalBudgetMs) {
+      // Budget totale esaurito: i candidati non ancora processati restano ritentabili, il prossimo cron riprovera'.
+      timedOut = true;
+      break;
+    }
     try {
       let systemUserId = systemUserIdByTenant.get(candidate.tenant_id);
       if (!systemUserId) {
@@ -139,11 +201,33 @@ export async function runMedmarDeliveryRetryBatch(
         systemUserIdByTenant.set(candidate.tenant_id, systemUserId);
       }
 
-      const outcome = await doDeliver(
-        { admin, tenantId: candidate.tenant_id, userId: systemUserId, issuingAttemptId: candidate.issuing_attempt_id },
-        deps?.deliverDeps
+      const raced = await raceWithTimeout(
+        doDeliver(
+          { admin, tenantId: candidate.tenant_id, userId: systemUserId, issuingAttemptId: candidate.issuing_attempt_id },
+          deps?.deliverDeps
+        ),
+        perCandidateBudgetMs
       );
 
+      if (raced === TIMEOUT_MARKER) {
+        // Budget per-candidato esaurito (tipicamente mailbox/PDF lookup lento): nessuno stato toccato,
+        // il candidato resta ritentabile cosi' com'e' al prossimo giro. Si interrompe il batch qui:
+        // il budget totale e' comunque prossimo all'esaurimento se un candidato ha gia' consumato questa quota.
+        timedOut = true;
+        stillPending += 1;
+        results.push({
+          delivery_attempt_id: candidate.id,
+          tenant_id: candidate.tenant_id,
+          issuing_attempt_id: candidate.issuing_attempt_id,
+          before_status: candidate.status,
+          after_status: "timeout",
+          escalated_to_manual_review: false,
+          error: false,
+        });
+        break;
+      }
+
+      const outcome = raced;
       let afterStatus: string = outcome.status;
       let escalatedNow = false;
       let attemptId = candidate.id;
@@ -210,6 +294,9 @@ export async function runMedmarDeliveryRetryBatch(
     still_pending: stillPending,
     escalated_to_manual_review: escalated,
     errors,
+    timed_out: timedOut,
+    db_query_ms: dbQueryMs,
+    total_ms: nowMs() - batchStartMs,
     results,
   };
 }

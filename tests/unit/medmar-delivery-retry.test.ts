@@ -5,6 +5,7 @@ import {
   MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS,
   MEDMAR_DELIVERY_RETRY_MIN_INTERVAL_MS,
   MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
+  MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE,
   type MedmarDeliveryRetryCandidate,
   type MedmarDeliveryRetryDeps,
 } from "@/lib/server/medmar-booking/delivery-retry";
@@ -378,5 +379,82 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
     expect(summary.errors).toBe(1);
     expect(summary.results[0]!.error).toBe(true);
+  });
+
+  it("15. zero candidati -> risposta rapida, nessun timeout, delivered/deliver mai chiamato", async () => {
+    const deliver = vi.fn();
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
+      baseDeps({ loadCandidates: (async () => []) as never, deliver: deliver as never })
+    );
+    expect(summary.candidates_found).toBe(0);
+    expect(summary.processed).toBe(0);
+    expect(summary.timed_out).toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("16. default limit passato alla query e' 1", async () => {
+    expect(MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE).toBe(1);
+  });
+
+  it("17. max batch size esportato e' 3", async () => {
+    expect(MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE).toBe(3);
+  });
+
+  it("18. timeout interno per-candidato: deliver non risponde entro perCandidateBudgetMs -> candidato resta ritentabile, timed_out=true, nessun repo.updateAttempt", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const repo = fakeRepo();
+    const deliver = vi.fn(() => new Promise<MedmarDeliveryOutcome>(() => {})); // non risolve mai (simula mailbox lenta)
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never, repo, perCandidateBudgetMs: 20 })
+    );
+    expect(summary.timed_out).toBe(true);
+    expect(summary.still_pending).toBe(1);
+    expect(summary.delivered).toBe(0);
+    expect(summary.results[0]!.after_status).toBe("timeout");
+    expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
+  });
+
+  it("19. budget totale esaurito prima di un secondo candidato: il batch si interrompe, timed_out=true, il secondo candidato non viene toccato", async () => {
+    const candidate1 = makeCandidate({ id: DELIVERY_ATTEMPT_1, status: "awaiting_pdf" });
+    const candidate2 = makeCandidate({ id: DELIVERY_ATTEMPT_2, issuing_attempt_id: ISSUING_ATTEMPT_2, status: "awaiting_pdf" });
+    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
+      ok: true,
+      status: "delivered",
+      attempt: makeAttempt({ status: "delivered" }),
+      already_delivered: false,
+    }));
+    // nowMs: le prime 4 chiamate (batchStart/dbQueryStart/dbQueryMs/check-candidato-1) restano a 0,
+    // dalla 5a (check-candidato-2) il clock "salta" oltre il budget totale.
+    let nowMsCallCount = 0;
+    const nowMs = vi.fn(() => (nowMsCallCount++ < 4 ? 0 : 100_000));
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate1, candidate2]) as never, deliver, nowMs, totalBudgetMs: 25_000 })
+    );
+    expect(summary.timed_out).toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(summary.delivered).toBe(1);
+  });
+
+  it("20. PDF trovato prima dello scadere del budget per-candidato: nessun timeout, delivery normale", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const deliver = vi.fn(async (): Promise<MedmarDeliveryOutcome> => ({
+      ok: true,
+      status: "delivered",
+      attempt: makeAttempt({ status: "delivered" }),
+      already_delivered: false,
+    }));
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver, perCandidateBudgetMs: 20_000 })
+    );
+    expect(summary.timed_out).toBe(false);
+    expect(summary.delivered).toBe(1);
   });
 });

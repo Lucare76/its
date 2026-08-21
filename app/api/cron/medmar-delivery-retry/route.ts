@@ -22,7 +22,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
-import { runMedmarDeliveryRetryBatch, MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE } from "@/lib/server/medmar-booking/delivery-retry";
+import {
+  runMedmarDeliveryRetryBatch,
+  MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE,
+  MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE,
+} from "@/lib/server/medmar-booking/delivery-retry";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -46,18 +50,21 @@ export async function GET(request: NextRequest) {
   }
 
   const limitParam = Number(new URL(request.url).searchParams.get("limit"));
-  const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 50) : MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE;
+  const limit =
+    Number.isFinite(limitParam) && limitParam > 0
+      ? Math.min(limitParam, MEDMAR_DELIVERY_RETRY_MAX_BATCH_SIZE)
+      : MEDMAR_DELIVERY_RETRY_DEFAULT_BATCH_SIZE;
 
   const admin = adminClient();
 
   try {
     const summary = await runMedmarDeliveryRetryBatch(admin, limit);
 
-    // Nessun dato sensibile nei log: solo conteggi e id, mai email/PDF/allegati.
+    // Nessun dato sensibile nei log: solo conteggi, id e durate, mai email/PDF/allegati.
     auditLog({
       event: "medmar_delivery_retry_batch",
       level: summary.errors > 0 ? "warn" : "info",
-      outcome: `delivered=${summary.delivered} pending=${summary.still_pending} escalated=${summary.escalated_to_manual_review} errors=${summary.errors}`,
+      outcome: `delivered=${summary.delivered} pending=${summary.still_pending} escalated=${summary.escalated_to_manual_review} errors=${summary.errors} timed_out=${summary.timed_out}`,
       details: {
         candidates_found: summary.candidates_found,
         processed: summary.processed,
@@ -65,10 +72,18 @@ export async function GET(request: NextRequest) {
         still_pending: summary.still_pending,
         escalated_to_manual_review: summary.escalated_to_manual_review,
         errors: summary.errors,
+        timed_out: summary.timed_out,
+        db_query_ms: summary.db_query_ms,
+        total_ms: summary.total_ms,
       },
     });
 
-    return NextResponse.json({ ok: true, ...summary });
+    return NextResponse.json({
+      ok: true,
+      ...summary,
+      timedOut: summary.timed_out,
+      ...(summary.timed_out ? { message: "Retry deferred because processing budget expired" } : {}),
+    });
   } catch (err) {
     auditLog({
       event: "medmar_delivery_retry_batch_failed",
