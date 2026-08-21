@@ -91,6 +91,10 @@ export async function GET(request: NextRequest) {
           pdf_mailbox_message_uid: i.pdf_mailbox_message_uid ?? undefined,
           pdf_filename: i.pdf_filename ?? undefined,
           resend_message_id: i.resend_message_id ?? undefined,
+          error_name: i.error_name,
+          error_message: i.error_message,
+          error_code: i.error_code,
+          step: i.step,
         })),
       },
     });

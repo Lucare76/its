@@ -14,9 +14,19 @@
  * trovare il PDF.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { deliverMedmarTicket, type MedmarDeliveryDeps } from "./pdf-delivery";
+import { deliverMedmarTicket, getMedmarDeliveryErrorStep, type MedmarDeliveryDeps } from "./pdf-delivery";
 import { createDeliveryRepository } from "./delivery-repository";
 import { RETRYABLE_DELIVERY_STATUSES, type DeliveryRepository, type MedmarDeliveryStatus } from "./delivery-types";
+
+/**
+ * Riduce un messaggio d'errore a qualcosa di sicuro da mettere in audit/response:
+ * lunghezza limitata, whitespace normalizzato. I messaggi che possono arrivare qui
+ * (pdf-mailbox-lookup.ts, Supabase, Resend) non incorporano mai host/user/password
+ * per design — vedi commenti in quei moduli — questo e' difesa aggiuntiva, non l'unica.
+ */
+function sanitizeErrorMessage(message: string): string {
+  return message.replace(/\s+/g, " ").trim().slice(0, 200);
+}
 
 /** Numero massimo di tentativi automatici prima di passare a revisione manuale. */
 export const MEDMAR_DELIVERY_RETRY_MAX_ATTEMPTS = 5;
@@ -114,6 +124,11 @@ export type MedmarDeliveryRetryItemResult = {
   elapsed_ms: number;
   /** Budget (ms) applicato a questo candidato (MEDMAR_DELIVERY_RETRY_PER_CANDIDATE_BUDGET_MS o l'override dei test) — per leggere elapsed_ms in contesto senza dover conoscere le costanti. */
   budget_ms: number;
+  /** Popolati solo quando result:"error" — mai per gli altri esiti. Nessun dato sensibile: solo nome/messaggio troncato dell'eccezione e lo step interno (vedi pdf-delivery.ts:getMedmarDeliveryErrorStep). */
+  error_name?: string;
+  error_message?: string;
+  error_code?: string;
+  step?: string;
 };
 
 export type MedmarDeliveryRetrySummary = {
@@ -351,9 +366,33 @@ export async function runMedmarDeliveryRetryBatch(
         stillPending += 1;
         items.push({ ...itemBase, result: "pending", elapsed_ms: elapsedMs });
       }
-    } catch {
+    } catch (err) {
       errors += 1;
-      items.push({ ...itemBase, result: "error", elapsed_ms: nowMs() - candidateStartMs });
+      const errorName = err instanceof Error ? err.name : typeof err;
+      const errorMessage = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
+      const step = getMedmarDeliveryErrorStep(err);
+      const errorCode = step ? `medmar_retry_${step}_failed` : "medmar_retry_unexpected_error";
+
+      // Best-effort, NON bloccante: registra last_error_* sul record SENZA cambiare status
+      // (expectedStatus = lo stato del candidato letto a inizio batch, quindi resta esattamente
+      // com'era — "pdf_found" resta "pdf_found", mai un salto a delivery_failed/manual_review).
+      // Se fallisce (conflitto/stato gia' cambiato) e' innocuo: il candidato resta comunque
+      // ritentabile al prossimo giro, l'unica cosa che si perde e' l'annotazione last_error_*.
+      try {
+        await repo.updateAttempt(candidate.id, { last_error_code: errorCode, last_error_message: errorMessage }, candidate.status);
+      } catch {
+        /* non bloccante — vedi commento sopra */
+      }
+
+      items.push({
+        ...itemBase,
+        result: "error",
+        elapsed_ms: nowMs() - candidateStartMs,
+        error_name: errorName,
+        error_message: errorMessage,
+        error_code: errorCode,
+        step,
+      });
     }
   }
 

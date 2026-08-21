@@ -515,7 +515,7 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     expect(repo.updateAttemptSpy).not.toHaveBeenCalled();
   });
 
-  it("16. errore imprevisto durante un retry viene contenuto (non propagato), item.result='error'", async () => {
+  it("16. errore imprevisto durante un retry viene contenuto (non propagato), item.result='error' con error_name/error_message/error_code osservabili", async () => {
     const candidate = makeCandidate({ status: "awaiting_pdf" });
     const deliver = vi.fn(async () => {
       throw new Error("boom: mailbox non raggiungibile");
@@ -527,6 +527,72 @@ describe("runMedmarDeliveryRetryBatch — retry controllato delivery Medmar", ()
     );
     expect(summary.errors).toBe(1);
     expect(summary.items[0]!.result).toBe("error");
+    expect(summary.items[0]!.error_name).toBe("Error");
+    expect(summary.items[0]!.error_message).toBe("boom: mailbox non raggiungibile");
+    expect(summary.items[0]!.error_code).toBe("medmar_retry_unexpected_error"); // nessuno step taggato su questo errore sintetico
+    expect(summary.items[0]!.step).toBeUndefined();
+  });
+
+  it("16b. errore lunghissimo/con spazi ripetuti viene troncato e normalizzato prima di finire in audit/response", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const longMessage = "riga1\n\n  riga2   con   spazi   multipli  " + "x".repeat(500);
+    const deliver = vi.fn(async () => {
+      throw new Error(longMessage);
+    });
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never })
+    );
+    expect(summary.items[0]!.error_message!.length).toBeLessThanOrEqual(200);
+    expect(summary.items[0]!.error_message).not.toContain("\n");
+  });
+
+  it("16c. errore in Fase B: tenta un update best-effort di last_error_code/last_error_message SENZA cambiare status (expectedStatus = candidate.status, il record resta 'pdf_found' -> ritentabile)", async () => {
+    const candidate = makeCandidate({ status: "pdf_found", pdf_mailbox_message_uid: "uid-noto" });
+    const repo = fakeRepo();
+    const deliver = vi.fn(async () => {
+      throw new Error("errore Fase B simulato");
+    });
+    await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never, repo })
+    );
+    expect(repo.updateAttemptSpy).toHaveBeenCalledWith(
+      DELIVERY_ATTEMPT_1,
+      expect.objectContaining({ last_error_code: expect.any(String), last_error_message: "errore Fase B simulato" }),
+      "pdf_found" // expectedStatus = lo stato del candidato, MAI un cambio di status
+    );
+    // Il patch non include mai "status": il record resta pdf_found, quindi ritentabile al prossimo giro.
+    const patch = repo.updateAttemptSpy.mock.calls[0]![1] as Record<string, unknown>;
+    expect(patch.status).toBeUndefined();
+  });
+
+  it("16d. se anche l'update best-effort di last_error_* fallisce (conflitto), il batch non si rompe: result resta 'error', nessuna eccezione propagata", async () => {
+    const candidate = makeCandidate({ status: "awaiting_pdf" });
+    const repo: DeliveryRepository = {
+      async findByIssuingAttempt() {
+        return null;
+      },
+      async acquireAttempt() {
+        throw new Error("non atteso");
+      },
+      async updateAttempt() {
+        throw new Error("medmar_delivery_attempt_conflict");
+      },
+    };
+    const deliver = vi.fn(async () => {
+      throw new Error("errore primario");
+    });
+    const summary = await runMedmarDeliveryRetryBatch(
+      {} as SupabaseClient,
+      10,
+      baseDeps({ loadCandidates: (async () => [candidate]) as never, deliver: deliver as never, repo })
+    );
+    expect(summary.errors).toBe(1);
+    expect(summary.items[0]!.result).toBe("error");
+    expect(summary.items[0]!.error_message).toBe("errore primario"); // l'errore riportato resta quello ORIGINALE, non quello del tentativo di update fallito
   });
 
   it("17. nessun invio duplicato su run successivi: un secondo run dopo la delivery non trova piu' candidati e non richiama mai deliver", async () => {

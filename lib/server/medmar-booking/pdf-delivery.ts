@@ -29,6 +29,30 @@ import { loadAgencyRecipient } from "./recipient-repository";
 import { resolveFinalTicketRecipient, type MedmarFinalRecipient } from "./recipient-resolver";
 import type { MedmarPreflightResult } from "./types";
 
+const MEDMAR_STEP = Symbol("medmarDeliveryStep");
+type SteppedError = Error & { [MEDMAR_STEP]?: string };
+
+/**
+ * Tagga (senza alterarla) un'eccezione con lo step interno in cui e' avvenuta,
+ * usando un Symbol per non inquinare proprieta' enumerabili/serializzabili
+ * dell'errore. Il chiamante (delivery-retry.ts) legge il tag con
+ * `getMedmarDeliveryErrorStep` per rendere osservabile un `result:"error"`
+ * altrimenti opaco — nessun cambio di comportamento, solo osservabilita'.
+ */
+async function stepped<T>(step: string, promise: PromiseLike<T>): Promise<T> {
+  try {
+    return await promise;
+  } catch (err) {
+    if (err instanceof Error && !(err as SteppedError)[MEDMAR_STEP]) (err as SteppedError)[MEDMAR_STEP] = step;
+    throw err;
+  }
+}
+
+/** Step in cui e' avvenuta l'eccezione, se `deliverMedmarTicket` (o le funzioni che chiama) l'hanno taggata — undefined altrimenti. */
+export function getMedmarDeliveryErrorStep(err: unknown): string | undefined {
+  return err instanceof Error ? (err as SteppedError)[MEDMAR_STEP] : undefined;
+}
+
 export type MedmarDeliveryPreconditionFailure =
   | "issuing_attempt_not_found"
   | "issuing_not_completed"
@@ -278,7 +302,7 @@ async function locatePdfBytes(
   const findPdfByUid = deps?.findPdfByUid ?? findMedmarPdfByUid;
 
   if (knownUid) {
-    const byUid = await findPdfByUid({ uid: knownUid, idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs });
+    const byUid = await stepped("fetch_pdf_by_uid", findPdfByUid({ uid: knownUid, idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs }));
     if (byUid.kind === "found") {
       return { kind: "ok", bytes: Buffer.from(byUid.pdfBytes), filename: byUid.filename, messageUid: byUid.messageUid, sha256: byUid.sha256 };
     }
@@ -288,7 +312,7 @@ async function locatePdfBytes(
     // not_found via UID: il messaggio potrebbe essere stato spostato/scaduto lato provider — si ricade sullo scan completo.
   }
 
-  const lookup = await findPdf({ idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs });
+  const lookup = await stepped("pdf_lookup_scan", findPdf({ idPrenotazione, medmarNumero, timeoutMs: mailboxTimeoutMs }));
   if (lookup.kind === "not_found") return { kind: "not_found" };
   if (lookup.kind === "ambiguous") {
     return { kind: "ambiguous", detail: `${lookup.candidates.length} PDF compatibili trovati: ${lookup.candidates.map((c) => c.filename).join(", ")}` };
@@ -318,12 +342,18 @@ async function resolvePdfForDelivery(
     return { kind: "validation_failed", detail };
   }
 
-  const validation = await validatePdf(cleaned, {
-    medmarNumero,
-    idPrenotazione,
-    ticketNumbers: [],
-    requiredPortKeywords: [],
-  });
+  // A differenza del cleaner (try/catch sopra, converte SEMPRE in validation_failed), validatePdf non era
+  // protetto: un'eccezione qui (es. errore interno di pdfjs) usciva non gestita da resolvePdfForDelivery.
+  // Tag dello step per osservabilita' — comportamento di propagazione invariato, nessuna modifica al cleaner.
+  const validation = await stepped(
+    "pdf_validation",
+    validatePdf(cleaned, {
+      medmarNumero,
+      idPrenotazione,
+      ticketNumbers: [],
+      requiredPortKeywords: [],
+    })
+  );
   if (!validation.ok) return { kind: "validation_failed", detail: validation.reason };
 
   return {
@@ -359,7 +389,7 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
   const doLoadDeliveryServices = deps?.loadDeliveryServices ?? loadDeliveryServices;
   const doSendEmail = deps?.sendEmail ?? sendMedmarCleanedTicketEmail;
 
-  const issuingAttempt = await doLoadIssuingAttempt(input.admin, input.tenantId, input.issuingAttemptId);
+  const issuingAttempt = await stepped("load_issuing_attempt", doLoadIssuingAttempt(input.admin, input.tenantId, input.issuingAttemptId));
   if (!issuingAttempt) {
     return { ok: false, status: "issuing_attempt_not_found", error: "Nessun tentativo di emissione Medmar trovato per questo id." };
   }
@@ -373,18 +403,21 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
     return { ok: false, status: "issuing_not_completed", error: "id_prenotazione o codice Medmar mancanti sull'attempt completato." };
   }
 
-  const services = await doLoadDeliveryServices(input.admin, input.tenantId, issuingAttempt.service_ids);
+  const services = await stepped("load_services", doLoadDeliveryServices(input.admin, input.tenantId, issuingAttempt.service_ids));
   const alreadySentRow = services.find((s) => !!s.medmar_ticket_sent_at);
 
   const repo = deps?.repo ?? createDeliveryRepository(input.admin);
-  const acquired = await repo.acquireAttempt({
-    tenantId: input.tenantId,
-    issuingAttemptId: issuingAttempt.id,
-    serviceIds: issuingAttempt.service_ids,
-    medmarIdPrenotazione: issuingAttempt.medmar_id_prenotazione,
-    medmarNumero: issuingAttempt.medmar_numero,
-    createdBy: input.userId,
-  });
+  const acquired = await stepped(
+    "acquire_attempt",
+    repo.acquireAttempt({
+      tenantId: input.tenantId,
+      issuingAttemptId: issuingAttempt.id,
+      serviceIds: issuingAttempt.service_ids,
+      medmarIdPrenotazione: issuingAttempt.medmar_id_prenotazione,
+      medmarNumero: issuingAttempt.medmar_numero,
+      createdBy: input.userId,
+    })
+  );
   let attempt = acquired.attempt;
 
   if (alreadySentRow || attempt.status === "delivered") {
@@ -433,21 +466,27 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
     // con un fetch mirato via UID, non uno scan completo.
     const located = await locatePdfBytes(issuingAttempt.medmar_id_prenotazione, issuingAttempt.medmar_numero, knownUid, deps, input.mailboxTimeoutMs);
     if (located.kind === "not_found") {
-      attempt = await repo.updateAttempt(attempt.id, { status: "pdf_not_found", attempt_count: attempt.attempt_count + 1 }, beforePdfStatus);
+      attempt = await stepped("db_update_pdf_not_found", repo.updateAttempt(attempt.id, { status: "pdf_not_found", attempt_count: attempt.attempt_count + 1 }, beforePdfStatus));
       return { ok: false, status: "pdf_not_found", attempt, error: "Nessun PDF trovato nella mailbox Medmar per questa prenotazione." };
     }
     if (located.kind === "ambiguous") {
-      attempt = await repo.updateAttempt(
-        attempt.id,
-        { status: "pdf_ambiguous", last_error_code: "pdf_ambiguous", last_error_message: located.detail },
-        beforePdfStatus
+      attempt = await stepped(
+        "db_update_pdf_ambiguous",
+        repo.updateAttempt(
+          attempt.id,
+          { status: "pdf_ambiguous", last_error_code: "pdf_ambiguous", last_error_message: located.detail },
+          beforePdfStatus
+        )
       );
       return { ok: false, status: "pdf_ambiguous", attempt, error: located.detail };
     }
-    attempt = await repo.updateAttempt(
-      attempt.id,
-      { status: "pdf_found", pdf_mailbox_message_uid: located.messageUid, pdf_filename: located.filename, pdf_original_sha256: located.sha256 },
-      beforePdfStatus
+    attempt = await stepped(
+      "db_update_pdf_found",
+      repo.updateAttempt(
+        attempt.id,
+        { status: "pdf_found", pdf_mailbox_message_uid: located.messageUid, pdf_filename: located.filename, pdf_original_sha256: located.sha256 },
+        beforePdfStatus
+      )
     );
     return { ok: false, status: "pdf_found", attempt, error: "PDF individuato in mailbox: invio rimandato al prossimo ciclo." };
   }
@@ -461,55 +500,73 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
   );
 
   if (pdfResolution.kind === "not_found") {
-    attempt = await repo.updateAttempt(attempt.id, { status: "pdf_not_found", attempt_count: attempt.attempt_count + 1 }, beforePdfStatus);
+    attempt = await stepped("db_update_pdf_not_found", repo.updateAttempt(attempt.id, { status: "pdf_not_found", attempt_count: attempt.attempt_count + 1 }, beforePdfStatus));
     return { ok: false, status: "pdf_not_found", attempt, error: "Nessun PDF trovato nella mailbox Medmar per questa prenotazione." };
   }
   if (pdfResolution.kind === "ambiguous") {
-    attempt = await repo.updateAttempt(
-      attempt.id,
-      { status: "pdf_ambiguous", last_error_code: "pdf_ambiguous", last_error_message: pdfResolution.detail },
-      beforePdfStatus
+    attempt = await stepped(
+      "db_update_pdf_ambiguous",
+      repo.updateAttempt(
+        attempt.id,
+        { status: "pdf_ambiguous", last_error_code: "pdf_ambiguous", last_error_message: pdfResolution.detail },
+        beforePdfStatus
+      )
     );
     return { ok: false, status: "pdf_ambiguous", attempt, error: pdfResolution.detail };
   }
   if (pdfResolution.kind === "validation_failed") {
-    attempt = await repo.updateAttempt(
-      attempt.id,
-      { status: "pdf_validation_failed", last_error_code: "pdf_validation_failed", last_error_message: pdfResolution.detail },
-      beforePdfStatus
+    attempt = await stepped(
+      "db_update_pdf_validation_failed",
+      repo.updateAttempt(
+        attempt.id,
+        { status: "pdf_validation_failed", last_error_code: "pdf_validation_failed", last_error_message: pdfResolution.detail },
+        beforePdfStatus
+      )
     );
     return { ok: false, status: "pdf_validation_failed", attempt, error: pdfResolution.detail };
   }
 
-  attempt = await repo.updateAttempt(
-    attempt.id,
-    {
-      status: "pdf_cleaned",
-      pdf_mailbox_message_uid: pdfResolution.messageUid,
-      pdf_filename: pdfResolution.filename,
-      pdf_original_sha256: pdfResolution.originalSha256,
-      pdf_cleaned_sha256: pdfResolution.cleanedSha256,
-    },
-    beforePdfStatus
+  attempt = await stepped(
+    "db_update_pdf_cleaned",
+    repo.updateAttempt(
+      attempt.id,
+      {
+        status: "pdf_cleaned",
+        pdf_mailbox_message_uid: pdfResolution.messageUid,
+        pdf_filename: pdfResolution.filename,
+        pdf_original_sha256: pdfResolution.originalSha256,
+        pdf_cleaned_sha256: pdfResolution.cleanedSha256,
+      },
+      beforePdfStatus
+    )
   );
 
   // --- Destinatario ---
   const primary = services[0];
   if (!primary) {
-    attempt = await repo.updateAttempt(attempt.id, { status: "recipient_missing", last_error_message: "Nessun service trovato per risolvere il destinatario." }, "pdf_cleaned");
+    attempt = await stepped(
+      "db_update_recipient_missing",
+      repo.updateAttempt(attempt.id, { status: "recipient_missing", last_error_message: "Nessun service trovato per risolvere il destinatario." }, "pdf_cleaned")
+    );
     return { ok: false, status: "recipient_missing", attempt, error: "Nessun service trovato per risolvere il destinatario." };
   }
-  const recipientResolution = await resolveDeliveryRecipient(input.admin, input.tenantId, primary, deps);
+  const recipientResolution = await stepped("recipient_resolution", resolveDeliveryRecipient(input.admin, input.tenantId, primary, deps));
   if (!recipientResolution.ok) {
-    attempt = await repo.updateAttempt(attempt.id, { status: "recipient_missing", last_error_message: recipientResolution.error }, "pdf_cleaned");
+    attempt = await stepped(
+      "db_update_recipient_missing",
+      repo.updateAttempt(attempt.id, { status: "recipient_missing", last_error_message: recipientResolution.error }, "pdf_cleaned")
+    );
     return { ok: false, status: "recipient_missing", attempt, error: recipientResolution.error };
   }
   const recipient = recipientResolution.recipient;
 
-  attempt = await repo.updateAttempt(
-    attempt.id,
-    { status: "delivery_started", recipient_type: recipient.type, recipient_name: recipient.name, recipient_email: recipient.email },
-    "pdf_cleaned"
+  attempt = await stepped(
+    "db_update_delivery_started",
+    repo.updateAttempt(
+      attempt.id,
+      { status: "delivery_started", recipient_type: recipient.type, recipient_name: recipient.name, recipient_email: recipient.email },
+      "pdf_cleaned"
+    )
   );
 
   const content = buildMedmarDeliveryEmailContent({
@@ -518,25 +575,34 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
     preflightSnapshot: issuingAttempt.preflight_snapshot,
   });
 
-  const sendResult = await doSendEmail({
-    to: recipient.email,
-    content,
-    attachmentFilename: `Prenotazione${issuingAttempt.medmar_id_prenotazione}.pdf`,
-    attachmentBase64: Buffer.from(pdfResolution.cleaned).toString("base64"),
-  });
+  const sendResult = await stepped(
+    "resend_send",
+    doSendEmail({
+      to: recipient.email,
+      content,
+      attachmentFilename: `Prenotazione${issuingAttempt.medmar_id_prenotazione}.pdf`,
+      attachmentBase64: Buffer.from(pdfResolution.cleaned).toString("base64"),
+    })
+  );
 
   if (sendResult.kind === "sent") {
     const now = new Date().toISOString();
-    attempt = await repo.updateAttempt(
-      attempt.id,
-      { status: "delivered", resend_message_id: sendResult.messageId, delivered_at: now },
-      "delivery_started"
+    attempt = await stepped(
+      "db_update_delivered",
+      repo.updateAttempt(
+        attempt.id,
+        { status: "delivered", resend_message_id: sendResult.messageId, delivered_at: now },
+        "delivery_started"
+      )
     );
-    await input.admin
-      .from("services")
-      .update({ medmar_ticket_sent_at: now, medmar_ticket_sent_by: input.userId })
-      .in("id", issuingAttempt.service_ids)
-      .eq("tenant_id", input.tenantId);
+    await stepped(
+      "services_update_sent_at",
+      input.admin
+        .from("services")
+        .update({ medmar_ticket_sent_at: now, medmar_ticket_sent_by: input.userId })
+        .in("id", issuingAttempt.service_ids)
+        .eq("tenant_id", input.tenantId)
+    );
     // L'email e' gia' partita con successo (message_id confermato): un eventuale
     // errore qui sull'update di services NON deve essere trattato come fallimento
     // dell'invio (sarebbe fuorviante — l'email E' stata inviata). L'idempotenza
@@ -545,18 +611,24 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
   }
 
   if (sendResult.kind === "failed") {
-    attempt = await repo.updateAttempt(
-      attempt.id,
-      { status: "delivery_failed", last_error_code: "resend_failed", last_error_message: sendResult.error },
-      "delivery_started"
+    attempt = await stepped(
+      "db_update_delivery_failed",
+      repo.updateAttempt(
+        attempt.id,
+        { status: "delivery_failed", last_error_code: "resend_failed", last_error_message: sendResult.error },
+        "delivery_started"
+      )
     );
     return { ok: false, status: "delivery_failed", attempt, error: sendResult.error };
   }
 
-  attempt = await repo.updateAttempt(
-    attempt.id,
-    { status: "delivery_state_unknown", last_error_code: "resend_ambiguous", last_error_message: sendResult.error },
-    "delivery_started"
+  attempt = await stepped(
+    "db_update_delivery_state_unknown",
+    repo.updateAttempt(
+      attempt.id,
+      { status: "delivery_state_unknown", last_error_code: "resend_ambiguous", last_error_message: sendResult.error },
+      "delivery_started"
+    )
   );
   return { ok: false, status: "delivery_state_unknown", attempt, error: sendResult.error };
 }

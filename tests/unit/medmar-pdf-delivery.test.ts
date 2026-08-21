@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { deliverMedmarTicket, deliverMedmarTicketWithTimeout, type MedmarDeliveryDeps } from "@/lib/server/medmar-booking/pdf-delivery";
+import { deliverMedmarTicket, deliverMedmarTicketWithTimeout, getMedmarDeliveryErrorStep, type MedmarDeliveryDeps } from "@/lib/server/medmar-booking/pdf-delivery";
 import type { DeliveryRepository, MedmarDeliveryAttempt } from "@/lib/server/medmar-booking/delivery-types";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -455,6 +455,49 @@ describe("deliverMedmarTicket — state machine delivery PDF Medmar", () => {
       expect(outcome.attempt.resend_message_id).toBe("resend-msg-19");
     }
     expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("20. eccezione in validatePdf (non solo cleaner) si propaga taggata con lo step 'pdf_validation' — osservabile via getMedmarDeliveryErrorStep", async () => {
+    const validatePdf = vi.fn(async () => {
+      throw new Error("pdfjs: errore interno inatteso");
+    });
+    await expect(
+      deliverMedmarTicket(
+        { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+        baseDeps({ repo: makeDeliveryRepo(), validatePdf: validatePdf as never })
+      )
+    ).rejects.toSatisfy((err: unknown) => getMedmarDeliveryErrorStep(err) === "pdf_validation");
+  });
+
+  it("21. eccezione durante il fetch-by-UID (Fase B) e' taggata con lo step 'fetch_pdf_by_uid'", async () => {
+    const existing = makeDeliveryAttempt({ status: "pdf_found", pdf_mailbox_message_uid: "uid-known-21", pdf_filename: "Prenotazione736987.pdf" });
+    const findPdfByUid = vi.fn(async () => {
+      throw new Error("ECONNRESET: connessione POP3 interrotta");
+    });
+    await expect(
+      deliverMedmarTicket(
+        { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+        baseDeps({ repo: makeDeliveryRepo(existing), findPdfByUid: findPdfByUid as never })
+      )
+    ).rejects.toSatisfy((err: unknown) => getMedmarDeliveryErrorStep(err) === "fetch_pdf_by_uid");
+  });
+
+  it("22. eccezione durante la scrittura DB (updateAttempt su pdf_cleaned) e' taggata con lo step 'db_update_pdf_cleaned'", async () => {
+    const repo = makeDeliveryRepo();
+    const originalUpdate = repo.updateAttempt.bind(repo);
+    const failingRepo: typeof repo = {
+      ...repo,
+      updateAttempt: (async (id, patch, expectedStatus) => {
+        if (patch.status === "pdf_cleaned") throw new Error("Supabase: connessione al DB persa");
+        return originalUpdate(id, patch, expectedStatus);
+      }) as typeof repo.updateAttempt,
+    };
+    await expect(
+      deliverMedmarTicket(
+        { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+        baseDeps({ repo: failingRepo })
+      )
+    ).rejects.toSatisfy((err: unknown) => getMedmarDeliveryErrorStep(err) === "db_update_pdf_cleaned");
   });
 
   it("se un service collegato ha già medmar_ticket_sent_at valorizzato, non reinvia (idempotenza a livello services)", async () => {
