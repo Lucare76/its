@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { pollEmailNow } from "@/lib/server/email-poll";
+import { withJobHealth } from "@/lib/server/job-health";
 import { sendPushToTenantRoles } from "@/lib/server/web-push";
 
 export const runtime = "nodejs";
@@ -62,7 +63,40 @@ export async function GET(request: NextRequest) {
   // arriva mentre un altro trigger (Vercel Cron, cron-job.org, o un refresh
   // manuale) ha già un import in corso o appena completato, non apre una
   // seconda connessione IMAP — vedi lib/server/email-poll.ts.
-  const result = await pollEmailNow(fakeAuth, { force: false });
+  const result = await withJobHealth({
+    admin,
+    tenantId,
+    jobKey: "poll-emails",
+    jobName: "Polling email",
+    source: "api/cron/poll-emails"
+  }, async () => {
+    const pollResult = await pollEmailNow(fakeAuth, { force: false });
+    const detail = pollResult.detail;
+    const skipped = pollResult.status === "skipped_in_progress" || pollResult.status === "skipped_recent";
+    return {
+      result: pollResult,
+      status: pollResult.status === "error" ? "failed" : "success",
+      counts: {
+        processedCount: detail?.emailsProcessed ?? 0,
+        successCount: detail?.draftsCreated ?? 0,
+        failedCount: pollResult.status === "error" ? 1 : 0,
+        warningCount: (detail?.duplicateWarnings ?? 0) + (detail?.skippedNoPdf ?? 0)
+      },
+      errorMessage: pollResult.status === "error" ? pollResult.error : null,
+      metadata: {
+        status: pollResult.status,
+        skipped,
+        mailbox: detail?.mailbox,
+        unread_found: detail?.unreadFound,
+        emails_processed: detail?.emailsProcessed,
+        pdf_found: detail?.pdfFound,
+        drafts_created: detail?.draftsCreated,
+        duplicate_warnings: detail?.duplicateWarnings,
+        skipped_no_pdf: detail?.skippedNoPdf,
+        last_success_at: pollResult.last_success_at
+      }
+    };
+  });
 
   if (result.status === "error") {
     if (result.imap_not_configured) {

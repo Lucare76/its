@@ -7,6 +7,7 @@ import {
   logWhatsAppEvent,
   sendWhatsAppReminder
 } from "@/lib/server/whatsapp";
+import { completeJobRun, startJobRun } from "@/lib/server/job-health";
 import { persistOutboundWhatsAppMessage } from "@/lib/server/whatsapp/messages";
 
 export const runtime = "nodejs";
@@ -28,6 +29,12 @@ async function runCron(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Server env missing" }, { status: 500 });
   }
+  const jobRunId = await startJobRun({
+    admin,
+    jobKey: "whatsapp-reminders",
+    jobName: "WhatsApp reminder",
+    source: "api/cron/whatsapp-reminders"
+  });
 
   const now = new Date();
   const fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -44,6 +51,7 @@ async function runCron(request: NextRequest) {
   let totalDue24h = 0;
   let totalDue2h = 0;
   let totalPlanned = 0;
+  let totalTenantErrors = 0;
   const phaseCounters: Record<string, number> = { "48h_departure": 0, "24h": 0, "2h": 0 };
 
   for (const tenant of tenants ?? []) {
@@ -59,7 +67,10 @@ async function runCron(request: NextRequest) {
       .in("status", ["new", "assigned"])
       .limit(500);
 
-    if (candidatesError) continue;
+    if (candidatesError) {
+      totalTenantErrors += 1;
+      continue;
+    }
 
     const candidateServices = candidates ?? [];
     totalScanned += candidateServices.length;
@@ -243,7 +254,7 @@ async function runCron(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({
+  const responsePayload = {
     ok: true,
     scanned: totalScanned,
     due_48h_departure: totalDue48h,
@@ -254,7 +265,30 @@ async function runCron(request: NextRequest) {
     sent_by_phase: phaseCounters,
     skipped_duplicates: totalSkipped,
     failed: totalFailed
+  };
+
+  await completeJobRun({
+    admin,
+    runId: jobRunId,
+    status: totalFailed > 0 || totalTenantErrors > 0 ? "warning" : "success",
+    processedCount: totalPlanned,
+    successCount: totalSent,
+    failedCount: totalFailed,
+    warningCount: totalTenantErrors,
+    errorMessage: totalTenantErrors > 0 ? `${totalTenantErrors} tenant non processati` : null,
+    metadata: {
+      scanned: totalScanned,
+      due_48h_departure: totalDue48h,
+      due_24h: totalDue24h,
+      due_2h: totalDue2h,
+      planned: totalPlanned,
+      sent_by_phase: phaseCounters,
+      skipped_duplicates: totalSkipped,
+      tenant_query_errors: totalTenantErrors
+    }
   });
+
+  return NextResponse.json(responsePayload);
 }
 
 export async function GET(request: NextRequest) {

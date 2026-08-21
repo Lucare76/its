@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { withJobHealth } from "@/lib/server/job-health";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -90,8 +91,7 @@ async function purgeOldBackups(admin: ReturnType<typeof createAdminClient>): Pro
   return { deleted: old.map((f) => f.name), errors: [] };
 }
 
-async function runBackup() {
-  const admin = createAdminClient();
+async function runBackup(admin: ReturnType<typeof createAdminClient>) {
   const today = new Date().toISOString().slice(0, 10);
   const snapshot: Record<string, unknown[]> = {};
   const errors: string[] = [];
@@ -154,7 +154,39 @@ async function handler(request: NextRequest) {
   }
 
   try {
-    const result = await runBackup();
+    const admin = createAdminClient();
+    const result = await withJobHealth({
+      admin,
+      jobKey: "backup",
+      jobName: "Backup automatico",
+      source: "api/cron/backup",
+      metadata: { tables_configured: TABLES.length, retention_days: RETENTION_DAYS }
+    }, async () => {
+      const backup = await runBackup(admin);
+      const tableErrors = Array.isArray(backup.table_errors) ? backup.table_errors.length : 0;
+      const purgeErrors = Array.isArray(backup.purge_errors) ? backup.purge_errors.length : 0;
+      const warningCount = tableErrors + purgeErrors;
+      return {
+        result: backup,
+        status: backup.ok ? (warningCount > 0 ? "warning" : "success") : "failed",
+        counts: {
+          processedCount: typeof backup.tables_exported === "number" ? backup.tables_exported : TABLES.length,
+          successCount: typeof backup.tables_exported === "number" ? backup.tables_exported : 0,
+          failedCount: tableErrors + (backup.ok ? 0 : 1),
+          warningCount
+        },
+        errorMessage: backup.ok ? null : backup.error,
+        metadata: {
+          filename: backup.filename,
+          tables_exported: backup.tables_exported,
+          rows_total: backup.rows_total,
+          row_counts: backup.row_counts,
+          table_errors: backup.table_errors,
+          purged_count: Array.isArray(backup.purged) ? backup.purged.length : 0,
+          purge_errors: backup.purge_errors
+        }
+      };
+    });
     return NextResponse.json(result, { status: result.ok ? 200 : 500 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { readSystemJobHealthSummary } from "@/lib/server/job-health";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
@@ -17,6 +18,8 @@ const CRON_JOBS = [
   { name: "Vehicle Expiry Check", path: "/api/cron/vehicle-expiry-check", schedule: "0 8 * * *",  description: "Controllo scadenze assicurazione/bollo/collaudo" },
   { name: "Backup notturno",      path: "/api/cron/backup",               schedule: "0 2 * * *",  description: "Backup automatico DB → Storage (retention 30gg)" },
 ];
+
+const HEALTH_JOB_KEYS = ["backup", "poll-emails", "whatsapp-reminders"];
 
 const ENV_VARS = [
   { key: "NEXT_PUBLIC_SUPABASE_URL",       label: "Supabase URL",            group: "Supabase" },
@@ -69,6 +72,9 @@ export async function GET(request: NextRequest) {
     };
   }
 
+  const recentSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const jobHealth = await readSystemJobHealthSummary(auth.admin, auth.membership.tenant_id, HEALTH_JOB_KEYS, recentSince);
+
   return NextResponse.json({
     ok: true,
     generated_at: new Date().toISOString(),
@@ -79,6 +85,7 @@ export async function GET(request: NextRequest) {
       bucket: BUCKET,
     },
     cron_jobs: CRON_JOBS,
+    job_health: jobHealth,
     env: envStatus,
   });
 }
