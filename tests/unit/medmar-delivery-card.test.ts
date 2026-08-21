@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveMedmarCardCompact,
   isMedmarDeliveryRetryButtonVisible,
+  isMedmarManualFallbackVisible,
   buildDeliveryAttemptIndex,
   lookupDeliveryAttempt,
   resolveMedmarGroupDelivery,
@@ -78,6 +79,24 @@ describe("isMedmarDeliveryRetryButtonVisible — pulsante 'Riprova ora' in lista
   });
 });
 
+describe("isMedmarManualFallbackVisible — fallback 'Invio manuale PDF', mai nel flusso normale", () => {
+  it("mai per 'awaiting_pdf'/'pdf_not_found' (auto-retry in corso, flusso normale)", () => {
+    expect(isMedmarManualFallbackVisible("awaiting_pdf")).toBe(false);
+    expect(isMedmarManualFallbackVisible("pdf_not_found")).toBe(false);
+  });
+
+  it("mai per 'delivered' (terminale) o 'delivery_started' (mid-flight)", () => {
+    expect(isMedmarManualFallbackVisible("delivered")).toBe(false);
+    expect(isMedmarManualFallbackVisible("delivery_started")).toBe(false);
+  });
+
+  it("visibile per gli stati di errore/revisione manuale", () => {
+    for (const status of ["pdf_ambiguous", "pdf_validation_failed", "recipient_missing", "delivery_failed", "delivery_state_unknown", "manual_review", "remote_state_unknown_blocked"]) {
+      expect(isMedmarManualFallbackVisible(status)).toBe(true);
+    }
+  });
+});
+
 describe("costanti esportate coerenti con l'engine server-side", () => {
   it("MEDMAR_DELIVERY_AUTO_RETRY_STATUSES contiene esattamente awaiting_pdf e pdf_not_found", () => {
     expect([...MEDMAR_DELIVERY_AUTO_RETRY_STATUSES].sort()).toEqual(["awaiting_pdf", "pdf_not_found"]);
@@ -114,6 +133,32 @@ describe("buildDeliveryAttemptIndex / lookupDeliveryAttempt — matching service
     const fresh: TestAttempt = { id: "attempt-fresh", service_ids: [SENESE_SVC_1], status: "delivered" };
     expect(buildDeliveryAttemptIndex([stale, fresh]).get(SENESE_SVC_1)).toBe(stale);
     expect(buildDeliveryAttemptIndex([fresh, stale]).get(SENESE_SVC_1)).toBe(fresh);
+  });
+});
+
+describe("hasIssuedAttempt (card biglietti-medmar) — quale pulsante mostra la card, via resolveMedmarGroupDelivery", () => {
+  // hasIssuedAttempt in app/(app)/biglietti-medmar/page.tsx e' letteralmente `!!result.attempt`:
+  // repo senza jsdom/@testing-library/react (vitest.config.ts usa environment: "node"), quindi la
+  // logica di visibilita' pulsanti si verifica sulla regola pura sottostante, stesso pattern del resto del file.
+
+  it("1. nessun attempt, nessun invio -> hasIssuedAttempt=false: la card mostra 'Emetti biglietto Medmar'", () => {
+    const result = resolveMedmarGroupDelivery([UNRELATED_SVC], [], null);
+    expect(!!result.attempt).toBe(false);
+  });
+
+  it("5/6/7. attempt esiste (awaiting_pdf / pdf_not_found / delivery_started) -> hasIssuedAttempt=true: niente pulsanti di emissione, solo stato invio", () => {
+    for (const status of ["awaiting_pdf", "pdf_not_found", "delivery_started"]) {
+      const attempt: TestAttempt = { id: `attempt-${status}`, service_ids: [SENESE_SVC_1], status };
+      const result = resolveMedmarGroupDelivery([SENESE_SVC_1], [attempt], null);
+      expect(!!result.attempt).toBe(true);
+      expect(result.isCompact).toBe(false); // non e' la card compatta 'delivered', ma comunque niente pulsante di emissione
+    }
+  });
+
+  it("8. attempt delivered -> card compatta/chiusa, nessun pulsante di emissione (gia' coperto da isCompact ma verificato esplicitamente qui)", () => {
+    const attempt: TestAttempt = { id: "attempt-delivered", service_ids: [SENESE_SVC_1], status: "delivered" };
+    const result = resolveMedmarGroupDelivery([SENESE_SVC_1], [attempt], null);
+    expect(result.isCompact).toBe(true);
   });
 });
 

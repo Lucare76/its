@@ -38,6 +38,16 @@ export function isMedmarDeliveryRetryButtonVisible(status: string): boolean {
 }
 
 /**
+ * Il fallback manuale con upload PDF ("Invio manuale PDF") NON deve mai
+ * comparire nel flusso normale (auto-retry in corso, mid-flight, o gia'
+ * delivered): solo per stati di errore/revisione manuale dove il retry
+ * automatico non interverra' mai piu' da solo.
+ */
+export function isMedmarManualFallbackVisible(status: string): boolean {
+  return !MEDMAR_DELIVERY_AUTO_RETRY_STATUSES.has(status) && status !== "delivered" && status !== "delivery_started";
+}
+
+/**
  * Indicizza gli attempt per service_id (service_ids e' un array Postgres,
  * ogni attempt puo' comparire sotto piu' chiavi). A parita' di service_id
  * vince il PRIMO attempt incontrato nell'array in input — scelta

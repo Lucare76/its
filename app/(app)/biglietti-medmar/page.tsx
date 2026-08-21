@@ -23,6 +23,7 @@ import {
 import {
   resolveMedmarGroupDelivery,
   isMedmarDeliveryRetryButtonVisible,
+  isMedmarManualFallbackVisible,
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
 } from "@/lib/medmar-delivery-card";
 
@@ -1130,7 +1131,6 @@ export default function BigliettiMedmarPage() {
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {groups.map((g) => {
               const isSent = g.sentAt != null || sentKeys.has(g.key);
-              const isSending = sending === g.key;
               const nameParts = g.customerName.trim().split(/\s+/);
               const nomeFirst = nameParts[0] ?? "";
               const cognomeLast = nameParts.slice(1).join(" ");
@@ -1148,13 +1148,18 @@ export default function BigliettiMedmarPage() {
               const deliveryAttempt = deliveryInfo?.attempt;
               const isDeliveredCompact = deliveryInfo?.isCompact ?? false;
               const isDetailsExpanded = expandedDeliveredKeys.has(g.key);
+              // Esiste gia' un'emissione Medmar One Click per questo gruppo (qualunque stato di delivery,
+              // 'delivered' incluso — quel caso e' pero' gestito prima dal ramo compatto qui sotto): da qui in
+              // poi il pulsante "Emetti biglietto Medmar" e il vecchio upload manuale non vanno piu' mostrati
+              // come percorso normale, per non far pensare a un altro operatore che il biglietto sia da fare.
+              const hasIssuedAttempt = !!deliveryAttempt;
+              const finalTotalCents = deliveryAttempt ? issuingFinalTotalById.get(deliveryAttempt.issuing_attempt_id) ?? null : null;
 
               // FASE 2/3: card compatta solo quando l'esito e' davvero 'emesso e inviato'
               // (delivery attempt 'delivered', o fallback difensivo su medmar_ticket_sent_at
               // quando non esiste alcun attempt — mai quando l'attempt esiste con un altro stato).
               if (isDeliveredCompact) {
                 const sentAtIso = deliveryAttempt?.delivered_at ?? deliveryAttempt?.updated_at ?? g.sentAt ?? null;
-                const finalTotalCents = deliveryAttempt ? issuingFinalTotalById.get(deliveryAttempt.issuing_attempt_id) ?? null : null;
                 const andataLabel = g.arrivo ? `${g.arrivo.date?.slice(5).split("-").reverse().join("/")} ${(g.arrivo.time ?? "").slice(0, 5)}`.trim() : null;
                 const ritornoLabel = hasPartenza
                   ? `${partenzaDate ? partenzaDate.slice(5).split("-").reverse().join("/") : "—"} ${partenzaTime ?? ""}`.trim()
@@ -1210,27 +1215,49 @@ export default function BigliettiMedmarPage() {
                     <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">{g.pax}p</span>
                   </div>
 
-                  {/* FASE 4: stato delivery Medmar quando esiste un attempt ma non e' (ancora) delivered — mai per delivered (compattato sopra). */}
+                  {/* Biglietto gia' emesso via One Click ma email non ancora delivered — mai per delivered (compattato sopra).
+                      Nessun pulsante di emissione qui: deve essere inequivocabile per un altro operatore che il biglietto e' gia' fatto. */}
                   {deliveryAttempt && deliveryAttempt.status !== "delivered" && (
                     <div className="border-t border-amber-100 bg-amber-50 px-3 py-1.5 space-y-1">
+                      <p className="text-[10px] font-bold text-emerald-700">✅ Biglietto Medmar emesso</p>
+                      <p className="text-[9px] text-slate-600">
+                        Codice: <span className="font-mono">{deliveryAttempt.medmar_numero ?? "—"}</span>
+                        {" · "}Prenotazione: <span className="font-mono">{deliveryAttempt.medmar_id_prenotazione ?? "—"}</span>
+                        {finalTotalCents != null && <>{" · "}Prezzo: {formatEur(finalTotalCents)}</>}
+                      </p>
                       <p className="text-[10px] font-medium text-amber-800">
-                        {MEDMAR_DELIVERY_STATUS_LABEL[deliveryAttempt.status] ?? deliveryAttempt.status}
+                        Stato invio: {MEDMAR_DELIVERY_STATUS_LABEL[deliveryAttempt.status] ?? deliveryAttempt.status}
                       </p>
                       {MEDMAR_DELIVERY_AUTO_RETRY_STATUSES.has(deliveryAttempt.status) && (
-                        <p className="text-[9px] text-amber-700">
-                          Tentativi: {deliveryAttempt.attempt_count} · Ultimo: {formatDateTimeIt(deliveryAttempt.updated_at)} · Prossimo retry: {formatDateTimeIt(addMinutesIso(deliveryAttempt.updated_at, 2))}
-                        </p>
+                        <>
+                          <p className="text-[10px] font-semibold text-amber-800">📩 Invio email in attesa PDF</p>
+                          <p className="text-[9px] text-amber-700">Il sistema riproverà automaticamente.</p>
+                          <p className="text-[9px] text-amber-700">
+                            Tentativi: {deliveryAttempt.attempt_count} · Ultimo: {formatDateTimeIt(deliveryAttempt.updated_at)} · Prossimo retry: {formatDateTimeIt(addMinutesIso(deliveryAttempt.updated_at, 2))}
+                          </p>
+                        </>
                       )}
-                      {isMedmarDeliveryRetryButtonVisible(deliveryAttempt.status) && (
-                        <button
-                          type="button"
-                          disabled={retryingKey === g.key}
-                          onClick={() => void handleRetryDeliveryFromCard(g)}
-                          className="rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                        >
-                          {retryingKey === g.key ? "Invio..." : "Riprova ora"}
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {isMedmarDeliveryRetryButtonVisible(deliveryAttempt.status) && (
+                          <button
+                            type="button"
+                            disabled={retryingKey === g.key}
+                            onClick={() => void handleRetryDeliveryFromCard(g)}
+                            className="rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            {retryingKey === g.key ? "Invio..." : "Riprova ora"}
+                          </button>
+                        )}
+                        {isMedmarManualFallbackVisible(deliveryAttempt.status) && (
+                          <button
+                            type="button"
+                            onClick={() => setSendModal({ group: g, pdfFile: null })}
+                            className="rounded-md border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-50"
+                          >
+                            Invio manuale PDF
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -1289,18 +1316,24 @@ export default function BigliettiMedmarPage() {
                     </div>
                   </div>
 
-                  {/* Azioni */}
+                  {/* Azioni — pulsante principale: "Emetti biglietto Medmar" avvia direttamente il preflight
+                      One Click (mai il vecchio upload manuale). Nascosto se il biglietto e' gia' stato emesso
+                      (hasIssuedAttempt): un altro operatore non deve poter riavviare l'emissione. */}
                   <div className="border-t border-slate-100 px-3 py-2 flex gap-1.5">
-                    {isSent ? (
+                    {hasIssuedAttempt ? (
+                      <div className="flex-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1.5 text-center">
+                        <span className="text-[11px] text-emerald-700 font-semibold">✅ Biglietto Medmar emesso</span>
+                      </div>
+                    ) : isSent ? (
                       <div className="flex flex-1 items-center gap-1.5 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1">
                         <span className="text-[11px] text-emerald-700 font-semibold flex-1">✓ Inviato</span>
                         <button type="button" onClick={() => setSendModal({ group: g, pdfFile: null })}
-                          className="text-[10px] text-emerald-600 underline hover:no-underline">Reinvia</button>
+                          className="text-[10px] text-emerald-600 underline hover:no-underline">Invio manuale PDF</button>
                       </div>
                     ) : (
-                      <button type="button" disabled={isSending} onClick={() => setSendModal({ group: g, pdfFile: null })}
+                      <button type="button" disabled={verifying === g.key} onClick={() => void handleVerifyMedmar(g)}
                         className="flex-1 rounded-lg bg-blue-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-                        {isSending ? "Invio..." : "✓ Fatto e invia"}
+                        {verifying === g.key ? "Verifica in corso..." : "Emetti biglietto Medmar"}
                       </button>
                     )}
                     <button type="button" disabled={deleting === g.key} onClick={() => void handleDelete(g)}
@@ -1308,15 +1341,11 @@ export default function BigliettiMedmarPage() {
                       {deleting === g.key ? "..." : "Elimina"}
                     </button>
                   </div>
-                  <div className="border-t border-slate-100 px-3 py-1.5">
-                    <button type="button" disabled={verifying === g.key} onClick={() => void handleVerifyMedmar(g)}
-                      className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
-                      {verifying === g.key ? "Verifica in corso..." : "🔍 Verifica emissione Medmar"}
-                    </button>
-                    {verifyError && !verifying && (
-                      <p className="mt-1 text-[10px] text-rose-600">{verifyError}</p>
-                    )}
-                  </div>
+                  {!hasIssuedAttempt && !isSent && verifyError && !verifying && (
+                    <div className="border-t border-slate-100 px-3 py-1.5">
+                      <p className="text-[10px] text-rose-600">{verifyError}</p>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1325,12 +1354,17 @@ export default function BigliettiMedmarPage() {
       ))}
     </section>
 
-    {/* Modal invio con allegato PDF */}
+    {/* Fallback manuale PDF — vecchio sistema pre-One-Click. NON e' piu' il percorso normale:
+        va aperto solo per stati di errore/revisione manuale (isMedmarManualFallbackVisible) o per
+        il legacy "Reinvia" su prenotazioni gia' inviate col vecchio sistema (nessun delivery attempt). */}
     {sendModal && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
         <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-slate-800">Invia biglietto all&apos;agenzia</h2>
+            <div>
+              <h2 className="text-base font-semibold text-slate-800">Invio manuale PDF</h2>
+              <p className="text-[11px] font-medium text-amber-700">Fallback manuale — usare solo se il retry automatico non può riuscire</p>
+            </div>
             <button type="button" onClick={() => setSendModal(null)} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
           </div>
 
@@ -1710,7 +1744,7 @@ export default function BigliettiMedmarPage() {
                         ? "Emissione reale non ancora abilitata"
                         : isTokenExpired(medmarPrepareState)
                           ? "Conferma scaduta"
-                          : "Conferma ed emetti biglietto Medmar"}
+                          : "Conferma emissione Medmar"}
                   </button>
                 </div>
               )}
