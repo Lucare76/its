@@ -26,6 +26,7 @@ import {
   resolveMedmarGroupDelivery,
   isMedmarDeliveryRetryButtonVisible,
   isMedmarManualFallbackVisible,
+  canResendMedmarTicket,
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
 } from "@/lib/medmar-delivery-card";
 import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
@@ -412,6 +413,7 @@ type MedmarDeliveryAttemptRow = {
   status: string;
   medmar_id_prenotazione: string | null;
   medmar_numero: string | null;
+  pdf_mailbox_message_uid: string | null;
   recipient_type: string | null;
   recipient_name: string | null;
   recipient_email: string | null;
@@ -421,6 +423,17 @@ type MedmarDeliveryAttemptRow = {
   last_error_message: string | null;
   delivered_at: string | null;
   updated_at: string;
+};
+
+/** Riga letta da medmar_ticket_resends (sola lettura, RLS gia' limita a admin/operator/supervisor del tenant) — PARTE 6 storico reinvii. */
+type MedmarTicketResendRow = {
+  id: string;
+  delivery_attempt_id: string;
+  recipient_email: string;
+  status: "started" | "sent" | "failed";
+  error_message: string | null;
+  created_at: string;
+  sent_at: string | null;
 };
 
 function medmarDeliveryStatusLabel(status: string | undefined, recipient: string | null | undefined): string {
@@ -494,6 +507,11 @@ export default function BigliettiMedmarPage() {
     { phase: "idle" } as MedmarPrepareState
   );
   const [deliveryAttempts, setDeliveryAttempts] = useState<MedmarDeliveryAttemptRow[]>([]);
+  const [resendsByDeliveryAttemptId, setResendsByDeliveryAttemptId] = useState<Map<string, MedmarTicketResendRow[]>>(new Map());
+  const [resendModal, setResendModal] = useState<{ groupKey: string; customerName: string; attempt: MedmarDeliveryAttemptRow } | null>(null);
+  const [resendSending, setResendSending] = useState(false);
+  const [resendError, setResendError] = useState<string | null>(null);
+  const [resendSuccess, setResendSuccess] = useState<string | null>(null);
   const [queueSummary, setQueueSummary] = useState<MedmarQueueSummary | null>(null);
   /** Rif. sempre aggiornato al token corrente, per leggerlo da refreshMedmarData senza doverlo aggiungere alle sue dipendenze (eviterebbe che ogni cambio di token ricrei la funzione e riattivi l'useEffect di caricamento iniziale). */
   const tokenRef = useRef<string | null>(null);
@@ -702,12 +720,34 @@ export default function BigliettiMedmarPage() {
     const attemptsRes = await supabase
       .from("medmar_delivery_attempts")
       .select(
-        "id, issuing_attempt_id, service_ids, status, medmar_id_prenotazione, medmar_numero, recipient_type, recipient_name, recipient_email, resend_message_id, attempt_count, last_error_code, last_error_message, delivered_at, updated_at"
+        "id, issuing_attempt_id, service_ids, status, medmar_id_prenotazione, medmar_numero, pdf_mailbox_message_uid, recipient_type, recipient_name, recipient_email, resend_message_id, attempt_count, last_error_code, last_error_message, delivered_at, updated_at"
       )
       .eq("tenant_id", tid)
       .overlaps("service_ids", medmarServiceIds);
     const attempts = (attemptsRes.data ?? []) as MedmarDeliveryAttemptRow[];
     setDeliveryAttempts(attempts);
+
+    // PARTE 6 (storico reinvii): stessa query RLS-protetta usata sopra per delivery_attempts,
+    // solo lettura, filtrata sugli id gia' caricati — nessun nuovo endpoint, opzione meno invasiva.
+    const deliveredIds = attempts.filter((a) => a.status === "delivered").map((a) => a.id);
+    if (deliveredIds.length > 0) {
+      const resendsRes = await supabase
+        .from("medmar_ticket_resends")
+        .select("id, delivery_attempt_id, recipient_email, status, error_message, created_at, sent_at")
+        .eq("tenant_id", tid)
+        .in("delivery_attempt_id", deliveredIds)
+        .order("created_at", { ascending: false });
+      const resendRows = (resendsRes.data ?? []) as MedmarTicketResendRow[];
+      const map = new Map<string, MedmarTicketResendRow[]>();
+      for (const r of resendRows) {
+        const list = map.get(r.delivery_attempt_id) ?? [];
+        list.push(r);
+        map.set(r.delivery_attempt_id, list);
+      }
+      setResendsByDeliveryAttemptId(map);
+    } else {
+      setResendsByDeliveryAttemptId(new Map());
+    }
 
     const issuingIds = [...new Set(attempts.map((a) => a.issuing_attempt_id))];
     if (issuingIds.length === 0) {
@@ -1128,6 +1168,37 @@ export default function BigliettiMedmarPage() {
   };
 
   /**
+   * "Rimanda biglietto" (MVP sicuro, PARTE 1/2): conferma via modal, poi
+   * POST /api/services/medmar-resend-ticket con SOLO delivery_attempt_id —
+   * nessuna nuova emissione, nessun lock/booking/payment, destinatario
+   * sempre quello gia' salvato (mai modificabile da qui).
+   */
+  const handleConfirmResend = async () => {
+    if (!token || !resendModal || resendSending) return;
+    setResendSending(true);
+    setResendError(null);
+    setResendSuccess(null);
+    try {
+      const res = await fetch("/api/services/medmar-resend-ticket", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ delivery_attempt_id: resendModal.attempt.id }),
+      });
+      const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !json?.ok) {
+        setResendError(json?.error ?? "Errore durante il reinvio.");
+        return;
+      }
+      setResendSuccess("Biglietto reinviato con successo.");
+      if (tenantId) await refreshMedmarData(tenantId, dateFrom, dateTo);
+    } catch {
+      setResendError("Errore di rete durante il reinvio.");
+    } finally {
+      setResendSending(false);
+    }
+  };
+
+  /**
    * Stato delivery per card (FASE 2/3/4): matching service_ids -> attempt e
    * regola compatta delegati a lib/medmar-delivery-card.ts (pure, testato)
    * — mai calcolato dal solo stato locale post-emissione, sempre dai dati
@@ -1501,6 +1572,9 @@ export default function BigliettiMedmarPage() {
                 const ritornoLabel = hasPartenza
                   ? `${partenzaDate ? partenzaDate.slice(5).split("-").reverse().join("/") : "—"} ${partenzaTime ?? ""}`.trim()
                   : null;
+                const resendRows = deliveryAttempt ? resendsByDeliveryAttemptId.get(deliveryAttempt.id) ?? [] : [];
+                const lastResend = resendRows[0] ?? null;
+                const canResend = canResendMedmarTicket(deliveryAttempt);
                 return (
                   <div key={g.key} className="rounded-xl border border-emerald-300 bg-emerald-50 shadow-sm overflow-hidden">
                     <div className="px-3 py-2 space-y-0.5">
@@ -1512,7 +1586,29 @@ export default function BigliettiMedmarPage() {
                       )}
                       <p className="text-[10px] text-slate-500 truncate">Inviato a: {deliveryAttempt?.recipient_email ?? "—"}</p>
                       {sentAtIso && <p className="text-[10px] text-slate-400">{formatDateTimeIt(sentAtIso)}</p>}
+                      {resendRows.length > 0 && (
+                        <p className="text-[10px] text-indigo-600 font-semibold">
+                          Reinviato {resendRows.length} {resendRows.length === 1 ? "volta" : "volte"}
+                          {lastResend && (lastResend.sent_at || lastResend.created_at) && (
+                            <> · Ultimo reinvio: {formatDateTimeIt(lastResend.sent_at ?? lastResend.created_at)}</>
+                          )}
+                        </p>
+                      )}
                     </div>
+                    {canResend && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!deliveryAttempt) return;
+                          setResendError(null);
+                          setResendSuccess(null);
+                          setResendModal({ groupKey: g.key, customerName: g.customerName, attempt: deliveryAttempt });
+                        }}
+                        className="w-full border-t border-emerald-200 bg-indigo-50 px-3 py-1.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                      >
+                        ↻ Rimanda biglietto
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => toggleExpandedDelivered(g.key)}
@@ -1531,6 +1627,15 @@ export default function BigliettiMedmarPage() {
                         <p><span className="font-semibold">medmar_ticket_sent_at:</span> {g.sentAt ? formatDateTimeIt(g.sentAt) : "—"}</p>
                         <p><span className="font-semibold">Stato delivery:</span> {deliveryAttempt?.status ?? "delivered (fallback: nessun delivery attempt trovato)"}</p>
                         <p><span className="font-semibold">Service IDs:</span> <span className="font-mono break-all">{g.allServiceIds.join(", ")}</span></p>
+                        {lastResend && (
+                          <>
+                            <p><span className="font-semibold">Ultimo destinatario reinvio:</span> {lastResend.recipient_email}</p>
+                            <p><span className="font-semibold">Ultimo stato reinvio:</span> {lastResend.status}</p>
+                            {lastResend.status === "failed" && lastResend.error_message && (
+                              <p className="text-rose-600"><span className="font-semibold">Errore ultimo reinvio:</span> {lastResend.error_message}</p>
+                            )}
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2164,6 +2269,57 @@ export default function BigliettiMedmarPage() {
             className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
             Chiudi
           </button>
+        </div>
+      </div>
+    )}
+
+    {/* "Rimanda biglietto" (MVP sicuro) — PARTE 1: modal di conferma, stesso destinatario, nessuna nuova emissione. */}
+    {resendModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-800">Rimanda biglietto</h2>
+            {!resendSending && (
+              <button
+                type="button"
+                onClick={() => { setResendModal(null); setResendError(null); setResendSuccess(null); }}
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+              >×</button>
+            )}
+          </div>
+
+          <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 space-y-1 text-sm">
+            <p><span className="font-semibold text-slate-700">Cliente:</span> {resendModal.customerName}</p>
+            <p><span className="font-semibold text-slate-700">Codice Medmar:</span> {resendModal.attempt.medmar_numero}</p>
+            <p><span className="font-semibold text-slate-700">ID prenotazione:</span> {resendModal.attempt.medmar_id_prenotazione}</p>
+            <p><span className="font-semibold text-slate-700">Destinatario:</span> {resendModal.attempt.recipient_email}</p>
+          </div>
+
+          <p className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+            Verrà reinviato il PDF pulito già emesso allo stesso destinatario. Non verrà emesso un nuovo biglietto.
+          </p>
+
+          {resendError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{resendError}</p>}
+          {resendSuccess && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{resendSuccess}</p>}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={resendSending}
+              onClick={() => { setResendModal(null); setResendError(null); setResendSuccess(null); }}
+              className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Annulla
+            </button>
+            <button
+              type="button"
+              disabled={resendSending || !!resendSuccess}
+              onClick={() => void handleConfirmResend()}
+              className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {resendSending ? "Invio in corso..." : "Rimanda biglietto"}
+            </button>
+          </div>
         </div>
       </div>
     )}

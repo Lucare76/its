@@ -86,3 +86,34 @@ export function resolveMedmarGroupDelivery<T extends { service_ids: string[]; st
   const isCompact = resolveMedmarCardCompact({ attemptStatus: attempt?.status ?? null, sentAt });
   return { attempt, isCompact };
 }
+
+/**
+ * "Rimanda biglietto" (MVP sicuro) — regola pura di visibilita' del
+ * pulsante, PARTE 1: deve apparire SOLO se status === 'delivered' E
+ * recipient_email/medmar_id_prenotazione/medmar_numero/pdf_mailbox_message_uid
+ * sono TUTTI presenti. Su qualunque altro stato (awaiting_pdf, pdf_found,
+ * pdf_cleaned, delivery_started, pdf_not_found, pdf_validation_failed,
+ * recipient_missing, delivery_failed, delivery_state_unknown, manual_review,
+ * remote_state_unknown_blocked, o attempt assente/non emesso) resta false.
+ */
+export function canResendMedmarTicket(
+  attempt:
+    | {
+        status: string;
+        recipient_email: string | null;
+        medmar_id_prenotazione: string | null;
+        medmar_numero: string | null;
+        pdf_mailbox_message_uid: string | null;
+      }
+    | null
+    | undefined
+): boolean {
+  return !!(
+    attempt &&
+    attempt.status === "delivered" &&
+    attempt.recipient_email &&
+    attempt.medmar_id_prenotazione &&
+    attempt.medmar_numero &&
+    attempt.pdf_mailbox_message_uid
+  );
+}

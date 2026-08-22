@@ -6,6 +6,7 @@ import {
   buildDeliveryAttemptIndex,
   lookupDeliveryAttempt,
   resolveMedmarGroupDelivery,
+  canResendMedmarTicket,
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
   MEDMAR_DELIVERY_LIST_NON_ACTIONABLE_STATUSES,
 } from "@/lib/medmar-delivery-card";
@@ -198,5 +199,60 @@ describe("resolveMedmarGroupDelivery — regola compatta end-to-end (matching + 
     const awaiting: TestAttempt = { id: "attempt-awaiting", service_ids: [SENESE_SVC_1], status: "awaiting_pdf" };
     const result = resolveMedmarGroupDelivery([SENESE_SVC_1], [awaiting], null);
     expect(result.isCompact).toBe(false);
+  });
+});
+
+describe("canResendMedmarTicket — visibilita' pulsante 'Rimanda biglietto' (MVP sicuro)", () => {
+  const VALID = {
+    status: "delivered",
+    recipient_email: "biglietteria@alesteviaggi.it",
+    medmar_id_prenotazione: "736987",
+    medmar_numero: "AG1908926B000438457",
+    pdf_mailbox_message_uid: "uid-1",
+  };
+
+  it("1. tutte le precondizioni soddisfatte, status delivered -> true", () => {
+    expect(canResendMedmarTicket(VALID)).toBe(true);
+  });
+
+  it("2. attempt assente/non emesso -> false", () => {
+    expect(canResendMedmarTicket(null)).toBe(false);
+    expect(canResendMedmarTicket(undefined)).toBe(false);
+  });
+
+  it("3. mai visibile su nessuno stato pending/errore, anche con tutti gli altri campi presenti", () => {
+    const statuses = [
+      "awaiting_pdf",
+      "pdf_found",
+      "pdf_cleaned",
+      "delivery_started",
+      "pdf_not_found",
+      "pdf_validation_failed",
+      "pdf_ambiguous",
+      "recipient_missing",
+      "delivery_failed",
+      "delivery_state_unknown",
+      "manual_review",
+      "remote_state_unknown_blocked",
+    ];
+    for (const status of statuses) {
+      expect(canResendMedmarTicket({ ...VALID, status })).toBe(false);
+    }
+  });
+
+  it("4. recipient_email mancante -> false anche se status e' delivered", () => {
+    expect(canResendMedmarTicket({ ...VALID, recipient_email: null })).toBe(false);
+  });
+
+  it("5. medmar_id_prenotazione mancante -> false", () => {
+    expect(canResendMedmarTicket({ ...VALID, medmar_id_prenotazione: null })).toBe(false);
+  });
+
+  it("6. medmar_numero mancante -> false", () => {
+    expect(canResendMedmarTicket({ ...VALID, medmar_numero: null })).toBe(false);
+  });
+
+  it("7. pdf_mailbox_message_uid mancante -> false", () => {
+    expect(canResendMedmarTicket({ ...VALID, pdf_mailbox_message_uid: null })).toBe(false);
   });
 });
