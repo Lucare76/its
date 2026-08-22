@@ -54,14 +54,47 @@ type JobHealth = {
 type OverallHealthStatus = "healthy" | "attention" | "critical";
 type JobHealthSummaryCounts = { healthy: number; info: number; warning: number; critical: number; disabled: number; unknown: number };
 
+/** Operational Health (Sprint 3) — distinto dal Job Health sopra: risponde "il risultato operativo prodotto e' sano?", non "il job e' andato a buon fine?". Calcolato SOLO server-side (lib/server/operational-health.ts): questa pagina si limita a renderizzarlo. */
+type OperationalHealthArea = "backup" | "medmar" | "email" | "operations";
+type OperationalHealthSeverity = "info" | "warning" | "critical";
+type OperationalHealthSignal = {
+  key: string;
+  area: OperationalHealthArea;
+  severity: OperationalHealthSeverity;
+  title: string;
+  message: string;
+  detectedAt: string;
+  entityId?: string;
+};
+type OperationalHealthAreaResult = {
+  area: OperationalHealthArea;
+  available: boolean;
+  error?: string;
+  signals: OperationalHealthSignal[];
+};
+type OperationalHealthReport = {
+  generated_at: string;
+  summary: { info: number; warning: number; critical: number };
+  areas: OperationalHealthAreaResult[];
+  signals: OperationalHealthSignal[];
+};
+
 type SystemStatus = {
   generated_at: string;
   overall_health?: OverallHealthStatus;
   job_health_summary?: JobHealthSummaryCounts;
+  operational_health?: OperationalHealthReport;
   backup: BackupInfo;
   cron_jobs: CronJob[];
   job_health?: JobHealth[];
   env: EnvVar[];
+};
+
+const OPERATIONAL_AREA_LABEL: Record<OperationalHealthArea, string> = {
+  backup: "Backup",
+  medmar: "Medmar",
+  email: "Importazioni",
+  operations: "Operativo",
 };
 
 function formatBytes(bytes: number): string {
@@ -476,6 +509,60 @@ export default function SystemStatusPage() {
                 </div>
               ) : null}
             </div>
+          </div>
+        );
+      })()}
+
+      {/* Salute operativa (Sprint 3) — segnali sui processi critici, distinti dal Job Health sopra. Solo problemi reali: 🔴 critical, 🟠 warning/info, ✅ quando nessuna anomalia. */}
+      {(() => {
+        const operational = status.operational_health;
+        if (!operational) return null;
+        const critical = operational.signals.filter((s) => s.severity === "critical");
+        const attention = operational.signals.filter((s) => s.severity !== "critical");
+        const unavailableAreas = operational.areas.filter((a) => !a.available);
+
+        return (
+          <div className="card p-5 space-y-4">
+            <h2 className="text-base font-semibold text-slate-800">Salute operativa</h2>
+
+            {critical.length === 0 && attention.length === 0 ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                ✅ Nessuna anomalia operativa rilevata
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {critical.length > 0 && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-rose-600 mb-2">🔴 Richiede attenzione</p>
+                    <div className="space-y-1">
+                      {critical.map((s) => (
+                        <p key={s.key} className="text-sm text-rose-800">
+                          <span className="font-semibold">{OPERATIONAL_AREA_LABEL[s.area]}:</span> {s.message}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {attention.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-amber-700 mb-2">🟠 Da verificare</p>
+                    <div className="space-y-1">
+                      {attention.map((s) => (
+                        <p key={s.key} className="text-sm text-amber-800">
+                          <span className="font-semibold">{OPERATIONAL_AREA_LABEL[s.area]}:</span> {s.message}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {unavailableAreas.length > 0 && (
+              <p className="text-xs text-slate-400">
+                {unavailableAreas.map((a) => `${OPERATIONAL_AREA_LABEL[a.area]}: ${a.error ?? "non disponibile"}`).join(" · ")}
+              </p>
+            )}
           </div>
         );
       })()}

@@ -9,6 +9,7 @@ import { readSystemJobHealthSummary, readRecentJobRuns } from "@/lib/server/job-
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { JOB_HEALTH_CONFIG, JOB_HEALTH_KEYS } from "@/lib/server/job-health-config";
 import { evaluateJobHealth, computeOverallHealth, summarizeJobHealthCounts } from "@/lib/server/job-health-evaluator";
+import { readOperationalHealth, combineOverallHealth } from "@/lib/server/operational-health";
 
 export const runtime = "nodejs";
 
@@ -78,9 +79,10 @@ export async function GET(request: NextRequest) {
 
   const now = new Date();
   const recentSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const [jobHealth, recentRunsByKey] = await Promise.all([
+  const [jobHealth, recentRunsByKey, operationalHealth] = await Promise.all([
     readSystemJobHealthSummary(auth.admin, auth.membership.tenant_id, HEALTH_JOB_KEYS, recentSince),
     readRecentJobRuns(auth.admin, auth.membership.tenant_id, HEALTH_JOB_KEYS),
+    readOperationalHealth(auth.admin, auth.membership.tenant_id, now),
   ]);
 
   // Centro Salute ITS (Sprint 2): interpretazione EXECUTION STATUS -> HEALTH
@@ -111,11 +113,17 @@ export async function GET(request: NextRequest) {
     };
   });
 
+  // Stato generale ITS (Sprint 3): combina Job Health (il processo e' andato a
+  // buon fine?) e Operational Health (il risultato prodotto e' sano?) — vedi
+  // combineOverallHealth per la regola esatta (pura, testata separatamente).
+  const overallHealth = combineOverallHealth(computeOverallHealth(healthEvaluations), operationalHealth.summary);
+
   return NextResponse.json({
     ok: true,
     generated_at: now.toISOString(),
-    overall_health: computeOverallHealth(healthEvaluations),
+    overall_health: overallHealth,
     job_health_summary: summarizeJobHealthCounts(healthEvaluations),
+    operational_health: operationalHealth,
     backup: {
       last: lastBackup,
       total_files: backupCount,
