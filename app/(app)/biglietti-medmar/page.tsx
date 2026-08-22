@@ -84,6 +84,7 @@ type BookingGroup = {
   key: string;
   customerName: string;
   phone: string | null;
+  agencyName: string | null;
   pax: number;
   arrivo: Service | null;
   partenza: Service | null;
@@ -488,6 +489,8 @@ export default function BigliettiMedmarPage() {
   const [sentKeys, setSentKeys] = useState<Set<string>>(new Set());
   const [showSent, setShowSent] = useState(false);
   const [medmarSearchQuery, setMedmarSearchQuery] = useState("");
+  const [medmarAgencyFilter, setMedmarAgencyFilter] = useState("all");
+  const [selectedMedmarGroupKey, setSelectedMedmarGroupKey] = useState<string | null>(null);
   const [medmarSentDateFilter, setMedmarSentDateFilter] = useState<MedmarSentDateFilter>(MEDMAR_DEFAULT_SENT_DATE_FILTER);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
@@ -856,6 +859,7 @@ export default function BigliettiMedmarPage() {
           key,
           customerName: s.customer_name ?? "N/D",
           phone: s.phone && s.phone !== "N/D" ? s.phone : null,
+          agencyName: s.billing_party_name?.trim() || null,
           pax: s.pax ?? 1,
           arrivo: null,
           partenza: null,
@@ -871,6 +875,7 @@ export default function BigliettiMedmarPage() {
       group.allServiceIds.push(s.id);
 
       if (s.phone && s.phone !== "N/D") group.phone = s.phone;
+      if (s.billing_party_name?.trim()) group.agencyName = s.billing_party_name.trim();
 
       if (isArrival) {
         if (!group.arrivo || (s.date ?? "") < (group.arrivo.date ?? "")) {
@@ -896,6 +901,14 @@ export default function BigliettiMedmarPage() {
     () => showSent ? bookingGroups : bookingGroups.filter((g) => g.sentAt == null && !sentKeys.has(g.key)),
     [bookingGroups, showSent, sentKeys]
   );
+
+  const medmarAgencyOptions = useMemo(() => {
+    const agencies = new Set<string>();
+    for (const group of visibleGroups) {
+      agencies.add(group.agencyName?.trim() || "Privato");
+    }
+    return [...agencies].sort((a, b) => a.localeCompare(b, "it"));
+  }, [visibleGroups]);
 
   /**
    * Ricerca + filtro data (biglietti-medmar PARTE ricerca/filtri): la
@@ -925,6 +938,7 @@ export default function BigliettiMedmarPage() {
         recipientName: attempt?.recipient_name ?? null,
       };
       if (!matchesMedmarSearch(searchable, medmarSearchQuery)) return false;
+      if (medmarAgencyFilter !== "all" && (g.agencyName?.trim() || "Privato") !== medmarAgencyFilter) return false;
 
       if (isSent) {
         const dateKey = medmarSentDateKey(attempt?.delivered_at, attempt?.updated_at ?? g.sentAt);
@@ -933,7 +947,7 @@ export default function BigliettiMedmarPage() {
 
       return true;
     });
-  }, [visibleGroups, deliveryAttempts, sentKeys, medmarSearchQuery, medmarSentDateFilter]);
+  }, [visibleGroups, deliveryAttempts, sentKeys, medmarSearchQuery, medmarAgencyFilter, medmarSentDateFilter]);
 
   const byDate = useMemo(() => {
     const map = new Map<string, BookingGroup[]>();
@@ -944,6 +958,11 @@ export default function BigliettiMedmarPage() {
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [medmarFilteredGroups]);
+
+  const selectedMedmarGroup = useMemo(
+    () => medmarFilteredGroups.find((group) => group.key === selectedMedmarGroupKey) ?? medmarFilteredGroups[0] ?? null,
+    [medmarFilteredGroups, selectedMedmarGroupKey],
+  );
 
   const activeTicketSlots = useMemo(
     () => ticketSlots.filter((slot) => slot.available_quantity > 0),
@@ -1253,32 +1272,6 @@ export default function BigliettiMedmarPage() {
         </div>
       </div>
 
-      {/* Ricerca + filtro data biglietti inviati (PARTE ricerca/filtri): filtra lato client i gruppi gia' caricati, non tocca emissione/delivery/cron. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={medmarSearchQuery}
-          onChange={(e) => setMedmarSearchQuery(e.target.value)}
-          placeholder="Cerca per cliente, codice Medmar, prenotazione o email..."
-          className="input-saas min-w-[260px] flex-1 text-sm"
-        />
-        <label className="text-xs font-medium text-slate-600">
-          Filtro data inviati
-          <select
-            value={medmarSentDateFilter}
-            onChange={(e) => setMedmarSentDateFilter(e.target.value as MedmarSentDateFilter)}
-            className="ml-1 input-saas text-xs"
-          >
-            {MEDMAR_SENT_DATE_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </label>
-        <span className="text-xs text-slate-400">
-          {medmarFilteredGroups.length} {medmarFilteredGroups.length === 1 ? "risultato" : "risultati"}
-        </span>
-      </div>
-
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
@@ -1394,7 +1387,66 @@ export default function BigliettiMedmarPage() {
         </div>
       )}
 
-      <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+      {/* Coda operativa biglietti: filtra lato client i gruppi gia' caricati, non tocca emissione/delivery/cron. */}
+      <div className="rounded-[22px] border border-indigo-100 bg-white p-4 shadow-sm shadow-slate-200/60">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-indigo-500">Area emissione</p>
+            <h2 className="text-lg font-extrabold text-slate-950">Coda operativa Medmar</h2>
+            <p className="text-xs text-slate-500">Vista tabellare pensata per giornate con molti biglietti.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700">
+              {medmarFilteredGroups.length} in coda
+            </span>
+            <span className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">
+              {medmarAgencyOptions.length} agenzie
+            </span>
+            <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+              {visibleGroups.length} in vista
+            </span>
+          </div>
+        </div>
+        <div className="grid gap-2 lg:grid-cols-[minmax(260px,1fr)_220px_220px]">
+          <input
+            type="text"
+            value={medmarSearchQuery}
+            onChange={(e) => setMedmarSearchQuery(e.target.value)}
+            placeholder="Cerca cliente, pratica o agenzia..."
+            className="input-saas w-full text-sm"
+          />
+          <select
+            value={medmarAgencyFilter}
+            onChange={(e) => setMedmarAgencyFilter(e.target.value)}
+            className="input-saas text-sm"
+            aria-label="Filtro agenzia"
+          >
+            <option value="all">Tutte le agenzie</option>
+            {medmarAgencyOptions.map((agency) => (
+              <option key={agency} value={agency}>{agency}</option>
+            ))}
+          </select>
+          <select
+            value={medmarSentDateFilter}
+            onChange={(e) => setMedmarSentDateFilter(e.target.value as MedmarSentDateFilter)}
+            className="input-saas text-sm"
+            aria-label="Filtro data inviati"
+          >
+            {MEDMAR_SENT_DATE_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <details className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-3">
+        <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-3 text-sm font-bold text-indigo-900">
+          <span>Memoria ticket da foto</span>
+          <span className="rounded-lg bg-white/80 px-3 py-1 text-xs font-semibold text-indigo-700">
+            {activeTicketSlots.reduce((sum, slot) => sum + slot.available_quantity, 0)} ticket disponibili
+          </span>
+        </summary>
+        <div className="mt-3 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-bold text-indigo-900">Memoria ticket da foto</h2>
@@ -1491,7 +1543,8 @@ export default function BigliettiMedmarPage() {
             </div>
           ))}
         </div>
-      </div>
+        </div>
+      </details>
 
       {!loading && bookingGroups.length === 0 && (
         <div className="card p-6 text-center text-sm text-slate-500">
@@ -1505,6 +1558,158 @@ export default function BigliettiMedmarPage() {
         </div>
       )}
 
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_330px]">
+        <div className="min-h-[520px] overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-sm">
+          <div className="sticky top-0 z-10 grid grid-cols-[28px_minmax(160px,1.35fr)_126px_42px_minmax(165px,1fr)_66px_96px_96px_108px] border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-extrabold uppercase tracking-wide text-slate-500 max-xl:hidden">
+            <span />
+            <span>Cliente</span>
+            <span>Agenzia</span>
+            <span>Pax</span>
+            <span>Tratta</span>
+            <span>Orario</span>
+            <span>Pratica</span>
+            <span>Stato</span>
+            <span className="text-right">Azioni</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {byDate.map(([date, groups]) => (
+              <div key={`queue-${date}`} className="bg-white">
+                <div className="flex flex-wrap items-center gap-2 border-y border-indigo-100 bg-indigo-50 px-3 py-2">
+                  <span className="font-extrabold text-indigo-950">{formatDate(date)}</span>
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-blue-700">{groups.length} biglietti</span>
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-slate-600">{groups.reduce((s, g) => s + g.pax, 0)} pax</span>
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-slate-600">{new Set(groups.map((g) => g.agencyName?.trim() || "Privato")).size} agenzie</span>
+                </div>
+                {groups.map((g) => {
+                  const agency = g.agencyName?.trim() || "Privato";
+                  const deliveryInfo = groupDeliveryByKey.get(g.key);
+                  const deliveryAttempt = deliveryInfo?.attempt;
+                  const isDeliveredCompact = deliveryInfo?.isCompact ?? false;
+                  const isSent = g.sentAt != null || sentKeys.has(g.key);
+                  const hasIssuedAttempt = !!deliveryAttempt;
+                  const ferrySource = g.partenza ?? g.arrivo ?? null;
+                  const routeLabel = ferrySource ? getDepartureFerryLabel(ferrySource) ?? ferrySource.vessel ?? "MEDMAR" : "MEDMAR";
+                  const timeLabel = (g.arrivo?.time ?? g.partenza?.orario_barca ?? g.partenza?.time ?? "").slice(0, 5) || "-";
+                  const statusLabel = isDeliveredCompact
+                    ? "Inviato"
+                    : deliveryAttempt
+                      ? MEDMAR_DELIVERY_STATUS_LABEL[deliveryAttempt.status] ?? deliveryAttempt.status
+                      : isSent
+                        ? "Inviato"
+                        : "Da emettere";
+                  const statusTone = isDeliveredCompact || isSent
+                    ? "bg-emerald-100 text-emerald-700"
+                    : deliveryAttempt?.status?.includes("error") || deliveryAttempt?.status?.includes("failed")
+                      ? "bg-rose-100 text-rose-700"
+                      : deliveryAttempt
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-blue-100 text-blue-700";
+                  return (
+                    <div
+                      key={`queue-row-${g.key}`}
+                      className={`grid gap-2 px-3 py-3 text-sm transition hover:bg-slate-50 max-xl:rounded-xl max-xl:border max-xl:border-slate-200 max-xl:m-2 max-xl:bg-white xl:grid-cols-[28px_minmax(160px,1.35fr)_126px_42px_minmax(165px,1fr)_66px_96px_96px_108px] xl:items-center xl:py-2.5 ${selectedMedmarGroup?.key === g.key ? "bg-indigo-50/80 ring-1 ring-inset ring-indigo-200" : ""}`}
+                    >
+                      <input type="checkbox" className="mt-1 h-4 w-4 rounded border-slate-300 xl:mt-0" aria-label={`Seleziona ${g.customerName}`} />
+                      <button type="button" onClick={() => setSelectedMedmarGroupKey(g.key)} className="min-w-0 text-left">
+                        <span className="block truncate font-extrabold uppercase text-slate-900">{g.customerName}</span>
+                        <span className="block truncate text-xs text-slate-500">{g.phone ?? "Telefono non indicato"} · {g.hotel}</span>
+                      </button>
+                      <span className="max-w-full truncate rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase text-slate-700 max-xl:w-fit max-xl:before:content-['Agenzia:_']">{agency}</span>
+                      <span className="font-bold text-slate-900 max-xl:before:mr-1 max-xl:before:text-xs max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Pax']">{g.pax}</span>
+                      <span className="truncate text-slate-700 max-xl:before:mr-1 max-xl:before:text-xs max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Tratta']">{routeLabel}</span>
+                      <span className="font-mono text-xs font-bold text-slate-800 max-xl:before:mr-1 max-xl:before:font-sans max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Orario']">{timeLabel}</span>
+                      <span className="truncate font-mono text-xs text-slate-500 max-xl:before:mr-1 max-xl:before:font-sans max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Pratica']">{g.pratica || g.key.slice(0, 12)}</span>
+                      <span className={`w-fit rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone}`}>{statusLabel}</span>
+                      <div className="flex justify-end gap-1 max-xl:justify-start">
+                        <button type="button" onClick={() => setSelectedMedmarGroupKey(g.key)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Dettagli</button>
+                        {!hasIssuedAttempt && !isSent ? (
+                          <button type="button" disabled={verifying === g.key} onClick={() => void handleVerifyMedmar(g)} className="rounded-lg bg-indigo-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
+                            {verifying === g.key ? "..." : "Emetti"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <aside className="rounded-[22px] border border-indigo-100 bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:max-h-[calc(100vh-120px)] xl:overflow-y-auto">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+            <div>
+              <h2 className="text-base font-extrabold text-slate-950">Dettaglio pratica</h2>
+              <p className="text-xs text-slate-500">Anteprima operativa Medmar</p>
+            </div>
+            <button type="button" onClick={() => setSelectedMedmarGroupKey(null)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">Reset</button>
+          </div>
+          {selectedMedmarGroup ? (() => {
+            const deliveryInfo = groupDeliveryByKey.get(selectedMedmarGroup.key);
+            const deliveryAttempt = deliveryInfo?.attempt;
+            const isDeliveredCompact = deliveryInfo?.isCompact ?? false;
+            const agency = selectedMedmarGroup.agencyName?.trim() || "Privato";
+            const ferrySource = selectedMedmarGroup.partenza ?? selectedMedmarGroup.arrivo ?? null;
+            const routeLabel = ferrySource ? getDepartureFerryLabel(ferrySource) ?? ferrySource.vessel ?? "MEDMAR" : "MEDMAR";
+            const timeLabel = (selectedMedmarGroup.arrivo?.time ?? selectedMedmarGroup.partenza?.orario_barca ?? selectedMedmarGroup.partenza?.time ?? "").slice(0, 5) || "-";
+            return (
+              <div className="space-y-4 pt-4 text-sm">
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">Cliente</p>
+                  <p className="font-extrabold text-slate-950">{selectedMedmarGroup.customerName}</p>
+                  <p className="text-xs text-slate-500">{selectedMedmarGroup.phone ?? "Telefono non indicato"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">Agenzia</p>
+                  <p className="inline-flex rounded bg-slate-100 px-2 py-1 text-xs font-bold uppercase text-slate-700">{agency}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><p className="text-xs font-bold uppercase text-slate-400">Pax</p><p className="font-bold text-slate-900">{selectedMedmarGroup.pax}</p></div>
+                  <div><p className="text-xs font-bold uppercase text-slate-400">Orario</p><p className="font-bold text-slate-900">{timeLabel}</p></div>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">Viaggio</p>
+                  <p className="font-semibold text-slate-900">{routeLabel}</p>
+                  <p className="text-xs text-slate-500">{selectedMedmarGroup.refDate ? formatDate(selectedMedmarGroup.refDate) : "Data non indicata"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">Hotel</p>
+                  <p className="font-semibold text-slate-900">{selectedMedmarGroup.hotel}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">Pratica</p>
+                  <p className="font-mono text-xs text-slate-700">{selectedMedmarGroup.pratica || selectedMedmarGroup.key}</p>
+                </div>
+                {deliveryAttempt ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase text-slate-400">Stato invio</p>
+                    <p className="font-semibold text-slate-900">{isDeliveredCompact ? "Emesso e inviato" : MEDMAR_DELIVERY_STATUS_LABEL[deliveryAttempt.status] ?? deliveryAttempt.status}</p>
+                    <p className="mt-1 text-xs text-slate-500">Codice: {deliveryAttempt.medmar_numero ?? "-"}</p>
+                    <p className="text-xs text-slate-500">Destinatario: {deliveryAttempt.recipient_email ?? "-"}</p>
+                  </div>
+                ) : null}
+                <div className="flex flex-col gap-2 border-t border-slate-100 pt-4">
+                  {!deliveryAttempt && !(selectedMedmarGroup.sentAt != null || sentKeys.has(selectedMedmarGroup.key)) ? (
+                    <button type="button" disabled={verifying === selectedMedmarGroup.key} onClick={() => void handleVerifyMedmar(selectedMedmarGroup)} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
+                      {verifying === selectedMedmarGroup.key ? "Verifica in corso..." : "Emetti biglietto Medmar"}
+                    </button>
+                  ) : null}
+                  <button type="button" onClick={() => handleCopy(selectedMedmarGroup.customerName, `drawer-name-${selectedMedmarGroup.key}`)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Copia nome cliente
+                  </button>
+                </div>
+              </div>
+            );
+          })() : (
+            <p className="pt-4 text-sm text-slate-500">Seleziona una riga per vedere il dettaglio.</p>
+          )}
+        </aside>
+      </div>
+
+      <details className="rounded-2xl border border-slate-200 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-bold text-slate-700">Strumenti avanzati e copia Medmar</summary>
+        <div className="mt-4 space-y-5">
+
       {byDate.map(([date, groups]) => (
         <div key={date} className="space-y-2">
           {/* Header data */}
@@ -1515,10 +1720,13 @@ export default function BigliettiMedmarPage() {
             <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
               {groups.length} {groups.length === 1 ? "prenotazione" : "prenotazioni"} · {groups.reduce((s, g) => s + g.pax, 0)} pax
             </span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">
+              {new Set(groups.map((g) => g.agencyName?.trim() || "Privato")).size} agenzie
+            </span>
             <button type="button"
               onClick={() => handleCopy(
                 groups.map((g) =>
-                  [g.customerName, `${g.pax} pax`, g.phone ?? "", g.hotel,
+                  [g.customerName, g.agencyName ? `Agenzia: ${g.agencyName}` : "Agenzia: Privato", `${g.pax} pax`, g.phone ?? "", g.hotel,
                    g.pratica ? `Pratica: ${g.pratica}` : "",
                    g.arrivo ? `Arrivo: ${g.arrivo.date} ${g.arrivo.time ?? ""}` : "",
                    (() => {
@@ -1580,6 +1788,9 @@ export default function BigliettiMedmarPage() {
                     <div className="px-3 py-2 space-y-0.5">
                       <p className="text-[10px] font-bold text-emerald-700">✅ Emesso e inviato</p>
                       <p className="text-[12px] font-bold uppercase text-slate-800 truncate">{g.customerName}</p>
+                      <p className="inline-flex max-w-full rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
+                        Agenzia: {g.agencyName?.trim() || "Privato"}
+                      </p>
                       <p className="text-[10px] text-slate-500 truncate">{[andataLabel, ritornoLabel].filter(Boolean).join(" / ") || "—"}</p>
                       {deliveryAttempt?.medmar_numero && (
                         <p className="text-[10px] text-slate-500 font-mono truncate">Codice: {deliveryAttempt.medmar_numero}</p>
@@ -1652,6 +1863,9 @@ export default function BigliettiMedmarPage() {
                         {isSent && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">✓</span>}
                       </div>
                       <p className="text-[11px] text-slate-400 truncate leading-tight">{g.hotel}</p>
+                      <p className="mt-1 inline-flex max-w-full rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
+                        Agenzia: {g.agencyName?.trim() || "Privato"}
+                      </p>
                       {g.pratica && <p className="text-[10px] text-slate-300 font-mono leading-tight">{g.pratica}</p>}
                     </div>
                     <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">{g.pax}p</span>
@@ -1794,6 +2008,8 @@ export default function BigliettiMedmarPage() {
           </div>
         </div>
       ))}
+        </div>
+      </details>
     </section>
 
     {/* Fallback manuale PDF — vecchio sistema pre-One-Click. NON e' piu' il percorso normale:
