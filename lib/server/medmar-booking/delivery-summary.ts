@@ -13,6 +13,7 @@
  */
 
 import type { MedmarDeliveryStatus } from "./delivery-types";
+import { medmarBookingGroupKey as buildMedmarBookingGroupKey } from "@/lib/medmar-booking-group";
 
 export const MEDMAR_SUMMARY_AWAITING_STATUSES: ReadonlySet<MedmarDeliveryStatus> = new Set([
   "awaiting_pdf",
@@ -211,8 +212,6 @@ export function summarizeMedmarIssuedAndDelivered(
   };
 }
 
-const MEDMAR_PRATICA_TAG_RE = /\[practice:([^\]]+)\]/;
-
 /**
  * Stessa chiave di raggruppamento usata client-side in
  * app/(app)/biglietti-medmar/page.tsx (extractPratica + normalizeCustomerKey)
@@ -221,16 +220,14 @@ const MEDMAR_PRATICA_TAG_RE = /\[practice:([^\]]+)\]/;
  * biglietti stimati dove in realta' un'unica emissione coprirebbe entrambe
  * le tratte A/R.
  */
-function medmarBookingGroupKey(notes: string | null, customerName: string | null): string {
-  const match = (notes ?? "").match(MEDMAR_PRATICA_TAG_RE);
-  if (match?.[1]) return `practice:${match[1]}`;
-  return `name:${(customerName ?? "sconosciuto").trim().toLowerCase().replace(/\s+/g, " ")}`;
-}
-
 export type MedmarCandidateServiceRow = {
   id: string;
   customer_name: string | null;
   notes: string | null;
+  linked_service_id?: string | null;
+  inbound_email_id?: string | null;
+  import_id?: string | null;
+  source_quote_id?: string | null;
 };
 
 export type MedmarUpcomingAmountSource = "preflight_local" | "historical_average" | "service_price" | "unavailable";
@@ -262,7 +259,7 @@ export function estimateMedmarUpcoming3Days(
 ): MedmarUpcomingForecast {
   const pending = candidateServices.filter((s) => !alreadyIssuedServiceIds.has(s.id));
   const groupKeys = new Set<string>();
-  for (const s of pending) groupKeys.add(medmarBookingGroupKey(s.notes, s.customer_name));
+  for (const s of pending) groupKeys.add(buildMedmarBookingGroupKey(s));
   const estimatedTickets = groupKeys.size;
 
   const validAmounts = historicalCompletedAmountsCents.filter((v) => Number.isFinite(v) && v > 0);

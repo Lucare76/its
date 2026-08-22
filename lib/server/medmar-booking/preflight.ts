@@ -34,6 +34,7 @@ import { findArTariffAndTax, resolveBigliettoLabel, selectPassengerTariffs, deri
 import type { PassengerCategorySelection, PassengerTariffSelection, MedmarPassengerCategory as LiveParserPassengerCategory } from "./live-parser";
 import { resolvePassengerComposition } from "./passenger-composition";
 import { getRouteDefinition } from "@/lib/medmar-ticket-memory";
+import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
 import type {
   MedmarPreflightLeg,
   MedmarPreflightResult,
@@ -130,16 +131,6 @@ function sumTicketBreakdownTotal(breakdown: MedmarPreflightTicketBreakdown): num
     total += breakdown.taxes.total_amount_cents;
   }
   return total;
-}
-
-function extractPratica(notes: string | null): string | null {
-  const match = (notes ?? "").match(/\[practice:([^\]]+)\]/);
-  return match?.[1] ?? null;
-}
-
-function normalizeGroupKey(customerName: string | null, pratica: string | null): string {
-  if (pratica) return pratica;
-  return (customerName ?? "sconosciuto").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function isMedmarService(row: MedmarPreflightServiceRow): boolean {
@@ -479,7 +470,7 @@ export async function runMedmarPreflight(
 
   const { data, error } = await admin
     .from("services")
-    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, booking_service_kind, direction, status, meeting_point, ferry_details, departure_date, departure_time")
+    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, linked_service_id, inbound_email_id, import_id, source_quote_id, booking_service_kind, direction, status, meeting_point, ferry_details, departure_date, departure_time")
     .in("id", serviceIds)
     .eq("tenant_id", tenantId);
 
@@ -499,8 +490,8 @@ export async function runMedmarPreflight(
   if (rows.some((r) => !isMedmarService(r))) {
     return {
       ok: true, can_issue: false, status: "not_medmar",
-      group_key: normalizeGroupKey(rows[0]!.customer_name, extractPratica(rows[0]!.notes)),
-      customer_name: rows[0]!.customer_name, pratica: extractPratica(rows[0]!.notes),
+      group_key: medmarBookingGroupKey(rows[0]!),
+      customer_name: rows[0]!.customer_name, pratica: extractMedmarPractice(rows[0]!.notes) || null,
       pax: Math.max(...rows.map((r) => r.pax ?? 1)),
       outward: null, return: null, tariff: null, taxes: [], expected_total_cents: null, is_live: false,
       warnings: [{ code: "not_medmar", message: "Uno o più servizi selezionati non sono servizi Medmar (campo vessel)." }],
@@ -510,14 +501,14 @@ export async function runMedmarPreflight(
     };
   }
 
-  const groupKeys = new Set(rows.map((r) => normalizeGroupKey(r.customer_name, extractPratica(r.notes))));
+  const groupKeys = new Set(rows.map((r) => medmarBookingGroupKey(r)));
   if (groupKeys.size > 1) {
     return errorResult("group_incoherent", "I servizi selezionati non appartengono allo stesso cliente/pratica.", serviceIds);
   }
 
   const first = rows[0]!;
-  const pratica = extractPratica(first.notes);
-  const groupKey = normalizeGroupKey(first.customer_name, pratica);
+  const pratica = extractMedmarPractice(first.notes) || null;
+  const groupKey = medmarBookingGroupKey(first);
   const pax = Math.max(...rows.map((r) => r.pax ?? 1));
   // Fase 2B.5 — fonte strutturata (services.ferry_details), MAI dedotta da
   // notes. Fallback adults=pax/children=0/infants=0 quando non valorizzata

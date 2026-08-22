@@ -265,6 +265,10 @@ export type MedmarPreflightServiceRow = {
   pax: number | null;
   vessel: string | null;
   notes: string | null;
+  linked_service_id?: string | null;
+  inbound_email_id?: string | null;
+  import_id?: string | null;
+  source_quote_id?: string | null;
   booking_service_kind: string | null;
   direction: string | null;
   status: string | null;

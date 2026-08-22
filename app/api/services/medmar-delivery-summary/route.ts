@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
       .limit(200),
     admin
       .from("services")
-      .select("id, customer_name, notes")
+      .select("id, customer_name, notes, linked_service_id, inbound_email_id, import_id, source_quote_id")
       .eq("tenant_id", tenantId)
       .eq("is_draft", false)
       .neq("status", "cancelled")

@@ -27,6 +27,7 @@ import {
   isMedmarManualFallbackVisible,
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
 } from "@/lib/medmar-delivery-card";
+import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -50,17 +51,6 @@ function formatDate(iso: string): string {
   const days = ["Dom","Lun","Mar","Mer","Gio","Ven","Sab"];
   const dow = new Date(`${iso}T12:00:00Z`).getUTCDay();
   return `${days[dow]} ${d} ${months[Number(m) - 1]} ${y}`;
-}
-
-function extractPratica(notes: string | null | undefined): string {
-  const m = (notes ?? "").match(/\[practice:([^\]]+)\]/);
-  return m?.[1] ?? "";
-}
-
-function normalizeCustomerKey(name: string, pratica: string): string {
-  // Se c'è una pratica, usa quella come chiave primaria per evitare merge errati
-  if (pratica) return pratica;
-  return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 async function copyText(text: string): Promise<void> {
@@ -796,8 +786,8 @@ export default function BigliettiMedmarPage() {
     const map = new Map<string, BookingGroup>();
 
     for (const s of medmarServices) {
-      const pratica = extractPratica(s.notes);
-      const key = normalizeCustomerKey(s.customer_name ?? "sconosciuto", pratica);
+      const pratica = extractMedmarPractice(s.notes);
+      const key = medmarBookingGroupKey(s);
       const hotelName = hotelsById.get(s.hotel_id)?.name ?? "Hotel N/D";
       const isArrival =
         s.direction === "arrival" ||

@@ -212,13 +212,24 @@ describe("estimateMedmarUpcoming3Days — stima prossimi 3 giorni (Credito e fab
     expect(result.upcoming_3d_candidate_services).toBe(2);
   });
 
-  it("2. senza pratica, deduplica per nome cliente normalizzato (andata+ritorno stesso cliente)", () => {
+  it("2. senza pratica, deduplica andata+ritorno usando la coppia linked_service_id", () => {
     const services = [
-      candidateService({ id: "svc-arrivo", customer_name: "Mario Rossi", notes: null }),
-      candidateService({ id: "svc-partenza", customer_name: "  MARIO   ROSSI ", notes: null }),
+      candidateService({ id: "svc-arrivo", linked_service_id: "svc-partenza", customer_name: "Mario Rossi", notes: null }),
+      candidateService({ id: "svc-partenza", linked_service_id: "svc-arrivo", customer_name: "  MARIO   ROSSI ", notes: null }),
     ];
     const result = estimateMedmarUpcoming3Days(services, new Set(), [5000]);
     expect(result.upcoming_3d_estimated_tickets).toBe(1);
+  });
+
+  it("2b. due pratiche omonime con linked_service_id diversi restano distinte", () => {
+    const services = [
+      candidateService({ id: "old-arrival", linked_service_id: "old-return", customer_name: "PIETRO VITO", notes: null }),
+      candidateService({ id: "old-return", linked_service_id: "old-arrival", customer_name: "PIETRO VITO", notes: null }),
+      candidateService({ id: "new-arrival", linked_service_id: "new-return", customer_name: "PIETRO VITO", notes: null }),
+      candidateService({ id: "new-return", linked_service_id: "new-arrival", customer_name: "PIETRO VITO", notes: null }),
+    ];
+    const result = estimateMedmarUpcoming3Days(services, new Set(), [5000]);
+    expect(result.upcoming_3d_estimated_tickets).toBe(2);
   });
 
   it("3. clienti diversi -> biglietti stimati distinti, nessun accorpamento indebito", () => {
