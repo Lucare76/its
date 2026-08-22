@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
 type EnvVar = { key: string; label: string; group: string; present: boolean };
@@ -87,6 +87,252 @@ function statusBadge(status: JobRunStatus | null | undefined) {
   if (status === "failed") return { label: "✕ Failed", className: "bg-rose-100 text-rose-700" };
   if (status === "running") return { label: "In corso", className: "bg-sky-100 text-sky-700" };
   return { label: "Mai eseguito", className: "bg-slate-100 text-slate-600" };
+}
+
+type MedmarCreditSettings = {
+  initial_credit_cents: number;
+  safety_threshold_cents: number;
+  notes: string | null;
+  updated_at: string;
+} | null;
+
+type MedmarCreditTopup = {
+  id: string;
+  amount_cents: number;
+  topup_date: string;
+  notes: string | null;
+  created_at: string;
+};
+
+function eurToCents(value: string): number | null {
+  const normalized = value.trim().replace(",", ".");
+  if (!normalized) return null;
+  const n = Number(normalized);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
+function centsToEurInput(cents: number | null | undefined): string {
+  if (cents == null) return "";
+  return (cents / 100).toFixed(2);
+}
+
+function formatEurAmount(cents: number | null | undefined): string {
+  if (typeof cents !== "number") return "—";
+  return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+}
+
+/** Sezione "Credito Medmar" — impostazioni credito manuale (iniziale, soglia) + ricariche. Sola gestione DB: nessun token/PDF/dato Medmar sensibile. */
+function MedmarCreditSettingsCard() {
+  const [settings, setSettings] = useState<MedmarCreditSettings>(null);
+  const [topups, setTopups] = useState<MedmarCreditTopup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [initialInput, setInitialInput] = useState("");
+  const [thresholdInput, setThresholdInput] = useState("200,00");
+
+  const [topupAmount, setTopupAmount] = useState("");
+  const [topupDate, setTopupDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [topupNotes, setTopupNotes] = useState("");
+  const [addingTopup, setAddingTopup] = useState(false);
+  const [topupError, setTopupError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const session = await getClientSessionContext();
+    if (!session.accessToken) { setError("Login richiesto."); setLoading(false); return; }
+    const headers = { authorization: `Bearer ${session.accessToken}` };
+    const [settingsRes, topupsRes] = await Promise.all([
+      fetch("/api/services/medmar-credit-settings", { headers }),
+      fetch("/api/services/medmar-credit-topups", { headers }),
+    ]);
+    if (!settingsRes.ok || !topupsRes.ok) { setError("Errore nel caricamento del credito Medmar."); setLoading(false); return; }
+    const settingsJson = await settingsRes.json() as { settings: MedmarCreditSettings };
+    const topupsJson = await topupsRes.json() as { topups: MedmarCreditTopup[] };
+    setSettings(settingsJson.settings);
+    setTopups(topupsJson.topups ?? []);
+    setInitialInput(centsToEurInput(settingsJson.settings?.initial_credit_cents ?? 0));
+    setThresholdInput(centsToEurInput(settingsJson.settings?.safety_threshold_cents ?? 20000));
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const run = async () => { await load(); };
+    void run();
+  }, [load]);
+
+  const totalTopupsCents = useMemo(() => topups.reduce((sum, t) => sum + t.amount_cents, 0), [topups]);
+
+  async function handleSave() {
+    setSaveError(null);
+    const initialCents = eurToCents(initialInput);
+    const thresholdCents = eurToCents(thresholdInput);
+    if (initialCents == null || thresholdCents == null) {
+      setSaveError("Importi non validi: usa numeri positivi (es. 200,00).");
+      return;
+    }
+    setSaving(true);
+    const session = await getClientSessionContext();
+    if (!session.accessToken) { setSaveError("Login richiesto."); setSaving(false); return; }
+    const res = await fetch("/api/services/medmar-credit-settings", {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ initial_credit_cents: initialCents, safety_threshold_cents: thresholdCents }),
+    });
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    setSaving(false);
+    if (!res.ok || !json?.ok) { setSaveError(json?.error ?? "Errore salvataggio."); return; }
+    await load();
+  }
+
+  async function handleAddTopup() {
+    setTopupError(null);
+    const amountCents = eurToCents(topupAmount);
+    if (amountCents == null || amountCents <= 0) {
+      setTopupError("Importo ricarica non valido: inserisci un numero positivo.");
+      return;
+    }
+    setAddingTopup(true);
+    const session = await getClientSessionContext();
+    if (!session.accessToken) { setTopupError("Login richiesto."); setAddingTopup(false); return; }
+    const res = await fetch("/api/services/medmar-credit-topups", {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        amount_cents: amountCents,
+        topup_date: topupDate || undefined,
+        notes: topupNotes.trim() || undefined,
+      }),
+    });
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    setAddingTopup(false);
+    if (!res.ok || !json?.ok) { setTopupError(json?.error ?? "Errore salvataggio ricarica."); return; }
+    setTopupAmount("");
+    setTopupNotes("");
+    await load();
+  }
+
+  return (
+    <div className="card p-5 space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-slate-800">Credito Medmar</h2>
+        <p className="text-xs text-slate-500 mt-1">
+          Calcolato da credito iniziale + ricariche - biglietti emessi nel gestionale. Mai il credito reale Medmar.
+        </p>
+      </div>
+
+      {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
+      {error && <p className="text-sm text-rose-600">{error}</p>}
+
+      {!loading && !error && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium text-slate-600">
+              Credito iniziale (€)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={initialInput}
+                onChange={(e) => setInitialInput(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-600">
+              Soglia attenzione (€)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={thresholdInput}
+                onChange={(e) => setThresholdInput(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          {saveError && <p className="text-xs text-rose-600">{saveError}</p>}
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving}
+            className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            {saving ? "Salvataggio..." : "Salva"}
+          </button>
+
+          <div className="border-t border-slate-100 pt-4 space-y-2">
+            <h3 className="text-sm font-semibold text-slate-700">Ricariche</h3>
+            <div className="grid gap-2 sm:grid-cols-4">
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="Importo €"
+                value={topupAmount}
+                onChange={(e) => setTopupAmount(e.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+              <input
+                type="date"
+                value={topupDate}
+                onChange={(e) => setTopupDate(e.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+              <input
+                type="text"
+                placeholder="Note (opzionale)"
+                value={topupNotes}
+                onChange={(e) => setTopupNotes(e.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm sm:col-span-1"
+              />
+              <button
+                type="button"
+                onClick={() => void handleAddTopup()}
+                disabled={addingTopup}
+                className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+              >
+                {addingTopup ? "Salvataggio..." : "+ Aggiungi ricarica"}
+              </button>
+            </div>
+            {topupError && <p className="text-xs text-rose-600">{topupError}</p>}
+
+            <div className="divide-y divide-slate-100">
+              {topups.length === 0 && <p className="text-xs text-slate-400 py-2">Nessuna ricarica registrata.</p>}
+              {topups.map((t) => (
+                <div key={t.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="text-slate-600">{t.topup_date}{t.notes ? ` — ${t.notes}` : ""}</span>
+                  <span className="font-semibold text-slate-800">{formatEurAmount(t.amount_cents)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="border-t border-slate-100 pt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-center">
+              <p className="text-[10px] text-slate-500 font-medium mb-1">Credito iniziale</p>
+              <p className="text-sm font-bold text-slate-700">{formatEurAmount(settings?.initial_credit_cents ?? 0)}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-center">
+              <p className="text-[10px] text-slate-500 font-medium mb-1">Ricariche totali</p>
+              <p className="text-sm font-bold text-slate-700">{formatEurAmount(totalTopupsCents)}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-center">
+              <p className="text-[10px] text-slate-500 font-medium mb-1">Ultimo aggiornamento</p>
+              <p className="text-sm font-bold text-slate-700">{settings?.updated_at ? new Date(settings.updated_at).toLocaleString("it-IT") : "—"}</p>
+            </div>
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-center">
+              <p className="text-[10px] text-emerald-600 font-medium mb-1">Disponibile stimato</p>
+              <p className="text-sm font-bold text-emerald-800">
+                {settings ? formatEurAmount(settings.initial_credit_cents + totalTopupsCents) : "—"}
+              </p>
+              <p className="text-[9px] font-normal text-emerald-600">al netto dei biglietti emessi (vedi /biglietti-medmar)</p>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export default function SystemStatusPage() {
@@ -245,6 +491,8 @@ export default function SystemStatusPage() {
           ))}
         </div>
       </div>
+
+      <MedmarCreditSettingsCard />
     </section>
   );
 }

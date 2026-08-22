@@ -16,13 +16,20 @@ import {
   summarizeMedmarDeliveryAttempts,
   summarizeMedmarIssuedAndDelivered,
   estimateMedmarUpcoming3Days,
-  resolveMedmarCreditInfo,
   evaluateMedmarCredit,
   type MedmarDeliverySummaryRow,
   type MedmarIssuingActivityRow,
   type MedmarDeliveryActivityRow,
   type MedmarCandidateServiceRow,
 } from "@/lib/server/medmar-booking/delivery-summary";
+import {
+  resolveMedmarManualCredit,
+  sumMedmarTopupsCents,
+  sumMedmarIssuedCentsForCredit,
+  type MedmarCreditSettingsRow,
+  type MedmarCreditTopupRow,
+  type MedmarIssuedAmountRow,
+} from "@/lib/server/medmar-booking/credit-settings";
 
 export const runtime = "nodejs";
 
@@ -81,7 +88,7 @@ export async function GET(request: NextRequest) {
   const todayKey = todayDateKeyRome(now);
   const plus3Key = addDaysToDateKey(todayKey, 3);
 
-  const [deliveryResult, issuingResult, candidateServicesResult] = await Promise.all([
+  const [deliveryResult, issuingResult, candidateServicesResult, creditSettingsResult, creditTopupsResult, issuedTotalResult] = await Promise.all([
     admin
       .from("medmar_delivery_attempts")
       .select("id, issuing_attempt_id, status, created_at, updated_at, delivered_at, medmar_numero, last_error_code")
@@ -105,15 +112,42 @@ export async function GET(request: NextRequest) {
       .gte("date", todayKey)
       .lte("date", plus3Key)
       .ilike("vessel", MEDMAR_VESSEL_FILTER),
+    admin
+      .from("medmar_credit_settings")
+      .select("initial_credit_cents, safety_threshold_cents, updated_at")
+      .eq("tenant_id", tenantId)
+      .maybeSingle(),
+    admin
+      .from("medmar_credit_topups")
+      .select("amount_cents")
+      .eq("tenant_id", tenantId),
+    // Storico COMPLETO (non limitato a 200) di status/final_total_cents, solo per il totale biglietti
+    // emessi che scala il credito — a differenza di issuingResult sopra, qui serve la somma esatta su
+    // tutta la vita del tenant, non solo le ultime 200 emissioni usate per "oggi"/media storica.
+    admin
+      .from("medmar_issuing_attempts")
+      .select("status, final_total_cents")
+      .eq("tenant_id", tenantId)
+      .eq("status", "completed"),
   ]);
 
-  if (deliveryResult.error || issuingResult.error || candidateServicesResult.error) {
+  if (
+    deliveryResult.error ||
+    issuingResult.error ||
+    candidateServicesResult.error ||
+    creditSettingsResult.error ||
+    creditTopupsResult.error ||
+    issuedTotalResult.error
+  ) {
     return NextResponse.json({ ok: false, error: "Errore lettura dati Medmar." }, { status: 500 });
   }
 
   const deliveryRows = (deliveryResult.data ?? []) as MedmarDeliverySummaryRow[];
   const issuingRows = (issuingResult.data ?? []) as MedmarIssuingActivityRow[];
   const candidateServices = (candidateServicesResult.data ?? []) as MedmarCandidateServiceRow[];
+  const creditSettingsRow = (creditSettingsResult.data ?? null) as MedmarCreditSettingsRow | null;
+  const creditTopupRows = (creditTopupsResult.data ?? []) as MedmarCreditTopupRow[];
+  const issuedTotalRows = (issuedTotalResult.data ?? []) as MedmarIssuedAmountRow[];
 
   const queueSummary = summarizeMedmarDeliveryAttempts(deliveryRows, now.toISOString(), windowStart);
   const activity = summarizeMedmarIssuedAndDelivered(
@@ -128,8 +162,17 @@ export async function GET(request: NextRequest) {
     .filter((v): v is number => typeof v === "number");
   const forecast = estimateMedmarUpcoming3Days(candidateServices, alreadyIssuedServiceIds, historicalAmountsCents);
 
-  const credit = resolveMedmarCreditInfo({ MEDMAR_MANUAL_CREDIT_CENTS: process.env.MEDMAR_MANUAL_CREDIT_CENTS });
-  const creditEvaluation = evaluateMedmarCredit(credit.available_cents, forecast.upcoming_3d_estimated_amount_cents);
+  const credit = resolveMedmarManualCredit({
+    settings: creditSettingsRow,
+    totalTopupsCents: sumMedmarTopupsCents(creditTopupRows),
+    totalIssuedCents: sumMedmarIssuedCentsForCredit(issuedTotalRows),
+    envManualCreditCents: process.env.MEDMAR_MANUAL_CREDIT_CENTS,
+  });
+  const creditEvaluation = evaluateMedmarCredit(
+    credit.available_cents,
+    forecast.upcoming_3d_estimated_amount_cents,
+    credit.safety_threshold_cents
+  );
 
   return NextResponse.json({
     ok: true,

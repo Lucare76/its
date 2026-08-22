@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useReducer, useRef } from "react";
+import Link from "next/link";
 import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -253,9 +254,13 @@ type MedmarQueueSummary = {
     upcoming_3d_amount_source: "preflight_local" | "historical_average" | "service_price" | "unavailable";
   };
   credit: {
-    type: "real" | "manual_estimated" | "unavailable";
+    type: "real" | "manual_estimated" | "env_estimated" | "unavailable";
+    initial_credit_cents: number | null;
+    total_topups_cents: number | null;
+    total_issued_cents: number | null;
     available_cents: number | null;
-    as_of: string | null;
+    safety_threshold_cents: number;
+    updated_at: string | null;
   };
   credit_evaluation: {
     status: "sufficient" | "warning" | "insufficient" | "unknown";
@@ -329,6 +334,7 @@ async function apiFetchJson<T>(path: string, token: string, options?: RequestIni
 const MEDMAR_CREDIT_TYPE_LABEL: Record<MedmarQueueSummary["credit"]["type"], string> = {
   real: "reale Medmar",
   manual_estimated: "stimato/manuale",
+  env_estimated: "stimato/manuale (env)",
   unavailable: "non disponibile",
 };
 
@@ -1135,8 +1141,19 @@ export default function BigliettiMedmarPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-bold text-slate-800">Credito e biglietti Medmar</h2>
-            <span className="text-[10px] text-slate-400">Aggiornato {formatDateTimeIt(queueSummary.as_of)}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-400">Aggiornato {formatDateTimeIt(queueSummary.as_of)}</span>
+              <Link
+                href="/settings/system"
+                className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Gestisci credito
+              </Link>
+            </div>
           </div>
+          <p className="mt-1 text-[10px] text-slate-400">
+            Calcolato da credito iniziale + ricariche - biglietti emessi nel gestionale.
+          </p>
 
           {/* Credito e fabbisogno Medmar */}
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
@@ -1178,6 +1195,20 @@ export default function BigliettiMedmarPage() {
             <p className="mt-2 text-[11px] font-semibold text-rose-600">
               Mancano circa: {formatEur(queueSummary.credit_evaluation.shortfall_cents)}
             </p>
+          )}
+
+          {(queueSummary.credit.type === "manual_estimated" || queueSummary.credit.type === "env_estimated") && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+              {queueSummary.credit.initial_credit_cents != null && (
+                <span>Credito iniziale: {formatEur(queueSummary.credit.initial_credit_cents)}</span>
+              )}
+              {queueSummary.credit.total_topups_cents != null && (
+                <span>Ricariche totali: {formatEur(queueSummary.credit.total_topups_cents)}</span>
+              )}
+              {queueSummary.credit.total_issued_cents != null && (
+                <span>Biglietti emessi totali: {formatEur(queueSummary.credit.total_issued_cents)}</span>
+              )}
+            </div>
           )}
 
           {/* Dettaglio coda invio (invariato dalla PARTE 3 originale) */}

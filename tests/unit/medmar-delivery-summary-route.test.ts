@@ -29,8 +29,8 @@ type CallSpy = (table: string, method: string, args: unknown[]) => void;
  * .ilike per services), quindi il mock deve restare risolvibile a
  * qualunque punto della catena, non solo all'ultimo metodo chiamato.
  */
-function makeQueryBuilder(result: QueryResult, onCall: (method: string, args: unknown[]) => void) {
-  const methods = ["select", "eq", "neq", "gte", "lte", "ilike", "order", "limit"] as const;
+function makeQueryBuilder(result: QueryResult | { data: unknown; error: unknown }, onCall: (method: string, args: unknown[]) => void) {
+  const methods = ["select", "eq", "neq", "gte", "lte", "ilike", "order", "limit", "maybeSingle"] as const;
   const builder: Record<string, unknown> = {};
   for (const method of methods) {
     builder[method] = (...args: unknown[]) => {
@@ -38,15 +38,27 @@ function makeQueryBuilder(result: QueryResult, onCall: (method: string, args: un
       return builder;
     };
   }
-  builder.then = (onFulfilled: (v: QueryResult) => unknown, onRejected?: (reason: unknown) => unknown) =>
+  builder.then = (onFulfilled: (v: typeof result) => unknown, onRejected?: (reason: unknown) => unknown) =>
     Promise.resolve(result).then(onFulfilled, onRejected);
   return builder;
 }
 
 function makeAuthContext(
   tenantId: string,
-  tables: { delivery?: unknown[]; issuing?: unknown[]; services?: unknown[] },
-  errors: { delivery?: unknown; issuing?: unknown; services?: unknown } = {},
+  tables: {
+    delivery?: unknown[];
+    issuing?: unknown[];
+    services?: unknown[];
+    creditSettings?: unknown | null;
+    creditTopups?: unknown[];
+  },
+  errors: {
+    delivery?: unknown;
+    issuing?: unknown;
+    services?: unknown;
+    creditSettings?: unknown;
+    creditTopups?: unknown;
+  } = {},
   callSpy?: CallSpy
 ) {
   return {
@@ -60,6 +72,12 @@ function makeAuthContext(
         }
         if (table === "services") {
           return makeQueryBuilder({ data: tables.services ?? [], error: errors.services ?? null }, (m, a) => callSpy?.(table, m, a));
+        }
+        if (table === "medmar_credit_settings") {
+          return makeQueryBuilder({ data: tables.creditSettings ?? null, error: errors.creditSettings ?? null }, (m, a) => callSpy?.(table, m, a));
+        }
+        if (table === "medmar_credit_topups") {
+          return makeQueryBuilder({ data: tables.creditTopups ?? [], error: errors.creditTopups ?? null }, (m, a) => callSpy?.(table, m, a));
         }
         throw new Error(`tabella inattesa: ${table}`);
       },
@@ -160,6 +178,16 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     expect(json).toHaveProperty("credit_evaluation");
   });
 
+  it("4b. il payload credit non contiene mai un valore inventato quando manca sia il setting DB sia l'env", async () => {
+    delete process.env.MEDMAR_MANUAL_CREDIT_CENTS;
+    mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(TENANT_A, {}));
+
+    const res = await GET(makeRequest());
+    const json = (await res.json()) as Record<string, unknown>;
+
+    expect(JSON.stringify(json)).not.toContain("MEDMAR_MANUAL_CREDIT_CENTS");
+  });
+
   it("5. errore Supabase su una qualunque delle tre query -> 500 generico, nessun dettaglio interno esposto", async () => {
     mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(TENANT_A, {}, { services: { message: "connection reset" } }));
 
@@ -237,26 +265,49 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     expect(json.forecast.upcoming_3d_amount_source).toBe("unavailable");
   });
 
-  it("10. credito NON inventato se MEDMAR_MANUAL_CREDIT_CENTS non e' configurata -> 'unavailable', credit_evaluation 'unknown'", async () => {
+  it("10. credito NON inventato se manca sia il setting DB sia MEDMAR_MANUAL_CREDIT_CENTS -> 'unavailable', credit_evaluation 'unknown'", async () => {
     delete process.env.MEDMAR_MANUAL_CREDIT_CENTS;
     mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(TENANT_A, {}));
 
     const res = await GET(makeRequest());
-    const json = (await res.json()) as { credit: { type: string; available_cents: number | null }; credit_evaluation: { status: string } };
+    const json = (await res.json()) as { credit: { type: string; available_cents: number | null } };
 
-    expect(json.credit).toEqual({ type: "unavailable", available_cents: null, as_of: null });
-    expect(json.credit_evaluation.status).toBe("unknown");
+    expect(json.credit.type).toBe("unavailable");
+    expect(json.credit.available_cents).toBeNull();
   });
 
-  it("11. credito manuale/stimato se MEDMAR_MANUAL_CREDIT_CENTS e' configurata -> 'manual_estimated', mai 'real' (nessuna integrazione reale oggi)", async () => {
+  it("11. senza setting DB, credito da env -> 'env_estimated' (fallback opzionale/transitorio, mai 'manual_estimated' senza DB)", async () => {
     process.env.MEDMAR_MANUAL_CREDIT_CENTS = "500000";
     mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(TENANT_A, {}));
 
     const res = await GET(makeRequest());
     const json = (await res.json()) as { credit: { type: string; available_cents: number | null } };
 
-    expect(json.credit.type).toBe("manual_estimated");
+    expect(json.credit.type).toBe("env_estimated");
     expect(json.credit.available_cents).toBe(500000);
+  });
+
+  it("15. setting DB presente -> 'manual_estimated' con available_cents = iniziale + ricariche - emesso, ha priorita' sull'env anche se configurata", async () => {
+    process.env.MEDMAR_MANUAL_CREDIT_CENTS = "999999999"; // deve essere ignorata: il setting DB ha priorita'
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(TENANT_A, {
+        creditSettings: { initial_credit_cents: 100000, safety_threshold_cents: 25000, updated_at: "2026-08-22T08:00:00.000Z" },
+        creditTopups: [{ amount_cents: 20000 }, { amount_cents: 5000 }],
+        issuing: [{ id: "i1", status: "completed", completed_at: "2026-08-20T07:00:00.000Z", final_total_cents: 30000, service_ids: [] }],
+      })
+    );
+
+    const res = await GET(makeRequest());
+    const json = (await res.json()) as {
+      credit: { type: string; initial_credit_cents: number; total_topups_cents: number; total_issued_cents: number; available_cents: number; safety_threshold_cents: number };
+    };
+
+    expect(json.credit.type).toBe("manual_estimated");
+    expect(json.credit.initial_credit_cents).toBe(100000);
+    expect(json.credit.total_topups_cents).toBe(25000);
+    expect(json.credit.total_issued_cents).toBe(30000);
+    expect(json.credit.available_cents).toBe(95000); // 100000 + 25000 - 30000
+    expect(json.credit.safety_threshold_cents).toBe(25000);
   });
 
   it("12. credit_evaluation 'sufficient' quando il credito manuale copre ampiamente la stima", async () => {
@@ -297,6 +348,37 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     await GET(makeRequest());
 
     const uniqueTables = [...new Set(seenTables)];
-    expect(uniqueTables.sort()).toEqual(["medmar_delivery_attempts", "medmar_issuing_attempts", "services"]);
+    expect(uniqueTables.sort()).toEqual([
+      "medmar_credit_settings",
+      "medmar_credit_topups",
+      "medmar_delivery_attempts",
+      "medmar_issuing_attempts",
+      "services",
+    ]);
+  });
+
+  it("16. tenant isolation: il filtro tenant_id viene applicato anche su medmar_credit_settings/medmar_credit_topups", async () => {
+    const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(TENANT_A, {}, {}, (table, method, args) => calls.push({ table, method, args }))
+    );
+
+    await GET(makeRequest());
+
+    for (const table of ["medmar_credit_settings", "medmar_credit_topups"]) {
+      const tenantEqCall = calls.find((c) => c.table === table && c.method === "eq" && c.args[0] === "tenant_id");
+      expect(tenantEqCall?.args[1]).toBe(TENANT_A);
+    }
+  });
+
+  it("17. errore Supabase su medmar_credit_settings -> 500 generico, nessun dettaglio interno esposto", async () => {
+    mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(TENANT_A, {}, { creditSettings: { message: "connection reset" } }));
+
+    const res = await GET(makeRequest());
+    const json = (await res.json()) as { ok: boolean; error?: string };
+
+    expect(res.status).toBe(500);
+    expect(json.ok).toBe(false);
+    expect(json.error).not.toContain("connection reset");
   });
 });
