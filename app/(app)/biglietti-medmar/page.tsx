@@ -29,6 +29,15 @@ import {
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
 } from "@/lib/medmar-delivery-card";
 import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
+import {
+  matchesMedmarSearch,
+  matchesMedmarSentDateFilter,
+  medmarSentDateKey,
+  MEDMAR_SENT_DATE_FILTER_OPTIONS,
+  MEDMAR_DEFAULT_SENT_DATE_FILTER,
+  type MedmarSearchableGroup,
+  type MedmarSentDateFilter,
+} from "@/lib/medmar-ticket-search";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -465,6 +474,8 @@ export default function BigliettiMedmarPage() {
   const [sending, setSending] = useState<string | null>(null); // key del gruppo in invio
   const [sentKeys, setSentKeys] = useState<Set<string>>(new Set());
   const [showSent, setShowSent] = useState(false);
+  const [medmarSearchQuery, setMedmarSearchQuery] = useState("");
+  const [medmarSentDateFilter, setMedmarSentDateFilter] = useState<MedmarSentDateFilter>(MEDMAR_DEFAULT_SENT_DATE_FILTER);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
   const [verifying, setVerifying] = useState<string | null>(null); // key del gruppo in verifica
@@ -846,15 +857,53 @@ export default function BigliettiMedmarPage() {
     [bookingGroups, showSent, sentKeys]
   );
 
+  /**
+   * Ricerca + filtro data (biglietti-medmar PARTE ricerca/filtri): la
+   * ricerca si applica a tutti i gruppi visibili (pending inclusi — e'
+   * comportamento atteso di una ricerca), il filtro data invece si applica
+   * SOLO ai gruppi gia' inviati/delivered (isSent), cosi' pending/errori
+   * restano sempre visibili indipendentemente dal filtro data selezionato.
+   */
+  const medmarFilteredGroups = useMemo(() => {
+    const todayKey = todayIso();
+    return visibleGroups.filter((g) => {
+      const deliveryInfo = resolveMedmarGroupDelivery(g.allServiceIds, deliveryAttempts, g.sentAt);
+      const attempt = deliveryInfo.attempt;
+      const isSent = g.sentAt != null || sentKeys.has(g.key) || deliveryInfo.isCompact;
+
+      const searchable: MedmarSearchableGroup = {
+        key: g.key,
+        customerName: g.customerName,
+        hotel: g.hotel,
+        pratica: g.pratica,
+        phone: g.phone,
+        agencyName: g.arrivo?.billing_party_name ?? g.partenza?.billing_party_name ?? null,
+        allServiceIds: g.allServiceIds,
+        medmarNumero: attempt?.medmar_numero ?? null,
+        medmarIdPrenotazione: attempt?.medmar_id_prenotazione ?? null,
+        recipientEmail: attempt?.recipient_email ?? null,
+        recipientName: attempt?.recipient_name ?? null,
+      };
+      if (!matchesMedmarSearch(searchable, medmarSearchQuery)) return false;
+
+      if (isSent) {
+        const dateKey = medmarSentDateKey(attempt?.delivered_at, attempt?.updated_at ?? g.sentAt);
+        if (!matchesMedmarSentDateFilter(dateKey, medmarSentDateFilter, todayKey)) return false;
+      }
+
+      return true;
+    });
+  }, [visibleGroups, deliveryAttempts, sentKeys, medmarSearchQuery, medmarSentDateFilter]);
+
   const byDate = useMemo(() => {
     const map = new Map<string, BookingGroup[]>();
-    for (const g of visibleGroups) {
+    for (const g of medmarFilteredGroups) {
       const k = g.refDate || "senza-data";
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(g);
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [visibleGroups]);
+  }, [medmarFilteredGroups]);
 
   const activeTicketSlots = useMemo(
     () => ticketSlots.filter((slot) => slot.available_quantity > 0),
@@ -1133,6 +1182,32 @@ export default function BigliettiMedmarPage() {
         </div>
       </div>
 
+      {/* Ricerca + filtro data biglietti inviati (PARTE ricerca/filtri): filtra lato client i gruppi gia' caricati, non tocca emissione/delivery/cron. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={medmarSearchQuery}
+          onChange={(e) => setMedmarSearchQuery(e.target.value)}
+          placeholder="Cerca per cliente, codice Medmar, prenotazione o email..."
+          className="input-saas min-w-[260px] flex-1 text-sm"
+        />
+        <label className="text-xs font-medium text-slate-600">
+          Filtro data inviati
+          <select
+            value={medmarSentDateFilter}
+            onChange={(e) => setMedmarSentDateFilter(e.target.value as MedmarSentDateFilter)}
+            className="ml-1 input-saas text-xs"
+          >
+            {MEDMAR_SENT_DATE_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </label>
+        <span className="text-xs text-slate-400">
+          {medmarFilteredGroups.length} {medmarFilteredGroups.length === 1 ? "risultato" : "risultati"}
+        </span>
+      </div>
+
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
@@ -1350,6 +1425,12 @@ export default function BigliettiMedmarPage() {
       {!loading && bookingGroups.length === 0 && (
         <div className="card p-6 text-center text-sm text-slate-500">
           Nessun biglietto MEDMAR nel periodo selezionato.
+        </div>
+      )}
+
+      {!loading && bookingGroups.length > 0 && visibleGroups.length > 0 && medmarFilteredGroups.length === 0 && (
+        <div className="card p-6 text-center text-sm text-slate-500">
+          Nessun biglietto inviato trovato con questi filtri.
         </div>
       )}
 
