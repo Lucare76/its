@@ -27,6 +27,23 @@ interface AgencyOption {
   name: string;
 }
 
+type CreatedBookingSummary = {
+  id: string;
+  id_return?: string | null;
+  round_trip?: boolean;
+  created_at?: string | null;
+  operator_name?: string | null;
+  booking?: {
+    customer_name?: string | null;
+    pax?: number | null;
+    service_label?: string | null;
+    arrival_date?: string | null;
+    departure_date?: string | null;
+    hotel_name?: string | null;
+    agency_name?: string | null;
+  } | null;
+};
+
 const EXCURSION_PORTS = ["Casamicciola", "Lacco Ameno", "Forio", "Ischia Porto"] as const;
 
 const kindOptions: Array<{ value: BookingKind; label: string }> = [
@@ -194,6 +211,7 @@ export default function OpsNewBookingPage() {
   const [ferryScheduleRows, setFerryScheduleRows] = useState<FerryScheduleRow[]>([]);
   const [dataLoadWarning, setDataLoadWarning] = useState<string | null>(null);
   const [reloadingData, setReloadingData] = useState(false);
+  const [createdBooking, setCreatedBooking] = useState<CreatedBookingSummary | null>(null);
 
   const [addingHotel, setAddingHotel] = useState(false);
   const [newHotelName, setNewHotelName] = useState("");
@@ -419,7 +437,7 @@ export default function OpsNewBookingPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ ...parsed.data, ...extraFields })
     });
-    const body = (await response.json().catch(() => null)) as { ok?: boolean; id?: string; id_return?: string; round_trip?: boolean; error?: string } | null;
+    const body = (await response.json().catch(() => null)) as (CreatedBookingSummary & { ok?: boolean; error?: string }) | null;
     setSubmitting(false);
 
     if (!response.ok || !body?.id) {
@@ -431,9 +449,25 @@ export default function OpsNewBookingPage() {
       ? `Prenotazione A/R creata (${serviceKindLabel}). Andata: ${body.id} · Ritorno: ${body.id_return ?? "—"}`
       : `Prenotazione creata (${serviceKindLabel}). ID: ${body.id}`);
 
+    setCreatedBooking({
+      id: body.id,
+      id_return: body.id_return ?? null,
+      round_trip: body.round_trip,
+      created_at: body.created_at ?? null,
+      operator_name: body.operator_name ?? null,
+      booking: body.booking ?? null,
+    });
+  };
+
+  const resetForAnotherBooking = () => {
+    setCreatedBooking(null);
+    setDuplicateWarning(null);
+    setReplaceError(null);
+    setFieldErrors({});
     resetForm(hotels[0]?.id ?? "");
     resetBus();
-    router.push("/inbox");
+    setMessage("Compila i campi obbligatori e conferma la prenotazione.");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const submit = async (force = false) => {
@@ -513,12 +547,39 @@ export default function OpsNewBookingPage() {
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento...</div>;
   if (!hasSupabaseEnv || !supabase) return <div className="card p-4 text-sm text-slate-500">Supabase non configurato.</div>;
 
+  const createdAtLabel = createdBooking?.created_at
+    ? new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" }).format(new Date(createdBooking.created_at))
+    : null;
+
   return (
     <section className="mx-auto w-full max-w-[1400px] page-section">
       <div className="section-head mb-1">
         <h1 className="section-title">Nuova prenotazione</h1>
         <p className="section-subtitle">Inserimento diretto da {role === "admin" ? "amministratore" : role === "supervisor" ? "supervisore" : "operatore"}.</p>
       </div>
+      {createdBooking ? (
+        <article className="card mb-4 space-y-4 border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Prenotazione creata</p>
+            <h2 className="mt-1 text-xl font-extrabold text-slate-950">{createdBooking.booking?.customer_name ?? "Cliente N/D"}</h2>
+            <p className="mt-1 text-emerald-800">
+              ID {createdBooking.id.slice(0, 8).toUpperCase()}
+              {createdBooking.id_return ? ` - Ritorno ${createdBooking.id_return.slice(0, 8).toUpperCase()}` : ""}
+            </p>
+          </div>
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div><dt className="text-xs font-semibold text-emerald-700">Pax</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.pax ?? "-"}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Servizio</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.service_label ?? serviceKindLabel}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Date</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.arrival_date ?? "-"}{createdBooking.booking?.departure_date ? ` / ${createdBooking.booking.departure_date}` : ""}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Operatore</dt><dd className="font-bold text-slate-950">{createdBooking.operator_name ?? "Operatore"}{createdAtLabel ? ` - ${createdAtLabel}` : ""}</dd></div>
+          </dl>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => router.push("/inbox")} className="btn-primary px-4 py-2 text-sm">Torna alle prenotazioni</button>
+            <button type="button" onClick={resetForAnotherBooking} className="btn-secondary px-4 py-2 text-sm">Inserisci altra prenotazione</button>
+            <Link href={`/services/${createdBooking.id}/edit`} className="btn-secondary px-4 py-2 text-sm">Apri prenotazione</Link>
+          </div>
+        </article>
+      ) : null}
       <div className="mb-4 flex flex-col gap-3 border-b border-slate-200 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex min-w-0 overflow-x-auto">
           <button type="button" className="border-b-2 border-indigo-600 px-5 py-3 text-sm font-bold text-indigo-700">Inserimento manuale</button>

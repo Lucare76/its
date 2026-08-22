@@ -17,6 +17,7 @@ import { computeIschiaArrivalTime, findArrivalScheduleForService, type FerrySche
 import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
+import { getOperatorName, logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 
 export const runtime = "nodejs";
 
@@ -228,13 +229,15 @@ export async function POST(request: NextRequest) {
     const { data: firstInsert, error: insertError } = await auth.admin
       .from("services")
       .insert(insert)
-      .select("id")
+      .select("id, created_at")
       .single();
 
     if (insertError || !firstInsert?.id) {
       return NextResponse.json({ error: insertError?.message ?? "Inserimento non riuscito." }, { status: 500 });
     }
     const serviceId: string = firstInsert.id;
+    const createdAt = firstInsert.created_at ?? new Date().toISOString();
+    const operatorName = await getOperatorName(auth);
 
     ensureWhatsAppContact(auth.admin, {
       tenantId,
@@ -285,6 +288,44 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const createdLogFields = [
+      "status",
+      "date",
+      "time",
+      "direction",
+      "customer_name",
+      "pax",
+      "booking_service_kind",
+      "agency_id",
+      "hotel_id",
+    ];
+    const firstSnapshot = await readServiceSnapshot(auth, tenantId, serviceId);
+    await logServiceChange({
+      auth,
+      tenantId,
+      serviceId,
+      rootServiceId: serviceId,
+      before: null,
+      after: firstSnapshot,
+      fields: createdLogFields,
+      action: "CREATED",
+      operatorName,
+    });
+    if (returnServiceId) {
+      const returnSnapshot = await readServiceSnapshot(auth, tenantId, returnServiceId);
+      await logServiceChange({
+        auth,
+        tenantId,
+        serviceId: returnServiceId,
+        rootServiceId: serviceId,
+        before: null,
+        after: returnSnapshot,
+        fields: createdLogFields,
+        action: "CREATED",
+        operatorName,
+      });
+    }
+
     if (bookingKind === "bus_city_hotel") {
       await ensureBusBookingQrCodes({
         admin: auth.admin,
@@ -328,6 +369,19 @@ export async function POST(request: NextRequest) {
       ok: true,
       id: serviceId,
       ...(returnServiceId ? { id_return: returnServiceId, round_trip: true } : {}),
+      created_at: createdAt,
+      operator_name: operatorName,
+      booking: {
+        customer_name: customerName,
+        pax: d.pax,
+        booking_service_kind: bookingKind,
+        service_label: baseVessel,
+        arrival_date: d.arrival_date,
+        departure_date: d.departure_date,
+        trip_leg: tripLeg,
+        hotel_name: hotelData?.name ?? null,
+        agency_name: billingPartyName ?? "Privato",
+      },
     });
   } catch (error) {
     auditLog({ event: "ops_booking_create_failed", level: "error", details: { message: error instanceof Error ? error.message : "Unknown error" } });

@@ -8,6 +8,13 @@ import {
   findDepartureScheduleForService,
   type FerryScheduleRow
 } from "@/lib/ferry-schedule-options";
+import {
+  compactServiceData,
+  getOperatorName,
+  logServiceChange,
+  readServiceSnapshot,
+  type ServiceSnapshot,
+} from "@/lib/server/service-audit-log";
 
 export const runtime = "nodejs";
 
@@ -34,81 +41,24 @@ const updateServiceSchema = z.object({
   return_ferry_departure_time: z.string().nullable().optional(),
 });
 
-type ServiceSnapshot = Record<string, unknown> & { id: string; linked_service_id?: string | null };
-
-function compactUpdate(input: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
-}
-
-function changedFields(before: ServiceSnapshot | null, after: ServiceSnapshot | null, fields: string[]) {
-  if (!before || !after) return fields;
-  return fields.filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null));
-}
+const hardDeleteReasons = ["Prenotazione di test", "Inserimento errato", "Altro"] as const;
+const hardDeleteSchema = z.object({
+  reason: z.enum(hardDeleteReasons),
+  note: z.string().trim().max(500).optional().default(""),
+  confirmation: z.literal("ELIMINA_DEFINITIVAMENTE"),
+}).superRefine((value, ctx) => {
+  if (value.reason === "Altro" && value.note.trim().length < 3) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["note"],
+      message: "Inserisci una nota per il motivo Altro.",
+    });
+  }
+});
 
 function ferryCompanyLabel(company: string | null | undefined) {
   if (!company) return null;
   return company.toUpperCase();
-}
-
-async function getOperatorName(auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>) {
-  const { data } = await auth.admin
-    .from("memberships")
-    .select("full_name")
-    .eq("tenant_id", auth.membership.tenant_id)
-    .eq("user_id", auth.user.id)
-    .maybeSingle();
-  return String(data?.full_name ?? auth.user.email ?? "Operatore").trim() || "Operatore";
-}
-
-async function readServiceSnapshot(
-  auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>,
-  tenantId: string,
-  serviceId: string
-) {
-  const { data } = await auth.admin
-    .from("services")
-    .select("*")
-    .eq("id", serviceId)
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
-  return (data ?? null) as ServiceSnapshot | null;
-}
-
-async function logServiceChange(input: {
-  auth: Exclude<Awaited<ReturnType<typeof authorizePricingRequest>>, NextResponse>;
-  tenantId: string;
-  serviceId: string;
-  rootServiceId: string;
-  before: ServiceSnapshot | null;
-  after: ServiceSnapshot | null;
-  fields: string[];
-}) {
-  const fields = changedFields(input.before, input.after, input.fields);
-  if (fields.length === 0) return;
-  const operatorName = await getOperatorName(input.auth);
-  const { error } = await input.auth.admin.from("service_change_logs").insert({
-    tenant_id: input.tenantId,
-    service_id: input.serviceId,
-    root_service_id: input.rootServiceId,
-    action: "updated",
-    changed_fields: fields,
-    before_data: input.before ?? {},
-    after_data: input.after ?? {},
-    operator_user_id: input.auth.user.id,
-    operator_name: operatorName,
-    operator_email: input.auth.user.email
-  });
-  if (error) {
-    auditLog({
-      event: "service_change_log_failed",
-      level: "warn",
-      tenantId: input.tenantId,
-      userId: input.auth.user.id,
-      role: input.auth.membership.role,
-      serviceId: input.serviceId,
-      details: { message: error.message }
-    });
-  }
 }
 
 export async function GET(
@@ -250,7 +200,7 @@ export async function PATCH(
     // il form di modifica espone all'operatore. Prima di questo fix, un
     // edit di arrival_date/departure_date non toccava mai "date": la riga
     // restava agganciata alla data vecchia ovunque tranne che nel form.
-    const mainUpdate = compactUpdate({
+    const mainUpdate = compactServiceData({
       ...(ordinaryUpdates as Record<string, unknown>),
       ...(ordinaryUpdates.notes === null ? { notes: "" } : {}),
       ...(ordinaryUpdates.arrival_date !== undefined && currentSnapshot.direction === "arrival"
@@ -293,7 +243,7 @@ export async function PATCH(
         .select("*").eq("id", linkedId).eq("tenant_id", tenantId).maybeSingle();
       if (linkedCurrent) {
         const linkedSnapshot = linkedCurrent as ServiceSnapshot;
-        const linkedUpdate = compactUpdate({
+        const linkedUpdate = compactServiceData({
           ...(ordinaryUpdates.arrival_date !== undefined ? { arrival_date: ordinaryUpdates.arrival_date } : {}),
           ...(ordinaryUpdates.departure_date !== undefined ? { departure_date: ordinaryUpdates.departure_date } : {}),
           ...(ordinaryUpdates.arrival_date !== undefined && linkedSnapshot.direction === "arrival"
@@ -330,7 +280,7 @@ export async function PATCH(
       const arrivalId = arrivalBefore?.id ?? null;
       const departureId = departureBefore?.id ?? null;
       if (arrivalId && (outbound_ferry_departure_time !== undefined || outbound_ferry_arrival_time !== undefined)) {
-        const arrivalUpdate = compactUpdate({
+        const arrivalUpdate = compactServiceData({
           ...(outbound_ferry_departure_time !== undefined ? { time: outbound_ferry_departure_time } : {}),
           ...(outbound_ferry_arrival_time !== undefined ? { arrival_time: outbound_ferry_arrival_time } : {}),
         });
@@ -348,7 +298,7 @@ export async function PATCH(
         });
       }
       if (departureId && (return_pickup_time !== undefined || return_ferry_departure_time !== undefined)) {
-        const departureUpdate = compactUpdate({
+        const departureUpdate = compactServiceData({
           ...(return_pickup_time !== undefined ? { pickup_time: return_pickup_time, departure_time: return_pickup_time } : {}),
           ...(return_ferry_departure_time !== undefined ? { orario_barca: return_ferry_departure_time } : {}),
         });
@@ -392,6 +342,10 @@ export async function DELETE(
 
     const { id: serviceId } = await params;
     const tenantId = auth.membership.tenant_id;
+    const parsed = hardDeleteSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Motivo eliminazione non valido." }, { status: 400 });
+    }
 
     const { data: svc } = await auth.admin
       .from("services")
@@ -412,13 +366,7 @@ export async function DELETE(
       hotelName = hotel?.name ?? null;
     }
 
-    // Recupera nome operatore
-    const { data: membership } = await auth.admin
-      .from("memberships")
-      .select("full_name")
-      .eq("user_id", auth.user.id)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
+    const operatorName = await getOperatorName(auth);
 
     // Lascia traccia nel log prima di eliminare
     await auth.admin.from("service_deletion_log").insert({
@@ -431,7 +379,10 @@ export async function DELETE(
       booking_service_kind: svc.booking_service_kind ?? null,
       status: svc.status ?? null,
       deleted_by_user_id: auth.user.id,
-      deleted_by_name: membership?.full_name ?? null,
+      deleted_by_name: operatorName,
+      deleted_by_role: auth.membership.role,
+      deletion_reason: parsed.data.reason,
+      notes: parsed.data.note.trim() || null,
     });
 
     // Elimina definitivamente (cascade su status_events, assignments, cancellation_requests)
@@ -452,7 +403,7 @@ export async function DELETE(
       role: auth.membership.role,
       serviceId,
       outcome: "deleted",
-      details: { customer_name: svc.customer_name, date: svc.date },
+      details: { customer_name: svc.customer_name, date: svc.date, reason: parsed.data.reason },
     });
 
     return NextResponse.json({ ok: true });

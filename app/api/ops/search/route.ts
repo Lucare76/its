@@ -62,6 +62,18 @@ type SearchServiceRow = Partial<Service> & {
   hotel_name?: string | null;
 };
 
+type CancellationLogRow = {
+  service_id: string;
+  operator_name: string | null;
+  operator_email: string | null;
+  created_at: string;
+  after_data: {
+    cancellation_reason?: string | null;
+    cancellation_note?: string | null;
+    assignments_cleared?: number | null;
+  } | null;
+};
+
 type BusAllocationDetailRow = {
   service_id: string;
   direction: "arrival" | "departure" | string | null;
@@ -462,7 +474,7 @@ export async function GET(req: NextRequest) {
     ]));
     const serviceIds = Array.from(new Set(serviceRows.map((service) => service.id).filter(Boolean)));
 
-    const [hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult] = await Promise.all([
+    const [hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult, cancellationLogsResult] = await Promise.all([
       hotelIds.length
         ? auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).in("id", hotelIds)
         : Promise.resolve({ data: [], error: null }),
@@ -494,9 +506,18 @@ export async function GET(req: NextRequest) {
       auth.admin
         .from("hotel_pickup_times")
         .select("hotel_name,pickup_time_linea_italia,pickup_time_linea_centro,pickup_time_linea_adriatica"),
+      serviceIds.length
+        ? auth.admin
+          .from("service_change_logs")
+          .select("service_id,operator_name,operator_email,created_at,after_data")
+          .eq("tenant_id", tenantId)
+          .eq("action", "CANCELLED")
+          .in("service_id", serviceIds)
+          .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ]);
 
-    const error = hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? busAllocationsResult.error ?? busFerryConfigsResult.error ?? busStopsResult.error ?? busLinesResult.error ?? hotelPickupTimesResult.error ?? null;
+    const error = hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? busAllocationsResult.error ?? busFerryConfigsResult.error ?? busStopsResult.error ?? busLinesResult.error ?? hotelPickupTimesResult.error ?? cancellationLogsResult.error ?? null;
     if (error) throw new Error(error.message);
 
     const hotelNameById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
@@ -513,6 +534,12 @@ export async function GET(req: NextRequest) {
     const busLineById = new Map(((busLinesResult.data ?? []) as BusLineRow[]).map((line) => [line.id, line]));
     const hotelPickupTimes = (hotelPickupTimesResult.data ?? []) as HotelPickupTimeRow[];
     const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
+    const cancellationLogByServiceId = new Map<string, CancellationLogRow>();
+    for (const log of (cancellationLogsResult.data ?? []) as CancellationLogRow[]) {
+      if (log.service_id && !cancellationLogByServiceId.has(log.service_id)) {
+        cancellationLogByServiceId.set(log.service_id, log);
+      }
+    }
     const searchable = candidateServices
       .map((service) => ({
         ...service,
@@ -532,6 +559,7 @@ export async function GET(req: NextRequest) {
         const ferryPickupRules = (ferryPickupRulesResult.data ?? []) as FerryPickupRule[];
         const joinedName = [r.customer_first_name, r.customer_last_name].filter(Boolean).join(" ").trim();
         const owner = r.billing_party_name ?? (r.agency_id ? agencyNameById.get(r.agency_id) : null) ?? "Privato";
+        const cancellationLog = cancellationLogByServiceId.get(r.id) ?? null;
         const hotelZone = r.hotel_id ? hotelZoneById.get(r.hotel_id) ?? null : null;
         const transportType = transferTransportType(arrivalLeg.booking_service_kind);
         const ruleTransportTime = cleanTime(arrivalLeg.train_arrival_time) ?? cleanTime(arrivalLeg.arrival_time) ?? cleanTime(arrivalLeg.time);
@@ -649,6 +677,12 @@ export async function GET(req: NextRequest) {
           return_ferry_company: returnSchedule?.company?.toUpperCase() ?? null,
           return_ferry_departure_port: returnSchedule ? ferryPortLabel(returnSchedule.departurePort) : null,
           return_ferry_arrival_port: returnSchedule ? ferryPortLabel(returnSchedule.arrivalPort) : null,
+          cancellation: cancellationLog ? {
+            cancelled_at: cancellationLog.created_at,
+            operator_name: cancellationLog.operator_name ?? cancellationLog.operator_email ?? null,
+            reason: cancellationLog.after_data?.cancellation_reason ?? null,
+            note: cancellationLog.after_data?.cancellation_note ?? null,
+          } : null,
         };
       });
 
