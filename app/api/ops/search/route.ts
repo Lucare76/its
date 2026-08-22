@@ -53,6 +53,7 @@ const SERVICE_SEARCH_COLUMNS = [
   "pickup_hotel",
   "notes",
   "linked_service_id",
+  "practice_number",
   "created_at",
 ].join(", ");
 
@@ -662,6 +663,7 @@ export async function GET(req: NextRequest) {
           meeting_point: r.meeting_point ?? null,
           notes: r.notes ?? null,
           linked_service_id: r.linked_service_id ?? null,
+          practice_number: r.practice_number ?? null,
           outbound_ferry_departure_time: ferryPickupRule?.departureTime ?? arrivalLeg.time ?? null,
           outbound_ferry_arrival_time: isBus
             ? busArrivalTime

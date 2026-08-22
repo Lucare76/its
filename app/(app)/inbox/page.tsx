@@ -311,6 +311,8 @@ export default function InboxPage() {
   const [cancelDialogService, setCancelDialogService] = useState<GlobalBookingSearchResult | null>(null);
   const [cancelReason, setCancelReason] = useState<(typeof CANCEL_REASONS)[number]>("Cliente ha annullato");
   const [cancelNote, setCancelNote] = useState("");
+  // "leg" = solo la tratta selezionata; "practice" = intera pratica A/R (entrambe le gambe collegate da linked_service_id).
+  const [cancelScope, setCancelScope] = useState<"leg" | "practice">("leg");
   const [cancellingServiceId, setCancellingServiceId] = useState<string | null>(null);
   const [hardDeleteDialogService, setHardDeleteDialogService] = useState<GlobalBookingSearchResult | null>(null);
   const [hardDeleteReason, setHardDeleteReason] = useState<(typeof HARD_DELETE_REASONS)[number]>("Prenotazione di test");
@@ -757,6 +759,7 @@ export default function InboxPage() {
     setCancelDialogService(service);
     setCancelReason("Cliente ha annullato");
     setCancelNote("");
+    setCancelScope("leg");
   };
 
   const cancelBooking = async () => {
@@ -769,7 +772,7 @@ export default function InboxPage() {
       const res = await fetch(`/api/ops/services/${cancelDialogService.id}/cancel`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: cancelReason, note: cancelNote }),
+        body: JSON.stringify({ reason: cancelReason, note: cancelNote, scope: cancelScope }),
       });
       const body = (await res.json().catch(() => null)) as {
         error?: string;
@@ -777,6 +780,7 @@ export default function InboxPage() {
         operator_name?: string | null;
         reason?: string | null;
         note?: string | null;
+        service_ids?: string[];
       } | null;
       if (!res.ok) {
         setMessage(body?.error ?? "Cancellazione prenotazione non riuscita.");
@@ -788,10 +792,17 @@ export default function InboxPage() {
         reason: body?.reason ?? cancelReason,
         note: body?.note ?? (cancelNote.trim() || null),
       };
-      setSearchResults((current) => current.map((row) => row.id === cancelDialogService.id ? { ...row, status: "cancelled", cancellation } : row));
-      setServices((current) => current.map((row) => row.id === cancelDialogService.id ? { ...row, status: "cancelled" } : row));
+      // service_ids include entrambe le gambe quando scope="practice" (RPC atomica lato server):
+      // aggiorna localmente OGNI id restituito, non solo quello selezionato in dialogo.
+      const affectedIds = new Set(body?.service_ids?.length ? body.service_ids : [cancelDialogService.id]);
+      setSearchResults((current) => current.map((row) => affectedIds.has(row.id) ? { ...row, status: "cancelled", cancellation } : row));
+      setServices((current) => current.map((row) => affectedIds.has(row.id) ? { ...row, status: "cancelled" } : row));
       setCancelDialogService(null);
-      setMessage(`Prenotazione di ${customer} cancellata operativamente.`);
+      setMessage(
+        cancelScope === "practice"
+          ? `Pratica A/R di ${customer} cancellata operativamente (entrambe le tratte).`
+          : `Prenotazione di ${customer} cancellata operativamente.`
+      );
     } finally {
       setCancellingServiceId(null);
     }
@@ -1026,6 +1037,27 @@ export default function InboxPage() {
             <p className="mt-1 text-sm text-slate-600">
               La pratica di {serviceCustomerLabel(cancelDialogService)} resterà nello storico e sarà esclusa dalle operazioni attive.
             </p>
+            {cancelDialogService.linked_service_id ? (
+              <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-semibold text-slate-700">
+                  {cancelDialogService.practice_number ? `Pratica A/R ${cancelDialogService.practice_number}` : "Prenotazione andata/ritorno"} — cosa vuoi cancellare?
+                </p>
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input type="radio" name="cancel-scope" className="mt-1" checked={cancelScope === "leg"} onChange={() => setCancelScope("leg")} />
+                  <span>
+                    <span className="block font-semibold">Cancella solo questa tratta</span>
+                    <span className="block text-xs text-slate-500">L&apos;altra tratta della stessa pratica resta invariata.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input type="radio" name="cancel-scope" className="mt-1" checked={cancelScope === "practice"} onChange={() => setCancelScope("practice")} />
+                  <span>
+                    <span className="block font-semibold">Cancella intera pratica A/R</span>
+                    <span className="block text-xs text-slate-500">Cancella sia andata sia ritorno.</span>
+                  </span>
+                </label>
+              </div>
+            ) : null}
             <label className="mt-4 block text-sm font-semibold text-slate-700">
               Motivo*
               <select value={cancelReason} onChange={(event) => setCancelReason(event.target.value as (typeof CANCEL_REASONS)[number])} className="input-saas mt-1 w-full">

@@ -13,7 +13,7 @@ const MAX_PAGE_SIZE = 100;
 
 const EMAIL_COLUMNS = "id, tenant_id, subject, parsed_json, body_text, raw_text, created_at";
 const SERVICE_COLUMNS =
-  "id, tenant_id, status, is_draft, date, direction, booking_service_kind, service_type_code, route_kind, vessel, customer_name, customer_first_name, customer_last_name, inbound_email_id";
+  "id, tenant_id, status, is_draft, date, direction, booking_service_kind, service_type_code, route_kind, vessel, customer_name, customer_first_name, customer_last_name, inbound_email_id, linked_service_id, practice_number";
 const HOTEL_COLUMNS = "id, tenant_id, name";
 const DRIVER_COLUMNS = "user_id, tenant_id, role, full_name";
 
