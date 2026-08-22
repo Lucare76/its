@@ -65,9 +65,9 @@ describe("practiceNumberHeading — mai l'UUID come identificativo principale", 
   });
 });
 
-describe("createdByLabel — utente che ha creato la pratica", () => {
-  it("1. nome operatore presente -> 'Creata da <nome>'", () => {
-    expect(createdByLabel("Mario Rossi")).toBe("Creata da Mario Rossi");
+describe("createdByLabel — utente che ha creato la pratica (dt 'Operatore' separato in UI, mai ridondante)", () => {
+  it("1. nome operatore presente -> solo il nome, senza prefisso ridondante", () => {
+    expect(createdByLabel("Mario Rossi")).toBe("Mario Rossi");
   });
 
   it("2. nome assente -> fallback 'Operatore', mai un UUID utente", () => {

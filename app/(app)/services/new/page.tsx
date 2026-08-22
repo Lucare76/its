@@ -583,7 +583,7 @@ export default function OpsNewBookingPage() {
             {bookingHasReturnLeg && createdBooking.booking?.departure_date ? (
               <div><dt className="text-xs font-semibold text-emerald-700">Ritorno</dt><dd className="font-bold text-slate-950">{formatDateItFromIso(createdBooking.booking.departure_date)}</dd></div>
             ) : null}
-            <div><dt className="text-xs font-semibold text-emerald-700">Creata da</dt><dd className="font-bold text-slate-950">{createdByLabel(createdBooking.operator_name)}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Operatore</dt><dd className="font-bold text-slate-950">{createdByLabel(createdBooking.operator_name)}</dd></div>
             <div><dt className="text-xs font-semibold text-emerald-700">Data e ora</dt><dd className="font-bold text-slate-950">{createdAtLabel ?? "-"}</dd></div>
           </dl>
           <div className="flex flex-wrap gap-2">

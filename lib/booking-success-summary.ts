@@ -51,7 +51,7 @@ export function practiceNumberHeading(practiceNumber: string | null | undefined)
   return practiceNumber ? `Pratica ${practiceNumber}` : "Prenotazione registrata";
 }
 
-/** Etichetta "Creata da X" — mai un UUID utente, sempre il nome operatore gia' risolto server-side (getOperatorName). */
+/** Nome operatore da mostrare accanto all'etichetta "Operatore" (dt/dd separati in UI) — mai un UUID utente, sempre il nome gia' risolto server-side (getOperatorName). */
 export function createdByLabel(operatorName: string | null | undefined): string {
-  return operatorName ? `Creata da ${operatorName}` : "Operatore";
+  return operatorName ? operatorName : "Operatore";
 }
