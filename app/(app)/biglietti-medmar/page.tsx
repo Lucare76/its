@@ -1649,9 +1649,11 @@ export default function BigliettiMedmarPage() {
             const deliveryAttempt = deliveryInfo?.attempt;
             const isDeliveredCompact = deliveryInfo?.isCompact ?? false;
             const agency = selectedMedmarGroup.agencyName?.trim() || "Privato";
-            const ferrySource = selectedMedmarGroup.partenza ?? selectedMedmarGroup.arrivo ?? null;
-            const routeLabel = ferrySource ? getDepartureFerryLabel(ferrySource) ?? ferrySource.vessel ?? "MEDMAR" : "MEDMAR";
-            const timeLabel = (selectedMedmarGroup.arrivo?.time ?? selectedMedmarGroup.partenza?.orario_barca ?? selectedMedmarGroup.partenza?.time ?? "").slice(0, 5) || "-";
+            const formatTimeValue = (value?: string | null) => value?.slice(0, 5) || "-";
+            const arrivalLeg = selectedMedmarGroup.arrivo;
+            const departureLeg = selectedMedmarGroup.partenza;
+            const arrivalRouteLabel = arrivalLeg ? arrivalLeg.vessel || "MEDMAR" : null;
+            const departureRouteLabel = departureLeg ? getDepartureFerryLabel(departureLeg) ?? departureLeg.vessel ?? "MEDMAR" : null;
             return (
               <div className="space-y-4 pt-4 text-sm">
                 <div>
@@ -1665,16 +1667,41 @@ export default function BigliettiMedmarPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div><p className="text-xs font-bold uppercase text-slate-400">Pax</p><p className="font-bold text-slate-900">{selectedMedmarGroup.pax}</p></div>
-                  <div><p className="text-xs font-bold uppercase text-slate-400">Orario</p><p className="font-bold text-slate-900">{timeLabel}</p></div>
-                </div>
-                <div>
-                  <p className="text-xs font-bold uppercase text-slate-400">Viaggio</p>
-                  <p className="font-semibold text-slate-900">{routeLabel}</p>
-                  <p className="text-xs text-slate-500">{selectedMedmarGroup.refDate ? formatDate(selectedMedmarGroup.refDate) : "Data non indicata"}</p>
+                  <div><p className="text-xs font-bold uppercase text-slate-400">Gambe</p><p className="font-bold text-slate-900">{[arrivalLeg, departureLeg].filter(Boolean).length || 1}</p></div>
                 </div>
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">Hotel</p>
                   <p className="font-semibold text-slate-900">{selectedMedmarGroup.hotel}</p>
+                </div>
+                <div className="space-y-3">
+                  {arrivalLeg ? (
+                    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-xs font-extrabold uppercase tracking-wide text-blue-700">Andata / Arrivo</p>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-blue-700">{formatDate(arrivalLeg.date)}</span>
+                      </div>
+                      <div className="space-y-1.5 text-xs text-slate-700">
+                        <p><span className="font-bold text-slate-900">Nave:</span> {arrivalRouteLabel}</p>
+                        <p><span className="font-bold text-slate-900">Partenza terraferma:</span> {formatTimeValue(arrivalLeg.time)}</p>
+                        <p><span className="font-bold text-slate-900">Arrivo indicativo isola:</span> {formatTimeValue(arrivalLeg.arrival_time)}</p>
+                        <p><span className="font-bold text-slate-900">Porto/meeting:</span> {arrivalLeg.meeting_point || arrivalLeg.barca_compagnia || "-"}</p>
+                      </div>
+                    </div>
+                  ) : null}
+                  {departureLeg ? (
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-xs font-extrabold uppercase tracking-wide text-violet-700">Ritorno / Partenza</p>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-violet-700">{formatDate(departureLeg.date)}</span>
+                      </div>
+                      <div className="space-y-1.5 text-xs text-slate-700">
+                        <p><span className="font-bold text-slate-900">Pickup hotel:</span> {formatTimeValue(departureLeg.pickup_time ?? departureLeg.time ?? departureLeg.departure_time)}</p>
+                        <p><span className="font-bold text-slate-900">Nave:</span> {departureRouteLabel}</p>
+                        <p><span className="font-bold text-slate-900">Partenza dall&apos;isola:</span> {formatTimeValue(departureLeg.orario_barca ?? departureLeg.departure_time ?? departureLeg.time)}</p>
+                        <p><span className="font-bold text-slate-900">Porto/meeting:</span> {departureLeg.meeting_point || departureLeg.barca_compagnia || "-"}</p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">Pratica</p>
