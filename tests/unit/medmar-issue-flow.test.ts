@@ -5,6 +5,7 @@ import {
   isTokenExpired,
   isRetryableIssueFailure,
   serviceIdsMatch,
+  shouldAutoPrepareAfterPreflight,
   type MedmarPrepareState,
   type MedmarPrepareSuccessPayload,
 } from "@/lib/medmar-issue-flow";
@@ -176,5 +177,23 @@ describe("serviceIdsMatch — scope token (FASE O, sensitivity #5)", () => {
 
   it("false se la lunghezza differisce", () => {
     expect(serviceIdsMatch([SVC_A], [SVC_A, SVC_B])).toBe(false);
+  });
+});
+
+describe("shouldAutoPrepareAfterPreflight — flusso UX a 2 click (biglietti-medmar PARTE 1)", () => {
+  it("true quando can_issue e is_live sono entrambi true -> click 1 incatena preflight+prepare senza un secondo click a vuoto", () => {
+    expect(shouldAutoPrepareAfterPreflight({ can_issue: true, is_live: true })).toBe(true);
+  });
+
+  it("false se can_issue e' false, anche con is_live true -> mai avviare prepare su dati insufficienti", () => {
+    expect(shouldAutoPrepareAfterPreflight({ can_issue: false, is_live: true })).toBe(false);
+  });
+
+  it("false se is_live e' false, anche con can_issue true -> mai avviare prepare su dati non live", () => {
+    expect(shouldAutoPrepareAfterPreflight({ can_issue: true, is_live: false })).toBe(false);
+  });
+
+  it("false quando entrambi sono false", () => {
+    expect(shouldAutoPrepareAfterPreflight({ can_issue: false, is_live: false })).toBe(false);
   });
 });

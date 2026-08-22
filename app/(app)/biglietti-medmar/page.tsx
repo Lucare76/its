@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useReducer } from "react";
+import { useEffect, useMemo, useState, useCallback, useReducer, useRef } from "react";
 import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -17,6 +17,7 @@ import {
   isTokenExpired,
   isRetryableIssueFailure,
   serviceIdsMatch,
+  shouldAutoPrepareAfterPreflight,
   type MedmarPrepareState,
   type MedmarDeliveryDiagnostics,
 } from "@/lib/medmar-issue-flow";
@@ -228,6 +229,51 @@ type MedmarPrepareApiResponse =
     }
   | { ok: false; status: string; error: string };
 
+/**
+ * Risposta di GET /api/services/medmar-delivery-summary — sola lettura, per
+ * il box "Credito e biglietti Medmar" (evoluzione del contatore coda,
+ * biglietti-medmar PARTE 3 + "Credito e fabbisogno Medmar"). I campi
+ * today/queue/oldest_pending/last_delivered/last_error sono il contatore
+ * coda originale, invariato; activity/forecast/credit/credit_evaluation
+ * sono l'aggiunta.
+ */
+type MedmarQueueSummary = {
+  ok: true;
+  tenant_id: string;
+  timezone: string;
+  as_of: string;
+  window_start: string;
+  today: { issued: number; delivered: number };
+  queue: { awaiting_pdf: number; ready: number; in_progress: number; errors: number };
+  oldest_pending: { id: string; status: string; created_at: string } | null;
+  last_delivered: { id: string; medmar_numero: string | null; delivered_at: string } | null;
+  last_error: { id: string; status: string; last_error_code: string | null; updated_at: string } | null;
+  activity: {
+    issued_today_count: number;
+    issued_today_amount_cents: number;
+    delivered_today_count: number;
+    delivered_today_amount_cents: number | null;
+    last_issued_amount_cents: number | null;
+    last_delivered_amount_cents: number | null;
+  };
+  forecast: {
+    upcoming_3d_candidate_services: number;
+    upcoming_3d_estimated_tickets: number;
+    upcoming_3d_estimated_amount_cents: number | null;
+    upcoming_3d_amount_source: "preflight_local" | "historical_average" | "service_price" | "unavailable";
+  };
+  credit: {
+    type: "real" | "manual_estimated" | "unavailable";
+    available_cents: number | null;
+    as_of: string | null;
+  };
+  credit_evaluation: {
+    status: "sufficient" | "warning" | "insufficient" | "unknown";
+    shortfall_cents: number | null;
+    safety_threshold_cents: number;
+  };
+};
+
 // Fase 2B.4: kill switch di fase, indipendente dalla capability
 // server-derived "issuing_enabled" restituita da /prepare. Entrambi devono
 // essere true perche' la CTA finale sia mai selezionabile — vedi
@@ -288,6 +334,27 @@ async function apiFetchJson<T>(path: string, token: string, options?: RequestIni
   }
   return body;
 }
+
+/** Etichette/tone per il box "Credito e biglietti Medmar" (evoluzione del contatore coda). */
+const MEDMAR_CREDIT_TYPE_LABEL: Record<MedmarQueueSummary["credit"]["type"], string> = {
+  real: "reale Medmar",
+  manual_estimated: "stimato/manuale",
+  unavailable: "non disponibile",
+};
+
+const MEDMAR_CREDIT_STATUS_LABEL: Record<MedmarQueueSummary["credit_evaluation"]["status"], string> = {
+  sufficient: "Credito sufficiente",
+  warning: "Attenzione: credito vicino alla soglia",
+  insufficient: "Credito probabilmente insufficiente",
+  unknown: "Credito non valutabile",
+};
+
+const MEDMAR_CREDIT_STATUS_TONE: Record<MedmarQueueSummary["credit_evaluation"]["status"], keyof typeof QUEUE_STAT_TONES> = {
+  sufficient: "emerald",
+  warning: "amber",
+  insufficient: "rose",
+  unknown: "slate",
+};
 
 const MEDMAR_DELIVERY_STATUS_LABEL: Record<string, string> = {
   awaiting_pdf: "PDF Medmar non ancora disponibile. Il sistema riproverà automaticamente.",
@@ -357,6 +424,36 @@ function medmarDeliveryStatusLabel(status: string | undefined, recipient: string
   return MEDMAR_DELIVERY_STATUS_LABEL[status] ?? status;
 }
 
+const QUEUE_STAT_TONES = {
+  blue: "border-blue-200 bg-blue-50 text-blue-700",
+  amber: "border-amber-200 bg-amber-50 text-amber-700",
+  indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  slate: "border-slate-200 bg-slate-50 text-slate-700",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  rose: "border-rose-200 bg-rose-50 text-rose-700",
+} as const;
+
+/** Riquadro compatto del box "Credito e biglietti Medmar": un valore (+ sublabel opzionale, es. importo) + un'etichetta, colore in base allo stato. */
+function QueueStatChip({
+  label,
+  value,
+  sublabel,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  sublabel?: string;
+  tone: keyof typeof QUEUE_STAT_TONES;
+}) {
+  return (
+    <div className={`rounded-xl border px-3 py-2 text-center ${QUEUE_STAT_TONES[tone]}`}>
+      <p className="text-lg font-extrabold leading-tight">{value}</p>
+      {sublabel && <p className="text-[10px] font-semibold leading-tight">{sublabel}</p>}
+      <p className="text-[10px] font-semibold uppercase tracking-wide leading-tight">{label}</p>
+    </div>
+  );
+}
+
 // ─── Componente ─────────────────────────────────────────────────────────────
 
 export default function BigliettiMedmarPage() {
@@ -390,6 +487,9 @@ export default function BigliettiMedmarPage() {
     { phase: "idle" } as MedmarPrepareState
   );
   const [deliveryAttempts, setDeliveryAttempts] = useState<MedmarDeliveryAttemptRow[]>([]);
+  const [queueSummary, setQueueSummary] = useState<MedmarQueueSummary | null>(null);
+  /** Rif. sempre aggiornato al token corrente, per leggerlo da refreshMedmarData senza doverlo aggiungere alle sue dipendenze (eviterebbe che ogni cambio di token ricrei la funzione e riattivi l'useEffect di caricamento iniziale). */
+  const tokenRef = useRef<string | null>(null);
   const [issuingFinalTotalById, setIssuingFinalTotalById] = useState<Map<string, number | null>>(new Map());
   const [expandedDeliveredKeys, setExpandedDeliveredKeys] = useState<Set<string>>(new Set());
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
@@ -425,35 +525,16 @@ export default function BigliettiMedmarPage() {
     if (tenantId) void refreshMedmarData(tenantId, dateFrom, dateTo);
   };
 
-  const handleVerifyMedmar = async (g: BookingGroup) => {
-    if (!token) return;
-    setVerifying(g.key);
-    setVerifyError(null);
-    try {
-      const data = await apiFetch<MedmarPreflightResult>("/api/services/medmar-preflight", token, {
-        method: "POST",
-        body: JSON.stringify({ service_ids: g.allServiceIds }),
-      });
-      dispatchMedmarPrepare({ type: "RESET" });
-      setVerifyModal({ group: g, result: data });
-    } catch (err) {
-      setVerifyError(err instanceof Error ? err.message : "Errore durante la verifica Medmar.");
-    } finally {
-      setVerifying(null);
-    }
-  };
-
   // STEP 1 -> STEP 2: preflight/local validation server-side, SOLO
   // lettura verso Medmar. Nessuna mutazione Medmar puo' partire da questa
   // chiamata (vedi app/api/services/medmar-issue/prepare/route.ts).
-  const handlePrepareMedmar = async () => {
-    if (!token || !verifyModal) return;
-    if (medmarPrepareState.phase === "preparing" || medmarPrepareState.phase === "prepared") return;
+  const runPrepareMedmar = useCallback(async (g: BookingGroup) => {
+    if (!token) return;
     dispatchMedmarPrepare({ type: "PREPARE_START" });
     try {
       const data = await apiFetchJson<MedmarPrepareApiResponse>("/api/services/medmar-issue/prepare", token, {
         method: "POST",
-        body: JSON.stringify({ service_ids: verifyModal.group.allServiceIds }),
+        body: JSON.stringify({ service_ids: g.allServiceIds }),
       });
       if (data.ok) {
         dispatchMedmarPrepare({
@@ -479,6 +560,43 @@ export default function BigliettiMedmarPage() {
         error: err instanceof Error ? err.message : "Preparazione emissione non riuscita.",
       });
     }
+  }, [token]);
+
+  /**
+   * UX 2-click (biglietti-medmar PARTE 1) — CLICK 1: "Emetti biglietto
+   * Medmar" fa preflight e, se shouldAutoPrepareAfterPreflight() e' true
+   * (can_issue && is_live, vedi lib/medmar-issue-flow.ts), incatena subito
+   * la preparazione (POST /prepare) cosi' il modal si apre gia' col
+   * riepilogo pronto per il CLICK 2 di conferma — nessun secondo click
+   * intermedio a vuoto. Se il preflight fallisce o i dati non bastano, si
+   * ferma qui esattamente come prima (nessuna mutazione Medmar possibile).
+   */
+  const handleVerifyMedmar = async (g: BookingGroup) => {
+    if (!token) return;
+    setVerifying(g.key);
+    setVerifyError(null);
+    dispatchMedmarPrepare({ type: "RESET" });
+    try {
+      const data = await apiFetch<MedmarPreflightResult>("/api/services/medmar-preflight", token, {
+        method: "POST",
+        body: JSON.stringify({ service_ids: g.allServiceIds }),
+      });
+      setVerifyModal({ group: g, result: data });
+      if (shouldAutoPrepareAfterPreflight(data)) {
+        await runPrepareMedmar(g);
+      }
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Errore durante la verifica Medmar.");
+    } finally {
+      setVerifying(null);
+    }
+  };
+
+  /** Fallback manuale: ripete la preparazione solo dopo un PREPARE_FAILURE (es. errore di rete transitorio) — mai il percorso normale, che e' sempre automatico dal click 1. */
+  const handlePrepareMedmar = async () => {
+    if (!verifyModal) return;
+    if (medmarPrepareState.phase === "preparing" || medmarPrepareState.phase === "prepared") return;
+    await runPrepareMedmar(verifyModal.group);
   };
 
   // STEP 2: consuma il confirmation_token single-use ottenuto da /prepare.
@@ -513,6 +631,10 @@ export default function BigliettiMedmarPage() {
         if (data.delivery) {
           setMedmarDelivery({ phase: "done", status: data.delivery.status, error: data.delivery.warning ?? undefined, recipient: data.delivery.recipient_email });
         }
+        // PARTE 2: refresh immediato — la card in lista deve riflettere subito
+        // l'emissione appena completata (codice/id/prenotazione/stato invio),
+        // senza richiedere un refresh manuale del browser.
+        if (tenantId) void refreshMedmarData(tenantId, dateFrom, dateTo);
       } else {
         dispatchMedmarPrepare({ type: "ISSUE_FAILURE", status: data.status, error: data.error, retry_allowed: data.retry_allowed });
       }
@@ -614,12 +736,33 @@ export default function BigliettiMedmarPage() {
     }
   }, []);
 
-  /** Ricarica services + hotels e, a valle, lo stato delivery Medmar (sola lettura) per i service medmar caricati. */
+  /** Contatore coda Medmar (PARTE 3, sola lettura): GET /api/services/medmar-delivery-summary. Un fallimento qui non deve mai bloccare il resto della pagina. */
+  const loadMedmarQueueSummary = useCallback(async (accessToken: string) => {
+    try {
+      const data = await apiFetch<MedmarQueueSummary>("/api/services/medmar-delivery-summary", accessToken);
+      setQueueSummary(data);
+    } catch {
+      /* contatore best-effort: nessun blocco della pagina se non disponibile */
+    }
+  }, []);
+
+  /**
+   * Ricarica services + hotels e, a valle, lo stato delivery Medmar (sola
+   * lettura) per i service medmar caricati, oltre al contatore coda (PARTE
+   * 3). Punto unico di refresh: usato sia dai flussi "Cerca"/elimina/invio
+   * manuale gia' esistenti, sia dal refresh immediato post-emissione (PARTE
+   * 2) aggiunto in handleConfirmIssueMedmar.
+   */
   const refreshMedmarData = useCallback(async (tid: string, from?: string, to?: string) => {
     const loadedServices = await loadData(tid, from, to);
     const medmarIds = loadedServices.filter(isMedmarService).map((s) => s.id);
     await loadMedmarDeliveryStatus(tid, medmarIds);
-  }, [loadData, loadMedmarDeliveryStatus]);
+    if (tokenRef.current) void loadMedmarQueueSummary(tokenRef.current);
+  }, [loadData, loadMedmarDeliveryStatus, loadMedmarQueueSummary]);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   useEffect(() => {
     let active = true;
@@ -632,12 +775,17 @@ export default function BigliettiMedmarPage() {
       setTenantId(session.tenantId);
       setToken(session.accessToken ?? null);
       await refreshMedmarData(session.tenantId, dateFrom, dateTo);
-      if (session.accessToken) await loadTicketMemory(session.accessToken, dateFrom, dateTo);
+      if (session.accessToken) {
+        await loadTicketMemory(session.accessToken, dateFrom, dateTo);
+        // refreshMedmarData qui sopra non ha ancora lo state `token` aggiornato
+        // (setToken e' asincrono): richiamato esplicitamente col valore fresco.
+        void loadMedmarQueueSummary(session.accessToken);
+      }
       if (active) setLoading(false);
     };
     void load();
     return () => { active = false; };
-  }, [dateFrom, dateTo, refreshMedmarData, loadTicketMemory]);
+  }, [dateFrom, dateTo, refreshMedmarData, loadTicketMemory, loadMedmarQueueSummary]);
 
   const hotelsById = useMemo(() => new Map(hotels.map((h) => [h.id, h])), [hotels]);
 
@@ -991,6 +1139,93 @@ export default function BigliettiMedmarPage() {
 
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
       {error && <p className="text-sm text-rose-600">{error}</p>}
+
+      {/* "Credito e biglietti Medmar" — evoluzione del contatore coda (PARTE 3), sola lettura da GET /api/services/medmar-delivery-summary. */}
+      {queueSummary && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-slate-800">Credito e biglietti Medmar</h2>
+            <span className="text-[10px] text-slate-400">Aggiornato {formatDateTimeIt(queueSummary.as_of)}</span>
+          </div>
+
+          {/* Credito e fabbisogno Medmar */}
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+            <QueueStatChip
+              label="Credito disponibile"
+              value={queueSummary.credit.available_cents != null ? formatEur(queueSummary.credit.available_cents) : "non disponibile"}
+              tone={MEDMAR_CREDIT_STATUS_TONE[queueSummary.credit_evaluation.status]}
+            />
+            <QueueStatChip label="Tipo credito" value={MEDMAR_CREDIT_TYPE_LABEL[queueSummary.credit.type]} tone="slate" />
+            <QueueStatChip
+              label="Emessi oggi"
+              value={queueSummary.activity.issued_today_count}
+              sublabel={formatEur(queueSummary.activity.issued_today_amount_cents)}
+              tone="blue"
+            />
+            <QueueStatChip
+              label="In coda invio"
+              value={queueSummary.queue.awaiting_pdf + queueSummary.queue.ready + queueSummary.queue.in_progress}
+              tone="amber"
+            />
+            <QueueStatChip label="Errori" value={queueSummary.queue.errors} tone={queueSummary.queue.errors > 0 ? "rose" : "slate"} />
+            <QueueStatChip
+              label="Prossimi 3 giorni"
+              value={`${queueSummary.forecast.upcoming_3d_estimated_tickets} biglietti`}
+              sublabel={
+                queueSummary.forecast.upcoming_3d_estimated_amount_cents != null
+                  ? formatEur(queueSummary.forecast.upcoming_3d_estimated_amount_cents)
+                  : "importo non calcolabile"
+              }
+              tone="indigo"
+            />
+            <QueueStatChip
+              label="Esito"
+              value={MEDMAR_CREDIT_STATUS_LABEL[queueSummary.credit_evaluation.status]}
+              tone={MEDMAR_CREDIT_STATUS_TONE[queueSummary.credit_evaluation.status]}
+            />
+          </div>
+          {queueSummary.credit_evaluation.status === "insufficient" && queueSummary.credit_evaluation.shortfall_cents != null && (
+            <p className="mt-2 text-[11px] font-semibold text-rose-600">
+              Mancano circa: {formatEur(queueSummary.credit_evaluation.shortfall_cents)}
+            </p>
+          )}
+
+          {/* Dettaglio coda invio (invariato dalla PARTE 3 originale) */}
+          <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 sm:grid-cols-6">
+            <QueueStatChip label="Emessi oggi" value={queueSummary.today.issued} tone="blue" />
+            <QueueStatChip label="In attesa PDF" value={queueSummary.queue.awaiting_pdf} tone="amber" />
+            <QueueStatChip label="Pronti per invio" value={queueSummary.queue.ready} tone="indigo" />
+            <QueueStatChip label="Invio in corso" value={queueSummary.queue.in_progress} tone="slate" />
+            <QueueStatChip
+              label="Inviati oggi"
+              value={queueSummary.today.delivered}
+              sublabel={queueSummary.activity.delivered_today_amount_cents != null ? formatEur(queueSummary.activity.delivered_today_amount_cents) : undefined}
+              tone="emerald"
+            />
+            <QueueStatChip label="Errori" value={queueSummary.queue.errors} tone={queueSummary.queue.errors > 0 ? "rose" : "slate"} />
+          </div>
+
+          {(queueSummary.oldest_pending || queueSummary.last_delivered || queueSummary.last_error) && (
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+              {queueSummary.oldest_pending && (
+                <span>In coda da più tempo: {formatDateTimeIt(queueSummary.oldest_pending.created_at)} ({queueSummary.oldest_pending.status})</span>
+              )}
+              {queueSummary.last_delivered && (
+                <span>
+                  Ultimo inviato: {formatDateTimeIt(queueSummary.last_delivered.delivered_at)}
+                  {queueSummary.activity.last_delivered_amount_cents != null && ` (${formatEur(queueSummary.activity.last_delivered_amount_cents)})`}
+                </span>
+              )}
+              {queueSummary.activity.last_issued_amount_cents != null && (
+                <span>Ultimo emesso: {formatEur(queueSummary.activity.last_issued_amount_cents)}</span>
+              )}
+              {queueSummary.last_error && (
+                <span className="font-semibold text-rose-600">Ultimo errore: {formatDateTimeIt(queueSummary.last_error.updated_at)} ({queueSummary.last_error.status})</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1687,18 +1922,24 @@ export default function BigliettiMedmarPage() {
 
           {verifyModal.result.can_issue && verifyModal.result.is_live && (
             <div className="space-y-3 border-t border-slate-100 pt-3">
-              <button
-                type="button"
-                onClick={() => void handlePrepareMedmar()}
-                disabled={medmarPrepareState.phase === "preparing" || medmarPrepareState.phase === "prepared" || medmarPrepareState.phase === "issuing" || medmarPrepareState.phase === "issued"}
-                className="w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {medmarPrepareState.phase === "preparing" ? "Verifica finale in corso..." : "Prepara emissione Medmar"}
-              </button>
+              {/* UX 2-click (PARTE 1): la preparazione parte automaticamente dopo il click 1
+                  (handleVerifyMedmar -> runPrepareMedmar), nessun pulsante manuale nel percorso normale. */}
+              {medmarPrepareState.phase === "preparing" && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">
+                  Preparazione emissione in corso...
+                </div>
+              )}
 
               {medmarPrepareState.phase === "prepare_failed" && (
-                <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700 space-y-2">
                   <p className="font-semibold">{medmarPrepareState.error}</p>
+                  <button
+                    type="button"
+                    onClick={() => void handlePrepareMedmar()}
+                    className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+                  >
+                    Riprova preparazione
+                  </button>
                 </div>
               )}
 

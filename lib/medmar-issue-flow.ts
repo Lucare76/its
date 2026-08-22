@@ -122,6 +122,17 @@ export function isRetryableIssueFailure(state: MedmarPrepareState): boolean {
   return state.phase === "issue_failed" && state.retry_allowed;
 }
 
+/**
+ * UX 2-click (biglietti-medmar PARTE 1): decide se, subito dopo un
+ * preflight riuscito, la UI deve incatenare automaticamente la
+ * preparazione (POST /prepare) senza un secondo click intermedio a vuoto.
+ * Stesso gate gia' usato per mostrare il pulsante "Prepara" nel vecchio
+ * flusso a 3 click: `can_issue && is_live`.
+ */
+export function shouldAutoPrepareAfterPreflight(result: { can_issue: boolean; is_live: boolean }): boolean {
+  return result.can_issue && result.is_live;
+}
+
 /** Confronto scope: previene un token preparato per A e usato per B. */
 export function serviceIdsMatch(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
