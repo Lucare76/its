@@ -205,6 +205,8 @@ export interface Service {
   setup_required?: boolean | null;
   medmar_ticket_sent_at?: string | null;
   medmar_ticket_sent_by?: string | null;
+  /** Numero pratica leggibile (ITS-YYYY-N), generato server-side — vedi supabase/migrations/0243_booking_practice_numbers.sql. Condiviso da entrambe le gambe A/R. */
+  practice_number?: string | null;
 }
 
 export interface Assignment {

@@ -19,6 +19,13 @@ import {
   type BookingKind,
   type HotelOption,
 } from "./_hooks";
+import {
+  formatDateItFromIso,
+  formatCreatedAtLabel,
+  hasReturnLeg,
+  practiceNumberHeading,
+  createdByLabel,
+} from "@/lib/booking-success-summary";
 
 type OpsRole = "admin" | "operator" | "supervisor";
 
@@ -34,11 +41,13 @@ type CreatedBookingSummary = {
   created_at?: string | null;
   operator_name?: string | null;
   booking?: {
+    practice_number?: string | null;
     customer_name?: string | null;
     pax?: number | null;
     service_label?: string | null;
     arrival_date?: string | null;
     departure_date?: string | null;
+    trip_leg?: string | null;
     hotel_name?: string | null;
     agency_name?: string | null;
   } | null;
@@ -200,7 +209,9 @@ function bookingContext(kind: BookingKind) {
 export default function OpsNewBookingPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("Compila i campi obbligatori e conferma la prenotazione.");
+  // Riservato SOLO agli errori (box rosso, vedi Objective 8): nessun testo istruttivo neutro qui,
+  // altrimenti verrebbe mostrato in rosso al primo caricamento senza che sia un errore.
+  const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submitInFlightRef = useRef(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -445,10 +456,9 @@ export default function OpsNewBookingPage() {
       return;
     }
 
-    setMessage(body.round_trip
-      ? `Prenotazione A/R creata (${serviceKindLabel}). Andata: ${body.id} · Ritorno: ${body.id_return ?? "—"}`
-      : `Prenotazione creata (${serviceKindLabel}). ID: ${body.id}`);
-
+    // Il successo e' rappresentato SOLO dalla card verde (createdBooking), mai da `message`:
+    // `message` resta riservato agli errori (rosso), coerente con la semantica colori del gestionale.
+    setMessage("");
     setCreatedBooking({
       id: body.id,
       id_return: body.id_return ?? null,
@@ -466,7 +476,7 @@ export default function OpsNewBookingPage() {
     setFieldErrors({});
     resetForm(hotels[0]?.id ?? "");
     resetBus();
-    setMessage("Compila i campi obbligatori e conferma la prenotazione.");
+    setMessage("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -547,9 +557,8 @@ export default function OpsNewBookingPage() {
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento...</div>;
   if (!hasSupabaseEnv || !supabase) return <div className="card p-4 text-sm text-slate-500">Supabase non configurato.</div>;
 
-  const createdAtLabel = createdBooking?.created_at
-    ? new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" }).format(new Date(createdBooking.created_at))
-    : null;
+  const createdAtLabel = formatCreatedAtLabel(createdBooking?.created_at);
+  const bookingHasReturnLeg = createdBooking ? hasReturnLeg({ id_return: createdBooking.id_return, trip_leg: createdBooking.booking?.trip_leg }) : false;
 
   return (
     <section className="mx-auto w-full max-w-[1400px] page-section">
@@ -558,25 +567,29 @@ export default function OpsNewBookingPage() {
         <p className="section-subtitle">Inserimento diretto da {role === "admin" ? "amministratore" : role === "supervisor" ? "supervisore" : "operatore"}.</p>
       </div>
       {createdBooking ? (
-        <article className="card mb-4 space-y-4 border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950">
+        <article className="card mb-4 space-y-4 border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-950" data-testid="booking-success-card">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Prenotazione creata</p>
-            <h2 className="mt-1 text-xl font-extrabold text-slate-950">{createdBooking.booking?.customer_name ?? "Cliente N/D"}</h2>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">✅ Prenotazione inserita correttamente</p>
+            <h2 className="mt-1 text-xl font-extrabold text-slate-950">
+              {practiceNumberHeading(createdBooking.booking?.practice_number)}
+            </h2>
             <p className="mt-1 text-emerald-800">
-              ID {createdBooking.id.slice(0, 8).toUpperCase()}
-              {createdBooking.id_return ? ` - Ritorno ${createdBooking.id_return.slice(0, 8).toUpperCase()}` : ""}
+              {createdBooking.booking?.customer_name ?? "Cliente N/D"} — {createdBooking.booking?.pax ?? "-"} pax
             </p>
           </div>
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div><dt className="text-xs font-semibold text-emerald-700">Pax</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.pax ?? "-"}</dd></div>
-            <div><dt className="text-xs font-semibold text-emerald-700">Servizio</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.service_label ?? serviceKindLabel}</dd></div>
-            <div><dt className="text-xs font-semibold text-emerald-700">Date</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.arrival_date ?? "-"}{createdBooking.booking?.departure_date ? ` / ${createdBooking.booking.departure_date}` : ""}</dd></div>
-            <div><dt className="text-xs font-semibold text-emerald-700">Operatore</dt><dd className="font-bold text-slate-950">{createdBooking.operator_name ?? "Operatore"}{createdAtLabel ? ` - ${createdAtLabel}` : ""}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Tipologia/tratta</dt><dd className="font-bold text-slate-950">{createdBooking.booking?.service_label ?? serviceKindLabel}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Andata</dt><dd className="font-bold text-slate-950">{formatDateItFromIso(createdBooking.booking?.arrival_date) ?? "-"}</dd></div>
+            {bookingHasReturnLeg && createdBooking.booking?.departure_date ? (
+              <div><dt className="text-xs font-semibold text-emerald-700">Ritorno</dt><dd className="font-bold text-slate-950">{formatDateItFromIso(createdBooking.booking.departure_date)}</dd></div>
+            ) : null}
+            <div><dt className="text-xs font-semibold text-emerald-700">Creata da</dt><dd className="font-bold text-slate-950">{createdByLabel(createdBooking.operator_name)}</dd></div>
+            <div><dt className="text-xs font-semibold text-emerald-700">Data e ora</dt><dd className="font-bold text-slate-950">{createdAtLabel ?? "-"}</dd></div>
           </dl>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => router.push("/inbox")} className="btn-primary px-4 py-2 text-sm">Torna alle prenotazioni</button>
             <button type="button" onClick={resetForAnotherBooking} className="btn-secondary px-4 py-2 text-sm">Inserisci altra prenotazione</button>
-            <Link href={`/services/${createdBooking.id}/edit`} className="btn-secondary px-4 py-2 text-sm">Apri prenotazione</Link>
+            <Link href={`/services/${createdBooking.id}/edit`} className="btn-secondary px-4 py-2 text-sm">Apri pratica</Link>
           </div>
         </article>
       ) : null}
@@ -592,6 +605,14 @@ export default function OpsNewBookingPage() {
         <p>Le prenotazioni ricevute da <strong>ALESTE VIAGGI</strong> e dalle altre agenzie vengono precompilate automaticamente. Verifica i dati nella coda prima di confermare.</p>
       </div>
 
+      {/*
+        Il form operativo resta montato SOLO finche' non esiste una prenotazione appena creata:
+        dopo un successo (createdBooking valorizzato) non deve restare utilizzabile ne' mostrare
+        piu' "Pronto per la conferma"/"Conferma prenotazione" — l'unico modo per tornare al form
+        e' cliccare "Inserisci altra prenotazione" (resetForAnotherBooking), che azzera createdBooking.
+      */}
+      {!createdBooking && (
+      <>
       {dataLoadWarning ? (
         <article className="card space-y-2 border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 mb-4">
           <p className="font-semibold">{dataLoadWarning}</p>
@@ -1268,13 +1289,9 @@ export default function OpsNewBookingPage() {
           </div>
         )}
 
-        {message && !message.startsWith("Prenotazione creata") ? (
+        {/* `message` e' riservato agli errori (rosso): il successo vive solo nella card verde in cima alla pagina. */}
+        {message ? (
           <div className="md:col-span-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
-            {message}
-          </div>
-        ) : null}
-        {message && message.startsWith("Prenotazione creata") ? (
-          <div className="md:col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
             {message}
           </div>
         ) : null}
@@ -1327,6 +1344,8 @@ export default function OpsNewBookingPage() {
         </button>
       </div>
       </div>
+      </>
+      )}
 
       {/* Modal duplicato */}
       {duplicateWarning ? (

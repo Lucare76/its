@@ -18,6 +18,7 @@ import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 import { getOperatorName, logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
+import { resolveBookingPracticeNumber } from "@/lib/server/booking-practice-number";
 
 export const runtime = "nodejs";
 
@@ -172,8 +173,34 @@ export async function POST(request: NextRequest) {
       if (schedule?.arrivalTime) resolvedFerryArrivalTime = schedule.arrivalTime;
     }
 
+    // Numero pratica leggibile (ITS-YYYY-N), generato server-side con protezione
+    // concorrenza reale — vedi lib/server/booking-practice-number.ts. Condiviso
+    // da entrambe le gambe A/R tramite lo spread `...insert` sotto (returnInsert).
+    // OBBLIGATORIO: e' parte dell'identita' operativa della prenotazione, non
+    // un arricchimento opzionale. Se la generazione fallisce, la creazione
+    // viene interrotta QUI, prima di qualunque insert su `services` — mai una
+    // pratica con practice_number = null. Il numero eventualmente gia'
+    // consumato da questo tentativo (contatore incrementato) resta perso
+    // (buco nella sequenza, mai riutilizzato) per design: vedi
+    // supabase/migrations/0243_booking_practice_numbers.sql.
+    const practiceNumber = await resolveBookingPracticeNumber(auth.admin, tenantId);
+    if (!practiceNumber) {
+      auditLog({
+        event: "ops_booking_create_failed",
+        level: "error",
+        tenantId,
+        userId: auth.user.id,
+        details: { reason: "practice_number_generation_failed" },
+      });
+      return NextResponse.json(
+        { error: "Impossibile generare il numero pratica. Riprova tra qualche istante." },
+        { status: 500 }
+      );
+    }
+
     const insert = {
       tenant_id: tenantId,
+      practice_number: practiceNumber,
       agency_id: agencyId,
       billing_party_name: billingPartyName,
       is_draft: false,
@@ -372,6 +399,7 @@ export async function POST(request: NextRequest) {
       created_at: createdAt,
       operator_name: operatorName,
       booking: {
+        practice_number: practiceNumber,
         customer_name: customerName,
         pax: d.pax,
         booking_service_kind: bookingKind,
