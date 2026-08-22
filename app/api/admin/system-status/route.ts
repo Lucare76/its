@@ -5,8 +5,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { readSystemJobHealthSummary } from "@/lib/server/job-health";
+import { readSystemJobHealthSummary, readRecentJobRuns } from "@/lib/server/job-health";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { JOB_HEALTH_CONFIG, JOB_HEALTH_KEYS } from "@/lib/server/job-health-config";
+import { evaluateJobHealth, computeOverallHealth, summarizeJobHealthCounts } from "@/lib/server/job-health-evaluator";
 
 export const runtime = "nodejs";
 
@@ -19,7 +21,9 @@ const CRON_JOBS = [
   { name: "Backup notturno",      path: "/api/cron/backup",               schedule: "0 2 * * *",  description: "Backup automatico DB → Storage (retention 30gg)" },
 ];
 
-const HEALTH_JOB_KEYS = ["backup", "poll-emails", "whatsapp-reminders"];
+// Riusa le chiavi dalla configurazione centrale (job-health-config.ts) invece di
+// duplicarle qui — stesso ordine ["backup", "poll-emails", "whatsapp-reminders"].
+const HEALTH_JOB_KEYS = JOB_HEALTH_KEYS;
 
 const ENV_VARS = [
   { key: "NEXT_PUBLIC_SUPABASE_URL",       label: "Supabase URL",            group: "Supabase" },
@@ -72,12 +76,46 @@ export async function GET(request: NextRequest) {
     };
   }
 
-  const recentSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const jobHealth = await readSystemJobHealthSummary(auth.admin, auth.membership.tenant_id, HEALTH_JOB_KEYS, recentSince);
+  const now = new Date();
+  const recentSince = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const [jobHealth, recentRunsByKey] = await Promise.all([
+    readSystemJobHealthSummary(auth.admin, auth.membership.tenant_id, HEALTH_JOB_KEYS, recentSince),
+    readRecentJobRuns(auth.admin, auth.membership.tenant_id, HEALTH_JOB_KEYS),
+  ]);
+
+  // Centro Salute ITS (Sprint 2): interpretazione EXECUTION STATUS -> HEALTH
+  // STATUS, calcolata SOLO qui (server-side) — la UI si limita a renderizzare
+  // health/reason/enabled/consecutive_failures/stale/stuck gia' decisi.
+  const healthEvaluations = HEALTH_JOB_KEYS.map((jobKey) =>
+    evaluateJobHealth({
+      config: JOB_HEALTH_CONFIG[jobKey]!,
+      runs: recentRunsByKey[jobKey] ?? [],
+      now,
+    })
+  );
+  const healthByKey = new Map(healthEvaluations.map((e) => [e.jobKey, e]));
+
+  const jobHealthEnriched = jobHealth.map((entry) => {
+    const evaluation = healthByKey.get(entry.job_key);
+    return {
+      ...entry,
+      health: evaluation?.healthStatus ?? "unknown",
+      reason: evaluation?.reason ?? "",
+      technical_detail: evaluation?.technicalDetail ?? null,
+      enabled: evaluation?.enabled ?? true,
+      consecutive_failures: evaluation?.consecutiveFailures ?? 0,
+      recent_warning_count: evaluation?.recentWarningCount ?? 0,
+      stale: evaluation?.stale ?? false,
+      stuck: evaluation?.stuck ?? false,
+      notes: evaluation?.notes ?? [],
+    };
+  });
 
   return NextResponse.json({
     ok: true,
-    generated_at: new Date().toISOString(),
+    generated_at: now.toISOString(),
+    overall_health: computeOverallHealth(healthEvaluations),
+    job_health_summary: summarizeJobHealthCounts(healthEvaluations),
     backup: {
       last: lastBackup,
       total_files: backupCount,
@@ -85,7 +123,7 @@ export async function GET(request: NextRequest) {
       bucket: BUCKET,
     },
     cron_jobs: CRON_JOBS,
-    job_health: jobHealth,
+    job_health: jobHealthEnriched,
     env: envStatus,
   });
 }

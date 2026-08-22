@@ -27,6 +27,10 @@ type JobRun = {
   error_message: string | null;
   metadata: Record<string, unknown>;
 };
+
+/** HEALTH STATUS (Centro Salute ITS, Sprint 2) — distinto da EXECUTION STATUS (JobRunStatus sopra). Deciso SOLO server-side (lib/server/job-health-evaluator.ts): questa pagina si limita a renderizzarlo. */
+type JobHealthStatus = "healthy" | "info" | "warning" | "critical" | "disabled" | "unknown";
+
 type JobHealth = {
   job_key: string;
   job_name: string;
@@ -35,10 +39,25 @@ type JobHealth = {
   latest_success: JobRun | null;
   latest_failure: JobRun | null;
   recent_failed_count: number;
+  // Campi Sprint 2 (interpretazione health, gia' calcolata dal server):
+  health: JobHealthStatus;
+  reason: string;
+  technical_detail: string | null;
+  enabled: boolean;
+  consecutive_failures: number;
+  recent_warning_count: number;
+  stale: boolean;
+  stuck: boolean;
+  notes: string[];
 };
+
+type OverallHealthStatus = "healthy" | "attention" | "critical";
+type JobHealthSummaryCounts = { healthy: number; info: number; warning: number; critical: number; disabled: number; unknown: number };
 
 type SystemStatus = {
   generated_at: string;
+  overall_health?: OverallHealthStatus;
+  job_health_summary?: JobHealthSummaryCounts;
   backup: BackupInfo;
   cron_jobs: CronJob[];
   job_health?: JobHealth[];
@@ -67,10 +86,28 @@ function groupBy<T>(arr: T[], key: keyof T): Record<string, T[]> {
   }, {} as Record<string, T[]>);
 }
 
+const OPERATIONAL_TIMEZONE = "Europe/Rome";
+
+/** I run sono salvati UTC nel DB: qui si converte SEMPRE esplicitamente alla timezone operativa (Europe/Rome), mai un confronto/format ingenuo sull'orario locale del browser. */
 function formatRunDate(iso: string | null | undefined): string {
   if (!iso) return "Mai eseguito";
-  return new Date(iso).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: OPERATIONAL_TIMEZONE });
 }
+
+const JOB_HEALTH_BADGE: Record<JobHealthStatus, { label: string; className: string }> = {
+  healthy: { label: "✅ Sano", className: "bg-emerald-100 text-emerald-700" },
+  info: { label: "ℹ️ Info", className: "bg-sky-100 text-sky-700" },
+  warning: { label: "🟠 Attenzione", className: "bg-amber-100 text-amber-700" },
+  critical: { label: "🔴 Critico", className: "bg-rose-100 text-rose-700" },
+  disabled: { label: "⚪ Non in uso", className: "bg-slate-100 text-slate-500" },
+  unknown: { label: "❔ In attesa", className: "bg-slate-100 text-slate-500" },
+};
+
+const OVERALL_HEALTH_BANNER: Record<OverallHealthStatus, { label: string; className: string }> = {
+  healthy: { label: "✅ Sistema automazioni sano", className: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+  attention: { label: "🟠 Richiede attenzione", className: "border-amber-200 bg-amber-50 text-amber-800" },
+  critical: { label: "🔴 Problemi critici", className: "border-rose-200 bg-rose-50 text-rose-800" },
+};
 
 function formatDuration(startedAt: string, finishedAt: string | null): string {
   if (!finishedAt) return "in corso";
@@ -81,13 +118,6 @@ function formatDuration(startedAt: string, finishedAt: string | null): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function statusBadge(status: JobRunStatus | null | undefined) {
-  if (status === "success") return { label: "✓ OK", className: "bg-emerald-100 text-emerald-700" };
-  if (status === "warning") return { label: "⚠ Warning", className: "bg-amber-100 text-amber-700" };
-  if (status === "failed") return { label: "✕ Failed", className: "bg-rose-100 text-rose-700" };
-  if (status === "running") return { label: "In corso", className: "bg-sky-100 text-sky-700" };
-  return { label: "Mai eseguito", className: "bg-slate-100 text-slate-600" };
-}
 
 type MedmarCreditSettings = {
   initial_credit_cents: number;
@@ -369,44 +399,86 @@ export default function SystemStatusPage() {
         </p>
       </div>
 
-      {/* Salute automazioni */}
-      <div className="card p-5 space-y-3">
-        <h2 className="text-base font-semibold text-slate-800">Salute automazioni</h2>
-        <div className="divide-y divide-slate-100">
-          {(status.job_health ?? []).map((job) => {
-            const run = job.latest_run;
-            const badge = statusBadge(run?.status);
-            return (
-              <div key={job.job_key} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-800">{job.job_name}</p>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${badge.className}`}>{badge.label}</span>
-                    {job.recent_failed_count > 0 ? (
-                      <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
-                        {job.recent_failed_count} fallimenti 7gg
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {formatRunDate(run?.started_at)} · durata {run ? formatDuration(run.started_at, run.finished_at) : "—"}
-                  </p>
-                  {run?.error_message ? <p className="mt-1 text-xs text-rose-600">{run.error_message}</p> : null}
-                </div>
-                <div className="shrink-0 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600 sm:text-right">
-                  <p><span className="font-semibold text-slate-800">{run?.processed_count ?? 0}</span> processati</p>
-                  <p>{run?.success_count ?? 0} riusciti · {run?.failed_count ?? 0} falliti · {run?.warning_count ?? 0} warning</p>
-                </div>
-              </div>
-            );
-          })}
-          {(status.job_health ?? []).length === 0 ? (
-            <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-600">
-              Nessun run registrato. I dati compariranno dopo la prima esecuzione dei job monitorati.
+      {/* Centro Salute ITS (Sprint 2) — riepilogo generale + job che richiedono attenzione + dettaglio per job. Health decisa server-side, questa pagina la renderizza soltanto. */}
+      {(() => {
+        const jobs = status.job_health ?? [];
+        const overall = status.overall_health ?? "healthy";
+        const banner = OVERALL_HEALTH_BANNER[overall];
+        const needsAttention = jobs.filter((j) => j.health === "warning" || j.health === "critical");
+
+        return (
+          <div className="card p-5 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-base font-semibold text-slate-800">Salute automazioni</h2>
             </div>
-          ) : null}
-        </div>
-      </div>
+
+            {/* Riepilogo generale */}
+            <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${banner.className}`}>
+              {banner.label}
+            </div>
+
+            {/* Richiede attenzione — solo anomalie reali (warning/critical), mai una lista vuota */}
+            {jobs.length > 0 && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">Richiede attenzione</p>
+                {needsAttention.length === 0 ? (
+                  <p className="text-sm text-slate-600">Nessuna anomalia attiva.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {needsAttention.map((job) => (
+                      <p key={job.job_key} className="text-sm text-slate-800">
+                        {job.health === "critical" ? "🔴" : "🟠"} {job.job_name}: {job.reason}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Dettaglio per job */}
+            <div className="divide-y divide-slate-100">
+              {jobs.map((job) => {
+                const run = job.latest_run;
+                const badge = JOB_HEALTH_BADGE[job.health];
+                return (
+                  <div key={job.job_key} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-800">{job.job_name}</p>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${badge.className}`}>{badge.label}</span>
+                      </div>
+                      {job.enabled ? (
+                        <>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Ultimo run: {formatRunDate(run?.started_at)}
+                            {run ? ` · durata ${formatDuration(run.started_at, run.finished_at)}` : ""}
+                          </p>
+                          {(job.health === "warning" || job.health === "critical") && job.reason ? (
+                            <p className={`mt-1 text-xs font-semibold ${job.health === "critical" ? "text-rose-600" : "text-amber-700"}`}>{job.reason}</p>
+                          ) : null}
+                          {job.notes.length > 0 ? (
+                            <p className="mt-1 text-xs text-slate-500">{job.notes.join(" · ")}</p>
+                          ) : null}
+                          {job.technical_detail ? (
+                            <p className="mt-1 text-[11px] text-slate-400">Dettaglio tecnico: {job.technical_detail}</p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="mt-1 text-xs text-slate-500">Nessun controllo richiesto.</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {jobs.length === 0 ? (
+                <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-600">
+                  Nessun run registrato. I dati compariranno dopo la prima esecuzione dei job monitorati.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Backup */}
       <div className="card p-5 space-y-4">

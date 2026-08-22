@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   completeJobRun,
+  readRecentJobRuns,
   readSystemJobHealthSummary,
   sanitizeJobMetadata,
   startJobRun,
@@ -148,5 +149,39 @@ describe("job-health registry", () => {
     expect(summary[0].latest_run?.id).toBe("1");
     expect(summary[0].latest_success?.id).toBe("2");
     expect(summary[0].recent_failed_count).toBe(1);
+  });
+
+  it("readRecentJobRuns raggruppa lo storico ordinato per job_key, piu' recente prima", async () => {
+    const rows = [
+      { id: "b2", tenant_id: "tenant-1", job_key: "backup", job_name: "Backup automatico", source: "cron", started_at: "2026-08-22T02:00:00.000Z", finished_at: "2026-08-22T02:01:00.000Z", status: "success", processed_count: 1, success_count: 1, failed_count: 0, warning_count: 0, error_message: null, metadata: {}, created_at: "2026-08-22T02:00:00.000Z" },
+      { id: "p1", tenant_id: "tenant-1", job_key: "poll-emails", job_name: "Polling email", source: "cron", started_at: "2026-08-22T06:00:00.000Z", finished_at: "2026-08-22T06:00:10.000Z", status: "success", processed_count: 1, success_count: 1, failed_count: 0, warning_count: 0, error_message: null, metadata: {}, created_at: "2026-08-22T06:00:00.000Z" },
+      { id: "b1", tenant_id: "tenant-1", job_key: "backup", job_name: "Backup automatico", source: "cron", started_at: "2026-08-21T02:00:00.000Z", finished_at: "2026-08-21T02:01:00.000Z", status: "failed", processed_count: 1, success_count: 0, failed_count: 1, warning_count: 0, error_message: "boom", metadata: {}, created_at: "2026-08-21T02:00:00.000Z" }
+    ];
+    const limit = vi.fn().mockResolvedValue({ data: rows, error: null });
+    const order = vi.fn(() => ({ limit }));
+    const inFn = vi.fn(() => ({ order }));
+    const or = vi.fn(() => ({ in: inFn }));
+    const select = vi.fn(() => ({ or }));
+    const from = vi.fn(() => ({ select }));
+
+    const byKey = await readRecentJobRuns({ from } as never, "tenant-1", ["backup", "poll-emails", "whatsapp-reminders"]);
+
+    expect(byKey.backup!.map((r) => r.id)).toEqual(["b2", "b1"]);
+    expect(byKey["poll-emails"]!.map((r) => r.id)).toEqual(["p1"]);
+    expect(byKey["whatsapp-reminders"]).toEqual([]);
+  });
+
+  it("readRecentJobRuns errore Supabase -> array vuoto per ogni chiave, mai un'eccezione propagata", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const limit = vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } });
+    const order = vi.fn(() => ({ limit }));
+    const inFn = vi.fn(() => ({ order }));
+    const or = vi.fn(() => ({ in: inFn }));
+    const select = vi.fn(() => ({ or }));
+    const from = vi.fn(() => ({ select }));
+
+    const byKey = await readRecentJobRuns({ from } as never, "tenant-1", ["backup"]);
+
+    expect(byKey).toEqual({ backup: [] });
   });
 });

@@ -177,6 +177,45 @@ export async function withJobHealth<T>(
   }
 }
 
+/**
+ * Storico ordinato (piu' recente prima) per il Centro Salute ITS (Sprint 2)
+ * — richiesto dall'evaluator (job-health-evaluator.ts) per calcolare i
+ * fallimenti consecutivi REALI a partire dal run piu' recente, cosa che
+ * `readSystemJobHealthSummary` non espone (restituisce solo aggregati:
+ * latest_run/latest_success/latest_failure/recent_failed_count).
+ *
+ * Query indipendente e duplicata deliberatamente rispetto a
+ * `readSystemJobHealthSummary`: quella funzione ha test Sprint 1 che
+ * fissano la sua esatta catena di chiamate sul client Supabase — non va
+ * toccata per aggiungere questa funzionalita'.
+ */
+export async function readRecentJobRuns(
+  admin: SupabaseClient,
+  tenantId: string,
+  jobKeys: string[],
+  limit = 500
+): Promise<Record<string, SystemJobRunRow[]>> {
+  const byKey: Record<string, SystemJobRunRow[]> = Object.fromEntries(jobKeys.map((key) => [key, []]));
+
+  const { data, error } = await admin
+    .from("system_job_runs")
+    .select("id, tenant_id, job_key, job_name, source, started_at, finished_at, status, processed_count, success_count, failed_count, warning_count, error_message, metadata, created_at")
+    .or(`tenant_id.is.null,tenant_id.eq.${tenantId}`)
+    .in("job_key", jobKeys)
+    .order("started_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("Job health run history read failed", { message: error.message });
+    return byKey;
+  }
+
+  for (const row of (data ?? []) as SystemJobRunRow[]) {
+    if (byKey[row.job_key]) byKey[row.job_key]!.push(row);
+  }
+  return byKey;
+}
+
 export async function readSystemJobHealthSummary(
   admin: SupabaseClient,
   tenantId: string,
