@@ -175,6 +175,13 @@ export interface Service {
   train_departure_number?: string | null;
   train_departure_time?: string | null;
   bus_city_origin?: string | null;
+  bus_operational_line_name?: string | null;
+  bus_operational_family_code?: string | null;
+  bus_operational_stop_name?: string | null;
+  bus_operational_stop_pickup_note?: string | null;
+  bus_operational_hotel_pickup_time?: string | null;
+  bus_operational_destination_label?: string | null;
+  bus_operational_resolution_source?: "allocation" | "bus_city_origin" | "service_fields" | "unresolved" | null;
   orario_barca?: string | null;
   barca_compagnia?: string | null;
   include_ferry_tickets?: boolean | null;

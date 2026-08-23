@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { fetchAllServices } from "@/lib/server/fetch-all-services";
+import { enrichServicesWithBusOperationalResolution } from "@/lib/server/bus-operational-resolver";
 
 const DATASET_VALUES = [
   "services",
@@ -219,6 +220,14 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ ok: false, error: result.error.message }, { status: 500 });
       }
       services = (result.data ?? []) as Record<string, unknown>[];
+      try {
+        services = await enrichServicesWithBusOperationalResolution(auth.admin, tenantId, services);
+      } catch (error) {
+        return NextResponse.json(
+          { ok: false, error: error instanceof Error ? error.message : "Errore arricchimento operativo bus" },
+          { status: 500 }
+        );
+      }
     }
     // Sprint Performance 13 — FASE 10/11: assignments/status_events are scoped
     // to the service ids the (scoped) services query actually returned, never

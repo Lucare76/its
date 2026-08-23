@@ -20,6 +20,55 @@ function isShuttleService(service: Service) {
   return service.booking_service_kind === "navetta" || service.booking_service_kind === "shuttle_hotel" || service.vessel?.trim().toLowerCase() === "navetta";
 }
 
+function cleanDepartureDisplayClock(value?: string | null, options?: { allowMidnight?: boolean }) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^([01]\d|2[0-3]):([0-5]\d)/);
+  if (!match) return null;
+  const time = `${match[1]}:${match[2]}`;
+  if (!options?.allowMidnight && time === "00:00") return null;
+  return time;
+}
+
+function isBusLineDepartureService(service: Service) {
+  return service.booking_service_kind === "bus_city_hotel" || service.service_type_code === "bus_line";
+}
+
+function getDeparturePickupTime(item: { time: string; service: Service }) {
+  const service = item.service;
+  if (!isBusLineDepartureService(service)) return item.time;
+  return (
+    cleanDepartureDisplayClock(service.bus_operational_hotel_pickup_time) ??
+    cleanDepartureDisplayClock(service.pickup_time) ??
+    cleanDepartureDisplayClock(service.departure_time) ??
+    cleanDepartureDisplayClock(service.time) ??
+    cleanDepartureDisplayClock(item.time) ??
+    "--:--"
+  );
+}
+
+function getDepartureDestinationLabel(service: Service) {
+  if (isBusLineDepartureService(service)) {
+    return service.bus_operational_destination_label ?? service.bus_operational_stop_name ?? service.meeting_point ?? "Destinazione N/D";
+  }
+  return service.meeting_point ?? "Destinazione N/D";
+}
+
+function getDepartureTransportLabel(service: Service) {
+  if (isBusLineDepartureService(service)) {
+    return service.bus_operational_line_name ?? service.transport_code ?? service.vessel ?? "Linea bus";
+  }
+  return getDepartureFerryLabel(service) ?? getDepartureTransportReference(service) ?? service.vessel ?? "Corsa N/D";
+}
+
+function getDepartureTimeBand(item: { time: string; service: Service }) {
+  const pickupTime = getDeparturePickupTime(item);
+  const hour = Number(pickupTime.slice(0, 2));
+  if (!Number.isFinite(hour)) return "evening";
+  if (hour < 12) return "morning";
+  if (hour < 18) return "afternoon";
+  return "evening";
+}
+
 function TransportIcon({ service }: { service: Service }) {
   const value = `${service.booking_service_kind ?? ""} ${service.service_type_code ?? ""} ${service.vessel ?? ""} ${service.transport_code ?? ""}`.toLowerCase();
   const common = "h-6 w-6 shrink-0 text-slate-700";
@@ -350,11 +399,11 @@ export default function DeparturesPage() {
         instance.direction === "departure" &&
         instance.date === selectedDate &&
         (agencyFilter === "all" || instance.service.billing_party_name?.trim().toLowerCase() === agencyFilter.toLowerCase()) &&
-        (!q || [instance.service.customer_name, instance.service.phone, instance.service.billing_party_name, instance.service.vessel, instance.service.transport_code, hotelsById.get(instance.service.hotel_id)?.name].some((value) => (value ?? "").toLowerCase().includes(q))) &&
+        (!q || [instance.service.customer_name, instance.service.phone, instance.service.billing_party_name, instance.service.vessel, instance.service.transport_code, instance.service.bus_operational_line_name, instance.service.bus_operational_stop_name, instance.service.bus_operational_destination_label, hotelsById.get(instance.service.hotel_id)?.name].some((value) => (value ?? "").toLowerCase().includes(q))) &&
         (departureView === "shuttles" ? isShuttleService(instance.service) : !isShuttleService(instance.service)) &&
-        (timeBand === "all" || (Number(instance.time.slice(0, 2)) < 12 ? "morning" : Number(instance.time.slice(0, 2)) < 18 ? "afternoon" : "evening") === timeBand)
+        (timeBand === "all" || getDepartureTimeBand(instance) === timeBand)
       )
-      .sort((left, right) => left.time.localeCompare(right.time));
+      .sort((left, right) => getDeparturePickupTime(left).localeCompare(getDeparturePickupTime(right)));
   }, [data.services, selectedDate, agencyFilter, search, hotelsById, departureView, timeBand]);
 
   const totalPax = departures.reduce((sum, item) => sum + item.service.pax, 0);
@@ -634,16 +683,16 @@ export default function DeparturesPage() {
 
   const buildRows = useCallback((): ExportRow[] =>
     departures.map((item) => ({
-      Ora: item.time,
+      Ora: getDeparturePickupTime(item),
       Cliente: getCustomerFullName(item.service),
       Pax: item.service.pax,
       "Origine/Hotel": resolveHotelName(item.service),
-      "Meeting point": resolvePickupNote(item.service) ?? resolveHotelName(item.service),
-      Riferimento: getDepartureFerryLabel(item.service) ?? getDepartureTransportReference(item.service) ?? "",
+      "Meeting point": getDepartureDestinationLabel(item.service),
+      Riferimento: getDepartureTransportLabel(item.service),
       Tipo: item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "",
       Agenzia: item.service.billing_party_name ?? "",
     }))
-  , [departures, resolveHotelName, resolvePickupNote]);
+  , [departures, resolveHotelName]);
 
   const handleExcel = () => void exportToExcel(buildRows(), `partenze-${selectedDate}.xlsx`);
   const handlePrint = () => void printTable(buildRows(), formatIsoDateShort(selectedDate));
@@ -674,8 +723,7 @@ export default function DeparturesPage() {
   const reviewCount = departures.filter((item) => item.service.status === "new").length;
   const shuttleCount = buildOperationalInstances(data.services).filter((item) => item.direction === "departure" && item.date === selectedDate && isShuttleService(item.service)).length;
   const timeBandCounts = buildOperationalInstances(data.services).filter((item) => item.direction === "departure" && item.date === selectedDate && !isShuttleService(item.service)).reduce((counts, item) => {
-    const hour = Number(item.time.slice(0, 2));
-    counts[hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening"] += 1;
+    counts[getDepartureTimeBand(item)] += 1;
     return counts;
   }, { morning: 0, afternoon: 0, evening: 0 });
   const rowsPerPage = 50;
@@ -707,14 +755,14 @@ export default function DeparturesPage() {
             <p className="mt-3 text-xs text-slate-500">ⓘ {departureView === "shuttles" ? "Vista dedicata alle navette quotidiane" : "Navette escluse dalla vista standard"}</p>
           </div>
           {departures.length === 0 ? <p className="py-12 text-center text-sm text-slate-500">Nessuna partenza nel filtro selezionato.</p> : <>
-          <div className="space-y-2 md:hidden">{visibleDepartures.map((item)=><article key={`compact-${item.instanceId}`} className="rounded-xl border border-slate-200 bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-slate-800">{getCustomerFullName(item.service)}</p><p className="mt-1 text-xs text-slate-500">{resolveHotelName(item.service)}</p></div><strong className="rounded-lg bg-indigo-50 px-2 py-1 text-indigo-700">{item.time}</strong></div><div className="mt-3 flex items-center gap-2 text-sm text-slate-600"><TransportIcon service={item.service}/><span>{getDepartureFerryLabel(item.service)??getDepartureTransportReference(item.service)??"Corsa N/D"}</span></div><div className="mt-3 flex gap-2"><button type="button" onClick={()=>setQrServiceId(item.service.id)} className="btn-secondary px-3 py-1.5 text-xs">Dettagli</button><button type="button" onClick={()=>setEditingService(item.service)} className="btn-secondary px-3 py-1.5 text-xs">Modifica</button><button type="button" onClick={()=>openCancelModal(item.service)} className="btn-secondary px-3 py-1.5 text-xs">•••</button></div></article>)}</div>
+          <div className="space-y-2 md:hidden">{visibleDepartures.map((item)=><article key={`compact-${item.instanceId}`} className="rounded-xl border border-slate-200 bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-slate-800">{getCustomerFullName(item.service)}</p><p className="mt-1 text-xs text-slate-500">{resolveHotelName(item.service)}</p></div><strong className="rounded-lg bg-indigo-50 px-2 py-1 text-indigo-700">{getDeparturePickupTime(item)}</strong></div><div className="mt-3 flex items-center gap-2 text-sm text-slate-600"><TransportIcon service={item.service}/><span>{getDepartureTransportLabel(item.service)}</span></div><div className="mt-3 flex gap-2"><button type="button" onClick={()=>setQrServiceId(item.service.id)} className="btn-secondary px-3 py-1.5 text-xs">Dettagli</button><button type="button" onClick={()=>setEditingService(item.service)} className="btn-secondary px-3 py-1.5 text-xs">Modifica</button><button type="button" onClick={()=>openCancelModal(item.service)} className="btn-secondary px-3 py-1.5 text-xs">•••</button></div></article>)}</div>
           <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white md:block">
             <div className="grid grid-cols-[70px_minmax(125px,1.1fr)_32px_minmax(120px,1fr)_minmax(135px,1.15fr)_minmax(105px,.8fr)_94px_124px] gap-2 border-b border-slate-200 px-3 py-3 text-[10px] font-bold uppercase tracking-wide text-slate-500"><span>Ora pickup</span><span>Cliente</span><span>Pax</span><span>Hotel / Pickup</span><span>Corsa / Destinazione</span><span>Autista / Veicolo</span><span>Stato</span><span className="text-right">Azioni</span></div>
-            <div className="divide-y divide-slate-100">{visibleDepartures.map((item)=>{const service=item.service;const assignment=assignmentByServiceId.get(service.id);const driverName=assignment?.driver_user_id?driverById.get(assignment.driver_user_id):null;const unassigned=!driverName;const hotel=resolveHotelName(service);const transport=getDepartureFerryLabel(service)??getDepartureTransportReference(service)??service.vessel??"Corsa N/D";return <div key={item.instanceId} className={`grid grid-cols-[70px_minmax(125px,1.1fr)_32px_minmax(120px,1fr)_minmax(135px,1.15fr)_minmax(105px,.8fr)_94px_124px] items-center gap-2 px-3 py-3 ${unassigned?"bg-amber-50/55":"hover:bg-slate-50/70"}`}><strong className="text-sm text-indigo-700">{item.time}</strong><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-bold leading-tight text-slate-800">{getCustomerFullName(service)}</p><p className="mt-1 break-all text-[11px] text-slate-500">{service.phone||"Telefono non indicato"}</p></div><span className="text-sm font-semibold">{service.pax}</span><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight">{hotel}</p><p className="mt-1 whitespace-normal break-words text-[11px] text-slate-500">{resolvePickupNote(service)||"Pickup hotel"}</p></div><div className="flex min-w-0 items-start gap-2"><TransportIcon service={service}/><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight">{transport}</p><p className="mt-1 text-[11px] text-slate-500">{service.meeting_point||"Destinazione N/D"}</p></div></div><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-medium">{driverName||"Non assegnato"}</p><p className="mt-1 text-[11px] text-slate-500">{assignment?.vehicle_label||"—"}</p></div><span className={`w-fit whitespace-nowrap rounded-lg px-2 py-1 text-[10px] font-bold ${unassigned?"border border-orange-200 bg-orange-50 text-orange-600":service.status==="new"?"border border-amber-200 bg-amber-50 text-amber-600":"bg-indigo-50 text-indigo-700"}`}>{unassigned?"Da assegnare":service.status==="new"?"Da verificare":"Confermato"}</span><div className="flex justify-end gap-1"><button type="button" onClick={()=>setQrServiceId(service.id)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Dettagli</button><button type="button" onClick={()=>setEditingService(service)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Modifica</button><button type="button" onClick={()=>openCancelModal(service)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-600">•••</button></div></div>})}</div>
+            <div className="divide-y divide-slate-100">{visibleDepartures.map((item)=>{const service=item.service;const assignment=assignmentByServiceId.get(service.id);const driverName=assignment?.driver_user_id?driverById.get(assignment.driver_user_id):null;const unassigned=!driverName;const hotel=resolveHotelName(service);const pickupTime=getDeparturePickupTime(item);const destination=getDepartureDestinationLabel(service);const transport=getDepartureTransportLabel(service);return <div key={item.instanceId} className={`grid grid-cols-[70px_minmax(125px,1.1fr)_32px_minmax(120px,1fr)_minmax(135px,1.15fr)_minmax(105px,.8fr)_94px_124px] items-center gap-2 px-3 py-3 ${unassigned?"bg-amber-50/55":"hover:bg-slate-50/70"}`}><strong className="text-sm text-indigo-700">{pickupTime}</strong><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-bold leading-tight text-slate-800">{getCustomerFullName(service)}</p><p className="mt-1 break-all text-[11px] text-slate-500">{service.phone||"Telefono non indicato"}</p></div><span className="text-sm font-semibold">{service.pax}</span><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight">{hotel}</p><p className="mt-1 whitespace-normal break-words text-[11px] text-slate-500">{resolvePickupNote(service)||"Pickup hotel"}</p></div><div className="flex min-w-0 items-start gap-2"><TransportIcon service={service}/><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-semibold leading-tight">{transport}</p><p className="mt-1 text-[11px] text-slate-500">{destination}</p></div></div><div className="min-w-0"><p className="whitespace-normal break-words text-sm font-medium">{driverName||"Non assegnato"}</p><p className="mt-1 text-[11px] text-slate-500">{assignment?.vehicle_label||"—"}</p></div><span className={`w-fit whitespace-nowrap rounded-lg px-2 py-1 text-[10px] font-bold ${unassigned?"border border-orange-200 bg-orange-50 text-orange-600":service.status==="new"?"border border-amber-200 bg-amber-50 text-amber-600":"bg-indigo-50 text-indigo-700"}`}>{unassigned?"Da assegnare":service.status==="new"?"Da verificare":"Confermato"}</span><div className="flex justify-end gap-1"><button type="button" onClick={()=>setQrServiceId(service.id)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Dettagli</button><button type="button" onClick={()=>setEditingService(service)} className="rounded-lg border border-slate-200 bg-white px-1.5 py-1.5 text-[11px] text-slate-600">Modifica</button><button type="button" onClick={()=>openCancelModal(service)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-600">•••</button></div></div>})}</div>
             <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-xs text-slate-500"><span>Visualizzati {departures.length?((safePage-1)*rowsPerPage)+1:0}–{Math.min(safePage*rowsPerPage,departures.length)} di {departures.length}</span><div className="flex gap-1"><button type="button" disabled={safePage===1} onClick={()=>setCurrentPage(safePage-1)} className="btn-secondary px-3 py-1.5 disabled:opacity-40">‹</button><span className="btn-primary px-3 py-1.5">{safePage}</span><button type="button" disabled={safePage===pageCount} onClick={()=>setCurrentPage(safePage+1)} className="btn-secondary px-3 py-1.5 disabled:opacity-40">›</button></div></div>
           </div></>}
         </SectionCard>
-        <aside className="space-y-4"><div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-slate-950">Controllo partenze</h2><div className="mt-4 divide-y divide-slate-100">{[["Senza autista",unassignedCount,"bg-orange-100 text-orange-700"],["Senza veicolo",unassignedCount,"bg-indigo-100 text-indigo-700"],["Dati da verificare",reviewCount,"bg-amber-100 text-amber-700"],["Ritardi segnalati",0,"bg-rose-100 text-rose-700"]].map(([label,value,tone])=><div key={String(label)} className="flex items-center justify-between py-4 text-sm font-medium"><span>{label}</span><strong className={`rounded-lg px-2.5 py-1 ${tone}`}>{value}</strong></div>)}</div><a href="/control-room" className="btn-secondary mt-4 block w-full py-3 text-center">Apri Control Room</a></div><div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-slate-950">Prossime partenze</h2><div className="mt-3 divide-y divide-slate-100">{departures.slice(0,4).map((item)=><div key={`next-${item.instanceId}`} className="grid grid-cols-[48px_1fr_auto] gap-2 py-4 text-xs"><strong className="text-indigo-700">{item.time}</strong><div><p className="font-bold text-slate-800">{resolveHotelName(item.service)}</p><p className="mt-1 text-slate-500">{item.service.meeting_point||"Ischia Porto"}</p></div><span>{item.service.pax} pax</span></div>)}</div></div></aside>
+        <aside className="space-y-4"><div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-slate-950">Controllo partenze</h2><div className="mt-4 divide-y divide-slate-100">{[["Senza autista",unassignedCount,"bg-orange-100 text-orange-700"],["Senza veicolo",unassignedCount,"bg-indigo-100 text-indigo-700"],["Dati da verificare",reviewCount,"bg-amber-100 text-amber-700"],["Ritardi segnalati",0,"bg-rose-100 text-rose-700"]].map(([label,value,tone])=><div key={String(label)} className="flex items-center justify-between py-4 text-sm font-medium"><span>{label}</span><strong className={`rounded-lg px-2.5 py-1 ${tone}`}>{value}</strong></div>)}</div><a href="/control-room" className="btn-secondary mt-4 block w-full py-3 text-center">Apri Control Room</a></div><div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-extrabold text-slate-950">Prossime partenze</h2><div className="mt-3 divide-y divide-slate-100">{departures.slice(0,4).map((item)=><div key={`next-${item.instanceId}`} className="grid grid-cols-[48px_1fr_auto] gap-2 py-4 text-xs"><strong className="text-indigo-700">{getDeparturePickupTime(item)}</strong><div><p className="font-bold text-slate-800">{resolveHotelName(item.service)}</p><p className="mt-1 text-slate-500">{getDepartureDestinationLabel(item.service)}</p></div><span>{item.service.pax} pax</span></div>)}</div></div></aside>
       </div>
 
       <div className="hidden">
@@ -791,8 +839,9 @@ export default function DeparturesPage() {
           <div className="space-y-2 md:hidden">
             {departures.map((item) => {
               const hotelName = resolveHotelName(item.service);
-              const meetingPoint = resolvePickupNote(item.service);
-              const riferimento = getDepartureFerryLabel(item.service) ?? getDepartureTransportReference(item.service);
+              const meetingPoint = getDepartureDestinationLabel(item.service);
+              const riferimento = getDepartureTransportLabel(item.service);
+              const pickupTime = getDeparturePickupTime(item);
               const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
               const hint = pickupHints.get(item.service.id);
               return (
@@ -810,7 +859,7 @@ export default function DeparturesPage() {
                         onChange={() => toggleDepSelect(item.service.id)}
                       />
                       <span className="inline-flex min-w-[56px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
-                        {item.time}
+                        {pickupTime}
                       </span>
                     </div>
                   </div>
@@ -860,8 +909,9 @@ export default function DeparturesPage() {
             <div className="divide-y divide-slate-100">
               {departures.map((item) => {
                 const hotelName = resolveHotelName(item.service);
-                const meetingPoint = resolvePickupNote(item.service);
-                const riferimento = getDepartureFerryLabel(item.service) ?? getDepartureTransportReference(item.service);
+                const meetingPoint = getDepartureDestinationLabel(item.service);
+                const riferimento = getDepartureTransportLabel(item.service);
+                const pickupTime = getDeparturePickupTime(item);
                 const tipoLabel = item.service.service_type_code ?? item.service.booking_service_kind ?? item.service.service_type ?? "N/D";
                 const hint = pickupHints.get(item.service.id);
                 return (
@@ -881,14 +931,14 @@ export default function DeparturesPage() {
                     {/* ORA + hint pickup */}
                     <div className="space-y-0.5">
                       <span className="inline-flex min-w-[48px] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-bold text-slate-800">
-                        {item.time}
+                        {pickupTime}
                       </span>
-                      {hint && hint.pickup !== item.time && (
+                      {hint && hint.pickup !== pickupTime && (
                         <p className="text-[10px] font-semibold text-amber-600 cursor-help" title={`Regole: ${hint.pickup} · ${hint.label}`}>
                           ⏰ {hint.pickup}
                         </p>
                       )}
-                      {hint && hint.pickup === item.time && (
+                      {hint && hint.pickup === pickupTime && (
                         <p className="text-[10px] text-emerald-500" title="Orario conforme alle regole">✓</p>
                       )}
                     </div>
