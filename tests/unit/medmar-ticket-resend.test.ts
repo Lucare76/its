@@ -76,6 +76,31 @@ function makeResendRepo(): { repo: MedmarResendRepository; rows: MedmarTicketRes
       rows.push(row);
       return row;
     },
+    // Nessun `await` tra il controllo e l'inserimento: nel backend reale
+    // sono due round-trip separati (vedi commento in resend-repository.ts),
+    // ma qui — dove conta dimostrare che il guard chiude la race sotto
+    // Promise.all — check+reserve avviene nello stesso tick sincrono, come
+    // farebbe un vero constraint atomico.
+    async insertStartedIfEligible(input, cooldownSeconds) {
+      const cutoffMs = Date.now() - cooldownSeconds * 1000;
+      const recent = rows
+        .filter((r) => r.delivery_attempt_id === input.deliveryAttemptId && new Date(r.created_at).getTime() >= cutoffMs)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      if (recent) return { kind: "blocked" as const, recent };
+
+      const row = makeLedgerRow({
+        id: `ledger-${rows.length + 1}`,
+        delivery_attempt_id: input.deliveryAttemptId,
+        issuing_attempt_id: input.issuingAttemptId,
+        medmar_id_prenotazione: input.medmarIdPrenotazione,
+        medmar_numero: input.medmarNumero,
+        recipient_email: input.recipientEmail,
+        created_by: input.createdBy,
+        status: "started",
+      });
+      rows.push(row);
+      return { kind: "started" as const, row };
+    },
     async markSent(id, patch) {
       const idx = rows.findIndex((r) => r.id === id);
       if (idx === -1) throw new Error("ledger not found");
@@ -336,5 +361,82 @@ describe("resendMedmarTicket — orchestratore reinvio (MVP sicuro)", () => {
     const { deps } = baseDeps(makeAttempt());
     const outcome = await resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps);
     expect(outcome.ok).toBe(true);
+  });
+
+  describe("guard anti-doppio-resend (micro-fix Case 5 — chiude il gap P2 dell'audit finale)", () => {
+    it("16.1/16.2/16.3. due richieste concorrenti per lo stesso delivery_attempt_id -> UN SOLO invio, UNA SOLA riga 'sent', la seconda rifiutata senza crash", async () => {
+      const sendSpy = vi.fn(async () => ({ kind: "sent" as const, messageId: `resend-msg-${sendSpy.mock.calls.length + 1}` }));
+      const { deps, rows } = baseDeps(makeAttempt(), { sendEmail: sendSpy as never });
+
+      const [first, second] = await Promise.all([
+        resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps),
+        resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps),
+      ]);
+
+      const outcomes = [first, second];
+      const succeeded = outcomes.filter((o) => o.ok);
+      const blocked = outcomes.filter((o) => !o.ok && o.status === "resend_in_progress");
+
+      expect(succeeded).toHaveLength(1);
+      expect(blocked).toHaveLength(1);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      expect(rows.filter((r) => r.status === "sent")).toHaveLength(1);
+      // La richiesta bloccata non crea una riga propria: nessun ledger orfano.
+      expect(rows).toHaveLength(1);
+      if (!blocked[0]!.ok) {
+        expect(blocked[0]!.error).not.toMatch(/error|exception|stack|postgres|supabase/i);
+        expect(blocked[0]!.error).toContain("Attendi qualche secondo");
+      }
+    });
+
+    it("4. resend normale singolo (nessuna concorrenza) -> invariato: invio eseguito, ledger 'sent'", async () => {
+      const { deps, rows } = baseDeps(makeAttempt());
+      const outcome = await resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps);
+      expect(outcome.ok).toBe(true);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.status).toBe("sent");
+    });
+
+    it("5. un resend successivo DOPO la finestra di cooldown (15s) -> consentito, mai un blocco permanente", async () => {
+      const { deps, rows } = baseDeps(makeAttempt());
+      // Riga di un "resend" precedente, fuori dalla finestra di 15s.
+      rows.push(makeLedgerRow({ id: "ledger-old", status: "sent", created_at: new Date(Date.now() - 60_000).toISOString() }));
+
+      const outcome = await resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps);
+      expect(outcome.ok).toBe(true);
+      expect(rows.filter((r) => r.status === "sent")).toHaveLength(2);
+    });
+
+    it("6. errore reale di invio (fuori da qualunque concorrenza) -> comportamento precedente invariato: send_failed, ledger 'failed'", async () => {
+      const { deps, rows } = baseDeps(makeAttempt(), { sendEmail: (async () => ({ kind: "failed", error: "Resend HTTP 500" })) as never });
+      const outcome = await resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.status).toBe("send_failed");
+      expect(rows[0]!.status).toBe("failed");
+    });
+
+    it("7. A/R invariato: issuing_attempt_id e medmar_numero passano invariati sulla riga 'sent' (il guard non li tocca)", async () => {
+      const { deps, rows } = baseDeps(makeAttempt());
+      await resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps);
+      expect(rows[0]!.issuing_attempt_id).toBe(ISSUING_ATTEMPT_ID);
+      expect(rows[0]!.medmar_numero).toBe(MEDMAR_NUMERO);
+    });
+
+    it("8. nessuna nuova emissione Medmar: il guard opera solo su medmar_ticket_resends, mai su medmar_issuing_attempts", async () => {
+      const { deps } = baseDeps(makeAttempt());
+      const outcome = await resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps);
+      expect(outcome.ok).toBe(true);
+      // fakeAdmin non espone from(): qualunque scrittura su medmar_issuing_attempts fuori dalle deps iniettate farebbe fallire questo test.
+    });
+
+    it("9. destinatario invariato: la richiesta bloccata riferisce lo stesso recipient_email della riga esistente", async () => {
+      const { deps, rows } = baseDeps(makeAttempt());
+      await Promise.all([
+        resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps),
+        resendMedmarTicket({ admin: fakeAdmin, tenantId: TENANT, userId: USER, deliveryAttemptId: DELIVERY_ATTEMPT_ID }, deps),
+      ]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.recipient_email).toBe(RECIPIENT_EMAIL);
+    });
   });
 });

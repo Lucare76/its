@@ -50,6 +50,20 @@ function normalizeResendRow(row: Record<string, unknown>): MedmarTicketResendRow
   };
 }
 
+export type MedmarInsertStartedIfEligibleInput = {
+  tenantId: string;
+  deliveryAttemptId: string;
+  issuingAttemptId: string | null;
+  medmarIdPrenotazione: string;
+  medmarNumero: string;
+  recipientEmail: string;
+  createdBy: string;
+};
+
+export type MedmarInsertStartedIfEligibleResult =
+  | { kind: "started"; row: MedmarTicketResendRow }
+  | { kind: "blocked"; recent: MedmarTicketResendRow };
+
 export type MedmarResendRepository = {
   insertStarted(input: {
     tenantId: string;
@@ -60,6 +74,23 @@ export type MedmarResendRepository = {
     recipientEmail: string;
     createdBy: string;
   }): Promise<MedmarTicketResendRow>;
+  /**
+   * Guard anti-doppio-reinvio (micro-fix "guard anti-doppio resend"): in
+   * un'unica chiamata di repository, verifica se esiste gia' un reinvio
+   * (qualunque stato — 'started' = in corso, 'sent'/'failed' = appena
+   * tentato) per lo stesso delivery_attempt_id creato negli ultimi
+   * `cooldownSeconds`; se si', ritorna quella riga senza inserirne una
+   * nuova ('blocked'); altrimenti inserisce 'started' ('started'). Nessun
+   * vincolo UNIQUE esiste oggi su medmar_ticket_resends per
+   * (tenant_id, delivery_attempt_id) — vedi commento in ticket-resend.ts sul
+   * limite reale di questo guard sul backend Supabase (2 round-trip, non un
+   * singolo constraint atomico) e sulla migration proposta per chiuderlo del
+   * tutto.
+   */
+  insertStartedIfEligible(
+    input: MedmarInsertStartedIfEligibleInput,
+    cooldownSeconds: number
+  ): Promise<MedmarInsertStartedIfEligibleResult>;
   markSent(id: string, patch: {
     resendMessageId: string;
     pdfCleanedSha256: string;
@@ -89,6 +120,47 @@ export function createResendRepository(admin: SupabaseClient): MedmarResendRepos
         .single();
       if (insert.error || !insert.data) throw new Error("medmar_ticket_resend_insert_failed");
       return normalizeResendRow(insert.data as Record<string, unknown>);
+    },
+
+    async insertStartedIfEligible(input, cooldownSeconds) {
+      const cutoffIso = new Date(Date.now() - cooldownSeconds * 1000).toISOString();
+      // Check-then-insert: due round-trip separati, NON un singolo constraint
+      // atomico (nessun UNIQUE esiste oggi su questa tabella per
+      // (tenant_id, delivery_attempt_id) — vedi migration proposta nel
+      // report del micro-fix). Copre in modo affidabile il caso reale
+      // (doppio click, refresh, richiesta ripetuta a pochi secondi di
+      // distanza): la finestra di race residua e' la latenza tra queste due
+      // query, non l'intera finestra di cooldown.
+      const recent = await admin
+        .from("medmar_ticket_resends")
+        .select("*")
+        .eq("tenant_id", input.tenantId)
+        .eq("delivery_attempt_id", input.deliveryAttemptId)
+        .gte("created_at", cutoffIso)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (recent.error) throw new Error("medmar_ticket_resend_lookup_failed");
+      if (recent.data) {
+        return { kind: "blocked", recent: normalizeResendRow(recent.data as Record<string, unknown>) };
+      }
+
+      const insert = await admin
+        .from("medmar_ticket_resends")
+        .insert({
+          tenant_id: input.tenantId,
+          delivery_attempt_id: input.deliveryAttemptId,
+          issuing_attempt_id: input.issuingAttemptId,
+          medmar_id_prenotazione: input.medmarIdPrenotazione,
+          medmar_numero: input.medmarNumero,
+          recipient_email: input.recipientEmail,
+          status: "started",
+          created_by: input.createdBy,
+        })
+        .select("*")
+        .single();
+      if (insert.error || !insert.data) throw new Error("medmar_ticket_resend_insert_failed");
+      return { kind: "started", row: normalizeResendRow(insert.data as Record<string, unknown>) };
     },
 
     async markSent(id, patch) {

@@ -127,16 +127,26 @@ export type MedmarResendDeps = {
   sendEmail?: typeof sendMedmarCleanedTicketEmail;
 };
 
+/**
+ * Finestra anti-doppio-resend (micro-fix "guard anti-doppio resend"): breve
+ * di proposito — copre il doppio click/refresh reale, non un blocco
+ * prolungato. Qualunque esito del tentativo precedente (sent/failed, o
+ * perfino uno 'started' rimasto orfano per un crash) smette di bloccare
+ * dopo questa finestra: mai un blocco permanente del ticket.
+ */
+export const MEDMAR_RESEND_COOLDOWN_SECONDS = 15;
+
 export type MedmarResendOutcome =
   | { ok: true; status: "sent"; resendMessageId: string; hashWarning: boolean; ledgerId: string }
   | { ok: false; status: "pdf_not_found" | "pdf_ambiguous" | "pdf_validation_failed" | "send_failed" | "send_ambiguous"; error: string; ledgerId: string }
-  | { ok: false; status: MedmarResendPreconditionFailure; error: string; ledgerId: null };
+  | { ok: false; status: MedmarResendPreconditionFailure; error: string; ledgerId: null }
+  | { ok: false; status: "resend_in_progress"; error: string; ledgerId: string };
 
 /**
- * Orchestratore reinvio: precondizioni -> ledger 'started' -> fetch PDF via
- * UID -> clean -> valida -> invia SOLO il pulito -> ledger 'sent'/'failed'.
- * Nessuna scrittura su medmar_issuing_attempts o su
- * medmar_delivery_attempts.delivered_at — quel record resta quello
+ * Orchestratore reinvio: precondizioni -> guard anti-doppio-resend -> ledger
+ * 'started' -> fetch PDF via UID -> clean -> valida -> invia SOLO il pulito
+ * -> ledger 'sent'/'failed'. Nessuna scrittura su medmar_issuing_attempts o
+ * su medmar_delivery_attempts.delivered_at — quel record resta quello
  * dell'invio originale, il reinvio vive solo in medmar_ticket_resends.
  */
 export async function resendMedmarTicket(
@@ -155,15 +165,30 @@ export async function resendMedmarTicket(
   if (!precondition.ok) return { ok: false, status: precondition.status, error: precondition.error, ledgerId: null };
   const validAttempt = attempt as MedmarDeliveryAttemptForResend;
 
-  const ledger = await repo.insertStarted({
-    tenantId: input.tenantId,
-    deliveryAttemptId: validAttempt.id,
-    issuingAttemptId: validAttempt.issuing_attempt_id,
-    medmarIdPrenotazione: validAttempt.medmar_id_prenotazione!,
-    medmarNumero: validAttempt.medmar_numero!,
-    recipientEmail: validAttempt.recipient_email!,
-    createdBy: input.userId,
-  });
+  // Guard anti-doppio-resend: una sola chiamata di repository verifica
+  // l'assenza di un reinvio recente/in corso e inserisce 'started' SOLO se
+  // eligibile. La richiesta bloccata non crea alcuna riga nuova.
+  const guard = await repo.insertStartedIfEligible(
+    {
+      tenantId: input.tenantId,
+      deliveryAttemptId: validAttempt.id,
+      issuingAttemptId: validAttempt.issuing_attempt_id,
+      medmarIdPrenotazione: validAttempt.medmar_id_prenotazione!,
+      medmarNumero: validAttempt.medmar_numero!,
+      recipientEmail: validAttempt.recipient_email!,
+      createdBy: input.userId,
+    },
+    MEDMAR_RESEND_COOLDOWN_SECONDS
+  );
+  if (guard.kind === "blocked") {
+    return {
+      ok: false,
+      status: "resend_in_progress",
+      error: "Un reinvio è già in corso o è stato appena effettuato. Attendi qualche secondo e riprova.",
+      ledgerId: guard.recent.id,
+    };
+  }
+  const ledger = guard.row;
 
   const located = await findPdfByUid({
     uid: validAttempt.pdf_mailbox_message_uid!,
