@@ -1541,7 +1541,14 @@ export default function WhatsAppInboxPage() {
             : current
         );
       }
-      await load(selectedThreadId, { silent: true, resetThreadsPagination: action === "mark_read" && filter === "unread" });
+      // mark_read/close/reopen possono far uscire (o entrare) il thread dal
+      // filtro corrente in qualunque tab (non solo "unread" con mark_read,
+      // come prima) — con mergeThreadsPreservingExtra il thread assente
+      // dalla pagina 1 in arrivo veniva trattato come "pagina successiva
+      // già caricata" e mantenuto invariato, quindi chiudere/riaprire/segnare
+      // come letto non si rifletteva mai nella lista finché non si
+      // ricaricava tutta la pagina. Reset sempre per queste tre azioni.
+      await load(selectedThreadId, { silent: true, resetThreadsPagination: true });
     }
     setBusyAction(null);
   };
