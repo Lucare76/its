@@ -10,7 +10,13 @@ import { checkRateLimit } from "@/lib/server/rate-limit";
 
 const RATE_LIMIT = { maxAttempts: 60, windowMs: 60 * 1000 };
 
-async function runTool(context: McpContext, tool: McpToolDefinition, rawInput: unknown) {
+/**
+ * Esportata (Sprint 6): l'endpoint interno /api/mario-assistant chiama
+ * questa stessa funzione — non riavvia un secondo server MCP via stdio
+ * dentro la route, ne' reimplementa policy/rate limit/audit. Stessa
+ * pipeline, stesso comportamento, zero logica parallela.
+ */
+export async function runTool(context: McpContext, tool: McpToolDefinition, rawInput: unknown) {
   const startedAt = Date.now();
   try {
     canExecuteTool(context, tool);

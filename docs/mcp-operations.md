@@ -60,3 +60,23 @@ Ogni WRITE segue sempre: **preview** (READ-only, restituisce un confirmation tok
 - "Chi è disponibile questo pomeriggio?" → `its.get_driver_availability`
 - "Mostrami i servizi senza autista" → `its.get_unassigned_services` (o `its.get_day_plan` per la vista completa)
 - "Assegna Mario Rossi al servizio X" → `its.preview_assign_driver` poi, dopo conferma, `its.assign_driver`
+
+## Mario Interface
+
+Interfaccia web one-shot (testo + voce) che traduce una domanda in linguaggio naturale in una chiamata a UN tool MCP READ, tramite la stessa pipeline `runTool` (policy → rate limit → validazione → handler → audit) usata dal transport stdio — nessuna seconda logica, nessun server MCP avviato dentro la route.
+
+- **Route:** `/mario-assistant` (pagina) + `POST /api/mario-assistant` (endpoint interno, sessione ITS esistente — nessun token MCP separato).
+- **Ruoli ammessi:** `admin`, `operator`, `supervisor` (mai `driver`/`agency`) — 401 se non autenticato, 403 se ruolo non ammesso.
+- **Intent supportati** (parser deterministico, nessun LLM — `lib/server/mario-assistant/intent-parser.ts`):
+  | Intent | Esempi | Tool chiamato |
+  |---|---|---|
+  | `operational_brief` | "Come siamo messi oggi?" | `its.get_operational_brief` |
+  | `health_status` | "ITS sta funzionando bene?" | `its.get_health_status` |
+  | `alerts` | "Cosa richiede attenzione?" | `its.get_operational_alerts` |
+  | `unassigned` | "Servizi senza autista" | `its.get_unassigned_services` |
+  | `driver_availability` | "Chi è disponibile questo pomeriggio?" | `its.get_driver_availability` |
+- Una richiesta che sembra una modifica ("assegna", "cambia stato", …) non viene mai eseguita: risposta fissa che rimanda al flusso preview/confirm MCP esistente.
+- Un testo non riconosciuto restituisce un messaggio di aiuto, mai un guess.
+- **Voce browser:** Web Speech API (`SpeechRecognition`/`webkitSpeechRecognition`) lato client, nessun servizio speech-to-text esterno. Se non supportata dal browser, fallback chiaro e il campo testo resta l'unico modo di inviare la domanda.
+- **Solo READ:** nessun nuovo WRITE raggiungibile da questa interfaccia in questo sprint.
+- **Nessun accesso remoto MCP diretto:** la Mario Interface non espone il transport MCP — chiama `runTool` in-process, il transport stdio resta invariato e locale.

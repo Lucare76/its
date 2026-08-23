@@ -1,0 +1,124 @@
+import { describe, it, expect } from "vitest";
+import { detectMarioIntent } from "@/lib/server/mario-assistant/intent-parser";
+import { parseRelativeOrIsoDate, parseTimeWindow } from "@/lib/server/mario-assistant/date-time";
+
+// 2026-08-23 e' CEST (Europe/Rome = UTC+2): le 10:00 UTC sono le 12:00 locali.
+const NOW = new Date("2026-08-23T10:00:00.000Z");
+
+describe("detectMarioIntent (spec TEST MINIMI — Intent parser)", () => {
+  it("1. 'come siamo messi oggi' -> operational_brief", () => {
+    expect(detectMarioIntent("come siamo messi oggi", NOW).intent).toBe("operational_brief");
+  });
+
+  it("2. 'ITS sta funzionando bene?' -> health_status", () => {
+    expect(detectMarioIntent("ITS sta funzionando bene?", NOW).intent).toBe("health_status");
+  });
+
+  it("3. 'quali problemi ci sono?' -> alerts", () => {
+    expect(detectMarioIntent("quali problemi ci sono?", NOW).intent).toBe("alerts");
+  });
+
+  it("4. 'servizi senza autista' -> unassigned", () => {
+    expect(detectMarioIntent("servizi senza autista", NOW).intent).toBe("unassigned");
+  });
+
+  it("5. 'chi è disponibile oggi?' -> driver_availability", () => {
+    expect(detectMarioIntent("chi è disponibile oggi?", NOW).intent).toBe("driver_availability");
+  });
+
+  it("6. intent sconosciuto ('che tempo fa domani?') -> unsupported", () => {
+    expect(detectMarioIntent("che tempo fa domani?", NOW).intent).toBe("unsupported");
+  });
+
+  // Copertura aggiuntiva sugli esempi espliciti della spec.
+  it("'Fammi il punto della giornata' -> operational_brief", () => {
+    expect(detectMarioIntent("Fammi il punto della giornata", NOW).intent).toBe("operational_brief");
+  });
+  it("'Ci sono problemi oggi?' -> operational_brief", () => {
+    expect(detectMarioIntent("Ci sono problemi oggi?", NOW).intent).toBe("operational_brief");
+  });
+  it("'Ci sono problemi tecnici?' -> health_status", () => {
+    expect(detectMarioIntent("Ci sono problemi tecnici?", NOW).intent).toBe("health_status");
+  });
+  it("'Come sta il sistema?' -> health_status", () => {
+    expect(detectMarioIntent("Come sta il sistema?", NOW).intent).toBe("health_status");
+  });
+  it("'Cosa richiede attenzione?' -> alerts", () => {
+    expect(detectMarioIntent("Cosa richiede attenzione?", NOW).intent).toBe("alerts");
+  });
+  it("'Ci sono problemi critici?' -> alerts con severity=critical", () => {
+    const result = detectMarioIntent("Ci sono problemi critici?", NOW);
+    expect(result.intent).toBe("alerts");
+    expect(result.intent === "alerts" && result.params.severity).toBe("critical");
+  });
+  it("'Fammi vedere gli alert' -> alerts", () => {
+    expect(detectMarioIntent("Fammi vedere gli alert", NOW).intent).toBe("alerts");
+  });
+  it("'Quali servizi sono senza autista?' -> unassigned", () => {
+    expect(detectMarioIntent("Quali servizi sono senza autista?", NOW).intent).toBe("unassigned");
+  });
+  it("'Ci sono servizi non assegnati?' -> unassigned", () => {
+    expect(detectMarioIntent("Ci sono servizi non assegnati?", NOW).intent).toBe("unassigned");
+  });
+  it("'Mostrami gli unassigned' -> unassigned", () => {
+    expect(detectMarioIntent("Mostrami gli unassigned", NOW).intent).toBe("unassigned");
+  });
+  it("'Chi è libero oggi?' -> driver_availability", () => {
+    expect(detectMarioIntent("Chi è libero oggi?", NOW).intent).toBe("driver_availability");
+  });
+  it("'Chi è disponibile questo pomeriggio?' -> driver_availability con timeWindow pomeriggio", () => {
+    const result = detectMarioIntent("Chi è disponibile questo pomeriggio?", NOW);
+    expect(result.intent).toBe("driver_availability");
+    expect(result.intent === "driver_availability" && result.params.timeWindow?.fromMinutes).toBe(12 * 60);
+  });
+  it("'Chi posso usare dalle 15 alle 20?' -> driver_availability con finestra esplicita", () => {
+    const result = detectMarioIntent("Chi posso usare dalle 15 alle 20?", NOW);
+    expect(result.intent).toBe("driver_availability");
+    expect(result.intent === "driver_availability" && result.params.timeWindow).toEqual({
+      fromMinutes: 15 * 60,
+      toMinutes: 20 * 60,
+      label: "dalle 15:00 alle 20:00",
+    });
+  });
+
+  it("18. write request ('Assegna Mario Rossi al servizio X') -> write_unsupported, mai un intent READ", () => {
+    expect(detectMarioIntent("Assegna Mario Rossi al servizio X", NOW).intent).toBe("write_unsupported");
+  });
+  it("write request variante ('Cambia stato del servizio 123') -> write_unsupported", () => {
+    expect(detectMarioIntent("Cambia stato del servizio 123", NOW).intent).toBe("write_unsupported");
+  });
+});
+
+describe("parseRelativeOrIsoDate (spec TEST MINIMI — Date/time)", () => {
+  it("7. 'oggi' -> data odierna Europe/Rome", () => {
+    expect(parseRelativeOrIsoDate("controllami oggi per favore", NOW)).toBe("2026-08-23");
+  });
+  it("8. 'domani' -> data di domani Europe/Rome", () => {
+    expect(parseRelativeOrIsoDate("controllami domani", NOW)).toBe("2026-08-24");
+  });
+  it("data ISO esplicita nel testo viene riconosciuta cosi' com'e'", () => {
+    expect(parseRelativeOrIsoDate("guarda il 2026-09-01", NOW)).toBe("2026-09-01");
+  });
+  it("nessuna data menzionata -> undefined (il default e' compito del chiamante)", () => {
+    expect(parseRelativeOrIsoDate("come va", NOW)).toBeUndefined();
+  });
+  it("10. timezone Europe/Rome: 'domani' attraversa la mezzanotte locale correttamente in CEST", () => {
+    // NOW e' 2026-08-23T10:00 UTC = 12:00 locale (CEST) — "domani" deve restare il 24, non il 25.
+    expect(parseRelativeOrIsoDate("domani", NOW)).toBe("2026-08-24");
+  });
+});
+
+describe("parseTimeWindow (spec TEST MINIMI — Date/time)", () => {
+  it("9. 'pomeriggio' -> 12:00-18:00", () => {
+    expect(parseTimeWindow("disponibile questo pomeriggio")).toEqual({ fromMinutes: 720, toMinutes: 1080, label: "pomeriggio (12:00–18:00)" });
+  });
+  it("'mattina' -> 06:00-12:00", () => {
+    expect(parseTimeWindow("libero di mattina")).toEqual({ fromMinutes: 360, toMinutes: 720, label: "mattina (06:00–12:00)" });
+  });
+  it("'sera' -> 18:00-23:59", () => {
+    expect(parseTimeWindow("libero la sera")).toEqual({ fromMinutes: 1080, toMinutes: 1439, label: "sera (18:00–23:59)" });
+  });
+  it("nessuna fascia menzionata -> undefined", () => {
+    expect(parseTimeWindow("chi è disponibile")).toBeUndefined();
+  });
+});
