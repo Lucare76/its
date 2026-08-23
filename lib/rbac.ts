@@ -39,6 +39,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/fleet-ops", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/scan", roles: ["admin", "operator", "supervisor", "assistenza"] },
   { prefix: "/mappa-live", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/mario-assistant", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/preventivo-ops", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/map", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/ingestion", roles: ["admin", "operator", "supervisor"] },

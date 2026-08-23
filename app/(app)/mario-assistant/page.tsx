@@ -20,6 +20,28 @@ type MarioResponse = {
   error?: string;
 };
 
+/**
+ * Esempi cliccabili — coerenti SOLO con gli intent realmente supportati da
+ * lib/server/mario-assistant/intent-parser.ts (vedi tests/unit/mario-assistant-suggestions.test.ts,
+ * che verifica ogni frase contro il parser reale). Costante locale semplice:
+ * il parser vive in lib/server/ (solo server), non importabile qui senza
+ * portare codice server-only nel bundle client — vedi nota "source of
+ * truth" nello sprint, refactor non necessario per 6 frasi stabili.
+ */
+export const MARIO_SUGGESTED_QUESTIONS: string[] = [
+  "Come siamo messi oggi?",
+  "ITS sta funzionando bene?",
+  "Cosa richiede attenzione?",
+  "Quali servizi sono senza autista?",
+  "Chi è disponibile questo pomeriggio?",
+  "Chi posso usare dalle 15 alle 20?",
+];
+
+/** Logica del click su un suggerimento: valorizza SOLO l'input, mai un invio automatico. */
+export function applySuggestion(suggestion: string, setMessage: (value: string) => void) {
+  setMessage(suggestion);
+}
+
 export default function MarioAssistantPage() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -142,6 +164,27 @@ export default function MarioAssistantPage() {
           {!speechSupported ? (
             <p className="text-xs text-muted">Riconoscimento vocale non disponibile in questo browser — usa il campo di testo.</p>
           ) : null}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Puoi chiedermi…">
+        <div className="space-y-2">
+          <p className="text-sm text-muted">
+            Puoi chiedermi della situazione della giornata, salute del sistema, alert, servizi non assegnati e
+            disponibilità autisti.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {MARIO_SUGGESTED_QUESTIONS.map((question) => (
+              <button
+                key={question}
+                type="button"
+                onClick={() => applySuggestion(question, setMessage)}
+                className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                {question}
+              </button>
+            ))}
+          </div>
         </div>
       </SectionCard>
 
