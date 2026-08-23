@@ -107,7 +107,43 @@ function selectBuilder(rows: Row[]) {
   return builder;
 }
 
-function createFakeAdmin(seed: Partial<Record<string, Row[]>> = {}) {
+function failingSelectBuilder(error: { message: string; code?: string }) {
+  const builder = {
+    eq() {
+      return builder;
+    },
+    in() {
+      return builder;
+    },
+    gte() {
+      return builder;
+    },
+    lte() {
+      return builder;
+    },
+    ilike() {
+      return builder;
+    },
+    or() {
+      return builder;
+    },
+    order() {
+      return builder;
+    },
+    range() {
+      return builder;
+    },
+    then(resolve: (v: { data: null; error: { message: string; code?: string } }) => unknown, reject?: (e: unknown) => unknown) {
+      return Promise.resolve({ data: null, error }).then(resolve, reject);
+    }
+  };
+  return builder;
+}
+
+function createFakeAdmin(
+  seed: Partial<Record<string, Row[]>> = {},
+  failFromCalls: Partial<Record<string, number[]>> = {}
+) {
   const tables: Record<string, Row[]> = {
     services: [],
     assignments: [],
@@ -120,7 +156,13 @@ function createFakeAdmin(seed: Partial<Record<string, Row[]>> = {}) {
   const admin = {
     from(table: string) {
       callCounts[table] = (callCounts[table] ?? 0) + 1;
-      return { select: () => selectBuilder(tables[table] ?? []) };
+      const fromCall = callCounts[table];
+      return {
+        select: () =>
+          failFromCalls[table]?.includes(fromCall)
+            ? failingSelectBuilder({ message: "temporary aggregate outage", code: "XX000" })
+            : selectBuilder(tables[table] ?? [])
+      };
     }
   };
   return { admin, tables, callCounts };
@@ -424,6 +466,18 @@ describe("POST /api/services/list — dataset-wide stats, filters and dropdown o
     const body = await res.json();
     expect(body.services).toHaveLength(50);
     expect(body.stats.totale).toBe(300);
+  });
+
+  it("A2: aggregate failure without advanced filters keeps the list visible and marks stats unavailable", async () => {
+    const fake = createFakeAdmin({ services: seedMany(3) }, { services: [1] });
+    authorizeAs(fake.admin);
+    const res = await POST(req({ tenant_id: TENANT_A }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.services).toHaveLength(3);
+    expect(body.stats_available).toBe(false);
+    expect(body.stats_error).toBe("Statistiche non disponibili.");
+    expect(body.stats.totale).toBe(0);
   });
 
   it("B: reviewed=no finds a record that only exists beyond page 1", async () => {

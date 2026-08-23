@@ -70,6 +70,8 @@ export async function POST(request: NextRequest) {
     // lightweight (minimal-column) pass over every matching service before
     // the page itself is fetched — see lib/server/services-list-aggregates.ts.
     let aggregates;
+    let statsAvailable = true;
+    let statsError: string | null = null;
     try {
       aggregates = await computeServicesListAggregates({ admin: auth.admin, tenantId, baseFilters: filters, extraFilters });
     } catch (aggregateError) {
@@ -81,6 +83,8 @@ export async function POST(request: NextRequest) {
       if (hasExtraServicesFilters(extraFilters)) {
         return NextResponse.json({ error: "Errore calcolo statistiche servizi." }, { status: 500 });
       }
+      statsAvailable = false;
+      statsError = "Statistiche non disponibili.";
       aggregates = {
         matchedIds: [] as string[],
         stats: {
@@ -156,6 +160,8 @@ export async function POST(request: NextRequest) {
       page_size: pageSize,
       has_more: hasMore,
       stats: aggregates.stats,
+      stats_available: statsAvailable,
+      stats_error: statsError,
       known_vessels: aggregates.knownVessels,
       known_agencies: aggregates.knownAgencies
     });

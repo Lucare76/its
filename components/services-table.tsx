@@ -103,6 +103,8 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
   const [knownVessels, setKnownVessels] = useState<string[]>([]);
   const [knownAgencies, setKnownAgencies] = useState<string[]>([]);
   const [listStats, setListStats] = useState<ServicesListStats>(EMPTY_STATS);
+  const [listStatsAvailable, setListStatsAvailable] = useState(true);
+  const [listStatsError, setListStatsError] = useState<string | null>(null);
 
   const tenantId = memberships[0]?.tenant_id ?? hotels[0]?.tenant_id ?? null;
 
@@ -165,6 +167,8 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
         inbound_emails?: InboundEmail[];
         has_more?: boolean;
         stats?: ServicesListStats;
+        stats_available?: boolean;
+        stats_error?: string | null;
         known_vessels?: string[];
         known_agencies?: string[];
         error?: string;
@@ -182,6 +186,8 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
       setPageInboundEmails(responsePayload.inbound_emails ?? []);
       setHasMore(Boolean(responsePayload.has_more));
       setListStats(responsePayload.stats ?? EMPTY_STATS);
+      setListStatsAvailable(responsePayload.stats_available !== false);
+      setListStatsError(responsePayload.stats_available === false ? responsePayload.stats_error ?? "Statistiche non disponibili." : null);
       // Sprint Performance 14A fix: these come from lightweight server-side
       // lookups scoped to the whole filtered dataset, not accumulated from
       // pages the user happened to visit — see
@@ -218,6 +224,7 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
 
   const selectedService = selectedServiceId ? baseServices.find((item) => item.id === selectedServiceId) : null;
   const filteredOperationalStats = listStats;
+  const formatStat = (value: number) => (listStatsAvailable ? value : "—");
   const selectedShareUrl = useMemo(() => {
     if (!selectedService) return "";
     const fromAction = shareUrlByServiceId[selectedService.id];
@@ -490,11 +497,16 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
         <ExportServicesButton defaultDateFrom={exportDefaults.from} defaultDateTo={exportDefaults.to} />
       </div>
       {listError ? <div className="card border-red-200 bg-red-50 p-3 text-sm text-red-700">{listError}</div> : null}
+      {!listStatsAvailable ? (
+        <div className="card border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+          {listStatsError ?? "Statistiche non disponibili."} L&apos;elenco servizi resta visibile, ma i riepiloghi non vengono mostrati come zero.
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <button type="button" onClick={resetOperationalFilters} className="group rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-[0_14px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_18px_42px_rgba(37,99,235,0.10)]">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-lg text-blue-700">▣</span>
           <p className="mt-3 text-sm font-bold text-slate-500">Totale visibili</p>
-          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.totale}</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{formatStat(filteredOperationalStats.totale)}</p>
           <p className="mt-1 text-xs font-medium text-slate-500">Reset vista completa.</p>
         </button>
         <button
@@ -509,19 +521,19 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
         >
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-lg text-amber-700">!</span>
           <p className="mt-3 text-sm font-bold text-slate-500">Da verificare</p>
-          <p className="text-3xl font-black tracking-tight text-amber-700">{filteredOperationalStats.needsAttention}</p>
+          <p className="text-3xl font-black tracking-tight text-amber-700">{formatStat(filteredOperationalStats.needsAttention)}</p>
           <p className="mt-1 text-xs font-medium text-slate-500">PDF o qualità bassa.</p>
         </button>
         <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-50 text-lg text-cyan-700">▤</span>
           <p className="mt-3 text-sm font-bold text-slate-500">Linea bus</p>
-          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.lineeBus}</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{formatStat(filteredOperationalStats.lineeBus)}</p>
           <p className="mt-1 text-xs font-medium text-slate-500">Bus linea / città-hotel.</p>
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-lg text-violet-700">↗</span>
           <p className="mt-3 text-sm font-bold text-slate-500">Altri servizi</p>
-          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.altriServizi}</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{formatStat(filteredOperationalStats.altriServizi)}</p>
           <p className="mt-1 text-xs font-medium text-slate-500">Nave, aeroporto, stazione.</p>
         </div>
         <button
@@ -534,13 +546,13 @@ export function ServicesTable({ hotels, memberships, refreshToken = 0 }: Service
         >
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-lg text-rose-700">⌁</span>
           <p className="mt-3 text-sm font-bold text-slate-500">Da gestire</p>
-          <p className="text-3xl font-black tracking-tight text-slate-950">{filteredOperationalStats.daAssegnareInternamente}</p>
+          <p className="text-3xl font-black tracking-tight text-slate-950">{formatStat(filteredOperationalStats.daAssegnareInternamente)}</p>
           <p className="mt-1 text-xs font-medium text-slate-500">Senza autista interno.</p>
         </button>
         <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50 text-lg text-orange-700">◷</span>
           <p className="mt-3 text-sm font-bold text-slate-500">Promemoria</p>
-          <p className="text-3xl font-black tracking-tight text-amber-700">{filteredOperationalStats.promemoriaDaVerificare}</p>
+          <p className="text-3xl font-black tracking-tight text-amber-700">{formatStat(filteredOperationalStats.promemoriaDaVerificare)}</p>
           <p className="mt-1 text-xs font-medium text-slate-500">Non consegnati.</p>
         </div>
       </div>
