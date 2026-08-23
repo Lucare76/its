@@ -10,10 +10,13 @@ vi.mock("@/lib/mcp/health-snapshot", () => ({
 
 type Row = Record<string, unknown>;
 
-function makeFakeAdmin(tables: Record<string, Row[]>) {
+type PostgrestErrorLike = { code: string; message: string; details: null; hint: null };
+
+function makeFakeAdmin(tables: Record<string, Row[]>, errorTables: Partial<Record<string, PostgrestErrorLike>> = {}) {
   return {
     from(table: string) {
       let filtered = tables[table] ?? [];
+      const tableError = errorTables[table] ?? null;
       const builder = {
         select() {
           return builder;
@@ -33,14 +36,22 @@ function makeFakeAdmin(tables: Record<string, Row[]>) {
         limit() {
           return builder;
         },
-        then(resolve: (result: { data: Row[]; error: null }) => unknown) {
-          return resolve({ data: filtered, error: null });
+        then(resolve: (result: { data: Row[] | null; error: PostgrestErrorLike | null }) => unknown) {
+          return resolve(tableError ? { data: null, error: tableError } : { data: filtered, error: null });
         },
       };
       return builder;
     },
   };
 }
+
+/** Riproduce esattamente l'errore reale osservato in produzione (Sprint 6 fix-diagnosi): colonna mancante. */
+const MISSING_COLUMN_ERROR: PostgrestErrorLike = {
+  code: "42703",
+  message: "column services.tour_name does not exist",
+  details: null,
+  hint: null,
+};
 
 function makeContext(admin: unknown, overrides: Partial<McpContext> = {}): McpContext {
   return {
@@ -207,5 +218,46 @@ describe("its.get_operational_brief", () => {
 
   it("RBAC: allowedRoles limitato ad admin/operator/supervisor", () => {
     expect(tool.allowedRoles).toEqual(["admin", "operator", "supervisor"]);
+  });
+
+  describe("regressione (Sprint 6 fix-diagnosi): colonna services.tour_name mancante in un ambiente", () => {
+    it("la query services fallisce (42703) -> services_available:false, summary azzerato, MAI 'zero problemi' travestito da dato reale", async () => {
+      mockCompute.mockResolvedValueOnce(EMPTY_HEALTHY_SNAPSHOT);
+      const admin = makeFakeAdmin(
+        { services: [serviceRow()], hotels: [HOTEL_ROW], assignments: [] },
+        { services: MISSING_COLUMN_ERROR }
+      );
+      const result = (await tool.handler(makeContext(admin), { date: "2026-08-23" })) as {
+        services_available: boolean;
+        summary: { total_services: number; upcoming_services: number; unassigned_services: number; active_services: number };
+      };
+      expect(result.services_available).toBe(false);
+      expect(result.summary).toEqual({ total_services: 0, upcoming_services: 0, unassigned_services: 0, active_services: 0 });
+    });
+
+    it("la snapshot Health resta indipendente dal fallimento servizi (i due failure path non si influenzano a vicenda)", async () => {
+      mockCompute.mockResolvedValueOnce({
+        ...EMPTY_HEALTHY_SNAPSHOT,
+        overall: "critical",
+        operationalHealth: { ...EMPTY_HEALTHY_SNAPSHOT.operationalHealth, summary: { info: 0, warning: 0, critical: 1 }, signals: [] },
+      });
+      const admin = makeFakeAdmin(
+        { services: [serviceRow()], hotels: [HOTEL_ROW], assignments: [] },
+        { services: MISSING_COLUMN_ERROR }
+      );
+      const result = (await tool.handler(makeContext(admin), { date: "2026-08-23" })) as {
+        services_available: boolean;
+        health: { available: boolean; overall: string | null };
+      };
+      expect(result.services_available).toBe(false);
+      expect(result.health).toEqual({ available: true, overall: "critical" });
+    });
+
+    it("esito normale: services_available:true", async () => {
+      mockCompute.mockResolvedValueOnce(EMPTY_HEALTHY_SNAPSHOT);
+      const admin = makeFakeAdmin({ services: [serviceRow()], hotels: [HOTEL_ROW], assignments: [] });
+      const result = (await tool.handler(makeContext(admin), { date: "2026-08-23" })) as { services_available: boolean };
+      expect(result.services_available).toBe(true);
+    });
   });
 });

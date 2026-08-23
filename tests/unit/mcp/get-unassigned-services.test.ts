@@ -9,10 +9,13 @@ type Row = Record<string, unknown>;
  * "services"/"hotels"/"assignments", stesso pattern (thenable-free, builder
  * esplicito) di tests/unit/mcp/get-service.test.ts.
  */
-function makeFakeAdmin(tables: Record<string, Row[]>) {
+type PostgrestErrorLike = { code: string; message: string; details: null; hint: null };
+
+function makeFakeAdmin(tables: Record<string, Row[]>, errorTables: Partial<Record<string, PostgrestErrorLike>> = {}) {
   return {
     from(table: string) {
       let filtered = tables[table] ?? [];
+      const tableError = errorTables[table] ?? null;
       const builder = {
         select() {
           return builder;
@@ -32,14 +35,22 @@ function makeFakeAdmin(tables: Record<string, Row[]>) {
         limit() {
           return builder;
         },
-        then(resolve: (result: { data: Row[]; error: null }) => unknown) {
-          return resolve({ data: filtered, error: null });
+        then(resolve: (result: { data: Row[] | null; error: PostgrestErrorLike | null }) => unknown) {
+          return resolve(tableError ? { data: null, error: tableError } : { data: filtered, error: null });
         },
       };
       return builder;
     },
   };
 }
+
+/** Riproduce esattamente l'errore reale osservato in produzione (Sprint 6 fix-diagnosi): colonna mancante. */
+const MISSING_COLUMN_ERROR: PostgrestErrorLike = {
+  code: "42703",
+  message: "column services.tour_name does not exist",
+  details: null,
+  hint: null,
+};
 
 function makeContext(admin: unknown, overrides: Partial<McpContext> = {}): McpContext {
   return {
@@ -127,5 +138,28 @@ describe("its.get_unassigned_services", () => {
   it("input invalido (data malformata) rifiutato dallo schema", () => {
     const parsed = tool.inputSchema.safeParse({ date: "23-08-2026" });
     expect(parsed.success).toBe(false);
+  });
+
+  describe("regressione (Sprint 6 fix-diagnosi): colonna services.tour_name mancante in un ambiente", () => {
+    it("la query services fallisce (42703) -> il tool risponde available:false invece di lanciare un errore MCP generico", async () => {
+      const admin = makeFakeAdmin(
+        { services: [assignableServiceRow()], hotels: [HOTEL_ROW], assignments: [] },
+        { services: MISSING_COLUMN_ERROR }
+      );
+      const result = (await tool.handler(makeContext(admin), { date: "2026-08-23" })) as {
+        available: boolean;
+        services: unknown[];
+        count: number;
+      };
+      expect(result.available).toBe(false);
+      expect(result.services).toEqual([]);
+      expect(result.count).toBe(0);
+    });
+
+    it("esito normale: available:true", async () => {
+      const admin = makeFakeAdmin({ services: [assignableServiceRow()], hotels: [HOTEL_ROW], assignments: [] });
+      const result = (await tool.handler(makeContext(admin), { date: "2026-08-23" })) as { available: boolean };
+      expect(result.available).toBe(true);
+    });
   });
 });

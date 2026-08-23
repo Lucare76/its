@@ -13,6 +13,22 @@ import {
 } from "@/lib/server/mario-assistant/answer-formatter";
 
 describe("formatOperationalBriefAnswer", () => {
+  it("regressione (Sprint 6 fix-diagnosi): services_available=false -> messaggio onesto, MAI '0 servizi/nessun problema'", () => {
+    const output: OperationalBriefOutput = {
+      date: "2026-08-23",
+      summary: { total_services: 0, upcoming_services: 0, unassigned_services: 0, active_services: 0 },
+      services_available: false,
+      critical_items: [],
+      warnings: [],
+      health: { available: true, overall: "healthy" },
+    };
+    const { answer, actions } = formatOperationalBriefAnswer(output);
+    expect(answer).toBe("Al momento non riesco a leggere la situazione della giornata.");
+    expect(answer).not.toContain("0 servizi");
+    expect(answer).not.toContain("Nessun problema");
+    expect(actions).toEqual([]);
+  });
+
   it("giornata sana: nessun problema menzionato, nessuna action", () => {
     const output: OperationalBriefOutput = {
       date: "2026-08-23",
@@ -134,6 +150,14 @@ describe("formatUnassignedAnswer", () => {
     };
     const { actions } = formatUnassignedAnswer(output);
     expect(actions).toEqual([{ label: "Apri servizio", href: "/services/svc-1/edit" }]);
+  });
+
+  it("regressione (Sprint 6 fix-diagnosi): available=false -> messaggio onesto, MAI 'nessun servizio senza autista' quando i dati non sono leggibili", () => {
+    const output: UnassignedServicesOutput = { date: "2026-08-23", count: 0, services: [], available: false };
+    const { answer, actions } = formatUnassignedAnswer(output);
+    expect(answer).toBe("Al momento non riesco a leggere i servizi senza autista.");
+    expect(answer).not.toContain("Nessun servizio senza autista");
+    expect(actions).toEqual([]);
   });
 });
 

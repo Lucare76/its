@@ -37,6 +37,15 @@ const outputSchema = z.object({
     unassigned_services: z.number(),
     active_services: z.number(),
   }),
+  /**
+   * false se la lettura servizi/hotel/assegnazioni e' fallita (stesso
+   * rischio SERVICE_COLUMNS gia' documentato in operations-health.ts — es.
+   * colonna "operational_v2" opzionale non ancora presente in un ambiente).
+   * In quel caso `summary` e' azzerato per costruzione, MAI un "zero
+   * servizi/nessun problema" travestito da dato reale — distinto da
+   * `health.available`, che copre solo la snapshot Job/Operational Health.
+   */
+  services_available: z.boolean(),
   critical_items: z.array(briefItemSchema),
   warnings: z.array(briefItemSchema),
   health: z.object({
@@ -54,10 +63,22 @@ registerTool({
   outputSchema,
   allowedRoles: ["admin", "operator", "supervisor"],
   async handler(context, input) {
-    try {
-      const now = new Date();
-      const date = input.date ?? romeDateKey(now);
+    const now = new Date();
+    const date = input.date ?? romeDateKey(now);
 
+    // Lettura dati isolata dal resto (stesso pattern di settleArea in
+    // lib/server/operational-health.ts): se services/hotels/assignments
+    // falliscono (es. colonna mancante in un ambiente specifico — rischio
+    // gia' documentato per SERVICE_COLUMNS), il tool risponde
+    // services_available:false invece di un errore MCP generico che nasconde
+    // la causa reale al chiamante. La causa reale resta comunque loggata.
+    let nonDraftServices: OperationsHealthServiceRow[] = [];
+    let unassignedCount = 0;
+    let upcomingCount = 0;
+    let activeCount = 0;
+    let servicesAvailable = true;
+
+    try {
       const [servicesResult, hotelsResult] = await Promise.all([
         context.admin.from("services").select(SERVICE_COLUMNS).eq("tenant_id", context.tenantId).eq("date", date).limit(500),
         context.admin.from("hotels").select("id, name, zone").eq("tenant_id", context.tenantId),
@@ -71,7 +92,7 @@ registerTool({
       );
       const serviceIds = services.map((s) => s.id);
 
-      const { data: assignmentRows, error: assignmentError } = serviceIds.length
+      const { data: assignmentData, error: assignmentError } = serviceIds.length
         ? await context.admin
             .from("assignments")
             .select("service_id, driver_user_id")
@@ -81,20 +102,26 @@ registerTool({
         : { data: [] as OperationsHealthAssignmentRow[], error: null };
       if (assignmentError) throw assignmentError;
 
-      const nonDraftServices = services.filter((s) => !s.is_draft);
+      nonDraftServices = services.filter((s) => !s.is_draft);
       const unassigned = listUnassignedServicesForDay(
         services,
-        (assignmentRows ?? []) as OperationsHealthAssignmentRow[],
+        (assignmentData ?? []) as OperationsHealthAssignmentRow[],
         hotelsById,
         { now }
       );
-      const upcomingCount = nonDraftServices.filter((s) => {
+      unassignedCount = unassigned.length;
+      upcomingCount = nonDraftServices.filter((s) => {
         if (EXCLUDED_STATUSES.has(s.status) || ACTIVE_STATUSES.has(s.status)) return false;
         const at = romeDateTimeToUtc(s.date, s.time);
         return at ? at.getTime() >= now.getTime() : false;
       }).length;
-      const activeCount = nonDraftServices.filter((s) => ACTIVE_STATUSES.has(s.status)).length;
+      activeCount = nonDraftServices.filter((s) => ACTIVE_STATUSES.has(s.status)).length;
+    } catch (error) {
+      console.error("its.get_operational_brief: lettura servizi non disponibile", error instanceof Error ? error.message : error);
+      servicesAvailable = false;
+    }
 
+    try {
       // Failure isolation (spec Sprint 5): la snapshot Health e' composta a
       // parte e non fa mai fallire il resto del brief — se non disponibile,
       // summary/servizi restano validi, solo health.available diventa false
@@ -131,9 +158,10 @@ registerTool({
         summary: {
           total_services: nonDraftServices.length,
           upcoming_services: upcomingCount,
-          unassigned_services: unassigned.length,
+          unassigned_services: unassignedCount,
           active_services: activeCount,
         },
+        services_available: servicesAvailable,
         critical_items: criticalItems,
         warnings: warningItems,
         health: {
@@ -152,5 +180,6 @@ registerTool({
     critical_count: output.critical_items.length,
     warning_count: output.warnings.length,
     health_available: output.health.available,
+    services_available: output.services_available,
   }),
 });

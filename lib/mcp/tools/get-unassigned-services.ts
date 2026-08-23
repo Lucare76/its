@@ -30,6 +30,15 @@ const outputSchema = z.object({
     })
   ),
   count: z.number(),
+  /**
+   * false se la lettura servizi/hotel/assegnazioni e' fallita (es. schema DB
+   * disallineato in un ambiente specifico) — stessa failure isolation gia'
+   * usata da readOperationsOperationalHealth per lo stesso identico rischio
+   * documentato (colonna "operational_v2" opzionale non ancora presente in
+   * un ambiente). In quel caso services/count sono vuoti per costruzione,
+   * MAI un "zero servizi" travestito da dato reale.
+   */
+  available: z.boolean(),
 });
 
 registerTool({
@@ -41,10 +50,21 @@ registerTool({
   outputSchema,
   allowedRoles: ["admin", "operator", "supervisor"],
   async handler(context, input) {
-    try {
-      const now = new Date();
-      const date = input.date ?? romeDateKey(now);
+    const now = new Date();
+    const date = input.date ?? romeDateKey(now);
 
+    // Lettura dati isolata dal resto (stesso pattern di settleArea in
+    // lib/server/operational-health.ts): se services/hotels/assignments
+    // falliscono (es. colonna mancante in un ambiente specifico — rischio
+    // gia' documentato per SERVICE_COLUMNS), il tool risponde available:false
+    // invece di un errore MCP generico che nasconde la causa reale al
+    // chiamante. La causa reale resta comunque loggata qui sotto.
+    let services: OperationsHealthServiceRow[] = [];
+    let hotelsById = new Map<string, OperationsHealthHotelRow>();
+    let assignmentRows: OperationsHealthAssignmentRow[] = [];
+    let available = true;
+
+    try {
       const [servicesResult, hotelsResult] = await Promise.all([
         context.admin.from("services").select(SERVICE_COLUMNS).eq("tenant_id", context.tenantId).eq("date", date).limit(500),
         context.admin.from("hotels").select("id, name, zone").eq("tenant_id", context.tenantId),
@@ -52,13 +72,11 @@ registerTool({
       if (servicesResult.error) throw servicesResult.error;
       if (hotelsResult.error) throw hotelsResult.error;
 
-      const services = (servicesResult.data ?? []) as unknown as OperationsHealthServiceRow[];
-      const hotelsById = new Map(
-        ((hotelsResult.data ?? []) as OperationsHealthHotelRow[]).map((h) => [h.id, h] as const)
-      );
+      services = (servicesResult.data ?? []) as unknown as OperationsHealthServiceRow[];
+      hotelsById = new Map(((hotelsResult.data ?? []) as OperationsHealthHotelRow[]).map((h) => [h.id, h] as const));
       const serviceIds = services.map((s) => s.id);
 
-      const { data: assignmentRows, error: assignmentError } = serviceIds.length
+      const { data, error: assignmentError } = serviceIds.length
         ? await context.admin
             .from("assignments")
             .select("service_id, driver_user_id")
@@ -67,13 +85,21 @@ registerTool({
             .not("driver_user_id", "is", null)
         : { data: [] as OperationsHealthAssignmentRow[], error: null };
       if (assignmentError) throw assignmentError;
+      assignmentRows = (data ?? []) as OperationsHealthAssignmentRow[];
+    } catch (error) {
+      console.error("its.get_unassigned_services: lettura dati non disponibile", error instanceof Error ? error.message : error);
+      available = false;
+    }
 
-      const unassigned = listUnassignedServicesForDay(
-        services,
-        (assignmentRows ?? []) as OperationsHealthAssignmentRow[],
-        hotelsById,
-        { now, withinMinutes: input.withinMinutes }
-      );
+    if (!available) {
+      return { date, services: [], count: 0, available: false };
+    }
+
+    try {
+      const unassigned = listUnassignedServicesForDay(services, assignmentRows, hotelsById, {
+        now,
+        withinMinutes: input.withinMinutes,
+      });
 
       return {
         date,
@@ -85,6 +111,7 @@ registerTool({
           minutes_until: s.minutesUntil,
         })),
         count: unassigned.length,
+        available: true,
       };
     } catch (error) {
       throw toSafeMcpError(error);

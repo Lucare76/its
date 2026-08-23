@@ -37,6 +37,14 @@ function collectActions(signals: readonly SignalLike[]): MarioAction[] {
 export type OperationalBriefOutput = {
   date: string;
   summary: { total_services: number; upcoming_services: number; unassigned_services: number; active_services: number };
+  /**
+   * false se la lettura servizi/hotel/assegnazioni e' fallita lato tool —
+   * distinto da health.available (che copre solo Job/Operational Health).
+   * Assente quando il tool e' una versione precedente allo Sprint 6
+   * fix-diagnosi: trattato come disponibile per compatibilita' (mai un falso
+   * "non disponibile" su dati vecchi/di test che non impostano il campo).
+   */
+  services_available?: boolean;
   critical_items: SignalLike[];
   warnings: SignalLike[];
   health: { available: boolean; overall: "healthy" | "attention" | "critical" | null };
@@ -44,6 +52,13 @@ export type OperationalBriefOutput = {
 
 export function formatOperationalBriefAnswer(output: OperationalBriefOutput): MarioAnswer {
   const { summary, critical_items, warnings, health } = output;
+
+  if (output.services_available === false) {
+    // Stesso principio di formatHealthStatusAnswer: mai un "0 servizi/nessun
+    // problema" travestito da dato reale quando la lettura e' fallita.
+    return { answer: "Al momento non riesco a leggere la situazione della giornata.", actions: [] };
+  }
+
   const parts: string[] = [];
 
   parts.push(
@@ -142,9 +157,17 @@ export type UnassignedServicesOutput = {
   date: string;
   count: number;
   services: Array<{ id: string; time: string; direction: string | null; practice_number: string | null; minutes_until: number | null }>;
+  /** false se la lettura servizi e' fallita lato tool — vedi formatOperationalBriefAnswer per lo stesso principio. Assente = disponibile, per compatibilita'. */
+  available?: boolean;
 };
 
 export function formatUnassignedAnswer(output: UnassignedServicesOutput): MarioAnswer {
+  if (output.available === false) {
+    // MAI "nessun servizio senza autista" quando in realta' non abbiamo
+    // potuto leggere i dati — sarebbe un falso rassicurante.
+    return { answer: "Al momento non riesco a leggere i servizi senza autista.", actions: [] };
+  }
+
   if (output.count === 0) {
     return { answer: `Nessun servizio senza autista per il ${output.date}.`, actions: [] };
   }
