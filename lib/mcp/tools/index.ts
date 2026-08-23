@@ -7,3 +7,7 @@ import "@/lib/mcp/tools/preview-assign-driver";
 import "@/lib/mcp/tools/assign-driver";
 import "@/lib/mcp/tools/preview-update-service-status";
 import "@/lib/mcp/tools/update-service-status";
+import "@/lib/mcp/tools/get-operational-brief";
+import "@/lib/mcp/tools/get-health-status";
+import "@/lib/mcp/tools/get-operational-alerts";
+import "@/lib/mcp/tools/get-unassigned-services";

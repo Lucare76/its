@@ -31,7 +31,7 @@ const SERVICE_SELECT = "id, time, status, direction, pax, vessel, service_type";
 registerTool({
   name: "its.get_day_plan",
   description:
-    "Vista operativa compatta del giorno per il tenant corrente: servizi, assegnazioni driver/veicolo, non assegnati, autisti in servizio.",
+    "Vista operativa compatta del giorno per il tenant corrente: servizi, assegnazioni driver/veicolo, non assegnati (campo 'assigned' per servizio), autisti in servizio. Nota (Sprint 5): 'assigned=false' qui e' un dato grezzo (include anche servizi che potrebbero non richiedere assegnazione) — per sapere quali servizi mancano DAVVERO di autista, o hanno un alert operativo, usa its.get_unassigned_services / its.get_operational_alerts.",
   category: "READ",
   inputSchema,
   outputSchema,

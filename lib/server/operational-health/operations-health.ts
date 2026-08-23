@@ -63,8 +63,12 @@ function serviceEditAction(serviceId: string) {
 export const OPERATIONS_CRITICAL_WINDOW_MINUTES = 60;
 export const OPERATIONS_WARNING_WINDOW_MINUTES = 180;
 
-/** Stessa esclusione di app/api/cron/sla-check/route.ts. */
-const EXCLUDED_STATUSES = new Set(["cancelled", "pending_cancellation", "completato"]);
+/**
+ * Stessa esclusione di app/api/cron/sla-check/route.ts. Esportata (Sprint 5
+ * MCP) per riuso esatto da its.get_unassigned_services / its.get_operational_brief
+ * — nessuna nuova definizione di "servizio escluso" altrove.
+ */
+export const EXCLUDED_STATUSES = new Set(["cancelled", "pending_cancellation", "completato"]);
 
 /**
  * Riga servizio per la valutazione — sovrainsieme dei campi minimi (id/date/
@@ -157,13 +161,72 @@ export function evaluateImminentUnassignedServices(
   return signals;
 }
 
-function romeDateKey(date: Date): string {
+/** Esportata (Sprint 5 MCP) — "oggi" operativo ITS per i tool che di default operano sulla giornata corrente, mai UTC ingenuo. */
+export function romeDateKey(date: Date): string {
   const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" });
   return fmt.format(date);
 }
 
-/** Colonne minime + gli stessi campi opzionali "operational_v2" che alimentano resolveAssignableService — stesso elenco concettuale gia' usato da app/api/ops/piano-giorno/unassigned-diagnostics/route.ts. */
-const SERVICE_COLUMNS = [
+/**
+ * Pura — sorella di evaluateImminentUnassignedServices (Sprint 5 MCP): stessi
+ * identici filtri (is_draft, EXCLUDED_STATUSES, requiresOperationalAssignment,
+ * nessun driver assegnato), ma SENZA il vincolo di finestra "imminente"
+ * (0..OPERATIONS_WARNING_WINDOW_MINUTES) — risponde a "quali servizi di
+ * OGGI mancano ancora di autista", non solo a quelli a rischio nelle
+ * prossime ore. `options.withinMinutes`, se passato, filtra ulteriormente
+ * per un orizzonte esplicito richiesto dal chiamante (mai un default
+ * "assenza assegnazione = problema" — vedi guardia requiresOperationalAssignment,
+ * stessa di evaluateImminentUnassignedServices).
+ */
+export function listUnassignedServicesForDay(
+  services: readonly OperationsHealthServiceRow[],
+  assignments: readonly OperationsHealthAssignmentRow[],
+  hotelsById: ReadonlyMap<string, OperationsHealthHotelRow>,
+  options?: { now?: Date; withinMinutes?: number }
+): Array<{ id: string; time: string; direction: string | null; practiceNumber: string | null; minutesUntil: number | null }> {
+  const now = options?.now ?? new Date();
+  const assignedServiceIds = new Set(
+    assignments.filter((a) => a.driver_user_id != null).map((a) => a.service_id)
+  );
+
+  const results: Array<{ id: string; time: string; direction: string | null; practiceNumber: string | null; minutesUntil: number | null }> = [];
+
+  for (const service of services) {
+    if (service.is_draft) continue;
+    if (EXCLUDED_STATUSES.has(service.status)) continue;
+
+    const hotel = service.hotel_id ? hotelsById.get(service.hotel_id) ?? null : null;
+    if (!requiresOperationalAssignment(service, hotel)) continue;
+    if (assignedServiceIds.has(service.id)) continue;
+
+    const serviceAtUtc = romeDateTimeToUtc(service.date, service.time);
+    const minutesUntil = serviceAtUtc ? Math.round((serviceAtUtc.getTime() - now.getTime()) / 60_000) : null;
+
+    if (options?.withinMinutes != null) {
+      if (minutesUntil === null || minutesUntil < 0 || minutesUntil > options.withinMinutes) continue;
+    }
+
+    results.push({
+      id: service.id,
+      time: service.time,
+      direction: service.direction,
+      practiceNumber: service.practice_number,
+      minutesUntil,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Colonne minime + gli stessi campi opzionali "operational_v2" che alimentano
+ * resolveAssignableService — stesso elenco concettuale gia' usato da
+ * app/api/ops/piano-giorno/unassigned-diagnostics/route.ts. Esportata
+ * (Sprint 5 MCP) cosi' its.get_unassigned_services / its.get_operational_brief
+ * leggono ESATTAMENTE lo stesso set di colonne, mai una selezione parallela
+ * che potrebbe divergere silenziosamente da questa.
+ */
+export const SERVICE_COLUMNS = [
   "id",
   "date",
   "time",

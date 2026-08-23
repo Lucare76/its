@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateImminentUnassignedServices,
   requiresOperationalAssignment,
+  listUnassignedServicesForDay,
   OPERATIONS_CRITICAL_WINDOW_MINUTES,
   OPERATIONS_WARNING_WINDOW_MINUTES,
   type OperationsHealthServiceRow,
   type OperationsHealthHotelRow,
+  type OperationsHealthAssignmentRow,
 } from "@/lib/server/operational-health/operations-health";
 
 // 2026-08-22 e' CEST (Europe/Rome = UTC+2): le 10:00 UTC sono le 12:00 locali.
@@ -170,6 +172,46 @@ describe("evaluateImminentUnassignedServices", () => {
       expect(href).not.toMatch(/^https?:\/\//);
       expect(href).not.toContain("token");
       expect(href).not.toContain("?");
+    });
+  });
+
+  describe("listUnassignedServicesForDay (Sprint 5 MCP — sorella di evaluateImminentUnassignedServices, senza finestra imminente)", () => {
+    it("include un servizio assegnabile senza autista, anche fuori dalla finestra imminente di 180min", () => {
+      const svc = assignableService({ id: "svc-later", date: "2026-08-22", time: "23:00" });
+      const result = listUnassignedServicesForDay([svc], [], HOTELS, { now: NOW_SUMMER });
+      expect(result.map((r) => r.id)).toEqual(["svc-later"]);
+    });
+
+    it("esclude un servizio gia' assegnato (assignment con driver_user_id)", () => {
+      const svc = assignableService({ id: "svc-assigned" });
+      const assignment: OperationsHealthAssignmentRow = { service_id: "svc-assigned", driver_user_id: "driver-1" };
+      const result = listUnassignedServicesForDay([svc], [assignment], HOTELS, { now: NOW_SUMMER });
+      expect(result).toEqual([]);
+    });
+
+    it("esclude un servizio non assegnabile (needs_review) — mai assignment assente = automaticamente problema", () => {
+      const svc = assignableService({ id: "svc-needs-review", hotel_id: null, meeting_point: null });
+      const result = listUnassignedServicesForDay([svc], [], HOTELS, { now: NOW_SUMMER });
+      expect(result).toEqual([]);
+    });
+
+    it("esclude uno stato in EXCLUDED_STATUSES (es. cancelled)", () => {
+      const svc = assignableService({ id: "svc-cancelled", status: "cancelled" });
+      const result = listUnassignedServicesForDay([svc], [], HOTELS, { now: NOW_SUMMER });
+      expect(result).toEqual([]);
+    });
+
+    it("withinMinutes filtra correttamente (dentro l'orizzonte -> incluso, fuori -> escluso)", () => {
+      const near = assignableService({ id: "svc-near", time: "12:30" }); // 30 min dopo NOW_SUMMER
+      const far = assignableService({ id: "svc-far", time: "20:00" }); // ore dopo
+      const result = listUnassignedServicesForDay([near, far], [], HOTELS, { now: NOW_SUMMER, withinMinutes: 60 });
+      expect(result.map((r) => r.id)).toEqual(["svc-near"]);
+    });
+
+    it("riporta minutesUntil coerente con l'orario del servizio", () => {
+      const svc = assignableService({ id: "svc-min", time: "12:30" });
+      const result = listUnassignedServicesForDay([svc], [], HOTELS, { now: NOW_SUMMER });
+      expect(result[0]!.minutesUntil).toBe(30);
     });
   });
 });

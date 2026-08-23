@@ -14,7 +14,13 @@ const outputSchema = z.object({
       full_name: z.string(),
       active: z.boolean(),
       has_access: z.boolean(),
+      /** true se l'accesso e' sospeso — motivo deterministico di indisponibilita' gia' noto (Sprint 5 MCP), mai una deduzione. */
+      access_suspended: z.boolean(),
       assigned_services_count: z.number(),
+      /** Slot orari gia' occupati per la data (Sprint 5 MCP) — nessuno scoring: il chiamante deduce da qui la finestra libera, mai un giudizio "disponibile dalle X alle Y" calcolato qui. */
+      assigned_services: z.array(
+        z.object({ id: z.string(), time: z.string().nullable(), direction: z.string().nullable(), vehicle_label: z.string().nullable() })
+      ),
     })
   ),
 });
@@ -22,7 +28,7 @@ const outputSchema = z.object({
 registerTool({
   name: "its.get_driver_availability",
   description:
-    "Disponibilita' operativa degli autisti attivi del tenant per una data: numero di servizi gia' assegnati. Nessuna PII (no telefono).",
+    "Disponibilita' operativa degli autisti attivi del tenant per una data: servizi gia' assegnati (orario/direzione/mezzo) cosi' si vedono gli slot occupati, non solo il conteggio. Nessuno scoring/scelta automatica dell'autista 'migliore' — solo dati deterministici. Usalo per 'chi e' disponibile dalle 15 alle 20?', 'chi posso usare per questo servizio?'. Nessuna PII (no telefono).",
   category: "READ",
   inputSchema,
   outputSchema,
@@ -39,31 +45,55 @@ registerTool({
       if (servicesError) throw servicesError;
       const serviceIds = ((serviceRows ?? []) as Array<{ id: string }>).map((row) => row.id);
 
+      type AssignmentRow = { service_id: string; driver_user_id: string | null; vehicle_label: string | null };
       const { data: assignmentRows, error: assignmentsError } =
         serviceIds.length === 0
-          ? { data: [] as Array<{ driver_user_id: string | null }>, error: null }
+          ? { data: [] as AssignmentRow[], error: null }
           : await context.admin
               .from("assignments")
-              .select("driver_user_id")
+              .select("service_id, driver_user_id, vehicle_label")
               .eq("tenant_id", context.tenantId)
               .in("service_id", serviceIds);
       if (assignmentsError) throw assignmentsError;
 
-      const countByDriverUserId = new Map<string, number>();
-      for (const row of (assignmentRows ?? []) as Array<{ driver_user_id: string | null }>) {
+      type ServiceTimeRow = { id: string; time: string | null; direction: string | null };
+      const { data: serviceTimeRows, error: serviceTimesError } =
+        serviceIds.length === 0
+          ? { data: [] as ServiceTimeRow[], error: null }
+          : await context.admin.from("services").select("id, time, direction").in("id", serviceIds);
+      if (serviceTimesError) throw serviceTimesError;
+      const serviceById = new Map(((serviceTimeRows ?? []) as ServiceTimeRow[]).map((row) => [row.id, row]));
+
+      const assignmentsByDriverUserId = new Map<string, AssignmentRow[]>();
+      for (const row of (assignmentRows ?? []) as AssignmentRow[]) {
         if (!row.driver_user_id) continue;
-        countByDriverUserId.set(row.driver_user_id, (countByDriverUserId.get(row.driver_user_id) ?? 0) + 1);
+        const list = assignmentsByDriverUserId.get(row.driver_user_id) ?? [];
+        list.push(row);
+        assignmentsByDriverUserId.set(row.driver_user_id, list);
       }
 
       return {
         date: input.date,
-        drivers: drivers.map((driver) => ({
-          user_id: driver.user_id,
-          full_name: driver.full_name,
-          active: driver.active,
-          has_access: driver.has_access,
-          assigned_services_count: driver.user_id ? (countByDriverUserId.get(driver.user_id) ?? 0) : 0,
-        })),
+        drivers: drivers.map((driver) => {
+          const driverAssignments = driver.user_id ? (assignmentsByDriverUserId.get(driver.user_id) ?? []) : [];
+          return {
+            user_id: driver.user_id,
+            full_name: driver.full_name,
+            active: driver.active,
+            has_access: driver.has_access,
+            access_suspended: driver.access_suspended,
+            assigned_services_count: driverAssignments.length,
+            assigned_services: driverAssignments.map((a) => {
+              const service = serviceById.get(a.service_id);
+              return {
+                id: a.service_id,
+                time: service?.time ?? null,
+                direction: service?.direction ?? null,
+                vehicle_label: a.vehicle_label ?? null,
+              };
+            }),
+          };
+        }),
       };
     } catch (error) {
       throw toSafeMcpError(error);

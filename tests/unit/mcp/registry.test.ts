@@ -62,7 +62,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     await import("@/lib/mcp/tools/index");
   });
 
-  it("registra esattamente i 9 tool attesi dopo Sprint 3 (7 READ + 2 WRITE)", () => {
+  it("registra esattamente i 13 tool attesi dopo Sprint 5 (11 READ + 2 WRITE)", () => {
     const names = listTools()
       .map((tool) => tool.name)
       .sort();
@@ -77,6 +77,11 @@ describe("mcp production tool registry (its.* reali)", () => {
         "its.preview_update_service_status",
         "its.assign_driver",
         "its.update_service_status",
+        // Sprint 5 — READ-only, riusano gli helper Health/Operational Health Sprint 1-4.
+        "its.get_operational_brief",
+        "its.get_health_status",
+        "its.get_operational_alerts",
+        "its.get_unassigned_services",
       ].sort()
     );
   });
