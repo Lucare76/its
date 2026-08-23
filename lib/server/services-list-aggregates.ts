@@ -39,6 +39,30 @@ type AggregateRow = {
   sent_at: string | null;
 };
 
+function isServicesReminderSchemaDrift(error: unknown) {
+  const maybeError = error as { code?: string; message?: string } | null;
+  const message = String(maybeError?.message ?? "");
+  return (
+    maybeError?.code === "42703" ||
+    message.includes("reminder_status") ||
+    message.includes("sent_at") ||
+    message === "Bad Request" ||
+    message.includes("Could not find") ||
+    message.includes("column")
+  );
+}
+
+function normalizeAggregateRows(rows: unknown[], reminderStatsAvailable: boolean): AggregateRow[] {
+  return rows.map((row) => {
+    const item = row as Partial<AggregateRow>;
+    return {
+      ...item,
+      reminder_status: reminderStatsAvailable ? item.reminder_status ?? null : null,
+      sent_at: reminderStatsAvailable ? item.sent_at ?? null : null
+    } as AggregateRow;
+  });
+}
+
 export type ServicesListStats = {
   totale: number;
   needsAttention: number;
@@ -72,13 +96,7 @@ export async function computeServicesListAggregates({
   let reminderStatsAvailable = true;
   let { data, error } = await query;
   if (error) {
-    const message = String(error.message ?? "");
-    const isSchemaDrift =
-      message.includes("reminder_status") ||
-      message.includes("sent_at") ||
-      message.includes("Could not find") ||
-      message.includes("column");
-    if (!isSchemaDrift) throw error;
+    if (!isServicesReminderSchemaDrift(error)) throw error;
 
     // Some environments have not applied the reminder tracking columns yet.
     // The services list must still load; only the optional "undelivered
@@ -90,7 +108,7 @@ export async function computeServicesListAggregates({
     error = null;
     reminderStatsAvailable = false;
   }
-  const rows = (data ?? []) as AggregateRow[];
+  const rows = normalizeAggregateRows(data ?? [], reminderStatsAvailable);
 
   const inboundEmailIds = Array.from(
     new Set(rows.map((row) => row.inbound_email_id).filter((id): id is string => typeof id === "string" && id.length > 0))

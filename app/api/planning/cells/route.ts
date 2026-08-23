@@ -37,13 +37,24 @@ export async function GET(request: NextRequest) {
 
     let bus_units: unknown[] = [];
     if (type === "bus") {
-      const { data: units, error: unitsError } = await auth.admin
+      let { data: units, error: unitsError } = await auth.admin
         .from("tenant_bus_units")
         .select("id, label, capacity, status, bus_line_id, sort_order, driver_name")
         .eq("tenant_id", tenantId)
         .eq("active", true)
         .order("sort_order")
         .order("label");
+      if (unitsError && (unitsError.code === "42703" || String(unitsError.message ?? "").includes("driver_name"))) {
+        const fallback = await auth.admin
+          .from("tenant_bus_units")
+          .select("id, label, capacity, status, bus_line_id, sort_order")
+          .eq("tenant_id", tenantId)
+          .eq("active", true)
+          .order("sort_order")
+          .order("label");
+        units = fallback.data?.map((unit) => ({ ...unit, driver_name: null })) ?? null;
+        unitsError = fallback.error;
+      }
       if (unitsError) throw new Error(unitsError.message);
       bus_units = units ?? [];
     }

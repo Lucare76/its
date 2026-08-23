@@ -73,11 +73,27 @@ export async function POST(request: NextRequest) {
     try {
       aggregates = await computeServicesListAggregates({ admin: auth.admin, tenantId, baseFilters: filters, extraFilters });
     } catch (aggregateError) {
-      console.error(
-        "Services list aggregates error",
-        aggregateError instanceof Error ? aggregateError.message : String(aggregateError)
-      );
-      return NextResponse.json({ error: "Errore calcolo statistiche servizi." }, { status: 500 });
+      const details =
+        aggregateError instanceof Error
+          ? { message: aggregateError.message, name: aggregateError.name }
+          : aggregateError;
+      console.error("Services list aggregates error", details);
+      if (hasExtraServicesFilters(extraFilters)) {
+        return NextResponse.json({ error: "Errore calcolo statistiche servizi." }, { status: 500 });
+      }
+      aggregates = {
+        matchedIds: [] as string[],
+        stats: {
+          totale: 0,
+          needsAttention: 0,
+          lineeBus: 0,
+          altriServizi: 0,
+          daAssegnareInternamente: 0,
+          promemoriaDaVerificare: 0
+        },
+        knownVessels: [] as string[],
+        knownAgencies: [] as string[]
+      };
     }
 
     let { query } = await buildServicesQuery({
