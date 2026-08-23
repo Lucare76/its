@@ -199,7 +199,12 @@ async function upsertThread(
     last_message_at: input.lastMessageAt,
     last_message_preview: input.preview,
     unread_count: Number(existing?.unread_count ?? 0) + 1,
-    status: existing ? undefined : status,
+    // Un nuovo messaggio inbound riapre sempre la thread, anche se un
+    // operatore l'aveva chiusa in precedenza: altrimenti resta 'closed' per
+    // sempre (bug confermato — il cliente scrive di nuovo, riceve la
+    // risposta automatica "ufficio chiuso", ma il messaggio non compare mai
+    // nella tab "Aperte" dell'inbox).
+    status,
     match_status: input.matchStatus,
     match_suggestions: input.matchSuggestions,
     updated_at: new Date().toISOString()
@@ -429,6 +434,10 @@ async function maybeSendOfficeClosedAutoReply(
     status: "sent",
     timestamp: sentAt,
     replyToWaMessageId: input.inboundWaMessageId,
+    // E' una risposta automatica del bot, non un operatore che ha gestito la
+    // conversazione: non deve azzerare unread_count del messaggio del
+    // cliente appena arrivato (altrimenti resta invisibile come "letto").
+    preserveUnreadState: true,
     rawMessage: {
       id: sendResult.messageId,
       source: "office_closed_auto_reply",

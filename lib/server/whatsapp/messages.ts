@@ -20,6 +20,12 @@ export type PersistOutboundWhatsAppMessageInput = {
   serviceId?: string | null;
   replyToWaMessageId?: string | null;
   rawMessage?: Record<string, unknown>;
+  // Un vero invio (operatore, reminder, arrivi) significa "gestito": azzerare
+  // unread_count e' corretto. La risposta automatica "ufficio chiuso" invece
+  // risponde a un messaggio del cliente che nessun operatore ha ancora
+  // letto: passare true qui evita di farlo sparire come "letto" solo perche'
+  // un bot ha risposto.
+  preserveUnreadState?: boolean;
 };
 
 function previewText(input: PersistOutboundWhatsAppMessageInput) {
@@ -68,7 +74,7 @@ export async function persistOutboundWhatsAppMessage(
 
   const { data: existingThread, error: existingThreadError } = await admin
     .from("whatsapp_threads")
-    .select("id, booking_id, transfer_id, customer_id, match_status, status")
+    .select("id, booking_id, transfer_id, customer_id, match_status, status, unread_count")
     .eq("tenant_id", input.tenantId)
     .eq("wa_id", waId)
     .maybeSingle();
@@ -84,7 +90,7 @@ export async function persistOutboundWhatsAppMessage(
     transfer_id: existingThread?.transfer_id ?? service?.id ?? null,
     last_message_at: timestamp,
     last_message_preview: previewText(input),
-    unread_count: 0,
+    unread_count: input.preserveUnreadState ? Number(existingThread?.unread_count ?? 0) : 0,
     status: existingThread?.status ?? "open",
     match_status: existingThread?.match_status ?? (service?.id ? "matched" : "needs_review"),
     match_suggestions: [],
