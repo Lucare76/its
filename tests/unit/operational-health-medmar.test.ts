@@ -58,4 +58,26 @@ describe("evaluateMedmarDeliveryRows", () => {
     const signals = evaluateMedmarDeliveryRows([row({ id: "d1", status: "delivery_started" })], NOW);
     expect(signals[0]!.severity).toBe("info");
   });
+
+  describe("action (Sprint 4 — collegamento contestuale)", () => {
+    it("delivery_failed (critical) -> action verso /biglietti-medmar", () => {
+      const signals = evaluateMedmarDeliveryRows([row({ id: "f1", status: "delivery_failed" })], NOW);
+      expect(signals[0]!.action).toEqual({ label: "Apri Medmar", href: "/biglietti-medmar" });
+    });
+
+    it("delivery_pending (warning) -> action verso /biglietti-medmar", () => {
+      const staleCreatedAt = new Date(NOW.getTime() - (MEDMAR_PENDING_WARNING_MS + 60_000)).toISOString();
+      const signals = evaluateMedmarDeliveryRows([row({ id: "p2", status: "pdf_not_found", created_at: staleCreatedAt })], NOW);
+      expect(signals[0]!.action).toEqual({ label: "Apri Medmar", href: "/biglietti-medmar" });
+    });
+
+    it("href e' sempre una route interna (nessun URL esterno, nessun token/secret)", () => {
+      const signals = evaluateMedmarDeliveryRows([row({ id: "f2", status: "delivery_failed", medmar_numero: "MED-9" })], NOW);
+      const href = signals[0]!.action!.href;
+      expect(href.startsWith("/")).toBe(true);
+      expect(href).not.toMatch(/^https?:\/\//);
+      expect(href).not.toContain("token");
+      expect(href).not.toContain("?");
+    });
+  });
 });

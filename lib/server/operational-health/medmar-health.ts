@@ -32,7 +32,17 @@ import {
 } from "@/lib/server/medmar-booking/delivery-retry";
 import { MEDMAR_SUMMARY_ERROR_STATUSES } from "@/lib/server/medmar-booking/delivery-summary";
 import type { MedmarDeliveryStatus } from "@/lib/server/medmar-booking/delivery-types";
-import type { OperationalHealthAreaResult, OperationalHealthSignal } from "./types";
+import type { OperationalHealthAreaResult, OperationalHealthSignal, OperationalHealthSignalAction } from "./types";
+
+/**
+ * Unica destinazione affidabile per i segnali Medmar (Sprint 4): /biglietti-medmar
+ * legge medmar_delivery_attempts per delivery_attempt_id (stessa tabella di
+ * questo reader) — vedi audit sprint. /medmar-ar e' un'area diversa (nessun
+ * riferimento a delivery attempts), non usata. Nessun query param: la pagina
+ * non ne legge nessuno oggi, quindi si linka alla pagina generale e il
+ * riferimento biglietto resta nel testo del messaggio (gia' presente sopra).
+ */
+const MEDMAR_OPEN_ACTION: OperationalHealthSignalAction = { label: "Apri Medmar", href: "/biglietti-medmar" };
 
 /**
  * Soglia "pending oltre il ragionevole" derivata direttamente dalle
@@ -81,6 +91,7 @@ export function evaluateMedmarDeliveryRows(
         detectedAt,
         entityId: row.medmar_numero ?? row.id,
         metadata: { delivery_attempt_id: row.id, status: row.status, last_error_code: row.last_error_code },
+        action: MEDMAR_OPEN_ACTION,
       });
       continue;
     }
@@ -98,6 +109,7 @@ export function evaluateMedmarDeliveryRows(
         detectedAt,
         entityId: row.medmar_numero ?? row.id,
         metadata: { delivery_attempt_id: row.id, status: row.status, age_minutes: Math.round(ageMs / 60000) },
+        action: MEDMAR_OPEN_ACTION,
       });
     } else {
       signals.push({

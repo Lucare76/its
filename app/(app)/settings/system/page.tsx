@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
@@ -57,6 +58,8 @@ type JobHealthSummaryCounts = { healthy: number; info: number; warning: number; 
 /** Operational Health (Sprint 3) — distinto dal Job Health sopra: risponde "il risultato operativo prodotto e' sano?", non "il job e' andato a buon fine?". Calcolato SOLO server-side (lib/server/operational-health.ts): questa pagina si limita a renderizzarlo. */
 type OperationalHealthArea = "backup" | "medmar" | "email" | "operations";
 type OperationalHealthSeverity = "info" | "warning" | "critical";
+/** Collegamento contestuale opzionale (Sprint 4) — vedi OperationalHealthSignalAction server-side. Assente quando non esiste una destinazione affidabile. */
+type OperationalHealthSignalAction = { label: string; href: string };
 type OperationalHealthSignal = {
   key: string;
   area: OperationalHealthArea;
@@ -65,6 +68,7 @@ type OperationalHealthSignal = {
   message: string;
   detectedAt: string;
   entityId?: string;
+  action?: OperationalHealthSignalAction;
 };
 type OperationalHealthAreaResult = {
   area: OperationalHealthArea;
@@ -538,6 +542,14 @@ export default function SystemStatusPage() {
                       {critical.map((s) => (
                         <p key={s.key} className="text-sm text-rose-800">
                           <span className="font-semibold">{OPERATIONAL_AREA_LABEL[s.area]}:</span> {s.message}
+                          {s.action ? (
+                            <Link
+                              href={s.action.href}
+                              className="ml-2 inline-block rounded-md border border-rose-300 bg-white px-2 py-0.5 align-middle text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                            >
+                              {s.action.label}
+                            </Link>
+                          ) : null}
                         </p>
                       ))}
                     </div>
@@ -550,6 +562,14 @@ export default function SystemStatusPage() {
                       {attention.map((s) => (
                         <p key={s.key} className="text-sm text-amber-800">
                           <span className="font-semibold">{OPERATIONAL_AREA_LABEL[s.area]}:</span> {s.message}
+                          {s.action ? (
+                            <Link
+                              href={s.action.href}
+                              className="ml-2 inline-block rounded-md border border-amber-300 bg-white px-2 py-0.5 align-middle text-xs font-semibold text-amber-700 hover:bg-amber-100"
+                            >
+                              {s.action.label}
+                            </Link>
+                          ) : null}
                         </p>
                       ))}
                     </div>

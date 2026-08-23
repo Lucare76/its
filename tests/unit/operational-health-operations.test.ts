@@ -154,4 +154,22 @@ describe("evaluateImminentUnassignedServices", () => {
     expect(OPERATIONS_CRITICAL_WINDOW_MINUTES).toBe(60);
     expect(OPERATIONS_WARNING_WINDOW_MINUTES).toBe(180);
   });
+
+  describe("action (Sprint 4 — collegamento contestuale)", () => {
+    it("servizio imminente senza assegnazione -> action verso /services/{id}/edit (route reale)", () => {
+      const svc = assignableService({ id: "svc-42", time: "12:42" });
+      const signals = evaluateImminentUnassignedServices([svc], [], HOTELS, NOW_SUMMER);
+      expect(signals[0]!.action).toEqual({ label: "Apri servizio", href: "/services/svc-42/edit" });
+    });
+
+    it("href e' sempre una route interna (nessun URL esterno, nessun token/secret)", () => {
+      const svc = assignableService({ id: "svc-99", time: "12:42" });
+      const signals = evaluateImminentUnassignedServices([svc], [], HOTELS, NOW_SUMMER);
+      const href = signals[0]!.action!.href;
+      expect(href.startsWith("/")).toBe(true);
+      expect(href).not.toMatch(/^https?:\/\//);
+      expect(href).not.toContain("token");
+      expect(href).not.toContain("?");
+    });
+  });
 });

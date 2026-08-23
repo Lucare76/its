@@ -76,4 +76,12 @@ describe("evaluateBackupPayload", () => {
     expect(signals[0]!.key).toBe("backup:missing_metadata");
     expect(signals[0]!.severity).toBe("warning");
   });
+
+  it("action (Sprint 4): nessun segnale backup ha una destinazione — i segnali sono gia' mostrati su /settings/system, un link a se stessa non serve", () => {
+    const payload = validPayload();
+    delete (payload.data as Record<string, unknown>).services;
+    const signals = evaluateBackupPayload(payload, { filename: "backup_2026-08-22.json", detectedAt: NOW });
+    expect(signals.length).toBeGreaterThan(0);
+    for (const s of signals) expect(s.action).toBeUndefined();
+  });
 });

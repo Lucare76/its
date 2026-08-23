@@ -15,6 +15,21 @@ export type OperationalHealthArea = "backup" | "medmar" | "email" | "operations"
 
 export type OperationalHealthSeverity = "info" | "warning" | "critical";
 
+/**
+ * Collegamento contestuale verso una schermata GIA' ESISTENTE del gestionale
+ * (Sprint 4). Mai una nuova pagina, mai un'azione automatica: solo
+ * navigazione. `href` e' sempre una route interna ITS, costruita solo con
+ * dati gia' presenti sul segnale — mai token/secret/email/telefono/URL
+ * esterni. Opzionale: se il reader non ha una destinazione affidabile,
+ * l'action resta assente (mai un link "indovinato").
+ */
+export type OperationalHealthSignalAction = {
+  /** Breve e specifica (es. "Apri Medmar", "Apri servizio") — mai una CTA generica tipo "Apri". */
+  label: string;
+  /** Route interna ITS (path relativo). Mai un URL assoluto/esterno. */
+  href: string;
+};
+
 export type OperationalHealthSignal = {
   /** Stabile per una stessa condizione (es. "backup:missing_table:services") — usabile come React key. */
   key: string;
@@ -27,6 +42,8 @@ export type OperationalHealthSignal = {
   /** Identificatore sintetico (numero pratica, id delivery attempt, ecc.) — mai email/telefono/token. */
   entityId?: string;
   metadata?: Record<string, unknown>;
+  /** Assente quando non esiste una destinazione affidabile — vedi OperationalHealthSignalAction. */
+  action?: OperationalHealthSignalAction;
 };
 
 export type OperationalHealthAreaResult = {

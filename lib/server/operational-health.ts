@@ -23,6 +23,7 @@ export type {
   OperationalHealthReport,
   OperationalHealthSeverity,
   OperationalHealthSignal,
+  OperationalHealthSignalAction,
   OperationalHealthSummaryCounts,
   OverallHealthStatus,
 } from "./operational-health/types";

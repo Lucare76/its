@@ -18,7 +18,16 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { derivePdfImportStatus, type InboundRow, type ServiceRow } from "@/lib/server/pdf-imports";
-import type { OperationalHealthAreaResult, OperationalHealthSignal } from "./types";
+import type { OperationalHealthAreaResult, OperationalHealthSignal, OperationalHealthSignalAction } from "./types";
+
+/**
+ * Unica destinazione affidabile per i segnali email/import (Sprint 4):
+ * /pdf-imports e' la coda di revisione import PDF — vedi audit sprint.
+ * /inbox e' un'area diversa (review agenzia/booking, non pertinente). Nessun
+ * query param: la pagina non ne legge nessuno oggi, si linka alla pagina
+ * generale.
+ */
+const EMAIL_IMPORT_OPEN_ACTION: OperationalHealthSignalAction = { label: "Apri import PDF", href: "/pdf-imports" };
 
 /** Finestra e limite di lettura — vedi readEmailImportOperationalHealth. */
 export const EMAIL_IMPORT_HEALTH_WINDOW_DAYS = 14;
@@ -68,6 +77,7 @@ export function evaluateEmailImportRows(rows: readonly EmailImportHealthRow[], n
           message: "Un documento PDF ricevuto via email non e' stato importato correttamente (parsing fallito).",
           detectedAt,
           entityId: row.id,
+          action: EMAIL_IMPORT_OPEN_ACTION,
         });
       }
       continue;
@@ -87,6 +97,7 @@ export function evaluateEmailImportRows(rows: readonly EmailImportHealthRow[], n
       message: `Altri ${failedCount - MAX_FAILED_SIGNALS} documenti PDF con parsing fallito (oltre ai ${MAX_FAILED_SIGNALS} gia' elencati).`,
       detectedAt,
       metadata: { additional_failed_count: failedCount - MAX_FAILED_SIGNALS },
+      action: EMAIL_IMPORT_OPEN_ACTION,
     });
   }
 
@@ -100,6 +111,7 @@ export function evaluateEmailImportRows(rows: readonly EmailImportHealthRow[], n
       message: `${reviewPendingCount} document${reviewPendingCount === 1 ? "o" : "i"} PDF in attesa di revisione manuale.`,
       detectedAt,
       metadata: { review_pending_count: reviewPendingCount },
+      action: EMAIL_IMPORT_OPEN_ACTION,
     });
   }
 

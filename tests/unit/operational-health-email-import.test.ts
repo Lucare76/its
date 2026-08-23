@@ -58,4 +58,34 @@ describe("evaluateEmailImportRows", () => {
     const signals = evaluateEmailImportRows([row({ parsed_json: { pdf_import: { import_state: "imported" } } })], NOW);
     expect(signals).toEqual([]);
   });
+
+  describe("action (Sprint 4 — collegamento contestuale)", () => {
+    it("import fallito -> action verso /pdf-imports", () => {
+      const signals = evaluateEmailImportRows(
+        [row({ id: "f1", parsed_json: { pdf_import: { import_state: "failed" } } })],
+        NOW
+      );
+      expect(signals[0]!.action).toEqual({ label: "Apri import PDF", href: "/pdf-imports" });
+    });
+
+    it("review pending -> action verso /pdf-imports", () => {
+      const signals = evaluateEmailImportRows(
+        [row({ id: "r1", created_at: NOW.toISOString(), parsed_json: { pdf_import: { import_state: "draft" } } })],
+        NOW
+      );
+      expect(signals[0]!.action).toEqual({ label: "Apri import PDF", href: "/pdf-imports" });
+    });
+
+    it("href e' sempre una route interna (nessun URL esterno, nessun token/secret)", () => {
+      const signals = evaluateEmailImportRows(
+        [row({ id: "f2", parsed_json: { pdf_import: { import_state: "failed" } } })],
+        NOW
+      );
+      const href = signals[0]!.action!.href;
+      expect(href.startsWith("/")).toBe(true);
+      expect(href).not.toMatch(/^https?:\/\//);
+      expect(href).not.toContain("token");
+      expect(href).not.toContain("?");
+    });
+  });
 });

@@ -48,6 +48,17 @@ import { resolveAssignableService, type AssignableHotel, type AssignableService 
 import type { AutoAssignPreviewHotel } from "@/lib/piano-assignable-preview";
 import type { OperationalHealthAreaResult, OperationalHealthSignal } from "./types";
 
+/**
+ * Destinazione affidabile per i segnali operativi (Sprint 4):
+ * /services/[id]/edit e' una route reale e stabile (useParams<{id}>()) — vedi
+ * audit sprint. Ogni segnale qui porta gia' service.id, quindi il fallback a
+ * Piano del Giorno (priorita' 2/3 della spec) non serve mai in pratica: quella
+ * pagina non legge comunque alcun query param data oggi.
+ */
+function serviceEditAction(serviceId: string) {
+  return { label: "Apri servizio", href: `/services/${serviceId}/edit` };
+}
+
 /** Soglie server-side (non in UI) — vedi spec sprint: prima configurazione semplice, nessuna soglia operativa preesistente trovata nel progetto oltre alla finestra 12h di sla-check (troppo ampia per un alert "imminente"). */
 export const OPERATIONS_CRITICAL_WINDOW_MINUTES = 60;
 export const OPERATIONS_WARNING_WINDOW_MINUTES = 180;
@@ -139,6 +150,7 @@ export function evaluateImminentUnassignedServices(
       detectedAt,
       entityId: label,
       metadata: { service_id: service.id, minutes_until: minutesRounded, direction: service.direction },
+      action: serviceEditAction(service.id),
     });
   }
 
