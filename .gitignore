@@ -19,3 +19,7 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 .supabase-sync-temp/
 *.VISUAL2-BACKUP.*
+
+.chrome-codex-profile/
+artifacts/mockups/
+artifacts/screenshots/
