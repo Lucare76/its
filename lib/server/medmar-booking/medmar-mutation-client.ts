@@ -4,6 +4,7 @@ import type { MedmarBookingPayload, MedmarMutationClient, MedmarMutationTicketLi
 const MEDMAR_API_BASE_URL = process.env.MEDMAR_API_BASE_URL?.trim() || null;
 const MEDMAR_API_PATH_PREFIX = "/production/biglietteria_api/public/index.php/api";
 const MUTATION_TIMEOUT_MS = 10_000;
+const BOOKING_MUTATION_TIMEOUT_MS = 30_000;
 
 const TURN_PATH = `${MEDMAR_API_PATH_PREFIX}/turni`;
 const LOCK_PATH = `${MEDMAR_API_PATH_PREFIX}/prenotazioni/lock-disponibilita`;
@@ -56,7 +57,7 @@ function parseEnvelope<T>(json: unknown, label: string): T {
   return obj.output as T;
 }
 
-async function postMutative<T>(path: string, body: unknown, label: string): Promise<T> {
+async function postMutative<T>(path: string, body: unknown, label: string, timeoutMs = MUTATION_TIMEOUT_MS): Promise<T> {
   assertIssuingEnabled();
   const baseUrl = assertBaseUrl();
   const session = await getMedmarAuthProvider().getValidToken();
@@ -69,7 +70,7 @@ async function postMutative<T>(path: string, body: unknown, label: string): Prom
         Authorization: `Bearer ${session.bearerToken}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     throw new MedmarMutationRemoteUnknownError(`Timeout o rete durante ${label}: verificare manualmente Medmar.`);
@@ -126,7 +127,7 @@ export function createMedmarMutationClient(): MedmarMutationClient {
     },
 
     async createBooking(payload: MedmarBookingPayload) {
-      const output = await postMutative<Record<string, unknown>>(BOOKING_PATH, payload, "creazione prenotazione");
+      const output = await postMutative<Record<string, unknown>>(BOOKING_PATH, payload, "creazione prenotazione", BOOKING_MUTATION_TIMEOUT_MS);
       if (output.id_prenotazione == null || output.prezzo_totale == null || output.id_cliente == null) {
         throw new MedmarMutationRemoteUnknownError("Response prenotazione senza dati essenziali: verificare manualmente Medmar.");
       }

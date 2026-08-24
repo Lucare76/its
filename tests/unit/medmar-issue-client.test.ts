@@ -77,6 +77,41 @@ describe("medmar mutation client", () => {
     });
   });
 
+  it("usa un timeout piu' lungo solo per la creazione prenotazione", async () => {
+    process.env.MEDMAR_ISSUING_ENABLED = "true";
+    const { __setMedmarAuthProviderForTests } = await import("@/lib/server/medmar-booking/auth");
+    __setMedmarAuthProviderForTests({
+      authenticate: vi.fn(),
+      getValidToken: vi.fn().mockResolvedValue({ bearerToken: "test-token", expiresAt: Date.now() + 60_000, userId: null, clienteId: null, postazioneId: null }),
+      invalidateToken: vi.fn(),
+    });
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(jsonResponse({ return: true, output: { nonDisponibili: [], congelati: [] } }));
+    const { createMedmarMutationClient } = await import("@/lib/server/medmar-booking/medmar-mutation-client");
+    const client = createMedmarMutationClient();
+
+    await client.lockAvailability({ biglietti: [{ id_corsa: 1, quantita: 2, id_log: 3, descrizione: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR" }], utente: 91001 });
+
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ return: true, output: { id_prenotazione: 732162, prezzo_totale: "23.00", id_cliente: "cliente-from-auth" } }));
+    await client.createBooking({
+      cliente_sito: { nome: "Mario", cognome: "Rossi", telefono_1: "123", email: "mario@example.test" },
+      dettaglio: [],
+      dettaglioMezzo: [],
+      id_causale: 1,
+      id_cliente: "cliente-from-auth",
+      id_modalita: 5,
+      id_prenotazione: null,
+      id_turno: 91001,
+      id_vettore_andata: 1,
+      id_vettore_ritorno: 1,
+      targa: { dettagli: [] },
+      urlPagamento: null,
+    });
+
+    expect(timeoutSpy).toHaveBeenNthCalledWith(1, 10_000);
+    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 30_000);
+  });
+
   it("POST prenotazioni timeout/5xx non viene retryato e diventa remote_state_unknown", async () => {
     process.env.MEDMAR_ISSUING_ENABLED = "true";
     const { __setMedmarAuthProviderForTests } = await import("@/lib/server/medmar-booking/auth");
