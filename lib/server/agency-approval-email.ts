@@ -487,3 +487,168 @@ export async function sendOperatorInvoiceDisputeNotifyEmail(input: OperatorInvoi
     text,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Email AGENZIA — esito della contestazione prezzo (approvata/rifiutata da ITS)
+// ---------------------------------------------------------------------------
+
+export interface AgencyInvoiceDisputeResolvedInput {
+  to: string;
+  customerName: string;
+  serviceDate: string | null;
+  originalPriceCents: number;
+  proposedPriceCents: number;
+  approved: boolean;
+  resolutionNote: string | null;
+}
+
+export async function sendAgencyInvoiceDisputeResolvedEmail(input: AgencyInvoiceDisputeResolvedInput): Promise<EmailResult> {
+  const original = formatPrice(input.originalPriceCents);
+  const proposed = formatPrice(input.proposedPriceCents);
+  const dateLabel = input.serviceDate ? fmtDate(input.serviceDate) : "—";
+  const statusLabel = input.approved ? "approvata" : "rifiutata";
+  const statusColor = input.approved ? "#16a34a" : "#dc2626";
+
+  const html = emailHtml(`
+    <p style="font-size:17px;margin-bottom:4px;">La vostra segnalazione è stata <span style="color:${statusColor};font-weight:700;">${statusLabel}</span></p>
+    <p style="color:#475569;margin-bottom:24px;">
+      ${input.approved
+        ? "Il prezzo proposto è stato applicato alla riga dell'estratto conto."
+        : "Il prezzo sulla riga dell'estratto conto resta invariato."}
+    </p>
+
+    ${emailDataTable([
+      ["👤 Cliente", input.customerName],
+      ["📅 Data servizio", dateLabel],
+      ["💰 Prezzo fatturato", original],
+      ["✏️ Prezzo proposto", proposed],
+      ["📝 Note ITS", input.resolutionNote?.trim() || "—"],
+    ])}
+
+    <p style="color:#475569;margin-top:20px;font-size:14px;">
+      Per qualsiasi chiarimento contattateci a
+      <a href="mailto:info@ischiatransferservice.it" style="color:#1e3a5f;font-weight:600;">info@ischiatransferservice.it</a>.
+    </p>
+  `, { title: `Contestazione prezzo ${statusLabel}`, preheader: `${input.customerName}: ${original} → ${proposed} — ${statusLabel}` });
+
+  const text = [
+    `CONTESTAZIONE PREZZO ${statusLabel.toUpperCase()}`,
+    `Cliente: ${input.customerName}`,
+    `Data servizio: ${dateLabel}`,
+    `Prezzo fatturato: ${original}`,
+    `Prezzo proposto: ${proposed}`,
+    input.resolutionNote?.trim() ? `Note ITS: ${input.resolutionNote.trim()}` : null,
+  ].filter(Boolean).join("\n");
+
+  return sendEmail({
+    to: input.to,
+    subject: `[Estratto conto] Contestazione ${statusLabel} — ${input.customerName}`,
+    html,
+    text,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Email OPERATORE — riscontro dell'agenzia su un intero estratto conto: UNA
+// sola email per l'intero blocco di correzioni inviate insieme (mai una per
+// riga contestata — l'agenzia rivede tutto e invia un unico riscontro), o
+// UNA email quando conferma che e' tutto corretto senza correzioni.
+// ---------------------------------------------------------------------------
+
+export interface OperatorInvoiceBatchDisputeNotifyInput {
+  agencyName: string;
+  periodFrom: string;
+  periodTo: string;
+  corrections: Array<{
+    customerName: string;
+    serviceDate: string | null;
+    originalPriceCents: number;
+    proposedPriceCents: number;
+    agencyNote: string | null;
+  }>;
+  reviewUrl: string;
+}
+
+export async function sendOperatorInvoiceBatchDisputeNotifyEmail(input: OperatorInvoiceBatchDisputeNotifyInput): Promise<EmailResult> {
+  const to = process.env.OPS_NOTIFY_EMAIL?.trim();
+  if (!to) return { status: "skipped", error: "OPS_NOTIFY_EMAIL non configurata." };
+
+  const rows = input.corrections.map((c) => {
+    const diff = c.proposedPriceCents - c.originalPriceCents;
+    const diffFormatted = `${diff > 0 ? "+" : diff < 0 ? "−" : ""}${formatPrice(Math.abs(diff))}`;
+    return `<tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#1e293b;">${c.customerName}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${c.serviceDate ? fmtDate(c.serviceDate) : "—"}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#64748b;text-decoration:line-through;">${formatPrice(c.originalPriceCents)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;color:#92400e;">${formatPrice(c.proposedPriceCents)} (${diffFormatted})</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;">${c.agencyNote?.trim() || "—"}</td>
+    </tr>`;
+  }).join("");
+
+  const html = emailHtml(`
+    <p style="font-size:17px;margin-bottom:4px;">${input.agencyName} ha inviato ${input.corrections.length} correzion${input.corrections.length === 1 ? "e" : "i"} prezzo</p>
+    <p style="color:#475569;margin-bottom:24px;">Estratto conto ${fmtDate(input.periodFrom)} — ${fmtDate(input.periodTo)}. Rivedi e decidi riga per riga se approvare.</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+      <thead>
+        <tr style="background:#f8fafc;">
+          <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#94a3b8;">Cliente</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#94a3b8;">Data</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#94a3b8;">Fatturato</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#94a3b8;">Proposto</th>
+          <th style="padding:8px 12px;text-align:left;font-size:11px;text-transform:uppercase;color:#94a3b8;">Motivazione</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${emailButton("Rivedi le segnalazioni", input.reviewUrl, "#1e3a5f")}
+  `, { title: "Correzioni prezzo estratto conto", preheader: `${input.agencyName} — ${input.corrections.length} correzioni, ${fmtDate(input.periodFrom)}–${fmtDate(input.periodTo)}` });
+
+  const text = [
+    `CORREZIONI PREZZO ESTRATTO CONTO`,
+    `Agenzia: ${input.agencyName}`,
+    `Periodo: ${fmtDate(input.periodFrom)} — ${fmtDate(input.periodTo)}`,
+    ``,
+    ...input.corrections.map((c) => `${c.customerName} (${c.serviceDate ? fmtDate(c.serviceDate) : "—"}): ${formatPrice(c.originalPriceCents)} → ${formatPrice(c.proposedPriceCents)}${c.agencyNote?.trim() ? ` — ${c.agencyNote.trim()}` : ""}`),
+    ``,
+    `Rivedi: ${input.reviewUrl}`,
+  ].join("\n");
+
+  return sendEmail({
+    to,
+    subject: `[Estratto conto] ${input.agencyName} — ${input.corrections.length} correzion${input.corrections.length === 1 ? "e" : "i"} prezzo`,
+    html,
+    text,
+  });
+}
+
+export interface OperatorInvoiceApprovedNotifyInput {
+  agencyName: string;
+  periodFrom: string;
+  periodTo: string;
+  totalCents: number;
+}
+
+export async function sendOperatorInvoiceApprovedNotifyEmail(input: OperatorInvoiceApprovedNotifyInput): Promise<EmailResult> {
+  const to = process.env.OPS_NOTIFY_EMAIL?.trim();
+  if (!to) return { status: "skipped", error: "OPS_NOTIFY_EMAIL non configurata." };
+
+  const html = emailHtml(`
+    <p style="font-size:17px;margin-bottom:4px;">${input.agencyName} ha confermato l'estratto conto</p>
+    <p style="color:#475569;">Periodo ${fmtDate(input.periodFrom)} — ${fmtDate(input.periodTo)} · Totale ${formatPrice(input.totalCents)}. Nessuna correzione richiesta, tutto confermato corretto.</p>
+  `, { title: "Estratto conto confermato", preheader: `${input.agencyName} — nessuna correzione` });
+
+  const text = [
+    `ESTRATTO CONTO CONFERMATO`,
+    `Agenzia: ${input.agencyName}`,
+    `Periodo: ${fmtDate(input.periodFrom)} — ${fmtDate(input.periodTo)}`,
+    `Totale: ${formatPrice(input.totalCents)}`,
+    `Nessuna correzione richiesta.`,
+  ].join("\n");
+
+  return sendEmail({
+    to,
+    subject: `[Estratto conto] ${input.agencyName} — confermato senza correzioni`,
+    html,
+    text,
+  });
+}

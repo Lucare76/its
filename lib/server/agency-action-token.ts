@@ -5,7 +5,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 
-export type AgencyActionType = "cancel";
+export type AgencyActionType = "cancel" | "invoice_review";
 
 export interface AgencyActionPayload {
   sid: string;  // service_id
@@ -13,6 +13,7 @@ export interface AgencyActionPayload {
   tid: string;  // tenant_id
   act: AgencyActionType;
   exp: number;  // unix timestamp seconds
+  iid?: string; // invoice_id (solo per act === "invoice_review")
 }
 
 function getSecret(): string {

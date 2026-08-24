@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { generateInvoiceHtml, buildInvoiceXlsx, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { getRequestAppUrl } from "@/lib/app-url";
+import { generateAgencyActionToken } from "@/lib/server/agency-action-token";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -217,8 +219,21 @@ export async function POST(request: NextRequest) {
   }
 
   const invoiceId = (invoice as InvoiceRow).id as string;
+  const resolvedAgencyId = agency?.id ?? agency_id ?? null;
 
-  // Genera HTML
+  // Genera HTML — link con token (funziona senza login, valido anche per
+  // agenzie senza account nell'area agenzia) quando l'agenzia e' risolta,
+  // altrimenti fallback alla pagina che richiede login. Se la generazione
+  // del token fallisce (es. AGENCY_ACTION_SECRET non configurato), non deve
+  // mai bloccare la creazione/invio dell'estratto conto: fallback silenzioso.
+  const appUrl = getRequestAppUrl(request.headers);
+  let reviewUrl = `${appUrl}/agency/statement`;
+  if (resolvedAgencyId) {
+    try {
+      const token = generateAgencyActionToken({ sid: "", aid: resolvedAgencyId, tid: tenantId, act: "invoice_review", iid: invoiceId }, 60);
+      reviewUrl = `${appUrl}/agency-estratto-conto?token=${encodeURIComponent(token)}`;
+    } catch { /* fallback gia' impostato sopra */ }
+  }
   const html = generateInvoiceHtml({
     agencyName: agency_name,
     agencyEmail: invoiceEmail,
@@ -227,7 +242,8 @@ export async function POST(request: NextRequest) {
     invoiceId,
     createdAt,
     items,
-    totalCents
+    totalCents,
+    reviewUrl
   });
 
   // Invia via Resend se richiesto

@@ -25,6 +25,7 @@ export type InvoiceData = {
   createdAt: string;
   items: InvoiceLineItem[];
   totalCents: number;
+  reviewUrl?: string | null;
 };
 
 function formatDate(iso: string): string {
@@ -39,7 +40,7 @@ function formatCents(cents: number): string {
 export function generateInvoiceHtml(data: InvoiceData): string {
   // Usa emailHtml() come tutti gli altri template — layout table-based inline,
   // compatibile con Gmail desktop e mobile senza dipendere da <style> in <head>.
-  const { emailHtml } = require("@/lib/server/email-layout") as typeof import("@/lib/server/email-layout");
+  const { emailHtml, emailButton } = require("@/lib/server/email-layout") as typeof import("@/lib/server/email-layout");
 
   const rows = data.items.map((item, i) => {
     const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
@@ -109,6 +110,8 @@ export function generateInvoiceHtml(data: InvoiceData): string {
     <p style="font-size:12px;color:#94a3b8;text-align:center;">Rif. <strong style="color:#475569;">${data.invoiceId.slice(0, 8).toUpperCase()}</strong> &nbsp;·&nbsp; Emesso il ${formatDate(data.createdAt.slice(0, 10))}</p>
 
     <p style="font-size:12px;color:#94a3b8;text-align:center;margin-top:16px;">Se un importo ti sembra sbagliato, accedi alla tua area agenzia per segnalarlo: verrà rivisto dal nostro team.</p>
+
+    ${data.reviewUrl ? emailButton("Vedi estratto conto", data.reviewUrl, "#1e3a5f") : ""}
   `;
 
   return emailHtml(body, {

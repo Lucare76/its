@@ -16,6 +16,7 @@ import { z } from "zod";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
 import { sendOperatorInvoiceDisputeNotifyEmail } from "@/lib/server/agency-approval-email";
+import { getRequestAppUrl } from "@/lib/app-url";
 
 export const runtime = "nodejs";
 
@@ -119,7 +120,7 @@ export async function POST(request: NextRequest) {
       .select("name")
       .eq("id", agencyId)
       .maybeSingle();
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://app.ischiatransferservice.it";
+    const appUrl = getRequestAppUrl(request.headers);
     const customerName = [service.customer_first_name, service.customer_last_name].filter(Boolean).join(" ") || service.customer_name || "Cliente";
     const emailResult = await sendOperatorInvoiceDisputeNotifyEmail({
       agencyName: agencyRow?.name ?? "Agenzia",

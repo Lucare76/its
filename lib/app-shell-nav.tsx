@@ -234,6 +234,7 @@ export const MAIN_NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   supervisor: [],
   agency: [
     { href: "/agency", label: "Area Agenzia", icon: "A" },
+    { href: "/agency/statement", label: "Estratto conto", icon: "€" },
     { href: "/map", label: "Mappa", icon: "M" }
   ],
   driver: [{ href: "/driver", label: "Area Autista", icon: "R" }],

@@ -12,6 +12,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
 import { sendEmail } from "@/lib/server/send-email";
+import { getConfiguredAppUrl } from "@/lib/app-url";
+import { generateAgencyActionToken } from "@/lib/server/agency-action-token";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -138,6 +140,18 @@ export async function POST(request: NextRequest) {
 
       const invoiceId = invoice?.id ?? "N/D";
 
+      // Link con token (funziona senza login, valido anche per agenzie
+      // senza account nell'area agenzia) quando l'insert e' andato a buon
+      // fine, altrimenti fallback alla pagina che richiede login. Se la
+      // generazione del token fallisce, non deve mai bloccare l'invio.
+      const cronAppUrl = getConfiguredAppUrl() ?? "https://ischia-transfer.vercel.app";
+      let reviewUrl = `${cronAppUrl}/agency/statement`;
+      if (invoice?.id) {
+        try {
+          const token = generateAgencyActionToken({ sid: "", aid: agency.id, tid: tenantId, act: "invoice_review", iid: invoice.id }, 60);
+          reviewUrl = `${cronAppUrl}/agency-estratto-conto?token=${encodeURIComponent(token)}`;
+        } catch { /* fallback gia' impostato sopra */ }
+      }
       const html = generateInvoiceHtml({
         agencyName: agency.name,
         agencyEmail: email,
@@ -146,7 +160,8 @@ export async function POST(request: NextRequest) {
         invoiceId,
         createdAt,
         items,
-        totalCents
+        totalCents,
+        reviewUrl
       });
 
       const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];

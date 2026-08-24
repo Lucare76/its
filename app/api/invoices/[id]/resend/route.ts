@@ -6,6 +6,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { generateInvoiceHtml, buildInvoiceXlsx } from "@/lib/server/invoice-pdf";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { getRequestAppUrl } from "@/lib/app-url";
+import { generateAgencyActionToken } from "@/lib/server/agency-action-token";
 
 export const runtime = "nodejs";
 
@@ -46,7 +48,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ ok: false, error: "RESEND_API_KEY non configurata." }, { status: 500 });
   }
 
-  // Rigenera HTML dall'invoice_data salvato
+  // Rigenera HTML dall'invoice_data salvato — link con token se l'agenzia
+  // e' risolta (funziona senza login), altrimenti fallback alla pagina che
+  // richiede login. Se la generazione del token fallisce, non deve mai
+  // bloccare il reinvio: fallback silenzioso.
+  const appUrl = getRequestAppUrl(request.headers);
+  let reviewUrl = `${appUrl}/agency/statement`;
+  if (invoice.agency_id) {
+    try {
+      const token = generateAgencyActionToken({ sid: "", aid: invoice.agency_id, tid: tenantId, act: "invoice_review", iid: invoice.id }, 60);
+      reviewUrl = `${appUrl}/agency-estratto-conto?token=${encodeURIComponent(token)}`;
+    } catch { /* fallback gia' impostato sopra */ }
+  }
   const html = generateInvoiceHtml({
     agencyName: invoice.agency_name,
     agencyEmail: invoiceEmail,
@@ -56,6 +69,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     createdAt: invoice.created_at,
     items: invoice.invoice_data ?? [],
     totalCents: invoice.total_cents,
+    reviewUrl,
   });
 
   const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
