@@ -71,8 +71,27 @@ function fmtDate(iso: string): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 }
 
+function escapeHtml(value: string | number | null | undefined): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value.trim());
+}
+
+function sortDistAllocations(allocations: IschiaDistAllocation[]): IschiaDistAllocation[] {
+  return [...allocations].sort((a, b) => {
+    const stopDelta = (a.stop_order ?? 9999) - (b.stop_order ?? 9999);
+    if (stopDelta !== 0) return stopDelta;
+    const hotelDelta = (a.hotel_name || "Hotel N/D").localeCompare(b.hotel_name || "Hotel N/D", "it");
+    if (hotelDelta !== 0) return hotelDelta;
+    return a.customer_name.localeCompare(b.customer_name, "it");
+  });
 }
 
 function InlineCityEdit({ serviceId, currentCity, onSave, saving }: { serviceId: string; currentCity: string; onSave: (city: string) => Promise<unknown>; saving: boolean }) {
@@ -184,6 +203,7 @@ export default function BusNetworkPage() {
   // Route strip
   const [showRouteStrip, setShowRouteStrip] = useState(true);
   const [selectedBusUnitId, setSelectedBusUnitId] = useState<string | null>(null);
+  const [smistamentoBusUnitIds, setSmistamentoBusUnitIds] = useState<string[]>([]);
 
   // Editable bus label
   const [editLabelUnitId, setEditLabelUnitId] = useState<string | null>(null);
@@ -236,6 +256,9 @@ export default function BusNetworkPage() {
     ro.observe(el);
     return () => ro.disconnect();
   });
+  useEffect(() => {
+    setSmistamentoBusUnitIds([]);
+  }, [date, direction, selectedLineId]);
 
   // Distribuzione Ischia
   const [dragDistAllocId, setDragDistAllocId] = useState<string | null>(null);
@@ -373,6 +396,11 @@ export default function BusNetworkPage() {
     [payload.unit_loads, selectedLine]
   );
 
+  const serviceById = useMemo(
+    () => new Map(payload.services.map((service) => [service.id, service])),
+    [payload.services]
+  );
+
   const lineStops = useMemo(
     () => {
       const filtered = payload.stops.filter(
@@ -454,6 +482,21 @@ export default function BusNetworkPage() {
       allocations: allDateAllocations.filter((a) => a.bus_unit_id === unit.id)
     })),
     [dateUnitLoads, allDateAllocations]
+  );
+
+  const toggleSmistamentoBusUnit = useCallback((unitId: string) => {
+    setSmistamentoBusUnitIds((current) =>
+      current.includes(unitId)
+        ? current.filter((id) => id !== unitId)
+        : [...current, unitId]
+    );
+  }, []);
+
+  const returnCollectionBuses = useMemo(
+    () => payload.pozzuoli_dist_buses
+      .filter((bus) => bus.date === date && (bus.bus_line_id === selectedLine?.id || !bus.bus_line_id))
+      .sort((a, b) => a.sort_order - b.sort_order),
+    [payload.pozzuoli_dist_buses, date, selectedLine]
   );
 
   // Ferry config della linea selezionata (per colorare le bus card)
@@ -1175,6 +1218,263 @@ export default function BusNetworkPage() {
     await downloadWorkbook(wb, `bus_tutte_linee_${date}.xlsx`);
   }, [payload, date]);
 
+  const exportReturnCollectionExcel = useCallback(async () => {
+    if (returnCollectionBuses.length === 0) return;
+    const { downloadWorkbook, fetchLogoBase64, addLogo } = await import("@/lib/bus-export-excel");
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "ITS - Ischia Transfer Service";
+    const logo = await fetchLogoBase64();
+    const usedNames = new Set<string>();
+
+    for (const bus of returnCollectionBuses) {
+      const allocations = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id));
+      let sheetName = bus.label.replace(/[\\/*?:[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 31) || "Raccolta";
+      if (usedNames.has(sheetName)) sheetName = `${sheetName.slice(0, 27)} ${usedNames.size + 1}`.slice(0, 31);
+      usedNames.add(sheetName);
+      const ws = wb.addWorksheet(sheetName);
+      ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+      ws.columns = [
+        { width: 28 },
+        { width: 8 },
+        { width: 32 },
+        { width: 18 },
+        { width: 24 },
+        { width: 18 },
+      ];
+
+      ws.getRow(1).height = 36;
+      if (logo) addLogo(wb, ws, logo);
+      ws.mergeCells(1, 3, 1, 6);
+      const brandCell = ws.getCell(1, 3);
+      brandCell.value = "ISCHIA TRANSFER SERVICE";
+      brandCell.font = { bold: true, size: 12, color: { argb: "FF0B2D4F" } };
+      brandCell.alignment = { horizontal: "right", vertical: "middle" };
+      ws.mergeCells(2, 1, 2, 6);
+      const title = ws.getCell(2, 1);
+      title.value = `RACCOLTA SMISTAMENTO — ${bus.label}`;
+      title.font = { bold: true, size: 16, color: { argb: "FF1E3A5F" } };
+      title.alignment = { horizontal: "center", vertical: "middle" };
+      title.border = {
+        top: { style: "medium", color: { argb: "FF1E3A5F" } },
+        bottom: { style: "medium", color: { argb: "FF1E3A5F" } },
+      };
+      ws.mergeCells(3, 1, 3, 6);
+      const subtitle = ws.getCell(3, 1);
+      subtitle.value = `${selectedLine?.name ?? "Linea Bus"} · ${fmtDate(date)} · ${bus.zone || "Raccolta"}`;
+      subtitle.font = { bold: true, size: 11, color: { argb: "FF0B56A4" } };
+      subtitle.alignment = { horizontal: "center", vertical: "middle" };
+      ws.addRow([]);
+
+      const header = ws.addRow(["Hotel / Comune", "Pax", "Nominativo", "Cell", "Zona", "Note"]);
+      header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      header.eachCell((cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF082452" } };
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFB9C4D0" } },
+          left: { style: "thin", color: { argb: "FFB9C4D0" } },
+          bottom: { style: "thin", color: { argb: "FFB9C4D0" } },
+          right: { style: "thin", color: { argb: "FFB9C4D0" } },
+        };
+      });
+
+      let totalPax = 0;
+      let previousHotel = "";
+      for (const [index, allocation] of allocations.entries()) {
+        const hotel = allocation.hotel_name || "Hotel N/D";
+        const isNewHotel = hotel !== previousHotel;
+        previousHotel = hotel;
+        const hotelPax = allocations
+          .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
+          .reduce((sum, item) => sum + item.pax_assigned, 0);
+        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        const row = ws.addRow([
+          isNewHotel ? hotel : "",
+          isNewHotel ? hotelPax : "",
+          allocation.customer_name,
+          phone && phone !== "N/D" ? phone : "",
+          allocation.hotel_zone || bus.zone || "",
+          "",
+        ]);
+        row.font = { size: 10 };
+        row.eachCell((cell) => {
+          cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFB9C4D0" } },
+            left: { style: "thin", color: { argb: "FFB9C4D0" } },
+            bottom: { style: "thin", color: { argb: "FFB9C4D0" } },
+            right: { style: "thin", color: { argb: "FFB9C4D0" } },
+          };
+          if (index % 2 === 1) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FBFF" } };
+        });
+        row.getCell(1).font = { bold: isNewHotel, size: 10, color: { argb: "FF082452" } };
+        row.getCell(2).font = { bold: isNewHotel, size: 10, color: { argb: "FF047857" } };
+        totalPax += allocation.pax_assigned;
+      }
+
+      ws.addRow([]);
+      const totalRow = ws.addRow(["TOTALE", totalPax, "", "", "", ""]);
+      totalRow.font = { bold: true, size: 12, color: { argb: "FF082452" } };
+      totalRow.eachCell((cell) => {
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFB9C4D0" } },
+          left: { style: "thin", color: { argb: "FFB9C4D0" } },
+          bottom: { style: "thin", color: { argb: "FFB9C4D0" } },
+          right: { style: "thin", color: { argb: "FFB9C4D0" } },
+        };
+      });
+      ws.addRow([]);
+      const driverRow = ws.addRow([`AUTISTA : ${bus.driver_name || "N/D"}  ${bus.driver_phone || ""}`.trim()]);
+      driverRow.font = { bold: true, size: 11, color: { argb: "FF082452" } };
+      ws.mergeCells(driverRow.number, 1, driverRow.number, 6);
+    }
+
+    await downloadWorkbook(wb, `raccolta_smistamento_${selectedLine?.code ?? "linea"}_${date}.xlsx`);
+  }, [returnCollectionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+
+  const printReturnCollection = useCallback(async () => {
+    if (returnCollectionBuses.length === 0) return;
+    const { fetchLogoBase64 } = await import("@/lib/bus-export-excel");
+    const logo = await fetchLogoBase64();
+    const totalAllPax = returnCollectionBuses.reduce((sum, bus) => {
+      const allocations = payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id);
+      return sum + allocations.reduce((inner, allocation) => inner + allocation.pax_assigned, 0);
+    }, 0);
+    const busSections = returnCollectionBuses.map((bus) => {
+      const allocations = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id));
+      const totalPax = allocations.reduce((sum, allocation) => sum + allocation.pax_assigned, 0);
+      let previousHotel = "";
+      const rows = allocations.map((allocation, index) => {
+        const hotel = allocation.hotel_name || "Hotel N/D";
+        const isNewHotel = hotel !== previousHotel;
+        previousHotel = hotel;
+        const hotelPax = allocations
+          .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
+          .reduce((sum, item) => sum + item.pax_assigned, 0);
+        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        return `<tr class="${index % 2 === 1 ? "alt" : ""}">
+          <td class="hotel">${isNewHotel ? `<strong>${escapeHtml(hotel)}</strong><span>${hotelPax} pax</span>` : ""}</td>
+          <td class="center">${escapeHtml(allocation.pax_assigned)}</td>
+          <td>${escapeHtml(allocation.customer_name)}</td>
+          <td>${escapeHtml(phone && phone !== "N/D" ? phone : "")}</td>
+          <td>${escapeHtml(allocation.hotel_zone || bus.zone || "")}</td>
+        </tr>`;
+      }).join("");
+      return `<section class="bus-section">
+        <div class="bus-title">
+          <div><strong>${escapeHtml(bus.label)}</strong><span>${escapeHtml(bus.zone || "Raccolta")}</span></div>
+          <div class="bus-meta"><span>${totalPax} pax</span><span>Autista: ${escapeHtml(bus.driver_name || "N/D")}</span></div>
+        </div>
+        <table>
+          <thead><tr><th>hotel / comune</th><th>pax</th><th>nominativo</th><th>cell</th><th>zona</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="5" class="center">Nessun passeggero assegnato</td></tr>`}</tbody>
+        </table>
+      </section>`;
+    }).join("");
+    const html = `<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>Raccolta smistamento - ${escapeHtml(selectedLine?.name ?? "Linea Bus")}</title>
+  <style>
+    @page { size: A4 landscape; margin: 7mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef3f8; color: #071733; font-family: Arial, Helvetica, sans-serif; }
+    .screen-actions { position: sticky; top: 0; display: flex; justify-content: center; gap: 12px; padding: 12px; }
+    .screen-actions button { border: 0; border-radius: 10px; padding: 10px 18px; color: white; background: linear-gradient(135deg, #059669, #0f766e); font-weight: 800; cursor: pointer; }
+    .page { width: 285mm; min-height: 198mm; margin: 0 auto; background: white; border: 1px solid #d9e2ec; padding: 7mm; }
+    .top { display: grid; grid-template-columns: 45mm 1fr 55mm; align-items: center; gap: 6mm; border-bottom: 2px solid #082452; padding-bottom: 4mm; }
+    .logo { width: 32mm; height: auto; display: block; }
+    h1 { margin: 0; text-align: center; color: #082452; font-size: 27px; line-height: 1; letter-spacing: 0.12em; }
+    .subtitle { margin-top: 4px; text-align: center; color: #0b56a4; font-size: 12px; font-weight: 800; }
+    .chip { border: 1.5px solid #0b56a4; border-radius: 6px; padding: 6px 8px; color: #082452; font-size: 12px; font-weight: 800; text-align: center; }
+    .chip strong { color: #079669; font-size: 18px; }
+    .bus-section { margin-top: 5mm; break-inside: avoid; }
+    .bus-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #b9c4d0; border-bottom: 0; background: #eaf7f2; padding: 7px 9px; color: #082452; }
+    .bus-title strong { display: block; font-size: 14px; }
+    .bus-title span { color: #31577e; font-size: 10.5px; font-weight: 700; }
+    .bus-meta { display: flex; gap: 8px; align-items: center; }
+    .bus-meta span { border-radius: 999px; background: white; padding: 4px 8px; color: #047857; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th { background: linear-gradient(180deg, #0b4a91, #082452); color: white; border: 1px solid #8bb1d8; padding: 5px 4px; font-size: 10.5px; text-align: center; text-transform: lowercase; }
+    td { border: 1px solid #b9c4d0; padding: 4px 5px; font-size: 10px; line-height: 1.18; vertical-align: middle; overflow-wrap: anywhere; }
+    tr.alt td { background: #f8fbff; }
+    .hotel { text-align: center; color: #082452; }
+    .hotel strong { display: block; text-transform: uppercase; }
+    .hotel span { display: inline-block; margin-top: 2px; border-radius: 999px; background: #dcfce7; color: #047857; padding: 2px 7px; font-size: 9.5px; font-weight: 800; }
+    .center { text-align: center; font-weight: 800; }
+    @media print {
+      body { background: white; }
+      .screen-actions { display: none; }
+      .page { width: auto; min-height: auto; border: 0; padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="screen-actions"><button onclick="window.print()">Stampa / Salva PDF</button></div>
+  <main class="page">
+    <header class="top">
+      <div>${logo ? `<img class="logo" src="${logo}" alt="Ischia Transfer Service" />` : ""}</div>
+      <div>
+        <h1>RACCOLTA SMISTAMENTO</h1>
+        <div class="subtitle">${escapeHtml(selectedLine?.name ?? "Linea Bus")} · ${escapeHtml(fmtDate(date))}</div>
+      </div>
+      <div class="chip">Totale passeggeri: <strong>${totalAllPax}</strong></div>
+    </header>
+    ${busSections}
+  </main>
+</body>
+</html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank", "width=1280,height=900");
+    if (!win) {
+      URL.revokeObjectURL(url);
+      setMessage("Popup bloccato: abilita i popup per aprire la stampa raccolta.");
+      return;
+    }
+    win.focus();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, [returnCollectionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+
+  const moveReturnCollectionHotelGroup = useCallback(async (
+    busId: string,
+    hotelName: string,
+    direction: "up" | "down"
+  ) => {
+    const allocations = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === busId));
+    const groups: Array<{ hotelName: string; allocations: IschiaDistAllocation[] }> = [];
+    for (const allocation of allocations) {
+      const currentHotelName = allocation.hotel_name || "Hotel N/D";
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup?.hotelName === currentHotelName) {
+        lastGroup.allocations.push(allocation);
+      } else {
+        groups.push({ hotelName: currentHotelName, allocations: [allocation] });
+      }
+    }
+
+    const groupIndex = groups.findIndex((group) => group.hotelName === hotelName);
+    if (groupIndex === -1) return;
+    if (direction === "up" && groupIndex === 0) return;
+    if (direction === "down" && groupIndex === groups.length - 1) return;
+
+    const groupToMove = groups[groupIndex];
+    const beforeAllocationId = direction === "up"
+      ? groups[groupIndex - 1]?.allocations[0]?.id ?? null
+      : groups[groupIndex + 2]?.allocations[0]?.id ?? null;
+
+    for (const allocation of groupToMove.allocations) {
+      await post("reorder_dist_alloc", {
+        allocation_id: allocation.id,
+        before_allocation_id: beforeAllocationId,
+      });
+    }
+  }, [payload.ischia_dist_allocations, post]);
+
   const saveDriver = useCallback(async (unitId: string) => {
     await post("update_driver", {
       unit_id: unitId,
@@ -1279,12 +1579,30 @@ export default function BusNetworkPage() {
                   const hasExisting = payload.ischia_dist_buses.some(b => b.date === date);
                   if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
                   setSmistamentoConfirm(false);
-                  void post("smista_ischia", { date });
+                  void post("smista_ischia", {
+                    date,
+                    direction: "arrival",
+                    bus_unit_ids: smistamentoBusUnitIds,
+                  });
                 }}
                 disabled={saving}
                 className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-lg disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 shadow-rose-100 hover:bg-rose-700" : "bg-gradient-to-r from-violet-600 to-indigo-600 shadow-indigo-200 hover:from-violet-700 hover:to-indigo-700"}`}
               >
-                {smistamentoConfirm ? "⚠ Conferma smistamento" : "⚡ Smista per zona"}
+                {smistamentoConfirm ? "⚠ Conferma smistamento" : smistamentoBusUnitIds.length > 0 ? `⚡ Smista ${smistamentoBusUnitIds.length} bus` : "⚡ Smista per zona"}
+              </button>
+            )}
+            {direction === "departure" && (
+              <button
+                onClick={() => {
+                  const hasExisting = payload.pozzuoli_dist_buses.some(b => b.date === date);
+                  if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
+                  setSmistamentoConfirm(false);
+                  void post("smista_ischia", { date, direction: "departure" });
+                }}
+                disabled={saving}
+                className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold text-white shadow-lg disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 shadow-rose-100 hover:bg-rose-700" : "bg-gradient-to-r from-emerald-600 to-teal-600 shadow-emerald-200 hover:from-emerald-700 hover:to-teal-700"}`}
+              >
+                {smistamentoConfirm ? "Conferma raccolta" : "Raccolta per smistamento"}
               </button>
             )}
           </div>
@@ -1595,6 +1913,239 @@ export default function BusNetworkPage() {
                 );
               })()}
 
+              {/* ── Raccolta Ischia per ritorno ── */}
+              {activeTab === "bus" && direction === "departure" && (
+                <div className="mt-6">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-1.5 text-base font-bold text-slate-800"><FerryIcon size={22} /> Raccolta Ischia per ritorno</span>
+                      <span className="text-xs text-slate-400">Prima divide tutte le partenze per comune/zona hotel, poi le porta sui bus linea</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {returnCollectionBuses.length > 0 && (
+                        <>
+                          <button
+                            onClick={() => void printReturnCollection()}
+                            disabled={saving}
+                            className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-bold text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:opacity-40"
+                          >
+                            🖨 Stampa raccolta
+                          </button>
+                          <button
+                            onClick={() => void exportReturnCollectionExcel()}
+                            disabled={saving}
+                            className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:opacity-40"
+                          >
+                            📥 Excel raccolta
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => {
+                          const hasExisting = payload.pozzuoli_dist_buses.some(b => b.date === date);
+                          if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
+                          setSmistamentoConfirm(false);
+                          void post("smista_ischia", { date, direction: "departure" });
+                        }}
+                        disabled={saving}
+                        className={`rounded-xl px-4 py-2 text-sm font-bold text-white shadow-lg disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 shadow-rose-100 hover:bg-rose-700" : "bg-gradient-to-r from-emerald-600 to-teal-600 shadow-emerald-200 hover:from-emerald-700 hover:to-teal-700"}`}
+                      >
+                        {smistamentoConfirm ? "Conferma raccolta" : "Raccolta per smistamento"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {returnCollectionBuses.length === 0 ? (
+                    <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
+                      Nessuna raccolta Ischia per questa linea. Usa “Raccolta per smistamento” per dividere automaticamente tutte le partenze per comune, oppure aggiungi un bus manuale.
+                    </div>
+                  ) : (
+                    <div className="flex gap-4 overflow-x-auto pb-2">
+                      {returnCollectionBuses
+                        .map((bus) => {
+                          const busAllocs = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id));
+                          const hotelGroups = busAllocs.reduce<Array<{ hotelName: string; pax: number }>>((groups, allocation) => {
+                            const hotelName = allocation.hotel_name || "Hotel N/D";
+                            const lastGroup = groups[groups.length - 1];
+                            if (lastGroup?.hotelName === hotelName) {
+                              lastGroup.pax += allocation.pax_assigned;
+                            } else {
+                              groups.push({ hotelName, pax: allocation.pax_assigned });
+                            }
+                            return groups;
+                          }, []);
+                          const hotelGroupIndexByName = new Map(hotelGroups.map((group, index) => [group.hotelName, index]));
+                          const totalPax = busAllocs.reduce((s, a) => s + a.pax_assigned, 0);
+                          const pct = bus.capacity > 0 ? Math.round((totalPax / bus.capacity) * 100) : 0;
+                          const isDragOver = dragOverDistBusId === bus.id;
+                          return (
+                            <div
+                              key={bus.id}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                setDragOverDistBusId(bus.id);
+                              }}
+                              onDragLeave={() => setDragOverDistBusId(null)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDragOverDistBusId(null);
+                                setDragReorderTargetId(null);
+                                if (!dragDistAllocId) return;
+                                const isFromThisBus = busAllocs.some((a) => a.id === dragDistAllocId);
+                                if (isFromThisBus) {
+                                  void post("reorder_dist_alloc", { allocation_id: dragDistAllocId, before_allocation_id: null });
+                                } else {
+                                  void post("move_dist", { allocation_id: dragDistAllocId, to_dist_bus_id: bus.id });
+                                }
+                                setDragDistAllocId(null);
+                              }}
+                              className={`flex w-72 flex-shrink-0 flex-col rounded-2xl border bg-white shadow-sm transition-colors ${isDragOver ? "border-emerald-400 bg-emerald-50" : "border-slate-200"}`}>
+                              <div className="rounded-t-2xl bg-emerald-700 px-4 py-3 text-white">
+                                <div className="flex items-center justify-between">
+                                  <div className="min-w-0">
+                                    <span className="font-bold text-sm truncate block max-w-[140px]">{bus.label}</span>
+                                    {bus.zone && <span className="text-xs text-white/80">{bus.zone}</span>}
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      title="Clona bus"
+                                      onClick={() => void post("clone_dist_bus", { dist_bus_id: bus.id })}
+                                      disabled={saving}
+                                      className="text-white/60 hover:text-sky-300 disabled:opacity-30 text-xs">⧉</button>
+                                    <button
+                                      onClick={() => {
+                                        if (!window.confirm("Sei sicuro di voler rimuovere questo bus di distribuzione Ischia? Le assegnazioni collegate potrebbero essere eliminate o rigenerate.")) return;
+                                        void post("remove_dist_bus", { dist_bus_id: bus.id });
+                                      }}
+                                      disabled={saving}
+                                      className="text-white/60 hover:text-rose-300 disabled:opacity-30 text-xs">✕</button>
+                                  </div>
+                                </div>
+                                <div className="mt-1 flex items-center gap-2">
+                                  <div className="h-1.5 flex-1 rounded-full bg-slate-600">
+                                    <div className="h-1.5 rounded-full bg-emerald-300" style={{ width: `${Math.min(pct, 100)}%` }} />
+                                  </div>
+                                  <span className="text-xs text-slate-300">{totalPax}/{bus.capacity}</span>
+                                </div>
+                              </div>
+                              <div className="p-3 text-xs text-slate-500">
+                                {bus.driver_name
+                                  ? <div className="font-medium text-slate-700">👤 {bus.driver_name}</div>
+                                  : <div className="italic text-slate-400">Autista da assegnare</div>}
+                                {busAllocs.length === 0
+                                  ? <div className="mt-2 text-center text-slate-300 italic">Nessun passeggero</div>
+                                  : busAllocs.map((a, index) => {
+                                      const hotelName = a.hotel_name || "Hotel N/D";
+                                      const previous = busAllocs[index - 1];
+                                      const isNewHotelGroup = !previous || (previous.hotel_name || "Hotel N/D") !== hotelName;
+                                      const hotelGroupIndex = hotelGroupIndexByName.get(hotelName) ?? 0;
+                                      const hotelPax = hotelGroups[hotelGroupIndex]?.pax ?? a.pax_assigned;
+                                      const customerPhone = serviceById.get(a.service_id)?.phone_display;
+                                      return (
+                                        <div key={a.id}>
+                                          {isNewHotelGroup && (
+                                            <div className="mb-1 mt-2 flex items-center justify-between gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-[10px] font-black uppercase text-emerald-900 first:mt-0">
+                                              <span className="truncate">{hotelName}</span>
+                                              <div className="flex shrink-0 items-center gap-1">
+                                                <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-white">{hotelPax} pax</span>
+                                                <button
+                                                  type="button"
+                                                  title="Sposta albergo su"
+                                                  onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    void moveReturnCollectionHotelGroup(bus.id, hotelName, "up");
+                                                  }}
+                                                  disabled={saving || hotelGroupIndex === 0}
+                                                  className="flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-white text-[11px] text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-30"
+                                                >
+                                                  ↑
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  title="Sposta albergo giù"
+                                                  onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    void moveReturnCollectionHotelGroup(bus.id, hotelName, "down");
+                                                  }}
+                                                  disabled={saving || hotelGroupIndex >= hotelGroups.length - 1}
+                                                  className="flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-white text-[11px] text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-30"
+                                                >
+                                                  ↓
+                                                </button>
+                                              </div>
+                                            </div>
+                                          )}
+                                          {dragReorderTargetId === a.id && dragDistAllocId && busAllocs.some((item) => item.id === dragDistAllocId) && (
+                                            <div className="mb-1 h-0.5 w-full rounded-full bg-emerald-500" />
+                                          )}
+                                          <div
+                                            draggable
+                                            onDragStart={() => {
+                                              setDragDistAllocId(a.id);
+                                              setDragReorderTargetId(null);
+                                            }}
+                                            onDragEnd={() => {
+                                              setDragDistAllocId(null);
+                                              setDragReorderTargetId(null);
+                                            }}
+                                            onDragOver={(e) => {
+                                              e.preventDefault();
+                                              if (dragDistAllocId && dragDistAllocId !== a.id && busAllocs.some((item) => item.id === dragDistAllocId)) {
+                                                e.stopPropagation();
+                                                setDragReorderTargetId(a.id);
+                                                setDragOverDistBusId(null);
+                                              }
+                                            }}
+                                            onDragLeave={() => setDragReorderTargetId(null)}
+                                            onDrop={(e) => {
+                                              e.preventDefault();
+                                              if (!dragDistAllocId || dragDistAllocId === a.id) return;
+                                              const isFromSameBus = busAllocs.some((item) => item.id === dragDistAllocId);
+                                              if (isFromSameBus) {
+                                                e.stopPropagation();
+                                                void post("reorder_dist_alloc", {
+                                                  allocation_id: dragDistAllocId,
+                                                  before_allocation_id: a.id,
+                                                });
+                                                setDragDistAllocId(null);
+                                                setDragReorderTargetId(null);
+                                              }
+                                            }}
+                                            className={`mt-1 flex cursor-grab items-center justify-between gap-1 rounded px-2 py-1 transition-opacity ${dragDistAllocId === a.id ? "opacity-40" : "bg-slate-50 hover:bg-emerald-50"}`}>
+                                            <span className="min-w-0">
+                                              <span className="block truncate">{a.customer_name}</span>
+                                              {customerPhone && customerPhone !== "N/D" && (
+                                                <span className="block truncate text-[10px] text-slate-400">☎ {customerPhone}</span>
+                                              )}
+                                            </span>
+                                            <span className="shrink-0 font-semibold text-slate-600">{a.pax_assigned}p</span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+
+                  {/* Aggiungi bus raccolta ritorno manuale */}
+                  <div className="mt-3">
+                    <button
+                      onClick={() => {
+                        const label = window.prompt("Etichetta bus (es. Bus Napoli Nord):");
+                        const zone = window.prompt("Zona/destinazione (es. Napoli, Caserta, Roma):");
+                        if (label && zone) void post("add_dist_bus", { date, label, zone, capacity: 50, section: "pozzuoli" });
+                      }}
+                      disabled={saving}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                      + Aggiungi bus raccolta
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Bus cards */}
               {activeTab === "bus" && <>
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1636,6 +2187,7 @@ export default function BusNetworkPage() {
                   );
 
                   const isSelected = selectedBusUnitId === unit.id;
+                  const isSelectedForSmistamento = smistamentoBusUnitIds.includes(unit.id);
                   return (
                     <div key={unit.id}
                       onDragOver={(e) => { if (unit.tag === "esclusivo") return; e.preventDefault(); setDragOverUnitId(unit.id); }}
@@ -1681,6 +2233,26 @@ export default function BusNetworkPage() {
                             </div>
                           )}
                           <div className="flex items-center gap-1">
+                            {direction === "arrival" && (
+                              <button
+                                type="button"
+                                title={isSelectedForSmistamento ? "Rimuovi questo bus dallo smistamento selettivo" : "Includi questo bus nello smistamento selettivo"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleSmistamentoBusUnit(unit.id);
+                                }}
+                                disabled={saving || paxTotal === 0}
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  isSelectedForSmistamento
+                                    ? "bg-white text-violet-700 shadow-sm"
+                                    : selectedLineFerryConfig
+                                    ? "bg-white/15 text-white/75 hover:bg-white/25"
+                                    : "bg-violet-50 text-violet-700 hover:bg-violet-100"
+                                }`}
+                              >
+                                {isSelectedForSmistamento ? "✓ Smista" : "Smista"}
+                              </button>
+                            )}
                             {/* Tag selector */}
                             <select
                               value={unit.tag ?? ""}
@@ -2186,18 +2758,26 @@ export default function BusNetworkPage() {
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="flex items-center gap-1.5 text-base font-bold text-slate-800"><FerryIcon size={22} /> Distribuzione Ischia</span>
-                      <span className="text-xs text-slate-400">Tutti gli arrivi del giorno smistati per zona</span>
+                      <span className="text-xs text-slate-400">
+                        {smistamentoBusUnitIds.length > 0
+                          ? `Smistamento limitato a ${smistamentoBusUnitIds.length} bus selezionati`
+                          : "Tutti gli arrivi del giorno smistati per zona"}
+                      </span>
                     </div>
                     <button
                       onClick={() => {
                         const hasExisting = payload.ischia_dist_buses.some(b => b.date === date);
                         if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
                         setSmistamentoConfirm(false);
-                        void post("smista_ischia", { date });
+                        void post("smista_ischia", {
+                          date,
+                          direction: "arrival",
+                          bus_unit_ids: smistamentoBusUnitIds,
+                        });
                       }}
                       disabled={saving}
                       className={`flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 hover:bg-rose-700" : "bg-violet-600 hover:bg-violet-700"}`}>
-                      {smistamentoConfirm ? "⚠ Conferma (sovrascrive)" : "⚡ Smista per zona"}
+                      {smistamentoConfirm ? "⚠ Conferma (rigenera)" : smistamentoBusUnitIds.length > 0 ? `⚡ Smista ${smistamentoBusUnitIds.length} bus` : "⚡ Smista per zona"}
                     </button>
                   </div>
 
@@ -2569,94 +3149,6 @@ export default function BusNetworkPage() {
                     </div>
                     );
                   })()}
-                </div>
-              )}
-
-              {/* ── Smistamento Pozzuoli ── */}
-              {activeTab === "bus" && direction === "departure" && (
-                <div className="mt-6">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="flex items-center gap-1.5 text-base font-bold text-slate-800"><FerryIcon size={22} /> Smistamento Pozzuoli</span>
-                      <span className="text-xs text-slate-400">Bus continentali per le partenze da Ischia</span>
-                    </div>
-                  </div>
-
-                  {payload.pozzuoli_dist_buses.filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id)).length === 0 ? (
-                    <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
-                      Nessun bus smistamento Pozzuoli per questa linea. Aggiungili manualmente con il tasto qui sotto.
-                    </div>
-                  ) : (
-                    <div className="flex gap-4 overflow-x-auto pb-2">
-                      {payload.pozzuoli_dist_buses
-                        .filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id))
-                        .sort((a, b) => a.sort_order - b.sort_order)
-                        .map((bus) => {
-                          const busAllocs = payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id);
-                          const totalPax = busAllocs.reduce((s, a) => s + a.pax_assigned, 0);
-                          const pct = bus.capacity > 0 ? Math.round((totalPax / bus.capacity) * 100) : 0;
-                          return (
-                            <div key={bus.id} className="flex w-56 flex-shrink-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
-                              <div className="rounded-t-2xl bg-emerald-700 px-4 py-3 text-white">
-                                <div className="flex items-center justify-between">
-                                  <div className="min-w-0">
-                                    <span className="font-bold text-sm truncate block max-w-[140px]">{bus.label}</span>
-                                    {bus.zone && <span className="text-xs text-white/80">{bus.zone}</span>}
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    <button
-                                      title="Clona bus"
-                                      onClick={() => void post("clone_dist_bus", { dist_bus_id: bus.id })}
-                                      disabled={saving}
-                                      className="text-white/60 hover:text-sky-300 disabled:opacity-30 text-xs">⧉</button>
-                                    <button
-                                      onClick={() => {
-                                        if (!window.confirm("Sei sicuro di voler rimuovere questo bus di distribuzione Ischia? Le assegnazioni collegate potrebbero essere eliminate o rigenerate.")) return;
-                                        void post("remove_dist_bus", { dist_bus_id: bus.id });
-                                      }}
-                                      disabled={saving}
-                                      className="text-white/60 hover:text-rose-300 disabled:opacity-30 text-xs">✕</button>
-                                  </div>
-                                </div>
-                                <div className="mt-1 flex items-center gap-2">
-                                  <div className="h-1.5 flex-1 rounded-full bg-slate-600">
-                                    <div className="h-1.5 rounded-full bg-emerald-300" style={{ width: `${Math.min(pct, 100)}%` }} />
-                                  </div>
-                                  <span className="text-xs text-slate-300">{totalPax}/{bus.capacity}</span>
-                                </div>
-                              </div>
-                              <div className="p-3 text-xs text-slate-500">
-                                {bus.driver_name
-                                  ? <div className="font-medium text-slate-700">👤 {bus.driver_name}</div>
-                                  : <div className="italic text-slate-400">Autista da assegnare</div>}
-                                {busAllocs.length === 0
-                                  ? <div className="mt-2 text-center text-slate-300 italic">Nessun passeggero</div>
-                                  : busAllocs.map((a) => (
-                                      <div key={a.id} className="mt-1 flex items-center justify-between gap-1 rounded bg-slate-50 px-2 py-1">
-                                        <span className="truncate">{a.customer_name}</span>
-                                        <span className="shrink-0 font-semibold text-slate-600">{a.pax_assigned}p</span>
-                                      </div>
-                                    ))}
-                              </div>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  )}
-
-                  {/* Aggiungi bus Pozzuoli manuale */}
-                  <div className="mt-3">
-                    <button
-                      onClick={() => {
-                        const label = window.prompt("Etichetta bus (es. Bus Napoli Nord):");
-                        const zone = window.prompt("Zona/destinazione (es. Napoli, Caserta, Roma):");
-                        if (label && zone) void post("add_dist_bus", { date, label, zone, capacity: 50, section: "pozzuoli" });
-                      }}
-                      disabled={saving}
-                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40">
-                      + Aggiungi bus Pozzuoli
-                    </button>
-                  </div>
                 </div>
               )}
 

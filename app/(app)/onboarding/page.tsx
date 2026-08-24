@@ -120,7 +120,12 @@ export default function OnboardingPage() {
     }
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
     if (sessionError || !sessionData.session?.access_token) {
-      setMessage("Sessione non valida.");
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("__it_e2e_session");
+        window.sessionStorage.removeItem("__it_e2e_session");
+      }
+      await supabase.auth.signOut().catch(() => undefined);
+      router.replace("/login?redirect=%2Fbus-network");
       return;
     }
 

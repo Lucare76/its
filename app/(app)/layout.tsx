@@ -849,6 +849,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     if (supabase) {
       await supabase.auth.signOut().catch(() => undefined);
     }
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("__it_e2e_session");
+      window.sessionStorage.removeItem("__it_e2e_session");
+    }
     router.replace("/login");
     router.refresh();
   };

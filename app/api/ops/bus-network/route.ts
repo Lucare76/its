@@ -2382,19 +2382,25 @@ export async function POST(request: NextRequest) {
     // ── Distribuzione Ischia ────────────────────────────────────────────────
 
     if (action === "smista_ischia") {
-      const schema = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+      const schema = z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        direction: z.enum(["arrival", "departure"]).default("arrival"),
+        bus_unit_ids: z.array(z.string().uuid()).optional().default([]),
+      });
       const parsed = schema.parse(body);
       const BUS_CAPACITY = 50;
+      const distSection = parsed.direction === "departure" ? "pozzuoli" : "ischia";
+      const selectedBusUnitIds = new Set(parsed.bus_unit_ids);
 
       // ── Step 1: tutti i servizi linea bus in arrivo ─────────────────────────
       const { data: rawServices, error: lsErr } = await auth.admin
         .from("services")
         .select("id, customer_name, customer_first_name, customer_last_name, pax, hotel_id, meeting_point")
-        .eq("tenant_id", tenantId).eq("direction", "arrival").eq("date", parsed.date)
+        .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("date", parsed.date)
         .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel");
       if (lsErr) throw new Error(`Errore lettura passeggeri: ${lsErr.message}`);
       if (!rawServices?.length)
-        return NextResponse.json({ ok: false, error: `Nessun passeggero linea bus in arrivo per il ${parsed.date}.` }, { status: 400 });
+        return NextResponse.json({ ok: false, error: `Nessun passeggero linea bus ${parsed.direction === "departure" ? "in ritorno" : "in arrivo"} per il ${parsed.date}.` }, { status: 400 });
 
       const serviceIds = (rawServices as Array<{ id: string }>).map(s => s.id);
 
@@ -2410,13 +2416,13 @@ export async function POST(request: NextRequest) {
         { data: ferryConfigs },
       ] = await Promise.all([
         auth.admin.from("ops_bus_allocation_details").select("service_id, hotel_name")
-          .eq("tenant_id", tenantId).eq("direction", "arrival").eq("service_date", parsed.date),
+          .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("service_date", parsed.date),
         auth.admin.from("hotels").select("id, name, zone, lat, lng").eq("tenant_id", tenantId),
         auth.admin.from("tenant_bus_allocations").select("service_id, bus_unit_id")
-          .eq("tenant_id", tenantId).eq("direction", "arrival").in("service_id", serviceIds),
+          .eq("tenant_id", tenantId).eq("direction", parsed.direction).in("service_id", serviceIds),
         auth.admin.from("tenant_bus_units").select("id, label").eq("tenant_id", tenantId).eq("tag", "esclusivo"),
         auth.admin.from("tenant_bus_allocations").select("service_id, bus_unit_id")
-          .eq("tenant_id", tenantId).eq("direction", "arrival").in("service_id", serviceIds),
+          .eq("tenant_id", tenantId).eq("direction", parsed.direction).in("service_id", serviceIds),
         auth.admin.from("tenant_bus_units").select("id, bus_line_id").eq("tenant_id", tenantId),
         // Mappa line_id → family_code per ordinamento per orario traghetto
         auth.admin.from("tenant_bus_lines").select("id, family_code").eq("tenant_id", tenantId),
@@ -2446,26 +2452,43 @@ export async function POST(request: NextRequest) {
         if (u.bus_line_id) unitToLine.set(u.id, u.bus_line_id);
       }
       const serviceToLineId = new Map<string, string>();
+      const selectedServiceIds = new Set<string>();
       for (const a of (lineAllocations ?? []) as Array<{ service_id: string; bus_unit_id: string }>) {
         const lineId = unitToLine.get(a.bus_unit_id);
         if (lineId) serviceToLineId.set(a.service_id, lineId);
+        if (selectedBusUnitIds.size > 0 && selectedBusUnitIds.has(a.bus_unit_id)) selectedServiceIds.add(a.service_id);
       }
 
       if (serviceToLineId.size === 0) {
         return NextResponse.json({
           ok: false,
-          error: "Non ci sono ancora passeggeri allocati sulle linee bus per questa data. Prima assegna i passeggeri alle linee, poi esegui Smistamento Ischia."
+          error: "Non ci sono ancora passeggeri allocati sulle linee bus per questa data. Prima assegna i passeggeri alle linee, poi esegui lo smistamento."
+        }, { status: 400 });
+      }
+      if (selectedBusUnitIds.size > 0 && selectedServiceIds.size === 0) {
+        return NextResponse.json({
+          ok: false,
+          error: "I bus selezionati non hanno passeggeri da smistare. Seleziona bus con passeggeri allocati."
         }, { status: 400 });
       }
 
       type Svc = { service_id: string; customer_name: string; pax_assigned: number; hotel_name: string; hotel_zone: string; bus_line_id: string | null };
-      const enriched: Svc[] = (rawServices as Array<{ id: string; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; pax: number; hotel_id: string | null; meeting_point: string | null }>).map(s => {
+      const normalizeDistributionZone = (zone: string | null | undefined): string => {
+        const clean = (zone ?? "ischia").trim().toLowerCase();
+        const normalized = clean.replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+        if (parsed.direction === "departure" && normalized.startsWith("ischia")) return "ischia";
+        return clean || "ischia";
+      };
+      const enrichedAll: Svc[] = (rawServices as Array<{ id: string; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; pax: number; hotel_id: string | null; meeting_point: string | null }>).map(s => {
         const hotelFromId = s.hotel_id ? hotelsById.get(s.hotel_id) : null;
         const fullName = [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "Cliente N/D";
         const hotelName = hotelNameFromAlloc.get(s.id) ?? hotelFromId?.name ?? s.meeting_point ?? "Hotel N/D";
         const matchedHotel = hotelFromId ?? findHotel(hotelName);
-        return { service_id: s.id, customer_name: fullName, pax_assigned: s.pax, hotel_name: hotelName, hotel_zone: matchedHotel?.zone ?? "ischia", bus_line_id: serviceToLineId.get(s.id) ?? null };
+        return { service_id: s.id, customer_name: fullName, pax_assigned: s.pax, hotel_name: hotelName, hotel_zone: normalizeDistributionZone(matchedHotel?.zone), bus_line_id: serviceToLineId.get(s.id) ?? null };
       });
+      const enriched = selectedBusUnitIds.size > 0
+        ? enrichedAll.filter((svc) => selectedServiceIds.has(svc.service_id))
+        : enrichedAll;
 
       // ── Step 4: coordinate per nearest-neighbor ─────────────────────────────
       const coordMap = new Map<string, { lat: number; lng: number }>();
@@ -2502,16 +2525,62 @@ export async function POST(request: NextRequest) {
       }
 
       // ── Step 7: elimina bus esistenti e ricrea ─────────────────────────────
-      const { error: delErr } = await auth.admin.from("bus_ischia_dist_buses")
-        .delete().eq("tenant_id", tenantId).eq("date", parsed.date);
-      if (delErr) throw new Error(`Errore pulizia bus esistenti: ${delErr.message}`);
+      let sortOrder = 0;
+      if (selectedBusUnitIds.size > 0) {
+        const selectedServiceIdList = [...selectedServiceIds];
+        const { data: existingAllocations, error: existingAllocErr } = await auth.admin
+          .from("bus_ischia_dist_allocations")
+          .select("id, dist_bus_id")
+          .eq("tenant_id", tenantId)
+          .in("service_id", selectedServiceIdList);
+        if (existingAllocErr) throw new Error(`Errore lettura smistamento esistente: ${existingAllocErr.message}`);
+
+        const allocationIds = (existingAllocations ?? []).map((allocation) => allocation.id);
+        const affectedBusIds = [...new Set((existingAllocations ?? []).map((allocation) => allocation.dist_bus_id))];
+        if (allocationIds.length > 0) {
+          const { error: deleteAllocErr } = await auth.admin
+            .from("bus_ischia_dist_allocations")
+            .delete()
+            .eq("tenant_id", tenantId)
+            .in("id", allocationIds);
+          if (deleteAllocErr) throw new Error(`Errore pulizia passeggeri smistamento selezionato: ${deleteAllocErr.message}`);
+        }
+        for (const distBusId of affectedBusIds) {
+          const { count, error: countErr } = await auth.admin
+            .from("bus_ischia_dist_allocations")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", tenantId)
+            .eq("dist_bus_id", distBusId);
+          if (countErr) throw new Error(`Errore controllo bus smistamento vuoto: ${countErr.message}`);
+          if ((count ?? 0) === 0) {
+            const { error: deleteBusErr } = await auth.admin
+              .from("bus_ischia_dist_buses")
+              .delete()
+              .eq("tenant_id", tenantId)
+              .eq("id", distBusId);
+            if (deleteBusErr) throw new Error(`Errore pulizia bus smistamento vuoto: ${deleteBusErr.message}`);
+          }
+        }
+
+        const { data: existingBusesForDate } = await auth.admin
+          .from("bus_ischia_dist_buses")
+          .select("sort_order")
+          .eq("tenant_id", tenantId)
+          .eq("date", parsed.date)
+          .eq("section", distSection);
+        sortOrder = Math.max(-1, ...((existingBusesForDate ?? []) as Array<{ sort_order: number }>).map((bus) => bus.sort_order ?? 0)) + 1;
+      } else {
+        const { error: delErr } = await auth.admin.from("bus_ischia_dist_buses")
+          .delete().eq("tenant_id", tenantId).eq("date", parsed.date).eq("section", distSection);
+        if (delErr) throw new Error(`Errore pulizia bus esistenti: ${delErr.message}`);
+      }
 
       // Helper: crea bus + alloca passeggeri con stop_order geografico
       const createDistBus = async (label: string, zone: string, passengers: Svc[], so: number, busLineId: string | null = null) => {
         const sorted = sortPassengersByRoute(passengers, coordMap);
         const { data: nb, error: be } = await auth.admin.from("bus_ischia_dist_buses").insert({
           tenant_id: tenantId, date: parsed.date, bus_line_id: busLineId,
-          label, zone, capacity: BUS_CAPACITY, sort_order: so,
+          label, zone, capacity: BUS_CAPACITY, sort_order: so, section: distSection,
         }).select("id").single();
         if (be) throw new Error(`Errore creazione bus ${label}: ${be.message}`);
         if (nb?.id) {
@@ -2525,7 +2594,6 @@ export async function POST(request: NextRequest) {
         }
       };
 
-      let sortOrder = 0;
       // Bus esclusivi (uno per ogni bus unit esclusivo)
       for (const [, { label, passengers }] of exclusiveByUnit.entries()) {
         if (!passengers.length) continue;
@@ -2570,7 +2638,9 @@ export async function POST(request: NextRequest) {
           const b = byZoneLine.get(svc.hotel_zone) ?? []; b.push(svc); byZoneLine.set(svc.hotel_zone, b);
         }
         for (const [zone, passengers] of byZoneLine.entries()) {
-          const baseLabel = ZONE_LABELS[zone] ?? `Bus ${zone}`;
+          const baseLabel = parsed.direction === "departure" && zone === "ischia"
+            ? "Bus Ischia"
+            : ZONE_LABELS[zone] ?? `Bus ${zone}`;
           const chunks: Svc[][] = [];
           let cur: Svc[] = [], curPax = 0;
           for (const p of passengers) {

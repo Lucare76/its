@@ -15,6 +15,7 @@ function clearStoredSupabaseAuth() {
       if (/^sb-.*-auth-token$/i.test(key)) storage.removeItem(key);
     }
     storage.removeItem(AUTH_PERSISTENCE_KEY);
+    storage.removeItem("__it_e2e_session");
   }
 }
 
