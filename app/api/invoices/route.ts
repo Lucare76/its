@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
+import { generateInvoiceHtml, buildInvoiceXlsx, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
@@ -37,6 +37,8 @@ type ServiceRow = {
   service_type: string | null;
   notes: string | null;
   source_total_amount_cents: number | null;
+  agency_quoted_price_cents: number | null;
+  practice_number: string | null;
   pax: number | null;
 };
 
@@ -148,7 +150,7 @@ export async function POST(request: NextRequest) {
 
   let serviceQuery = admin
     .from("services")
-    .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, notes, source_total_amount_cents, pax")
+    .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number, pax")
     .eq("tenant_id", tenantId)
     .eq("is_draft", false)
     .gte("date", period_from)
@@ -166,16 +168,26 @@ export async function POST(request: NextRequest) {
   if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
 
   const items: InvoiceLineItem[] = ((services ?? []) as ServiceRow[]).map((s) => {
+    // Priorita': numero pratica dell'AGENZIA se presente (estratto dal loro
+    // PDF, tag [practice:XXX] in notes — e' quello che riconoscono loro).
+    // Altrimenti, se la pratica e' stata inserita a mano da ITS, usa il
+    // numero ITS-YYYY-N (services.practice_number, migration 0243) invece
+    // di mostrare sempre "—".
     const practiceMatch = (s.notes ?? "").match(/\[practice:([^\]]+)\]/);
-    const practiceNumber = practiceMatch?.[1] ?? "—";
+    const practiceNumber = practiceMatch?.[1] ?? s.practice_number ?? "—";
     const clienteName = [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "—";
     const tipoServizio = s.booking_service_kind ?? s.service_type ?? "transfer";
     return {
+      service_id: s.id,
       numero_pratica: practiceNumber,
       cliente_nome: clienteName,
       data_servizio: s.date ?? period_from,
       tipo_servizio: tipoServizio,
-      importo_cents: s.source_total_amount_cents ?? 0
+      // Prezzo concordato con l'agenzia (inserito/modificabile su ogni
+      // pratica) ha priorita': e' l'importo che l'agenzia deve, non il
+      // costo interno. source_total_amount_cents resta come fallback per
+      // le righe che non passano da quel campo (es. altre fonti import).
+      importo_cents: s.agency_quoted_price_cents ?? s.source_total_amount_cents ?? 0
     };
   });
 
@@ -227,11 +239,24 @@ export async function POST(request: NextRequest) {
       ? `${months[Number(fm)-1]} ${fy}`
       : `${months[Number(fm)-1]}-${months[Number(period_to.split("-")[1])-1]} ${fy}`;
 
+    const xlsxBuffer = buildInvoiceXlsx({
+      agencyName: agency_name,
+      agencyEmail: invoiceEmail,
+      periodFrom: period_from,
+      periodTo: period_to,
+      invoiceId,
+      createdAt,
+      items,
+      totalCents
+    });
+    const xlsxFilename = `estratto_conto_${agency_name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}_${period_from}_${period_to}.xlsx`;
+
     await resendFetch(process.env.RESEND_API_KEY!, {
       from: `Ischia Transfer Service <${fromEmail}>`,
       to: [invoiceEmail],
       subject: `Estratto conto ${periodLabel} — ${agency_name}`,
-      html
+      html,
+      attachments: [{ filename: xlsxFilename, content: xlsxBuffer.toString("base64") }]
     });
 
     await admin

@@ -25,6 +25,29 @@ type ServiceRow = {
   agency_name: string;
 };
 
+type DisputeRow = {
+  id: string;
+  agency_id: string;
+  service_id: string;
+  original_price_cents: number;
+  proposed_price_cents: number;
+  agency_note: string | null;
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+  agencies: { name: string } | { name: string }[] | null;
+  services: { customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; date: string | null; booking_service_kind: string | null } | null;
+};
+
+function disputeAgencyName(row: DisputeRow) {
+  return Array.isArray(row.agencies) ? row.agencies[0]?.name ?? "—" : row.agencies?.name ?? "—";
+}
+
+function disputeCustomerName(row: DisputeRow) {
+  const s = row.services;
+  if (!s) return "—";
+  return [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "—";
+}
+
 const KIND_LABELS: Record<string, string> = {
   transfer_port_hotel: "Transfer Porto",
   transfer_airport_hotel: "Transfer Aeroporto",
@@ -65,6 +88,18 @@ export default function AgencyStatementPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [filterPaid, setFilterPaid] = useState<"all" | "unpaid" | "paid">("all");
 
+  // Contestazioni prezzo in attesa (agenzia -> ITS)
+  const [disputes, setDisputes] = useState<DisputeRow[]>([]);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [disputeError, setDisputeError] = useState<string | null>(null);
+
+  const loadDisputes = useCallback(async (tk: string) => {
+    const res = await fetch("/api/ops/agency-invoice-disputes?status=pending", { headers: { Authorization: `Bearer ${tk}` } });
+    const body = await res.json().catch(() => null) as { disputes?: DisputeRow[]; error?: string } | null;
+    if (!res.ok || !body) { setDisputeError(body?.error ?? "Errore caricamento segnalazioni."); return; }
+    setDisputes(body.disputes ?? []);
+  }, []);
+
   const loadData = useCallback(async (tk: string, agencyId: string | null) => {
     const url = agencyId ? `/api/agency/statement?agency_id=${agencyId}` : "/api/agency/statement";
     const res = await fetch(url, { headers: { Authorization: `Bearer ${tk}` } });
@@ -86,11 +121,28 @@ export default function AgencyStatementPage() {
       if (!tk) { setError("Sessione non valida."); setLoading(false); return; }
       setToken(tk);
       await loadData(tk, null);
+      await loadDisputes(tk);
       setLoading(false);
     };
     void boot();
     return () => { active = false; };
-  }, [loadData]);
+  }, [loadData, loadDisputes]);
+
+  const resolveDispute = async (disputeId: string, action: "approve" | "reject") => {
+    if (!token) return;
+    setResolvingId(disputeId);
+    setDisputeError(null);
+    const res = await fetch(`/api/ops/agency-invoice-disputes/${disputeId}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action }),
+    });
+    const body = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    setResolvingId(null);
+    if (!res.ok || !body?.ok) { setDisputeError(body?.error ?? "Operazione non riuscita."); return; }
+    setDisputes((prev) => prev.filter((d) => d.id !== disputeId));
+    if (action === "approve") await loadData(token, selectedAgencyId);
+  };
 
   // Ricalcola per-agenzia quando cambia selezione
   useEffect(() => {
@@ -191,6 +243,43 @@ export default function AgencyStatementPage() {
           <p className="section-subtitle">Monitora i saldi per agenzia, segna i pagamenti ricevuti e tieni il conto aggiornato.</p>
         </div>
       </div>
+
+      {disputes.length > 0 && (
+        <div className="card border-amber-200 bg-amber-50/60 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-amber-900">Contestazioni prezzo in attesa ({disputes.length})</h2>
+          </div>
+          {disputeError && <p className="text-xs font-semibold text-rose-600">{disputeError}</p>}
+          <div className="space-y-2">
+            {disputes.map((d) => (
+              <div key={d.id} className="rounded-xl border border-amber-200 bg-white p-3 flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-800">{disputeAgencyName(d)} — {disputeCustomerName(d)}</p>
+                  <p className="text-xs text-slate-500">
+                    {d.services?.date ? fmtDate(d.services.date) : "—"} · {KIND_LABELS[d.services?.booking_service_kind ?? ""] ?? d.services?.booking_service_kind ?? "—"}
+                  </p>
+                  <p className="text-sm mt-1">
+                    <span className="text-slate-400 line-through">{fmtEur(d.original_price_cents)}</span>
+                    {" → "}
+                    <span className="font-bold text-amber-700">{fmtEur(d.proposed_price_cents)}</span>
+                  </p>
+                  {d.agency_note && <p className="text-xs text-slate-500 mt-1 italic">&quot;{d.agency_note}&quot;</p>}
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button type="button" onClick={() => void resolveDispute(d.id, "approve")} disabled={resolvingId === d.id}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+                    {resolvingId === d.id ? "..." : "Approva"}
+                  </button>
+                  <button type="button" onClick={() => void resolveDispute(d.id, "reject")} disabled={resolvingId === d.id}
+                    className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-60">
+                    Rifiuta
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
 

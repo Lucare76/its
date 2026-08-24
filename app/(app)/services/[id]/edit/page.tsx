@@ -19,6 +19,7 @@ type ServiceRow = {
   hotel_id: string | null;
   agency_id: string | null;
   billing_party_name: string | null;
+  agency_quoted_price_cents: number | null;
   place_type: string | null;
   meeting_point: string | null;
   arrival_date: string | null;
@@ -157,6 +158,7 @@ export default function ServiceEditPage() {
   const [notes, setNotes] = useState("");
   const [hotelId, setHotelId] = useState("");
   const [agencyId, setAgencyId] = useState("");
+  const [agencyQuotedPriceEur, setAgencyQuotedPriceEur] = useState("");
   const [meetingPoint, setMeetingPoint] = useState("");
   const [arrivalDate, setArrivalDate] = useState("");
   const [arrivalTime, setArrivalTime] = useState("");
@@ -351,6 +353,7 @@ export default function ServiceEditPage() {
       setNotes(svc.notes ?? "");
       setHotelId(svc.hotel_id ?? "");
       setAgencyId(svc.agency_id ?? "");
+      setAgencyQuotedPriceEur(svc.agency_quoted_price_cents != null ? (svc.agency_quoted_price_cents / 100).toFixed(2) : "");
       setMeetingPoint(svc.meeting_point ?? "");
       setArrivalDate(svc.arrival_date ?? "");
       const ferryFormula = svc.booking_service_kind === "formula_snav"
@@ -418,6 +421,9 @@ export default function ServiceEditPage() {
         hotel_id: hotelId || null,
         agency_id: agencyId || null,
         billing_party_name: selectedAgency?.name ?? null,
+        agency_quoted_price_cents: agencyQuotedPriceEur.trim()
+          ? Math.round(Number(agencyQuotedPriceEur.trim().replace(",", ".")) * 100)
+          : null,
         meeting_point: meetingPoint.trim() || null,
         arrival_date: arrivalDate || null,
         ...(isFerryFormula ? {} : { arrival_time: arrivalTime || null }),
@@ -451,6 +457,9 @@ export default function ServiceEditPage() {
       hotel_id: hotelId || null,
       agency_id: agencyId || null,
       billing_party_name: selectedAgency?.name ?? null,
+      agency_quoted_price_cents: agencyQuotedPriceEur.trim()
+        ? Math.round(Number(agencyQuotedPriceEur.trim().replace(",", ".")) * 100)
+        : null,
       meeting_point: meetingPoint.trim() || null,
       arrival_date: arrivalDate || null,
       arrival_time: isFerryFormula ? outboundFerryArrival || null : arrivalTime || null,
@@ -695,6 +704,23 @@ export default function ServiceEditPage() {
               {agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
+
+          {/* Prezzo concordato — usato dall'Estratto Conto agenzia (importo_cents) */}
+          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+            Prezzo concordato (€)
+            <div className="mt-1 flex items-center gap-0 rounded-xl border border-slate-200 bg-white overflow-hidden">
+              <span className="px-3 text-slate-500 font-semibold text-sm shrink-0 select-none">€</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="0.00"
+                className="flex-1 bg-transparent outline-none text-sm py-2 pr-3 min-w-0"
+                value={agencyQuotedPriceEur}
+                onChange={(e) => setAgencyQuotedPriceEur(e.target.value.replace(",", ".").replace(/[^0-9.]/g, ""))}
+              />
+            </div>
+            <span className="mt-1 block text-[11px] text-slate-400">Opzionale — usato per l&apos;Estratto Conto dell&apos;agenzia.</span>
+          </label>
 
           {/* Note */}
           <label className="text-xs font-medium text-slate-600 sm:col-span-2">

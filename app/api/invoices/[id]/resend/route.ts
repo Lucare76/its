@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { generateInvoiceHtml } from "@/lib/server/invoice-pdf";
+import { generateInvoiceHtml, buildInvoiceXlsx } from "@/lib/server/invoice-pdf";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
@@ -65,12 +65,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     ? `${months[Number(fm) - 1]} ${fy}`
     : `${months[Number(fm) - 1]}–${months[Number(tm) - 1]} ${fy}`;
 
+  const xlsxBuffer = buildInvoiceXlsx({
+    agencyName: invoice.agency_name,
+    agencyEmail: invoiceEmail,
+    periodFrom: invoice.period_from,
+    periodTo: invoice.period_to,
+    invoiceId: invoice.id,
+    createdAt: invoice.created_at,
+    items: invoice.invoice_data ?? [],
+    totalCents: invoice.total_cents,
+  });
+  const xlsxFilename = `estratto_conto_${String(invoice.agency_name).replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}_${invoice.period_from}_${invoice.period_to}.xlsx`;
+
   const fromEmail = getVerifiedFromEmail();
   const res = await resendFetch(process.env.RESEND_API_KEY!, {
     from: `Ischia Transfer Service <${fromEmail}>`,
     to: [invoiceEmail],
     subject: `Estratto conto ${periodLabel} — ${invoice.agency_name}`,
     html,
+    attachments: [{ filename: xlsxFilename, content: xlsxBuffer.toString("base64") }],
   });
 
   if (!res.ok) {

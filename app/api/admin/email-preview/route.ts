@@ -193,10 +193,10 @@ const SAMPLES: Record<string, () => string> = {
     createdAt: "2026-07-01T08:00:00Z",
     totalCents: 184500,
     items: [
-      { numero_pratica: "AV-2024-001", cliente_nome: "Famiglia Bianchi", data_servizio: "2026-06-05", tipo_servizio: "Transfer Porto→Hotel", importo_cents: 45000 },
-      { numero_pratica: "AV-2024-002", cliente_nome: "Coppia Verdi", data_servizio: "2026-06-08", tipo_servizio: "Transfer Hotel→Porto", importo_cents: 38000 },
-      { numero_pratica: "AV-2024-003", cliente_nome: "Rossi Group", data_servizio: "2026-06-12", tipo_servizio: "Bus Line", importo_cents: 52000 },
-      { numero_pratica: "AV-2024-004", cliente_nome: "Tour Esposito", data_servizio: "2026-06-18", tipo_servizio: "Transfer Porto→Hotel", importo_cents: 49500 },
+      { service_id: "demo-1", numero_pratica: "AV-2024-001", cliente_nome: "Famiglia Bianchi", data_servizio: "2026-06-05", tipo_servizio: "Transfer Porto→Hotel", importo_cents: 45000 },
+      { service_id: "demo-2", numero_pratica: "AV-2024-002", cliente_nome: "Coppia Verdi", data_servizio: "2026-06-08", tipo_servizio: "Transfer Hotel→Porto", importo_cents: 38000 },
+      { service_id: "demo-3", numero_pratica: "AV-2024-003", cliente_nome: "Rossi Group", data_servizio: "2026-06-12", tipo_servizio: "Bus Line", importo_cents: 52000 },
+      { service_id: "demo-4", numero_pratica: "AV-2024-004", cliente_nome: "Tour Esposito", data_servizio: "2026-06-18", tipo_servizio: "Transfer Porto→Hotel", importo_cents: 49500 },
     ],
   }),
   reminder: () => buildServiceListEmailHtml({

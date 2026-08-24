@@ -4,9 +4,11 @@
  * oppure viene inviato come email HTML via Resend.
  */
 
+import * as XLSX from "xlsx";
 import { buildServiceListEmailHtml, buildServiceListPlainText } from "@/lib/server/service-list-email";
 
 export type InvoiceLineItem = {
+  service_id: string;
   numero_pratica: string;
   cliente_nome: string;
   data_servizio: string;
@@ -105,6 +107,8 @@ export function generateInvoiceHtml(data: InvoiceData): string {
     </table>
 
     <p style="font-size:12px;color:#94a3b8;text-align:center;">Rif. <strong style="color:#475569;">${data.invoiceId.slice(0, 8).toUpperCase()}</strong> &nbsp;·&nbsp; Emesso il ${formatDate(data.createdAt.slice(0, 10))}</p>
+
+    <p style="font-size:12px;color:#94a3b8;text-align:center;margin-top:16px;">Se un importo ti sembra sbagliato, accedi alla tua area agenzia per segnalarlo: verrà rivisto dal nostro team.</p>
   `;
 
   return emailHtml(body, {
@@ -251,4 +255,30 @@ export function generateReminderPlainText(
       direction: s.direction === "arrival" ? "arrival" : "departure",
     })),
   });
+}
+
+/**
+ * Allegato Excel dell'estratto conto — stesse righe/colonne dell'HTML,
+ * stesso pattern di lib/server/services-export.ts (XLSX.utils.aoa_to_sheet +
+ * XLSX.write bookType 'xlsx'), pensato per essere passato a strumenti esterni
+ * (alcune agenzie lo inoltrano a tool di analisi/AI).
+ */
+export function buildInvoiceXlsx(data: InvoiceData): Buffer {
+  const header = ["Numero pratica", "Cliente", "Data servizio", "Tipo servizio", "Importo EUR"];
+  const rows = data.items.map((item) => [
+    item.numero_pratica,
+    item.cliente_nome,
+    formatDate(item.data_servizio),
+    item.tipo_servizio,
+    Number((item.importo_cents / 100).toFixed(2)),
+  ]);
+  const totalRow = ["", "", "", "Totale", Number((data.totalCents / 100).toFixed(2))];
+
+  const sheet = XLSX.utils.aoa_to_sheet([header, ...rows, totalRow]);
+  sheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 24 }, { wch: 14 }];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Estratto conto");
+
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }

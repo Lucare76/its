@@ -174,6 +174,13 @@ function AgencyBookingsPageInner() {
   const [actionMessage, setActionMessage] = useState("");
   const [tenantId, setTenantId] = useState<string | null>(null);
 
+  // Contestazione prezzo su una riga già fatturata (estratto conto)
+  const [disputeOpen, setDisputeOpen]       = useState(false);
+  const [disputePrice, setDisputePrice]     = useState("");
+  const [disputeNote, setDisputeNote]       = useState("");
+  const [disputing, setDisputing]           = useState(false);
+  const [disputeMessage, setDisputeMessage] = useState("");
+
   const currentMonthKey = new Date().toISOString().slice(0, 7);
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set([currentMonthKey]));
   const toggleMonth = (key: string) =>
@@ -387,6 +394,30 @@ function AgencyBookingsPageInner() {
     if (!res.ok) { setActionMessage(data?.error ?? "Richiesta fallita."); return; }
     setBookings((prev) => prev.map((row) => row.id === selectedBooking.id ? { ...row, status: "pending_cancellation" } : row));
     setActionMessage("Richiesta di annullamento inviata. L'operatore la gestirà e ti contatterà per eventuali penali.");
+  };
+
+  const submitPriceDispute = async () => {
+    if (!selectedBooking || !accessToken) return;
+    const eur = Number(disputePrice.trim().replace(",", "."));
+    if (!Number.isFinite(eur) || eur < 0) { setDisputeMessage("Inserisci un importo valido."); return; }
+    setDisputing(true);
+    setDisputeMessage("");
+    const res = await fetch("/api/agency/invoice-disputes", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: selectedBooking.id,
+        proposed_price_cents: Math.round(eur * 100),
+        note: disputeNote.trim() || undefined,
+      }),
+    });
+    const data = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    setDisputing(false);
+    if (!res.ok) { setDisputeMessage(data?.error ?? "Segnalazione non riuscita."); return; }
+    setDisputeOpen(false);
+    setDisputePrice("");
+    setDisputeNote("");
+    setActionMessage("Segnalazione inviata. L'operatore la valuterà.");
   };
 
   if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento prenotazioni...</div>;
@@ -674,6 +705,57 @@ function AgencyBookingsPageInner() {
                     </div>
                   )}
                 </div>
+
+                {/* Contestazione prezzo — solo se c'è un prezzo concordato da mettere in discussione */}
+                {selectedBooking.agency_quoted_price_cents != null && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    {!disputeOpen ? (
+                      <button
+                        type="button"
+                        onClick={() => { setDisputeOpen(true); setDisputePrice(""); setDisputeNote(""); setDisputeMessage(""); }}
+                        className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                      >
+                        Segnala prezzo errato →
+                      </button>
+                    ) : (
+                      <div className="space-y-2.5">
+                        <p className="text-sm font-semibold text-slate-800">Segnala prezzo errato</p>
+                        <label className="block text-xs font-medium text-slate-600">
+                          Prezzo corretto secondo te (€)
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            value={disputePrice}
+                            onChange={(e) => setDisputePrice(e.target.value.replace(",", ".").replace(/[^0-9.]/g, ""))}
+                            className="mt-1 input-saas w-full"
+                          />
+                        </label>
+                        <label className="block text-xs font-medium text-slate-600">
+                          Nota (facoltativa)
+                          <textarea
+                            rows={2}
+                            value={disputeNote}
+                            onChange={(e) => setDisputeNote(e.target.value)}
+                            className="mt-1 input-saas w-full"
+                            placeholder="Spiega perché ritieni sbagliato l'importo..."
+                          />
+                        </label>
+                        {disputeMessage && <p className="text-xs font-semibold text-rose-600">{disputeMessage}</p>}
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => void submitPriceDispute()} disabled={disputing}
+                            className="rounded-lg bg-slate-700 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60">
+                            {disputing ? "Invio..." : "Invia segnalazione"}
+                          </button>
+                          <button type="button" onClick={() => setDisputeOpen(false)}
+                            className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100">
+                            Annulla
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {selectedBooking.email_confirmation_status && selectedBooking.email_confirmation_status !== "skipped" && (
                   <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">

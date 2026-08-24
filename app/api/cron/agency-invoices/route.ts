@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
       // Recupera servizi
       const { data: services } = await admin
         .from("services")
-        .select("id, date, time, customer_name, customer_first_name, customer_last_name, booking_service_kind, service_type, notes, source_total_amount_cents")
+        .select("id, date, time, customer_name, customer_first_name, customer_last_name, booking_service_kind, service_type, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number")
         .eq("tenant_id", tenantId)
         .eq("is_draft", false)
         .ilike("billing_party_name", `%${agency.name}%`)
@@ -95,16 +95,22 @@ export async function POST(request: NextRequest) {
 
       if ((services ?? []).length === 0) { skipped++; continue; }
 
-      type SvcRow = { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; };
+      type SvcRow = { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; agency_quoted_price_cents: number | null; practice_number: string | null; };
       const items: InvoiceLineItem[] = (services ?? []).map((s: SvcRow) => {
+        // Stessa priorita' di app/api/invoices/route.ts: numero pratica
+        // dell'agenzia (dal loro PDF) se presente, altrimenti il numero
+        // ITS-YYYY-N se la pratica e' stata inserita a mano.
         const practiceMatch = (s.notes ?? "").match(/\[practice:([^\]]+)\]/);
         const clienteName = [s.customer_first_name, s.customer_last_name].filter(Boolean).join(" ") || s.customer_name || "—";
         return {
-          numero_pratica: practiceMatch?.[1] ?? "—",
+          service_id: s.id,
+          numero_pratica: practiceMatch?.[1] ?? s.practice_number ?? "—",
           cliente_nome: clienteName,
           data_servizio: s.date ?? periodFrom,
           tipo_servizio: s.booking_service_kind ?? s.service_type ?? "transfer",
-          importo_cents: s.source_total_amount_cents ?? 0
+          // Stessa priorita' di app/api/invoices/route.ts: prezzo concordato
+          // con l'agenzia prima del costo interno.
+          importo_cents: s.agency_quoted_price_cents ?? s.source_total_amount_cents ?? 0
         };
       });
 
