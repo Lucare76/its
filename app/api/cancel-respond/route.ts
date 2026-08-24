@@ -31,6 +31,12 @@ function formatDate(iso: string): string {
   return (iso ?? "").split("-").reverse().join("/");
 }
 
+function toAgencyResponse(action: "accept" | "reject" | "counter"): "accepted" | "rejected" | "counter" {
+  if (action === "accept") return "accepted";
+  if (action === "reject") return "rejected";
+  return "counter";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const admin = createAdminClient();
@@ -69,6 +75,7 @@ export async function POST(req: NextRequest) {
     const tenantId = cr.tenant_id as string;
     const penaltyCents = cr.penalty_cents as number ?? 0;
     const newStatus = action === "accept" ? "approved" : "pending_agency_approval";
+    const agencyResponse = toAgencyResponse(action);
 
     if (action === "accept") {
       const { data: assignmentBeforeCancellation } = await admin
@@ -83,7 +90,7 @@ export async function POST(req: NextRequest) {
         p_tenant_id: tenantId,
         p_user_id: null,
         p_status: "approved",
-        p_agency_response: action,
+        p_agency_response: agencyResponse,
         p_agency_response_note: note ?? null,
         p_agency_counter_cents: null,
         p_penalty_cents: penaltyCents,
@@ -114,16 +121,27 @@ export async function POST(req: NextRequest) {
         requestedByUserId: null,
       });
     } else {
-      await admin
+      const { error: updateError } = await admin
         .from("cancellation_requests")
         .update({
           status: newStatus,
-          agency_response: action,
+          agency_response: agencyResponse,
           agency_response_note: note ?? null,
           agency_counter_cents: action === "counter" ? (counter_cents ?? null) : null,
           agency_responded_at: new Date().toISOString(),
         })
         .eq("id", cr.id);
+
+      if (updateError) {
+        auditLog({
+          event: "cancel_respond_update_failed",
+          level: "error",
+          tenantId,
+          serviceId: svc?.id as string | null,
+          details: { requestId: cr.id, action, message: updateError.message },
+        });
+        return NextResponse.json({ error: "Impossibile completare la risposta alla richiesta di cancellazione." }, { status: 500 });
+      }
     }
 
     const dateFormatted = formatDate(svc?.arrival_date as string ?? svc?.date as string ?? "");
