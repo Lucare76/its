@@ -652,3 +652,53 @@ export async function sendOperatorInvoiceApprovedNotifyEmail(input: OperatorInvo
     text,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Email AGENZIA — sollecito di pagamento per un estratto conto gia' inviato
+// e ancora non saldato (status "sent", mai "paid" ne' "draft").
+// ---------------------------------------------------------------------------
+
+export interface AgencyInvoicePaymentReminderInput {
+  to: string;
+  agencyName: string;
+  periodFrom: string;
+  periodTo: string;
+  totalCents: number;
+  servicesCount: number;
+  sentAt: string | null;
+}
+
+export async function sendAgencyInvoicePaymentReminderEmail(input: AgencyInvoicePaymentReminderInput): Promise<EmailResult> {
+  const html = emailHtml(`
+    <p style="font-size:17px;margin-bottom:4px;">Sollecito pagamento estratto conto</p>
+    <p style="color:#475569;margin-bottom:24px;">Il seguente estratto conto risulta ancora da saldare.</p>
+
+    ${emailDataTable([
+      ["📅 Periodo", `${fmtDate(input.periodFrom)} — ${fmtDate(input.periodTo)}`],
+      ["📋 Pratiche", String(input.servicesCount)],
+      ["💰 Totale da saldare", formatPrice(input.totalCents)],
+      ["📧 Inviato il", input.sentAt ? fmtDate(input.sentAt.slice(0, 10)) : "—"],
+    ])}
+
+    <p style="color:#475569;margin-top:20px;font-size:14px;">
+      Per qualsiasi chiarimento contattateci a
+      <a href="mailto:info@ischiatransferservice.it" style="color:#1e3a5f;font-weight:600;">info@ischiatransferservice.it</a>.
+    </p>
+  `, { title: "Sollecito pagamento", preheader: `${input.agencyName} — ${formatPrice(input.totalCents)} da saldare` });
+
+  const text = [
+    `SOLLECITO PAGAMENTO ESTRATTO CONTO`,
+    `Agenzia: ${input.agencyName}`,
+    `Periodo: ${fmtDate(input.periodFrom)} — ${fmtDate(input.periodTo)}`,
+    `Pratiche: ${input.servicesCount}`,
+    `Totale da saldare: ${formatPrice(input.totalCents)}`,
+    input.sentAt ? `Inviato il: ${fmtDate(input.sentAt.slice(0, 10))}` : null,
+  ].filter(Boolean).join("\n");
+
+  return sendEmail({
+    to: input.to,
+    subject: `[Sollecito] Estratto conto da saldare — ${input.agencyName}`,
+    html,
+    text,
+  });
+}

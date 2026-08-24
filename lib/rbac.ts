@@ -12,6 +12,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/services/new", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/agency-requests", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/agency-statement", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/estratto-conto", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/crm-agencies", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/agency/new-booking", roles: ["admin", "agency", "supervisor"] },
   { prefix: "/agency", roles: ["admin", "agency", "supervisor"] },

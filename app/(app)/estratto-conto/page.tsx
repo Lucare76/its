@@ -94,6 +94,7 @@ export default function EstrattoContoPage() {
   const [payNote, setPayNote] = useState("");
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [remindingId, setRemindingId] = useState<string | null>(null);
 
   const loadData = async (tok: string) => {
     const [agRes, invRes] = await Promise.all([
@@ -178,6 +179,22 @@ export default function EstrattoContoPage() {
       await loadData(token);
     } else {
       setMessage(`Errore: ${body?.error ?? "Invio fallito"}`);
+    }
+  };
+
+  const remindInvoice = async (invoiceId: string) => {
+    if (!token) return;
+    setRemindingId(invoiceId);
+    const res = await fetch(`/api/invoices/${invoiceId}/remind`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; sent_to?: string; error?: string } | null;
+    setRemindingId(null);
+    if (body?.ok) {
+      setMessage(`Sollecito inviato a ${body.sent_to ?? "agenzia"}`);
+    } else {
+      setMessage(`Errore: ${body?.error ?? "Invio sollecito fallito"}`);
     }
   };
 
@@ -449,6 +466,13 @@ export default function EstrattoContoPage() {
                               disabled={resendingId === inv.id}
                               className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
                               {resendingId === inv.id ? "..." : "📧 Re-invia"}
+                            </button>
+                          )}
+                          {inv.status === "sent" && (
+                            <button type="button" onClick={() => void remindInvoice(inv.id)}
+                              disabled={remindingId === inv.id}
+                              className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50">
+                              {remindingId === inv.id ? "..." : "🔔 Sollecito"}
                             </button>
                           )}
                           {inv.status !== "paid" && (
