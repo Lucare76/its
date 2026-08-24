@@ -6,13 +6,23 @@ import { buildBusLotAggregates, isBusLineService } from "@/lib/bus-lot-utils";
 import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 
+function computeNotificationsRangeScope(): { mode: "range"; from: string; to: string } {
+  const from = new Date();
+  from.setDate(from.getDate() - 7);
+  const to = new Date();
+  to.setDate(to.getDate() + 30);
+  return { mode: "range", from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
 export default function NotificationsPage() {
   // Sprint Performance 14D: only the datasets this page actually reads
   // (services, assignments, busLotConfigs, inboundEmails — verified via
-  // grep). Still full-history services (no serviceScope) since alerts are
-  // computed across the whole tenant, not a date window.
+  // grep). Scoped to a [-7, +30] day window so alerts stay actionable
+  // instead of surfacing every historical service with a missing pricing
+  // rule or driver.
   const { loading, errorMessage, data } = useTenantOperationalData({
-    datasets: { services: true, assignments: true, busLotConfigs: true, inboundEmails: true }
+    datasets: { services: true, assignments: true, busLotConfigs: true, inboundEmails: true },
+    serviceScope: computeNotificationsRangeScope()
   });
 
   const assignmentsByServiceId = useMemo(() => new Map(data.assignments.map((item) => [item.service_id, item])), [data.assignments]);
