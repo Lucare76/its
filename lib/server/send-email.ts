@@ -84,8 +84,15 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
   const fromDefault = getVerifiedFromEmail();
   const from = opts.from ?? `Ischia Transfer Service <${fromDefault}>`;
 
-  // BCC automatico (ignorato in modalità test — resendFetch azzera cc/bcc)
-  const autoBcc = process.env.NOTIFY_BCC_EMAIL ? [process.env.NOTIFY_BCC_EMAIL] : [];
+  // BCC automatico (ignorato in modalità test — resendFetch azzera cc/bcc).
+  // NOTIFY_BCC_EMAIL può contenere più indirizzi separati da virgola/
+  // punto e virgola/spazi (stesso formato di EMAIL_TEST_REDIRECT sopra in
+  // resendFetch) — prima veniva passato a Resend come un'unica stringa non
+  // divisa, che Resend rifiuta con 422 "Invalid bcc field" non appena
+  // contiene più di un indirizzo.
+  const autoBcc = process.env.NOTIFY_BCC_EMAIL
+    ? process.env.NOTIFY_BCC_EMAIL.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean)
+    : [];
   const bcc = [...autoBcc, ...normalize(opts.bcc)];
 
   const replyTo = opts.replyTo ?? process.env.EMAIL_REPLY_TO?.trim() ?? null;
