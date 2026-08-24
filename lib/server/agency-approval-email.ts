@@ -424,3 +424,66 @@ export async function sendAgencyPriceCorrectionEmail(input: AgencyPriceCorrectio
     text,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Email OPERATORE — l'agenzia contesta un prezzo su un estratto conto già
+// inviato (verso opposto rispetto a sendAgencyPriceCorrectionEmail sopra:
+// qui e' l'agenzia a proporre, ITS a decidere se approvare).
+// ---------------------------------------------------------------------------
+
+export interface OperatorInvoiceDisputeNotifyInput {
+  agencyName: string;
+  customerName: string;
+  serviceDate: string | null;
+  originalPriceCents: number;
+  proposedPriceCents: number;
+  agencyNote: string | null;
+  reviewUrl: string;
+}
+
+export async function sendOperatorInvoiceDisputeNotifyEmail(input: OperatorInvoiceDisputeNotifyInput): Promise<EmailResult> {
+  const to = process.env.OPS_NOTIFY_EMAIL?.trim();
+  if (!to) return { status: "skipped", error: "OPS_NOTIFY_EMAIL non configurata." };
+
+  const original = formatPrice(input.originalPriceCents);
+  const proposed = formatPrice(input.proposedPriceCents);
+  const diff = input.proposedPriceCents - input.originalPriceCents;
+  const diffFormatted = `${diff > 0 ? "+" : diff < 0 ? "−" : ""}${formatPrice(Math.abs(diff))}`;
+  const dateLabel = input.serviceDate ? fmtDate(input.serviceDate) : "—";
+
+  const html = emailHtml(`
+    <p style="font-size:17px;margin-bottom:4px;">${input.agencyName} ha contestato un prezzo</p>
+    <p style="color:#475569;margin-bottom:24px;">Una riga dell'estratto conto già inviato è stata segnalata come errata. Rivedi e decidi se approvare la correzione.</p>
+
+    ${emailDataTable([
+      ["👤 Cliente", input.customerName],
+      ["📅 Data servizio", dateLabel],
+      ["💰 Prezzo fatturato", original],
+      ["✏️ Prezzo proposto dall'agenzia", `${proposed} (${diffFormatted})`],
+      ["📝 Motivazione agenzia", input.agencyNote?.trim() || "—"],
+    ])}
+
+    <p style="color:#475569;margin-top:20px;font-size:14px;">Approvando, il prezzo proposto sostituisce quello attuale sulla prenotazione. Rifiutando, resta invariato.</p>
+
+    ${emailButton("Rivedi la segnalazione", input.reviewUrl, "#1e3a5f")}
+  `, { title: "Contestazione prezzo estratto conto", preheader: `${input.agencyName} — ${input.customerName}: ${original} → ${proposed}` });
+
+  const text = [
+    `CONTESTAZIONE PREZZO ESTRATTO CONTO`,
+    `Agenzia: ${input.agencyName}`,
+    `Cliente: ${input.customerName}`,
+    `Data servizio: ${dateLabel}`,
+    `Prezzo fatturato: ${original}`,
+    `Prezzo proposto: ${proposed} (${diffFormatted})`,
+    input.agencyNote?.trim() ? `Motivazione: ${input.agencyNote.trim()}` : null,
+    ``,
+    `Rivedi: ${input.reviewUrl}`,
+  ].filter(Boolean).join("\n");
+
+  return sendEmail({
+    to,
+    subject: `[Estratto conto] ${input.agencyName} contesta un prezzo — ${input.customerName}`,
+    html,
+    text,
+  });
+}

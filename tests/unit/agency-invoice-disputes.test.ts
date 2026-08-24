@@ -11,11 +11,16 @@ import { NextRequest, NextResponse } from "next/server";
 const mocks = vi.hoisted(() => ({
   authorizeServiceRoleRequest: vi.fn(),
   authorizePricingRequest: vi.fn(),
+  sendOperatorInvoiceDisputeNotifyEmail: vi.fn().mockResolvedValue({ status: "sent", error: null }),
 }));
 
 vi.mock("@/lib/server/pricing-auth", () => ({
   authorizeServiceRoleRequest: mocks.authorizeServiceRoleRequest,
   authorizePricingRequest: mocks.authorizePricingRequest,
+}));
+
+vi.mock("@/lib/server/agency-approval-email", () => ({
+  sendOperatorInvoiceDisputeNotifyEmail: mocks.sendOperatorInvoiceDisputeNotifyEmail,
 }));
 
 import { POST as postDispute, GET as getAgencyDisputes } from "@/app/api/agency/invoice-disputes/route";
@@ -94,6 +99,9 @@ function makeAdmin(store: { services: ServiceRow[]; disputes: DisputeRow[] }) {
         };
         return builder;
       }
+      if (table === "agencies") {
+        return makeTableBuilder([{ id: AGENCY_A, name: "ALESTE VIAGGI" }, { id: AGENCY_B, name: "ALTRA AGENZIA" }]);
+      }
       throw new Error(`tabella inattesa: ${table}`);
     },
   };
@@ -152,6 +160,18 @@ describe("Contestazione prezzo estratto conto — creazione, approvazione, rifiu
     expect(json.dispute.proposed_price_cents).toBe(6000);
     expect(json.dispute.status).toBe("pending");
     expect(store.disputes).toHaveLength(1);
+
+    // ITS deve ricevere un'email con il prezzo originale, quello proposto e
+    // la motivazione dell'agenzia — non solo la coda in pagina.
+    expect(mocks.sendOperatorInvoiceDisputeNotifyEmail).toHaveBeenCalledTimes(1);
+    expect(mocks.sendOperatorInvoiceDisputeNotifyEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agencyName: "ALESTE VIAGGI",
+        originalPriceCents: 6600,
+        proposedPriceCents: 6000,
+        agencyNote: "Prezzo troppo alto",
+      })
+    );
   });
 
   it("seconda contestazione sulla stessa pratica mentre una è già pending -> 409, nessuna riga aggiunta", async () => {

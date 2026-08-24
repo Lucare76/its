@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
+import { sendOperatorInvoiceDisputeNotifyEmail } from "@/lib/server/agency-approval-email";
 
 export const runtime = "nodejs";
 
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
 
   const { data: service, error: serviceErr } = await admin
     .from("services")
-    .select("id, agency_id, agency_quoted_price_cents")
+    .select("id, agency_id, agency_quoted_price_cents, date, customer_name, customer_first_name, customer_last_name")
     .eq("id", service_id)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -107,6 +108,46 @@ export async function POST(request: NextRequest) {
     outcome: "pending",
     details: { dispute_id: dispute.id, original_price_cents: dispute.original_price_cents, proposed_price_cents: dispute.proposed_price_cents },
   });
+
+  // Notifica ITS via email — best-effort: la segnalazione e' gia' salvata e
+  // visibile in /agency-statement anche se l'invio fallisce (stessa logica
+  // "mai far percepire come fallita un'operazione gia' commit-ata" usata
+  // altrove nel repo, es. lib/server/whatsapp/webhook-processing.ts).
+  try {
+    const { data: agencyRow } = await admin
+      .from("agencies")
+      .select("name")
+      .eq("id", agencyId)
+      .maybeSingle();
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://app.ischiatransferservice.it";
+    const customerName = [service.customer_first_name, service.customer_last_name].filter(Boolean).join(" ") || service.customer_name || "Cliente";
+    const emailResult = await sendOperatorInvoiceDisputeNotifyEmail({
+      agencyName: agencyRow?.name ?? "Agenzia",
+      customerName,
+      serviceDate: service.date ?? null,
+      originalPriceCents: dispute.original_price_cents,
+      proposedPriceCents: dispute.proposed_price_cents,
+      agencyNote: note?.trim() || null,
+      reviewUrl: `${appUrl}/agency-statement`,
+    });
+    if (emailResult.status === "failed") {
+      auditLog({
+        event: "agency_invoice_dispute_notify_failed",
+        level: "warn",
+        tenantId,
+        serviceId: service_id,
+        details: { dispute_id: dispute.id, error: emailResult.error },
+      });
+    }
+  } catch (error) {
+    auditLog({
+      event: "agency_invoice_dispute_notify_failed",
+      level: "warn",
+      tenantId,
+      serviceId: service_id,
+      details: { dispute_id: dispute.id, error: error instanceof Error ? error.message : "unknown" },
+    });
+  }
 
   return NextResponse.json({ ok: true, dispute });
 }
