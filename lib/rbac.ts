@@ -11,6 +11,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/servizi", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/services/new", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/agency-requests", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/agency-statement", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/crm-agencies", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/agency/new-booking", roles: ["admin", "agency", "supervisor"] },
   { prefix: "/agency", roles: ["admin", "agency", "supervisor"] },
@@ -177,8 +178,18 @@ export const routeCapabilityMap: Array<{ prefix: string; capability: AppCapabili
   { prefix: "/settings/agency-margins", capability: "pricing:view" }
 ];
 
+/**
+ * Match per prefisso che rispetta il confine di segmento path — un semplice
+ * `startsWith` farebbe combaciare "/agency-statement" con il prefisso
+ * "/agency" (pensato per l'area agenzia, capability agency_bookings:self),
+ * bloccando erroneamente admin/operator/supervisor su quella pagina ops.
+ */
+function matchesPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
 export function isProtectedPath(pathname: string): boolean {
-  return routeRoleMap.some((item) => pathname.startsWith(item.prefix));
+  return routeRoleMap.some((item) => matchesPrefix(pathname, item.prefix));
 }
 
 export function isAllowed(pathname: string, role: UserRole | null): boolean {
@@ -188,12 +199,12 @@ export function isAllowed(pathname: string, role: UserRole | null): boolean {
 export function isAllowedWithOverrides(pathname: string, role: UserRole | null, overrides?: CapabilityOverrides): boolean {
   const capabilityMatch = [...routeCapabilityMap]
     .sort((left, right) => right.prefix.length - left.prefix.length)
-    .find((item) => pathname.startsWith(item.prefix));
+    .find((item) => matchesPrefix(pathname, item.prefix));
   if (capabilityMatch) {
     return hasCapability(role, capabilityMatch.capability, overrides);
   }
 
-  const match = routeRoleMap.find((item) => pathname.startsWith(item.prefix));
+  const match = routeRoleMap.find((item) => matchesPrefix(pathname, item.prefix));
   if (!match) return true;
   if (!role) return false;
   return match.roles.includes(role);
