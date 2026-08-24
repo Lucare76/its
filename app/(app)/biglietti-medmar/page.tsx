@@ -496,6 +496,7 @@ export default function BigliettiMedmarPage() {
   const [sendModal, setSendModal] = useState<{ group: BookingGroup; pdfFile: File | null } | null>(null);
   const [verifying, setVerifying] = useState<string | null>(null); // key del gruppo in verifica
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [verifyErrorKey, setVerifyErrorKey] = useState<string | null>(null);
   const [verifyModal, setVerifyModal] = useState<{ group: BookingGroup; result: MedmarPreflightResult } | null>(null);
   const [medmarDelivery, setMedmarDelivery] = useState<{
     phase: "idle" | "sending" | "done";
@@ -544,6 +545,21 @@ export default function BigliettiMedmarPage() {
     notes: "",
   });
 
+  const resolveActionToken = useCallback(async () => {
+    const current = tokenRef.current ?? token;
+    if (current) return current;
+
+    const session = await getClientSessionContext({ forceRefresh: true });
+    if (session.accessToken) {
+      tokenRef.current = session.accessToken;
+      setToken(session.accessToken);
+      if (session.tenantId && !tenantId) setTenantId(session.tenantId);
+      return session.accessToken;
+    }
+
+    return null;
+  }, [tenantId, token]);
+
   const handleDelete = async (g: BookingGroup) => {
     if (!supabase || !tenantId) return;
     if (!confirm(`Eliminare la prenotazione di ${g.customerName}? L'operazione non è reversibile.`)) return;
@@ -557,10 +573,14 @@ export default function BigliettiMedmarPage() {
   // lettura verso Medmar. Nessuna mutazione Medmar puo' partire da questa
   // chiamata (vedi app/api/services/medmar-issue/prepare/route.ts).
   const runPrepareMedmar = useCallback(async (g: BookingGroup) => {
-    if (!token) return;
+    const actionToken = await resolveActionToken();
+    if (!actionToken) {
+      dispatchMedmarPrepare({ type: "PREPARE_FAILURE", status: "auth_missing", error: "Sessione non pronta: ricarica la pagina e riprova." });
+      return;
+    }
     dispatchMedmarPrepare({ type: "PREPARE_START" });
     try {
-      const data = await apiFetchJson<MedmarPrepareApiResponse>("/api/services/medmar-issue/prepare", token, {
+      const data = await apiFetchJson<MedmarPrepareApiResponse>("/api/services/medmar-issue/prepare", actionToken, {
         method: "POST",
         body: JSON.stringify({ service_ids: g.allServiceIds }),
       });
@@ -588,7 +608,7 @@ export default function BigliettiMedmarPage() {
         error: err instanceof Error ? err.message : "Preparazione emissione non riuscita.",
       });
     }
-  }, [token]);
+  }, [resolveActionToken]);
 
   /**
    * UX 2-click (biglietti-medmar PARTE 1) — CLICK 1: "Emetti biglietto
@@ -600,21 +620,33 @@ export default function BigliettiMedmarPage() {
    * ferma qui esattamente come prima (nessuna mutazione Medmar possibile).
    */
   const handleVerifyMedmar = async (g: BookingGroup) => {
-    if (!token) return;
+    const actionToken = await resolveActionToken();
+    if (!actionToken) {
+      setVerifyError("Sessione non pronta: ricarica la pagina e riprova.");
+      setVerifyErrorKey(g.key);
+      return;
+    }
     setVerifying(g.key);
     setVerifyError(null);
+    setVerifyErrorKey(null);
     dispatchMedmarPrepare({ type: "RESET" });
     try {
-      const data = await apiFetch<MedmarPreflightResult>("/api/services/medmar-preflight", token, {
+      const data = await apiFetch<MedmarPreflightResult>("/api/services/medmar-preflight", actionToken, {
         method: "POST",
         body: JSON.stringify({ service_ids: g.allServiceIds }),
       });
       setVerifyModal({ group: g, result: data });
+      if (!data.can_issue || !data.is_live) {
+        const diagnostic = data.warnings.find((warning) => warning.code === "medmar_live_unavailable")?.message;
+        setVerifyError(diagnostic ?? data.error ?? `Verifica Medmar non emettibile: ${data.status}.`);
+        setVerifyErrorKey(g.key);
+      }
       if (shouldAutoPrepareAfterPreflight(data)) {
         await runPrepareMedmar(g);
       }
     } catch (err) {
       setVerifyError(err instanceof Error ? err.message : "Errore durante la verifica Medmar.");
+      setVerifyErrorKey(g.key);
     } finally {
       setVerifying(null);
     }
@@ -632,7 +664,17 @@ export default function BigliettiMedmarPage() {
   // flag); questo controllo client-side e' solo UX (evita una chiamata
   // inutile quando gia' sappiamo che non puo' avere successo).
   const handleConfirmIssueMedmar = async () => {
-    if (!token || !verifyModal) return;
+    if (!verifyModal) return;
+    const actionToken = await resolveActionToken();
+    if (!actionToken) {
+      dispatchMedmarPrepare({
+        type: "ISSUE_FAILURE",
+        status: "auth_missing",
+        error: "Sessione non pronta: ricarica la pagina e riprova.",
+        retry_allowed: false,
+      });
+      return;
+    }
     if (medmarPrepareState.phase !== "prepared") return;
     if (!serviceIdsMatch(medmarPrepareState.service_ids, verifyModal.group.allServiceIds)) {
       dispatchMedmarPrepare({
@@ -650,7 +692,7 @@ export default function BigliettiMedmarPage() {
     const confirmationToken = medmarPrepareState.confirmation_token;
     dispatchMedmarPrepare({ type: "CONFIRM_START" });
     try {
-      const data = await apiFetchJson<MedmarIssueResult>("/api/services/medmar-issue", token, {
+      const data = await apiFetchJson<MedmarIssueResult>("/api/services/medmar-issue", actionToken, {
         method: "POST",
         body: JSON.stringify({ service_ids: verifyModal.group.allServiceIds, confirmation_token: confirmationToken }),
       });
@@ -824,6 +866,7 @@ export default function BigliettiMedmarPage() {
       }
       setTenantId(session.tenantId);
       setToken(session.accessToken ?? null);
+      tokenRef.current = session.accessToken ?? null;
       await refreshMedmarData(session.tenantId, dateFrom, dateTo);
       if (session.accessToken) {
         await loadTicketMemory(session.accessToken, dateFrom, dateTo);
@@ -1132,12 +1175,17 @@ export default function BigliettiMedmarPage() {
   };
 
   const handleDeliverMedmarPdf = async (serviceIds: string[]) => {
-    if (!token || medmarDelivery.phase === "sending") return;
+    if (medmarDelivery.phase === "sending") return;
+    const actionToken = await resolveActionToken();
+    if (!actionToken) {
+      setMedmarDelivery({ phase: "done", status: "auth_missing", error: "Sessione non pronta: ricarica la pagina e riprova." });
+      return;
+    }
     setMedmarDelivery({ phase: "sending" });
     try {
       const res = await fetch("/api/services/medmar-send", {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${actionToken}` },
         body: JSON.stringify({ service_ids: serviceIds }),
       });
       const data = (await res.json()) as {
@@ -1164,12 +1212,18 @@ export default function BigliettiMedmarPage() {
 
   /** Pulsante "Riprova ora" sulla card in lista (FASE 4): richiama lo stesso motore sicuro/idempotente di handleDeliverMedmarPdf, poi ricarica lo stato delivery. */
   const handleRetryDeliveryFromCard = async (g: BookingGroup) => {
-    if (!token || retryingKey) return;
+    if (retryingKey) return;
+    const actionToken = await resolveActionToken();
+    if (!actionToken) {
+      setVerifyError("Sessione non pronta: ricarica la pagina e riprova.");
+      setVerifyErrorKey(g.key);
+      return;
+    }
     setRetryingKey(g.key);
     try {
       await fetch("/api/services/medmar-send", {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${actionToken}` },
         body: JSON.stringify({ service_ids: g.allServiceIds }),
       });
       if (tenantId) await refreshMedmarData(tenantId, dateFrom, dateTo);
@@ -1558,6 +1612,13 @@ export default function BigliettiMedmarPage() {
         </div>
       )}
 
+      {verifyError && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <p className="font-semibold">Errore verifica Medmar</p>
+          <p>{verifyError}</p>
+        </div>
+      )}
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_330px]">
         <div className="min-h-[520px] overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-sm">
           <div className="sticky top-0 z-10 grid grid-cols-[28px_minmax(160px,1.35fr)_126px_42px_minmax(165px,1fr)_66px_96px_96px_108px] border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-extrabold uppercase tracking-wide text-slate-500 max-xl:hidden">
@@ -1716,6 +1777,12 @@ export default function BigliettiMedmarPage() {
                   </div>
                 ) : null}
                 <div className="flex flex-col gap-2 border-t border-slate-100 pt-4">
+                  {verifyError && verifyErrorKey === selectedMedmarGroup.key ? (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      <p className="font-semibold">Errore verifica Medmar</p>
+                      <p>{verifyError}</p>
+                    </div>
+                  ) : null}
                   {!deliveryAttempt && !(selectedMedmarGroup.sentAt != null || sentKeys.has(selectedMedmarGroup.key)) ? (
                     <button type="button" disabled={verifying === selectedMedmarGroup.key} onClick={() => void handleVerifyMedmar(selectedMedmarGroup)} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
                       {verifying === selectedMedmarGroup.key ? "Verifica in corso..." : "Emetti biglietto Medmar"}
