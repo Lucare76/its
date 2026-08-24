@@ -111,6 +111,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   };
   const homeHref = redirectByRole(authRole);
   const isHomePage = pathname === homeHref;
+  const canSeeTopbarNotifications = authRole === "admin" || authRole === "operator" || authRole === "supervisor";
+  const topbarNotificationCount =
+    pendingAgencyBookingsCount +
+    pendingAgencyReviewCount +
+    pendingCancellationsCount +
+    pendingQrReportsCount +
+    (authRole === "admin" || authRole === "supervisor" ? pendingAccessRequestCount : 0);
 
   const hardRedirect = (target: string) => {
     if (typeof window === "undefined") return;
@@ -680,6 +687,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             const nextStatus = typeof payload.new?.status === "string" ? payload.new.status : null;
             if (nextStatus === "pending") {
               setLiveToastMessage("Nuova richiesta accesso agenzia da approvare.");
+              if (inboxSoundEnabled) playInboxSound();
             }
             void refreshPendingAccessRequests(tenantId);
           }
@@ -706,6 +714,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             if (status === "modified") {
               const agency = typeof payload.new?.agency_name === "string" ? payload.new.agency_name : "Agenzia";
               setLiveToastMessage(`✏️ ${agency} ha segnalato modifiche al riepilogo.`);
+              if (inboxSoundEnabled) playInboxSound();
             }
             void refreshAgencyReviewCount(tenantId);
           }
@@ -715,6 +724,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           { event: "INSERT", schema: "public", table: "vehicle_qr_reports" },
           (payload) => {
             setLiveToastMessage(`🚨 Nuova segnalazione danno veicolo ricevuta.`);
+            if (inboxSoundEnabled) playInboxSound();
             void refreshQrReportsCount(tenantId);
           }
         )
@@ -726,6 +736,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             if (approvalStatus === "pending_operator") {
               const customerName = typeof payload.new?.customer_name === "string" ? payload.new.customer_name : null;
               setLiveToastMessage(`🏨 Nuova prenotazione agenzia${customerName ? ` — ${customerName}` : ""} in attesa di approvazione.`);
+              if (inboxSoundEnabled) playInboxSound();
               void refreshPendingAgencyBookings(tenantId);
             }
           }
@@ -744,13 +755,20 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           { event: "INSERT", schema: "public", table: "cancellation_requests", filter: `tenant_id=eq.${tenantId}` },
           () => {
             setLiveToastMessage("✕ Nuova richiesta di cancellazione ricevuta.");
+            if (inboxSoundEnabled) playInboxSound();
             void refreshPendingCancellations(tenantId);
           }
         )
         .on(
           "postgres_changes",
           { event: "UPDATE", schema: "public", table: "cancellation_requests", filter: `tenant_id=eq.${tenantId}` },
-          () => {
+          (payload) => {
+            const newAgencyResponse = typeof payload.new?.agency_response === "string" ? payload.new.agency_response : null;
+            const oldAgencyResponse = typeof payload.old?.agency_response === "string" ? payload.old.agency_response : null;
+            if (newAgencyResponse && newAgencyResponse !== oldAgencyResponse) {
+              setLiveToastMessage("Risposta agenzia ricevuta su una cancellazione.");
+              if (inboxSoundEnabled) playInboxSound();
+            }
             void refreshPendingCancellations(tenantId);
           }
         );
@@ -1449,7 +1467,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="min-w-0 space-y-4">
-        {pathname !== "/services" && pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/dashboard" && pathname !== "/arrivals" && pathname !== "/departures" && pathname !== "/mappa-live" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
+        {pathname !== "/services" && pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/arrivals" && pathname !== "/departures" && pathname !== "/mappa-live" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Vista operativa</p>
@@ -1469,29 +1487,29 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 <span>Cruscotto</span>
               </Link>
             ) : null}
-            {authRole === "admin" || authRole === "supervisor" ? (
+            {canSeeTopbarNotifications ? (
               <Link
-                href="/settings/users"
+                href="/notifications"
                 className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition ${
-                  pendingAccessRequestCount > 0
+                  topbarNotificationCount > 0
                     ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
                 title={
-                  pendingAccessRequestCount > 0
-                    ? `${pendingAccessRequestCount} richieste accesso da approvare`
-                    : "Nessuna nuova richiesta accesso"
+                  topbarNotificationCount > 0
+                    ? `${topbarNotificationCount} notifiche operative da vedere`
+                    : "Nessuna nuova notifica operativa"
                 }
               >
                 <span className="relative inline-flex">
                   <HeaderBellIcon />
-                  {pendingAccessRequestCount > 0 ? (
+                  {topbarNotificationCount > 0 ? (
                     <span className="absolute -right-2 -top-2 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 py-0.5 text-[10px] font-semibold text-white">
-                      {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                      {topbarNotificationCount > 99 ? "99+" : topbarNotificationCount}
                     </span>
                   ) : null}
                 </span>
-                <span className="hidden sm:inline">Richieste agenzia</span>
+                <span className="hidden sm:inline">Notifiche</span>
               </Link>
             ) : null}
             <div className="flex flex-wrap items-center justify-end gap-2">
