@@ -201,14 +201,14 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
     : ["pickup", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"];
 
   const bodyRows = rows.map(({ alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hasPickupCell, pickupCellHtml, hotel, agency, cleanNote }) => {
-    const shouldShowStopBand = shouldRenderStop && !(input.direction === "arrival" && hasPickupCell);
+    const shouldShowStopBand = shouldRenderStop;
     const stopBand = shouldShowStopBand
       ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">▣</span><strong>${escapeHtml(stopCity)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
       : "";
     const cells = input.direction === "arrival"
       ? [
           stopTime,
-          shouldRenderStop ? pickupCellHtml : "",
+          "",
           alloc.pax_assigned,
           alloc.customer_name,
           alloc.customer_phone,
@@ -298,6 +298,7 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
       font-size: 9.8px;
       line-height: 1.16;
       vertical-align: middle;
+      text-align: center;
       overflow-wrap: break-word;
     }
     tbody tr.alt td { background: #f8fbff; }
@@ -307,6 +308,7 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
       font-size: 11px;
       font-weight: 700;
       padding: 5px 7px;
+      text-align: left;
     }
     .stop-row span:last-child { margin-left: 12px; color: #31577e; font-size: 9.5px; font-weight: 600; }
     .bus-icon { color: ${BRAND_ORANGE}; margin-right: 8px; }
