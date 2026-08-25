@@ -262,6 +262,7 @@ export default function BusNetworkPage() {
 
   // Distribuzione Ischia
   const [dragDistAllocId, setDragDistAllocId] = useState<string | null>(null);
+  const [dragDistHotelGroup, setDragDistHotelGroup] = useState<{ busId: string; hotelName: string; allocationIds: string[] } | null>(null);
   const [dragOverDistBusId, setDragOverDistBusId] = useState<string | null>(null);
   const [dragReorderTargetId, setDragReorderTargetId] = useState<string | null>(null);
   const [editDistBusId, setEditDistBusId] = useState<string | null>(null);
@@ -497,6 +498,13 @@ export default function BusNetworkPage() {
       .filter((bus) => bus.date === date && (bus.bus_line_id === selectedLine?.id || !bus.bus_line_id))
       .sort((a, b) => a.sort_order - b.sort_order),
     [payload.pozzuoli_dist_buses, date, selectedLine]
+  );
+
+  const arrivalDistributionBuses = useMemo(
+    () => payload.ischia_dist_buses
+      .filter((bus) => bus.date === date && (bus.bus_line_id === selectedLine?.id || !bus.bus_line_id))
+      .sort((a, b) => a.sort_order - b.sort_order),
+    [payload.ischia_dist_buses, date, selectedLine]
   );
 
   // Ferry config della linea selezionata (per colorare le bus card)
@@ -1440,6 +1448,228 @@ export default function BusNetworkPage() {
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }, [returnCollectionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
 
+  const exportArrivalDistributionExcel = useCallback(async () => {
+    if (arrivalDistributionBuses.length === 0) return;
+    const { downloadWorkbook, fetchLogoBase64, addLogo } = await import("@/lib/bus-export-excel");
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "ITS - Ischia Transfer Service";
+    const logo = await fetchLogoBase64();
+    const usedNames = new Set<string>();
+
+    for (const bus of arrivalDistributionBuses) {
+      const allocations = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id));
+      let sheetName = bus.label.replace(/[\\/*?:[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 31) || "Distribuzione";
+      if (usedNames.has(sheetName)) sheetName = `${sheetName.slice(0, 27)} ${usedNames.size + 1}`.slice(0, 31);
+      usedNames.add(sheetName);
+      const ws = wb.addWorksheet(sheetName);
+      ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+      ws.columns = [
+        { width: 28 },
+        { width: 8 },
+        { width: 32 },
+        { width: 18 },
+        { width: 24 },
+        { width: 18 },
+      ];
+
+      ws.getRow(1).height = 36;
+      if (logo) addLogo(wb, ws, logo);
+      ws.mergeCells(1, 3, 1, 6);
+      const brandCell = ws.getCell(1, 3);
+      brandCell.value = "ISCHIA TRANSFER SERVICE";
+      brandCell.font = { bold: true, size: 12, color: { argb: "FF0B2D4F" } };
+      brandCell.alignment = { horizontal: "right", vertical: "middle" };
+      ws.mergeCells(2, 1, 2, 6);
+      const title = ws.getCell(2, 1);
+      title.value = `DISTRIBUZIONE ISCHIA — ${bus.label}`;
+      title.font = { bold: true, size: 16, color: { argb: "FF1E3A5F" } };
+      title.alignment = { horizontal: "center", vertical: "middle" };
+      title.border = {
+        top: { style: "medium", color: { argb: "FF1E3A5F" } },
+        bottom: { style: "medium", color: { argb: "FF1E3A5F" } },
+      };
+      ws.mergeCells(3, 1, 3, 6);
+      const subtitle = ws.getCell(3, 1);
+      subtitle.value = `${selectedLine?.name ?? "Linea Bus"} · ${fmtDate(date)} · ${bus.zone || "Distribuzione"}`;
+      subtitle.font = { bold: true, size: 11, color: { argb: "FF0B56A4" } };
+      subtitle.alignment = { horizontal: "center", vertical: "middle" };
+      ws.addRow([]);
+
+      const header = ws.addRow(["Hotel / Comune", "Pax", "Nominativo", "Cell", "Zona", "Note"]);
+      header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      header.eachCell((cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF082452" } };
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFB9C4D0" } },
+          left: { style: "thin", color: { argb: "FFB9C4D0" } },
+          bottom: { style: "thin", color: { argb: "FFB9C4D0" } },
+          right: { style: "thin", color: { argb: "FFB9C4D0" } },
+        };
+      });
+
+      let totalPax = 0;
+      let previousHotel = "";
+      for (const [index, allocation] of allocations.entries()) {
+        const hotel = allocation.hotel_name || "Hotel N/D";
+        const isNewHotel = hotel !== previousHotel;
+        previousHotel = hotel;
+        const hotelPax = allocations
+          .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
+          .reduce((sum, item) => sum + item.pax_assigned, 0);
+        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        const row = ws.addRow([
+          isNewHotel ? hotel : "",
+          isNewHotel ? hotelPax : "",
+          allocation.customer_name,
+          phone && phone !== "N/D" ? phone : "",
+          allocation.hotel_zone || bus.zone || "",
+          "",
+        ]);
+        row.font = { size: 10 };
+        row.eachCell((cell) => {
+          cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFB9C4D0" } },
+            left: { style: "thin", color: { argb: "FFB9C4D0" } },
+            bottom: { style: "thin", color: { argb: "FFB9C4D0" } },
+            right: { style: "thin", color: { argb: "FFB9C4D0" } },
+          };
+          if (index % 2 === 1) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FBFF" } };
+        });
+        row.getCell(1).font = { bold: isNewHotel, size: 10, color: { argb: "FF082452" } };
+        row.getCell(2).font = { bold: isNewHotel, size: 10, color: { argb: "FF047857" } };
+        totalPax += allocation.pax_assigned;
+      }
+
+      ws.addRow([]);
+      const totalRow = ws.addRow(["TOTALE", totalPax, "", "", "", ""]);
+      totalRow.font = { bold: true, size: 12, color: { argb: "FF082452" } };
+      totalRow.eachCell((cell) => {
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFB9C4D0" } },
+          left: { style: "thin", color: { argb: "FFB9C4D0" } },
+          bottom: { style: "thin", color: { argb: "FFB9C4D0" } },
+          right: { style: "thin", color: { argb: "FFB9C4D0" } },
+        };
+      });
+      ws.addRow([]);
+      const driverRow = ws.addRow([`AUTISTA : ${bus.driver_name || "N/D"}  ${bus.driver_phone || ""}`.trim()]);
+      driverRow.font = { bold: true, size: 11, color: { argb: "FF082452" } };
+      ws.mergeCells(driverRow.number, 1, driverRow.number, 6);
+    }
+
+    await downloadWorkbook(wb, `distribuzione_ischia_${selectedLine?.code ?? "linea"}_${date}.xlsx`);
+  }, [arrivalDistributionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+
+  const printArrivalDistribution = useCallback(async () => {
+    if (arrivalDistributionBuses.length === 0) return;
+    const { fetchLogoBase64 } = await import("@/lib/bus-export-excel");
+    const logo = await fetchLogoBase64();
+    const totalAllPax = arrivalDistributionBuses.reduce((sum, bus) => {
+      const allocations = payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id);
+      return sum + allocations.reduce((inner, allocation) => inner + allocation.pax_assigned, 0);
+    }, 0);
+    const busSections = arrivalDistributionBuses.map((bus) => {
+      const allocations = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id));
+      const totalPax = allocations.reduce((sum, allocation) => sum + allocation.pax_assigned, 0);
+      let previousHotel = "";
+      const rows = allocations.map((allocation, index) => {
+        const hotel = allocation.hotel_name || "Hotel N/D";
+        const isNewHotel = hotel !== previousHotel;
+        previousHotel = hotel;
+        const hotelPax = allocations
+          .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
+          .reduce((sum, item) => sum + item.pax_assigned, 0);
+        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        return `<tr class="${index % 2 === 1 ? "alt" : ""}">
+          <td class="hotel">${isNewHotel ? `<strong>${escapeHtml(hotel)}</strong><span>${hotelPax} pax</span>` : ""}</td>
+          <td class="center">${escapeHtml(allocation.pax_assigned)}</td>
+          <td>${escapeHtml(allocation.customer_name)}</td>
+          <td>${escapeHtml(phone && phone !== "N/D" ? phone : "")}</td>
+          <td>${escapeHtml(allocation.hotel_zone || bus.zone || "")}</td>
+        </tr>`;
+      }).join("");
+      return `<section class="bus-section">
+        <div class="bus-title">
+          <div><strong>${escapeHtml(bus.label)}</strong><span>${escapeHtml(bus.zone || "Distribuzione")}</span></div>
+          <div class="bus-meta"><span>${totalPax} pax</span><span>Autista: ${escapeHtml(bus.driver_name || "N/D")}</span></div>
+        </div>
+        <table>
+          <thead><tr><th>hotel / comune</th><th>pax</th><th>nominativo</th><th>cell</th><th>zona</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="5" class="center">Nessun passeggero assegnato</td></tr>`}</tbody>
+        </table>
+      </section>`;
+    }).join("");
+    const html = `<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>Distribuzione Ischia - ${escapeHtml(selectedLine?.name ?? "Linea Bus")}</title>
+  <style>
+    @page { size: A4 landscape; margin: 7mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef3f8; color: #071733; font-family: Arial, Helvetica, sans-serif; }
+    .screen-actions { position: sticky; top: 0; display: flex; justify-content: center; gap: 12px; padding: 12px; }
+    .screen-actions button { border: 0; border-radius: 10px; padding: 10px 18px; color: white; background: linear-gradient(135deg, #2563eb, #5b21b6); font-weight: 800; cursor: pointer; }
+    .page { width: 285mm; min-height: 198mm; margin: 0 auto; background: white; border: 1px solid #d9e2ec; padding: 7mm; }
+    .top { display: grid; grid-template-columns: 45mm 1fr 55mm; align-items: center; gap: 6mm; border-bottom: 2px solid #082452; padding-bottom: 4mm; }
+    .logo { width: 32mm; height: auto; display: block; }
+    h1 { margin: 0; text-align: center; color: #082452; font-size: 27px; line-height: 1; letter-spacing: 0.12em; }
+    .subtitle { margin-top: 4px; text-align: center; color: #0b56a4; font-size: 12px; font-weight: 800; }
+    .chip { border: 1.5px solid #0b56a4; border-radius: 6px; padding: 6px 8px; color: #082452; font-size: 12px; font-weight: 800; text-align: center; }
+    .chip strong { color: #079669; font-size: 18px; }
+    .bus-section { margin-top: 5mm; break-inside: avoid; }
+    .bus-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #b9c4d0; border-bottom: 0; background: #eef6ff; padding: 7px 9px; color: #082452; }
+    .bus-title strong { display: block; font-size: 14px; }
+    .bus-title span { color: #31577e; font-size: 10.5px; font-weight: 700; }
+    .bus-meta { display: flex; gap: 8px; align-items: center; }
+    .bus-meta span { border-radius: 999px; background: white; padding: 4px 8px; color: #047857; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th { background: linear-gradient(180deg, #0b4a91, #082452); color: white; border: 1px solid #8bb1d8; padding: 5px 4px; font-size: 10.5px; text-align: center; text-transform: lowercase; }
+    td { border: 1px solid #b9c4d0; padding: 4px 5px; font-size: 10px; line-height: 1.18; vertical-align: middle; overflow-wrap: anywhere; }
+    tr.alt td { background: #f8fbff; }
+    .hotel { text-align: center; color: #082452; }
+    .hotel strong { display: block; text-transform: uppercase; }
+    .hotel span { display: inline-block; margin-top: 2px; border-radius: 999px; background: #dcfce7; color: #047857; padding: 2px 7px; font-size: 9.5px; font-weight: 800; }
+    .center { text-align: center; font-weight: 800; }
+    @media print {
+      body { background: white; }
+      .screen-actions { display: none; }
+      .page { width: auto; min-height: auto; border: 0; padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="screen-actions"><button onclick="window.print()">Stampa / Salva PDF</button></div>
+  <main class="page">
+    <header class="top">
+      <div>${logo ? `<img class="logo" src="${logo}" alt="Ischia Transfer Service" />` : ""}</div>
+      <div>
+        <h1>DISTRIBUZIONE ISCHIA</h1>
+        <div class="subtitle">${escapeHtml(selectedLine?.name ?? "Linea Bus")} · ${escapeHtml(fmtDate(date))}</div>
+      </div>
+      <div class="chip">Totale passeggeri: <strong>${totalAllPax}</strong></div>
+    </header>
+    ${busSections}
+  </main>
+</body>
+</html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank", "width=1280,height=900");
+    if (!win) {
+      URL.revokeObjectURL(url);
+      setMessage("Popup bloccato: abilita i popup per aprire la stampa distribuzione.");
+      return;
+    }
+    win.focus();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, [arrivalDistributionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+
   const moveReturnCollectionHotelGroup = useCallback(async (
     busId: string,
     hotelName: string,
@@ -1474,6 +1704,54 @@ export default function BusNetworkPage() {
       });
     }
   }, [payload.ischia_dist_allocations, post]);
+
+  const moveDistHotelGroup = useCallback(async (
+    busId: string,
+    hotelName: string,
+    direction: "up" | "down"
+  ) => {
+    const allocations = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === busId));
+    const groups: Array<{ hotelName: string; allocations: IschiaDistAllocation[] }> = [];
+    for (const allocation of allocations) {
+      const currentHotelName = allocation.hotel_name || "Hotel N/D";
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup?.hotelName === currentHotelName) {
+        lastGroup.allocations.push(allocation);
+      } else {
+        groups.push({ hotelName: currentHotelName, allocations: [allocation] });
+      }
+    }
+
+    const groupIndex = groups.findIndex((group) => group.hotelName === hotelName);
+    if (groupIndex === -1) return;
+    if (direction === "up" && groupIndex === 0) return;
+    if (direction === "down" && groupIndex === groups.length - 1) return;
+
+    const groupToMove = groups[groupIndex];
+    const beforeAllocationId = direction === "up"
+      ? groups[groupIndex - 1]?.allocations[0]?.id ?? null
+      : groups[groupIndex + 2]?.allocations[0]?.id ?? null;
+
+    for (const allocation of groupToMove.allocations) {
+      await post("reorder_dist_alloc", {
+        allocation_id: allocation.id,
+        before_allocation_id: beforeAllocationId,
+      });
+    }
+  }, [payload.ischia_dist_allocations, post]);
+
+  const moveDistHotelGroupBefore = useCallback(async (
+    draggedGroup: { busId: string; hotelName: string; allocationIds: string[] },
+    targetAllocationId: string
+  ) => {
+    if (draggedGroup.allocationIds.includes(targetAllocationId)) return;
+    for (const allocationId of draggedGroup.allocationIds) {
+      await post("reorder_dist_alloc", {
+        allocation_id: allocationId,
+        before_allocation_id: targetAllocationId,
+      });
+    }
+  }, [post]);
 
   const saveDriver = useCallback(async (unitId: string) => {
     await post("update_driver", {
@@ -2764,32 +3042,48 @@ export default function BusNetworkPage() {
                           : "Tutti gli arrivi del giorno smistati per zona"}
                       </span>
                     </div>
-                    <button
-                      onClick={() => {
-                        const hasExisting = payload.ischia_dist_buses.some(b => b.date === date);
-                        if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
-                        setSmistamentoConfirm(false);
-                        void post("smista_ischia", {
-                          date,
-                          direction: "arrival",
-                          bus_unit_ids: smistamentoBusUnitIds,
-                        });
-                      }}
-                      disabled={saving}
-                      className={`flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 hover:bg-rose-700" : "bg-violet-600 hover:bg-violet-700"}`}>
-                      {smistamentoConfirm ? "⚠ Conferma (rigenera)" : smistamentoBusUnitIds.length > 0 ? `⚡ Smista ${smistamentoBusUnitIds.length} bus` : "⚡ Smista per zona"}
-                    </button>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {arrivalDistributionBuses.length > 0 && (
+                        <>
+                          <button
+                            onClick={() => void printArrivalDistribution()}
+                            disabled={saving}
+                            className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-40">
+                            🖨 Stampa distribuzione
+                          </button>
+                          <button
+                            onClick={() => void exportArrivalDistributionExcel()}
+                            disabled={saving}
+                            className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">
+                            📥 Excel distribuzione
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => {
+                          const hasExisting = payload.ischia_dist_buses.some(b => b.date === date);
+                          if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
+                          setSmistamentoConfirm(false);
+                          void post("smista_ischia", {
+                            date,
+                            direction: "arrival",
+                            bus_unit_ids: smistamentoBusUnitIds,
+                          });
+                        }}
+                        disabled={saving}
+                        className={`flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 hover:bg-rose-700" : "bg-violet-600 hover:bg-violet-700"}`}>
+                        {smistamentoConfirm ? "⚠ Conferma (rigenera)" : smistamentoBusUnitIds.length > 0 ? `⚡ Smista ${smistamentoBusUnitIds.length} bus` : "⚡ Smista per zona"}
+                      </button>
+                    </div>
                   </div>
 
-                  {payload.ischia_dist_buses.filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id)).length === 0 ? (
+                  {arrivalDistributionBuses.length === 0 ? (
                     <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
                       Nessun bus distribuzione per questa linea. Clicca <strong>⚡ Smista per zona</strong> per generarli automaticamente.
                     </div>
                   ) : (() => {
                     // Mostra solo i bus della linea selezionata (ogni linea ha il suo traghetto)
-                    const busesForDate = payload.ischia_dist_buses
-                      .filter((b) => b.date === date && (b.bus_line_id === selectedLine?.id || !b.bus_line_id))
-                      .sort((a, b) => a.sort_order - b.sort_order);
+                    const busesForDate = arrivalDistributionBuses;
 
                     // Costruisce mappa bus_line_id → ferry config (tramite lines)
                     const lineToConfig = new Map<string, BusLineFerryConfig>();
@@ -2841,7 +3135,19 @@ export default function BusNetworkPage() {
                           )}
                     <div className="flex gap-4 overflow-x-auto pb-2">
                       {group.buses.map((bus) => {
-                          const busAllocs = payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id);
+                          const busAllocs = sortDistAllocations(payload.ischia_dist_allocations.filter((a) => a.dist_bus_id === bus.id));
+                          const hotelGroups = busAllocs.reduce<Array<{ hotelName: string; pax: number; allocationIds: string[]; firstAllocationId: string }>>((groups, allocation) => {
+                            const hotelName = allocation.hotel_name || "Hotel N/D";
+                            const lastGroup = groups[groups.length - 1];
+                            if (lastGroup?.hotelName === hotelName) {
+                              lastGroup.pax += allocation.pax_assigned;
+                              lastGroup.allocationIds.push(allocation.id);
+                            } else {
+                              groups.push({ hotelName, pax: allocation.pax_assigned, allocationIds: [allocation.id], firstAllocationId: allocation.id });
+                            }
+                            return groups;
+                          }, []);
+                          const hotelGroupIndexByName = new Map(hotelGroups.map((hotelGroup, index) => [hotelGroup.hotelName, index]));
                           const totalPax = busAllocs.reduce((s, a) => s + a.pax_assigned, 0);
                           const pct = bus.capacity > 0 ? Math.round((totalPax / bus.capacity) * 100) : 0;
                           const isDragOver = dragOverDistBusId === bus.id;
@@ -2867,14 +3173,14 @@ export default function BusNetworkPage() {
                                 }
                                 setDragDistAllocId(null);
                               }}
-                              className={`flex w-56 flex-shrink-0 flex-col rounded-2xl border bg-white shadow-sm transition-colors ${isExclusive ? "border-yellow-400 ring-1 ring-yellow-200" : isDragOver ? "border-violet-400 bg-violet-50" : "border-slate-200"}`}>
+                              className={`flex w-72 flex-shrink-0 flex-col rounded-2xl border bg-white shadow-sm transition-colors ${isExclusive ? "border-yellow-400 ring-1 ring-yellow-200" : isDragOver ? "border-violet-400 bg-violet-50" : "border-slate-200"}`}>
                               {/* Header bus — colorato con il colore della linea se disponibile */}
                               <div
                                 className="rounded-t-2xl px-4 py-3 text-white"
                                 style={{ backgroundColor: group.config?.line_color ?? "#1e293b" }}>
                                 <div className="flex items-center justify-between">
                                   <div className="min-w-0">
-                                    <span className="font-bold text-sm truncate block max-w-[140px]">{bus.label}</span>
+                                    <span className="font-bold text-sm truncate block max-w-[190px]">{bus.label}</span>
                                     {isExclusive && (
                                       <span className="rounded-full bg-yellow-400/30 px-1.5 py-0.5 text-[9px] font-bold uppercase text-yellow-200">🔒 Riservato</span>
                                     )}
@@ -3008,35 +3314,91 @@ export default function BusNetworkPage() {
                               </div>
 
                               {/* Passeggeri */}
-                              <div className="flex-1 space-y-1 overflow-y-auto p-2" style={{ maxHeight: 320 }}>
+                              <div className="flex-1 space-y-1 overflow-y-auto p-2" style={{ maxHeight: 680 }}>
                                 {busAllocs.length === 0 && (
                                   <p className="py-4 text-center text-xs text-slate-300">Trascina qui i passeggeri</p>
                                 )}
-                                {[...busAllocs]
-                                  .sort((a, b) => {
-                                    const stopDelta = (a.stop_order ?? 0) - (b.stop_order ?? 0);
-                                    if (stopDelta !== 0) return stopDelta;
-                                    const hotelDelta = (a.hotel_name ?? "").localeCompare(b.hotel_name ?? "", "it");
-                                    if (hotelDelta !== 0) return hotelDelta;
-                                    return a.customer_name.localeCompare(b.customer_name, "it");
-                                  })
+                                {busAllocs
                                   .map((alloc, index, sortedAllocs) => {
                                     const hotelName = alloc.hotel_name || "Hotel N/D";
                                     const previous = sortedAllocs[index - 1];
                                     const isNewHotelGroup = !previous || (previous.hotel_name || "Hotel N/D") !== hotelName;
-                                    const hotelPax = sortedAllocs
-                                      .filter((item) => (item.hotel_name || "Hotel N/D") === hotelName)
-                                      .reduce((sum, item) => sum + item.pax_assigned, 0);
+                                    const hotelGroupIndex = hotelGroupIndexByName.get(hotelName) ?? 0;
+                                    const hotelGroup = hotelGroups[hotelGroupIndex];
+                                    const hotelPax = hotelGroup?.pax ?? alloc.pax_assigned;
+                                    const customerPhone = serviceById.get(alloc.service_id)?.phone_display;
                                     return (
                                   <div key={alloc.id}>
                                     {isNewHotelGroup && (
-                                      <div className="mb-1 mt-2 flex items-center justify-between rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-[10px] font-black uppercase text-emerald-900 first:mt-0">
-                                        <span className="truncate">{hotelName}</span>
-                                        <span className="ml-2 shrink-0 rounded-full bg-emerald-600 px-2 py-0.5 text-white">{hotelPax} pax</span>
+                                      <div
+                                        draggable
+                                        onDragStart={() => {
+                                          if (!hotelGroup) return;
+                                          setDragDistHotelGroup({ busId: bus.id, hotelName, allocationIds: hotelGroup.allocationIds });
+                                          setDragDistAllocId(null);
+                                          setDragReorderTargetId(null);
+                                        }}
+                                        onDragEnd={() => {
+                                          setDragDistHotelGroup(null);
+                                          setDragReorderTargetId(null);
+                                        }}
+                                        onDragOver={(event) => {
+                                          if (!dragDistHotelGroup || dragDistHotelGroup.busId !== bus.id || dragDistHotelGroup.hotelName === hotelName) return;
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          if (hotelGroup?.firstAllocationId) setDragReorderTargetId(hotelGroup.firstAllocationId);
+                                          setDragOverDistBusId(null);
+                                        }}
+                                        onDrop={(event) => {
+                                          if (!dragDistHotelGroup || dragDistHotelGroup.busId !== bus.id || !hotelGroup?.firstAllocationId) return;
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void moveDistHotelGroupBefore(dragDistHotelGroup, hotelGroup.firstAllocationId);
+                                          setDragDistHotelGroup(null);
+                                          setDragReorderTargetId(null);
+                                        }}
+                                        title={`${hotelName} · ${hotelPax} pax`}
+                                        className={`mb-1 mt-2 cursor-grab rounded-lg border px-2 py-1.5 text-[10px] font-black uppercase first:mt-0 ${
+                                          dragDistHotelGroup?.busId === bus.id && dragDistHotelGroup.hotelName === hotelName
+                                            ? "border-violet-300 bg-violet-50 text-violet-900 opacity-60"
+                                            : "border-emerald-100 bg-emerald-50 text-emerald-900"
+                                        }`}
+                                      >
+                                        <span className="block whitespace-normal break-words leading-tight">{hotelName}</span>
+                                        <div className="mt-1 flex items-center gap-1">
+                                          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-white">{hotelPax} pax</span>
+                                          <button
+                                            type="button"
+                                            title="Sposta albergo su"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              void moveDistHotelGroup(bus.id, hotelName, "up");
+                                            }}
+                                            disabled={saving || hotelGroupIndex === 0}
+                                            className="flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-white text-[11px] text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-30"
+                                          >
+                                            ↑
+                                          </button>
+                                          <button
+                                            type="button"
+                                            title="Sposta albergo giù"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              void moveDistHotelGroup(bus.id, hotelName, "down");
+                                            }}
+                                            disabled={saving || hotelGroupIndex >= hotelGroups.length - 1}
+                                            className="flex h-5 w-5 items-center justify-center rounded-full border border-emerald-200 bg-white text-[11px] text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-30"
+                                          >
+                                            ↓
+                                          </button>
+                                        </div>
                                       </div>
                                     )}
                                     {/* Indicatore visivo di inserimento sopra questa card */}
-                                    {dragReorderTargetId === alloc.id && dragDistAllocId && busAllocs.some(a => a.id === dragDistAllocId) && (
+                                    {dragReorderTargetId === alloc.id && (
+                                      (dragDistAllocId && busAllocs.some(a => a.id === dragDistAllocId)) ||
+                                      (dragDistHotelGroup?.busId === bus.id && dragDistHotelGroup.hotelName !== hotelName)
+                                    ) && (
                                       <div className="h-0.5 w-full rounded-full bg-violet-500 mb-1" />
                                     )}
                                     <div
@@ -3069,21 +3431,26 @@ export default function BusNetworkPage() {
                                         // Se da bus diverso: NON stopPropagation → gestisce il bus container
                                       }}
                                       className={`cursor-grab rounded-lg border px-2 py-1.5 text-xs transition-opacity ${dragDistAllocId === alloc.id ? "opacity-40" : "border-slate-200 bg-slate-50 hover:border-violet-200 hover:bg-violet-50"}`}>
-                                      <div className="flex items-center justify-between gap-1">
-                                        <div className="flex items-center gap-1 min-w-0">
-                                          <span className="shrink-0 rounded bg-slate-200 px-1 text-[9px] font-bold text-slate-500">{(alloc.stop_order ?? 0) + 1}</span>
-                                          <span className="font-semibold uppercase text-slate-800 truncate">{alloc.customer_name}</span>
+                                      <div className="flex items-start justify-between gap-1">
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex min-w-0 items-center gap-1">
+                                            <span className="shrink-0 rounded bg-slate-200 px-1 text-[9px] font-bold text-slate-500">{(alloc.stop_order ?? 0) + 1}</span>
+                                            <span className="truncate font-semibold uppercase text-slate-800">{alloc.customer_name}</span>
+                                          </div>
+                                          {customerPhone && customerPhone !== "N/D" && (
+                                            <span className="mt-0.5 block truncate pl-6 text-[10px] text-slate-400">☎ {customerPhone}</span>
+                                          )}
                                         </div>
                                         <span className="shrink-0 rounded-full bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600">{alloc.pax_assigned}</span>
                                       </div>
-                                      <div className="mt-0.5 flex items-center gap-1">
-                                        <span className={`truncate uppercase ${alloc.hotel_name === "Hotel N/D" ? "text-rose-400 font-medium" : "text-slate-400"}`}>{alloc.hotel_name}</span>
-                                        {alloc.hotel_name === "Hotel N/D" && (
+                                      {alloc.hotel_name === "Hotel N/D" && (
+                                        <div className="mt-0.5 flex items-center gap-1">
+                                          <span className="truncate font-medium uppercase text-rose-400">{alloc.hotel_name}</span>
                                           <button
                                             onClick={() => { setEditHotelAllocId(alloc.id); setHotelSearchQuery(""); setNewHotelForm(null); }}
                                             className="shrink-0 rounded px-1 text-[10px] text-rose-500 hover:bg-rose-50">✏</button>
-                                        )}
-                                      </div>
+                                        </div>
+                                      )}
                                     </div>
                                     {/* Hotel edit inline */}
                                     {editHotelAllocId === alloc.id && (() => {
