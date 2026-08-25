@@ -13,7 +13,7 @@
 
 import { cleanExtractedPdfText } from "@/lib/server/pdf-text-cleaning";
 
-const MODEL = "claude-haiku-4-5-20251001";
+export const MODEL = "claude-haiku-4-5-20251001";
 
 // ─── Prompt di sistema ───────────────────────────────────────────────────────
 
@@ -256,12 +256,39 @@ export type ClaudeFormState = {
   tipo_barca_ritorno: string;
 };
 
+export type HaikuUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
 export type HaikuExtractResult = {
   agency: string;
   form: ClaudeFormState;
   rawJson: Record<string, unknown>;
   textMode: boolean; // true = testo estratto, false = PDF base64
+  usage: HaikuUsage; // somma dei token consumati da tutte le chiamate (1 o 2 in caso di correzione agenzia)
 };
+
+/** Errore di estrazione che porta con sé i token eventualmente già consumati (per il logging costi anche sui fallimenti). */
+export class HaikuExtractError extends Error {
+  usage: HaikuUsage;
+  constructor(message: string, usage: HaikuUsage = { inputTokens: 0, outputTokens: 0 }) {
+    super(message);
+    this.name = "HaikuExtractError";
+    this.usage = usage;
+  }
+}
+
+function addUsage(a: HaikuUsage, b: HaikuUsage): HaikuUsage {
+  return { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens };
+}
+
+function usageFromResponse(resData: { usage?: { input_tokens?: number; output_tokens?: number } }): HaikuUsage {
+  return {
+    inputTokens: resData.usage?.input_tokens ?? 0,
+    outputTokens: resData.usage?.output_tokens ?? 0
+  };
+}
 
 type ClaudeJson = {
   agency_key?: string | null;
@@ -446,19 +473,25 @@ export async function extractWithHaiku(
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Errore Haiku: ${errText}`);
+    throw new HaikuExtractError(`Errore Haiku: ${errText}`);
   }
 
-  const resData = (await res.json()) as { content?: Array<{ text?: string }> };
+  const resData = (await res.json()) as { content?: Array<{ text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
+  const usage = usageFromResponse(resData);
   let rawText = resData.content?.map((b) => b.text ?? "").join("") ?? "";
   rawText = rawText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
   const match = rawText.match(/\{[\s\S]*\}/);
 
   if (!match) {
-    throw new Error("Haiku non ha restituito JSON valido.");
+    throw new HaikuExtractError("Haiku non ha restituito JSON valido.", usage);
   }
 
-  const rawJson = JSON.parse(match[0]) as ClaudeJson & { agency_key?: string };
+  let rawJson: ClaudeJson & { agency_key?: string };
+  try {
+    rawJson = JSON.parse(match[0]) as ClaudeJson & { agency_key?: string };
+  } catch {
+    throw new HaikuExtractError("Haiku non ha restituito JSON valido.", usage);
+  }
 
   // agency_key dal JSON ha priorità sulla regex se è un'agenzia nota
   const jsonAgencyKey = rawJson.agency_key ?? "";
@@ -491,19 +524,40 @@ export async function extractWithHaiku(
       messages: [{ role: "user", content: contentParts2 }]
     });
     if (res2.ok) {
-      const resData2 = (await res2.json()) as { content?: Array<{ text?: string }> };
+      const resData2 = (await res2.json()) as { content?: Array<{ text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
+      const usage2 = usageFromResponse(resData2);
       let rawText2 = resData2.content?.map((b) => b.text ?? "").join("") ?? "";
       rawText2 = rawText2.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
       const match2 = rawText2.match(/\{[\s\S]*\}/);
       if (match2) {
-        const rawJson2 = JSON.parse(match2[0]) as ClaudeJson & { agency_key?: string };
-        return {
-          agency: finalAgency,
-          form: jsonToForm(rawJson2, finalAgency),
-          rawJson: rawJson2 as Record<string, unknown>,
-          textMode
-        };
+        try {
+          const rawJson2 = JSON.parse(match2[0]) as ClaudeJson & { agency_key?: string };
+          return {
+            agency: finalAgency,
+            form: jsonToForm(rawJson2, finalAgency),
+            rawJson: rawJson2 as Record<string, unknown>,
+            textMode,
+            usage: addUsage(usage, usage2)
+          };
+        } catch {
+          // JSON del secondo passaggio non valido — ricadi sul risultato del primo passaggio,
+          // ma conserva comunque i token consumati anche dal secondo tentativo per il costo.
+          return {
+            agency: finalAgency,
+            form: jsonToForm(rawJson, finalAgency),
+            rawJson: rawJson as Record<string, unknown>,
+            textMode,
+            usage: addUsage(usage, usage2)
+          };
+        }
       }
+      return {
+        agency: finalAgency,
+        form: jsonToForm(rawJson, finalAgency),
+        rawJson: rawJson as Record<string, unknown>,
+        textMode,
+        usage: addUsage(usage, usage2)
+      };
     }
   }
 
@@ -513,6 +567,7 @@ export async function extractWithHaiku(
     agency: finalAgency,
     form,
     rawJson: rawJson as Record<string, unknown>,
-    textMode
+    textMode,
+    usage
   };
 }

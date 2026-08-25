@@ -13,8 +13,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { extractWithHaiku } from "@/lib/server/pdf-extract-haiku";
+import { extractWithHaiku, HaikuExtractError, MODEL as HAIKU_MODEL } from "@/lib/server/pdf-extract-haiku";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { logAiUsage } from "@/lib/server/ai-usage-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -49,6 +50,14 @@ export async function POST(request: NextRequest) {
   try {
     const result = await extractWithHaiku(pdf_base64, email_body, email_subject);
 
+    await logAiUsage({
+      tenantId: auth.membership.tenant_id,
+      source: "manual",
+      model: HAIKU_MODEL,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens
+    });
+
     // Per servizi bus: usa sempre l'orario dal catalogo fermate (è la fonte autoritativa)
     const form = { ...result.form };
     if (form.tipo_servizio === "bus_city_hotel" && form.citta_partenza) {
@@ -67,6 +76,16 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Errore sconosciuto.";
+    const usage = err instanceof HaikuExtractError ? err.usage : { inputTokens: 0, outputTokens: 0 };
+    await logAiUsage({
+      tenantId: auth.membership.tenant_id,
+      source: "manual",
+      model: HAIKU_MODEL,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      failed: true,
+      errorMessage: msg.slice(0, 2000)
+    });
     return NextResponse.json({ ok: false, error: msg }, { status: 502 });
   }
 }

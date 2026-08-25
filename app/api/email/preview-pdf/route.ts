@@ -2,8 +2,10 @@ import { Buffer } from "node:buffer";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { claudeEmailExtract } from "@/lib/server/claude-email-extract";
+import { HaikuExtractError, MODEL as HAIKU_MODEL } from "@/lib/server/pdf-extract-haiku";
 import { isPdfAttachment } from "@/lib/server/pdf-text";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { logAiUsage } from "@/lib/server/ai-usage-log";
 
 export const runtime = "nodejs";
 
@@ -38,6 +40,14 @@ export async function POST(request: NextRequest) {
   try {
     const result = await claudeEmailExtract(pdfBase64, bodyText, subject);
 
+    await logAiUsage({
+      tenantId: auth.membership.tenant_id,
+      source: "manual",
+      model: HAIKU_MODEL,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens
+    });
+
     // Per servizi bus: usa l'orario dal catalogo fermate (fonte autoritativa)
     const enrichedForm = { ...result.form };
     if (enrichedForm.tipo_servizio === "bus_city_hotel" && enrichedForm.citta_partenza) {
@@ -61,6 +71,16 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Errore durante l'analisi del PDF.";
     console.error("[preview-pdf] errore Claude:", message);
+    const usage = err instanceof HaikuExtractError ? err.usage : { inputTokens: 0, outputTokens: 0 };
+    await logAiUsage({
+      tenantId: auth.membership.tenant_id,
+      source: "manual",
+      model: HAIKU_MODEL,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      failed: true,
+      errorMessage: message.slice(0, 2000)
+    });
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

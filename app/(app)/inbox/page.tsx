@@ -327,6 +327,11 @@ export default function InboxPage() {
   const [hardDeleteNote, setHardDeleteNote] = useState("");
   const [hardDeleteConfirmStep, setHardDeleteConfirmStep] = useState<1 | 2>(1);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [aiUsageStats, setAiUsageStats] = useState<{
+    month_cost_usd: number;
+    month_cost_eur: number;
+    last_import: { cost_usd: number; cost_eur: number; failed: boolean; created_at: string } | null;
+  } | null>(null);
   const [emailsHasMore, setEmailsHasMore] = useState(false);
   const [loadingMoreEmails, setLoadingMoreEmails] = useState(false);
   const nextEmailPageRef = useRef(2);
@@ -423,6 +428,31 @@ export default function InboxPage() {
         setMessage(error instanceof Error ? error.message : "Errore caricamento inbox.");
       } finally {
         if (active) setHasLoadedInbox(true);
+      }
+
+      // Costo AI: caricamento separato e non bloccante, la card resta vuota se fallisce.
+      try {
+        const supabaseSession = await supabase.auth.getSession();
+        const token = supabaseSession.data.session?.access_token;
+        if (!token) return;
+        const response = await fetch("/api/ops/ai-usage-stats", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const body = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          month_cost_usd?: number;
+          month_cost_eur?: number;
+          last_import?: { cost_usd: number; cost_eur: number; failed: boolean; created_at: string } | null;
+        } | null;
+        if (active && response.ok && body?.ok) {
+          setAiUsageStats({
+            month_cost_usd: body.month_cost_usd ?? 0,
+            month_cost_eur: body.month_cost_eur ?? 0,
+            last_import: body.last_import ?? null
+          });
+        }
+      } catch {
+        // Non bloccante: se fallisce, la card costo AI resta nascosta.
       }
     };
     void boot();
@@ -990,6 +1020,41 @@ export default function InboxPage() {
           </article>
         ))}
       </div>
+
+      {aiUsageStats ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <article className="pms-panel flex items-center gap-3 p-4">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-xl font-bold text-indigo-700">🤖</span>
+            <div>
+              <p className="text-xs font-semibold text-slate-500">Costo AI mese corrente</p>
+              <p className="text-2xl font-extrabold leading-tight text-slate-950">
+                €{aiUsageStats.month_cost_eur.toFixed(2)}
+                <span className="ml-1.5 text-sm font-medium text-slate-400">(${aiUsageStats.month_cost_usd.toFixed(2)})</span>
+              </p>
+            </div>
+          </article>
+          <article className="pms-panel flex items-center gap-3 p-4">
+            <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-xl font-bold text-teal-700">📄</span>
+            <div>
+              <p className="text-xs font-semibold text-slate-500">Costo ultima importazione AI</p>
+              <p className="text-2xl font-extrabold leading-tight text-slate-950">
+                {aiUsageStats.last_import ? (
+                  aiUsageStats.last_import.failed ? (
+                    <span className="text-rose-600">Fallita</span>
+                  ) : (
+                    <>
+                      €{aiUsageStats.last_import.cost_eur.toFixed(4)}
+                      <span className="ml-1.5 text-sm font-medium text-slate-400">(${aiUsageStats.last_import.cost_usd.toFixed(4)})</span>
+                    </>
+                  )
+                ) : (
+                  "—"
+                )}
+              </p>
+            </div>
+          </article>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="min-w-0 flex-1">

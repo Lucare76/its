@@ -3,7 +3,7 @@
  * Re-export del modulo condiviso pdf-extract-haiku per compatibilità.
  */
 
-import { extractWithHaiku, type ClaudeFormState, type HaikuExtractResult } from "@/lib/server/pdf-extract-haiku";
+import { extractWithHaiku, type ClaudeFormState, type HaikuExtractResult, type HaikuUsage } from "@/lib/server/pdf-extract-haiku";
 
 export type { ClaudeFormState };
 
@@ -11,6 +11,7 @@ export type ClaudeEmailExtractResult = {
   agency: string;
   form: ClaudeFormState;
   rawJson: Record<string, unknown>;
+  usage: HaikuUsage;
 };
 
 export async function claudeEmailExtract(
@@ -22,6 +23,7 @@ export async function claudeEmailExtract(
   return {
     agency: result.agency,
     form: result.form,
-    rawJson: result.rawJson
+    rawJson: result.rawJson,
+    usage: result.usage
   };
 }

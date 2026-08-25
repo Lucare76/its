@@ -3,6 +3,8 @@ import { simpleParser } from "mailparser";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { isPdfAttachment } from "@/lib/server/pdf-text";
 import { claudeEmailExtract } from "@/lib/server/claude-email-extract";
+import { HaikuExtractError, MODEL as HAIKU_MODEL } from "@/lib/server/pdf-extract-haiku";
+import { logAiUsage, updateAiUsageImportId } from "@/lib/server/ai-usage-log";
 
 type OperationalImportAuth = {
   admin: SupabaseClient;
@@ -148,12 +150,30 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
           console.log(`[email-import] PDF trovato: ${firstPdfFilename}, avvio Claude...`);
           // ── Estrazione Claude AI ──────────────────────────────────────────
           let claudeResult: Awaited<ReturnType<typeof claudeEmailExtract>> | null = null;
+          let aiUsageLogId: string | null = null;
           try {
             claudeResult = await claudeEmailExtract(firstPdfBase64, bodyText, subject);
             console.log(`[email-import] Claude OK — agenzia: ${claudeResult.agency}, cliente: ${claudeResult.form.cliente_nome}`);
+            aiUsageLogId = await logAiUsage({
+              tenantId: auth.membership.tenant_id,
+              source: "imap",
+              model: HAIKU_MODEL,
+              inputTokens: claudeResult.usage.inputTokens,
+              outputTokens: claudeResult.usage.outputTokens
+            });
           } catch (err) {
             console.error(`[email-import] Claude errore:`, err);
             // Claude non disponibile — salva email senza estrazione
+            const usage = err instanceof HaikuExtractError ? err.usage : { inputTokens: 0, outputTokens: 0 };
+            await logAiUsage({
+              tenantId: auth.membership.tenant_id,
+              source: "imap",
+              model: HAIKU_MODEL,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              failed: true,
+              errorMessage: err instanceof Error ? err.message.slice(0, 2000) : "Unknown error"
+            });
           }
 
           // ── Controlla duplicati (numero_pratica nelle inbound_emails) ────
@@ -237,6 +257,9 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
           if (inboundData?.id) {
             console.log(`[email-import] Email salvata con ID: ${inboundData.id}`);
             draftsCreated += 1;
+            if (aiUsageLogId) {
+              await updateAiUsageImportId(aiUsageLogId, inboundData.id);
+            }
           } else {
             console.error(`[email-import] Errore salvataggio inbound_email`);
           }
