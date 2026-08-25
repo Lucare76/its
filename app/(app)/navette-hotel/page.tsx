@@ -10,7 +10,6 @@ type ShuttleGroup = {
   hotelId: string;
   hotelName: string;
   zone: string;
-  pax: number;
   services: Service[];
 };
 
@@ -277,10 +276,8 @@ export default function NavetteHotelPage() {
         hotelId: key,
         hotelName: hotelName(service, hotelsById),
         zone: hotelZone(service, hotelsById),
-        pax: 0,
         services: []
       };
-      current.pax += service.pax;
       current.services.push(service);
       map.set(key, current);
     });
@@ -292,7 +289,6 @@ export default function NavetteHotelPage() {
     const draft = drafts[service.id];
     return Boolean((draft?.driverUserId ?? assignment?.driver_user_id) || (draft?.vehicleLabel ?? assignment?.vehicle_label));
   }).length;
-  const paxTotal = shuttleServices.reduce((sum, service) => sum + service.pax, 0);
   const zones = new Set(groups.map((group) => group.zone)).size;
 
   async function saveAssignment(service: Service) {
@@ -367,7 +363,7 @@ export default function NavetteHotelPage() {
 
   function exportExcel() {
     downloadCsv(`navette-hotel-${date}.csv`, [
-      ["Data", "Hotel", "Zona", "Ora", "Direzione", "Cliente", "Telefono", "Pax", "Autista", "Mezzo", "Note"],
+      ["Data", "Hotel", "Zona", "Ora", "Direzione", "Cliente", "Telefono", "Servizio", "Autista", "Mezzo", "Note"],
       ...groups.flatMap((group) =>
         group.services.map((service) => {
           const assignment = assignmentByServiceId.get(service.id);
@@ -380,7 +376,7 @@ export default function NavetteHotelPage() {
             directionLabel(service),
             customerName(service),
             service.phone || "",
-            String(service.pax),
+            "Navetta hotel",
             driver?.name ?? "",
             assignment?.vehicle_label ?? "",
             service.notes ?? ""
@@ -397,7 +393,7 @@ export default function NavetteHotelPage() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Pianificazione</p>
             <h1 className="mt-1 text-3xl font-black tracking-tight">Navette Hotel</h1>
-            <p className="mt-1 text-sm text-slate-500">Vista dedicata alle navette hotel, separate dalle assegnazioni operative standard.</p>
+            <p className="mt-1 truncate text-sm text-slate-500">Vista dedicata alle navette hotel, separate dalle assegnazioni operative standard.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button type="button" onClick={() => setDate(todayIso())} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:border-indigo-200 hover:text-indigo-700">
@@ -417,7 +413,7 @@ export default function NavetteHotelPage() {
       <section className="grid gap-3 md:grid-cols-4">
         {[
           ["Navette", shuttleServices.length, "Servizi hotel del giorno", "bg-indigo-50 text-indigo-700"],
-          ["Passeggeri", paxTotal, "Totale pax navette", "bg-emerald-50 text-emerald-700"],
+          ["Servizi", shuttleServices.length, "Navette operative", "bg-emerald-50 text-emerald-700"],
           ["Hotel", groups.length, "Strutture coinvolte", "bg-sky-50 text-sky-700"],
           ["Assegnate", assignedServices, `${Math.max(shuttleServices.length - assignedServices, 0)} da completare`, "bg-amber-50 text-amber-700"]
         ].map(([label, value, caption, tone]) => (
@@ -471,9 +467,9 @@ export default function NavetteHotelPage() {
                       <h2 className="text-2xl font-black uppercase tracking-tight">{group.hotelName}</h2>
                       <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-500 shadow-sm">{group.zone}</span>
                     </div>
-                    <p className="mt-1 text-sm text-slate-500">{group.services.length} navette · {group.pax} pax</p>
+                    <p className="mt-1 truncate text-sm text-slate-500">{group.services.length} servizi navetta</p>
                   </div>
-                  <span className="w-fit rounded-2xl bg-emerald-100 px-4 py-2 text-sm font-black text-emerald-700">{group.pax} pax</span>
+                  <span className="w-fit rounded-2xl bg-emerald-100 px-4 py-2 text-sm font-black text-emerald-700">{group.services.length} servizi</span>
                 </header>
                 <div className="divide-y divide-slate-100">
                   {group.services.map((service) => {
@@ -481,22 +477,22 @@ export default function NavetteHotelPage() {
                     const draft = assignmentKey(service.id, drafts, assignment);
                     const assignedDriver = driverOptions.find((member) => member.userId === draft.driverUserId);
                     return (
-                      <div key={service.id} className="grid gap-3 p-4 lg:grid-cols-[90px_minmax(180px,1.3fr)_80px_minmax(180px,1fr)_minmax(180px,1fr)_100px] lg:items-center">
-                        <div>
-                          <p className="text-xs font-bold uppercase text-slate-400">{directionLabel(service)}</p>
-                          <p className="text-xl font-black text-indigo-700">{serviceTime(service)}</p>
+                      <div key={service.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[112px_minmax(220px,1.35fr)_96px_minmax(210px,1fr)_minmax(210px,1fr)_112px] lg:items-center">
+                        <div className="rounded-2xl bg-indigo-50 px-3 py-2">
+                          <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">{directionLabel(service)}</p>
+                          <p className="mt-0.5 whitespace-nowrap font-mono text-lg font-black leading-none text-indigo-700">{serviceTime(service)}</p>
                         </div>
                         <div className="min-w-0">
-                          <p className="truncate text-base font-black">{customerName(service)}</p>
-                          <p className="mt-1 text-sm text-slate-500">{service.phone || "Telefono non indicato"}</p>
+                          <p className="truncate text-sm font-black">{customerName(service)}</p>
+                          <p className="mt-1 truncate text-sm text-slate-500">{service.phone || "Telefono non indicato"}</p>
                         </div>
-                        <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
-                          <p className="text-xs font-bold uppercase text-slate-400">Pax</p>
-                          <p className="text-xl font-black">{service.pax}</p>
+                        <div className="flex min-h-[58px] flex-col justify-center rounded-2xl bg-slate-50 px-3 py-2 text-center">
+                          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Tipo</p>
+                          <p className="text-xs font-black">Navetta</p>
                         </div>
                         <label className="space-y-1 print:hidden">
-                          <span className="text-xs font-bold uppercase text-slate-400">Autista</span>
-                          <select value={draft.driverUserId} onChange={(event) => selectDriver(service, event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400">
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Autista</span>
+                          <select value={draft.driverUserId} onChange={(event) => selectDriver(service, event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400">
                             <option value="">— da assegnare —</option>
                             {driverOptions.map((driver) => (
                               <option key={driver.profileId || driver.userId} value={driver.userId}>{driver.name}</option>
@@ -504,13 +500,13 @@ export default function NavetteHotelPage() {
                           </select>
                         </label>
                         <label className="space-y-1 print:hidden">
-                          <span className="text-xs font-bold uppercase text-slate-400">Mezzo</span>
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Mezzo</span>
                           <input
                             value={draft.vehicleLabel}
                             onChange={(event) => updateDraft(service.id, { vehicleLabel: event.target.value })}
                             list="navette-vehicle-labels"
                             placeholder="Es. VAN 4"
-                            className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400"
+                            className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400"
                           />
                         </label>
                         <div className="flex items-center justify-between gap-2">
@@ -518,7 +514,7 @@ export default function NavetteHotelPage() {
                             <p className="text-sm font-semibold">{assignedDriver?.name ?? "Autista N/D"}</p>
                             <p className="text-xs text-slate-500">{draft.vehicleLabel || "Mezzo N/D"}</p>
                           </div>
-                          <button type="button" onClick={() => void saveAssignment(service)} disabled={savingId === service.id} className="w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-black text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60 print:hidden">
+                          <button type="button" onClick={() => void saveAssignment(service)} disabled={savingId === service.id} className="h-11 w-full rounded-2xl bg-indigo-600 px-4 text-sm font-black text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60 print:hidden">
                             {savingId === service.id ? "Salvo..." : "Salva"}
                           </button>
                         </div>
@@ -544,8 +540,8 @@ export default function NavetteHotelPage() {
                 <strong>{groups.length}</strong>
               </div>
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-600">Passeggeri</span>
-                <strong>{paxTotal}</strong>
+                <span className="font-semibold text-slate-600">Servizi navetta</span>
+                <strong>{shuttleServices.length}</strong>
               </div>
             </div>
           </article>
@@ -564,3 +560,4 @@ export default function NavetteHotelPage() {
     </main>
   );
 }
+
