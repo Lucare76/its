@@ -1,116 +1,160 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
-import { buildBusLotAggregates, isBusLineService } from "@/lib/bus-lot-utils";
-import { getServicePdfOperationalMeta } from "@/lib/service-pdf-metadata";
-import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
+import { supabase } from "@/lib/supabase/client";
+import { getClientSessionContext } from "@/lib/supabase/client-session";
 
-function computeNotificationsRangeScope(): { mode: "range"; from: string; to: string } {
-  const from = new Date();
-  from.setDate(from.getDate() - 7);
-  const to = new Date();
-  to.setDate(to.getDate() + 30);
-  return { mode: "range", from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+/**
+ * Centro notifiche: SOLO eventi reali sul ciclo di vita della prenotazione —
+ * nuove prenotazioni, modifiche, cancellazioni. Nessuna anomalia derivata
+ * (dispatch mancante, tariffa mancante, posti bus, PDF da rivedere, reminder
+ * falliti): quelle sono liste operative gia' presenti altrove nel gestionale
+ * (Piano del Giorno, Bus Network, Inbox), non notifiche.
+ *
+ * Fonte: service_change_logs (gia' scritta da logServiceChange ad ogni
+ * creazione/cancellazione/modifica di un servizio — vedi
+ * lib/server/service-audit-log.ts), letta direttamente con RLS
+ * (admin/operator/supervisor del tenant, vedi migration 0232).
+ */
+
+type ServiceChangeLogRow = {
+  id: string;
+  service_id: string;
+  action: "CREATED" | "CANCELLED" | "updated";
+  changed_fields: string[];
+  after_data: Record<string, unknown> | null;
+  operator_name: string | null;
+  created_at: string;
+};
+
+const LOOKBACK_DAYS = 14;
+const MAX_ROWS = 300;
+
+function customerLabel(row: ServiceChangeLogRow): string {
+  const name = row.after_data?.customer_name;
+  return typeof name === "string" && name.trim() ? name.trim() : "Cliente N/D";
+}
+
+function formatDateTimeIt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+type NotificationSeverity = "high" | "medium" | "low";
+
+function toAlert(row: ServiceChangeLogRow): { id: string; title: string; detail: string; severity: NotificationSeverity; serviceId: string } {
+  const customer = customerLabel(row);
+  const who = row.operator_name ? ` - ${row.operator_name}` : "";
+  const when = formatDateTimeIt(row.created_at);
+
+  if (row.action === "CREATED") {
+    return {
+      id: row.id,
+      title: "Nuova prenotazione",
+      detail: `${customer} | ${when}${who}`,
+      severity: "low",
+      serviceId: row.service_id,
+    };
+  }
+  if (row.action === "CANCELLED") {
+    const reason = row.after_data?.cancellation_reason;
+    const reasonLabel = typeof reason === "string" && reason.trim() ? ` | ${reason.trim()}` : "";
+    return {
+      id: row.id,
+      title: "Prenotazione cancellata",
+      detail: `${customer} | ${when}${reasonLabel}${who}`,
+      severity: "medium",
+      serviceId: row.service_id,
+    };
+  }
+  const fieldsLabel = row.changed_fields.length > 0 ? row.changed_fields.join(", ") : "dati aggiornati";
+  return {
+    id: row.id,
+    title: "Prenotazione modificata",
+    detail: `${customer} | ${when} | ${fieldsLabel}${who}`,
+    severity: "low",
+    serviceId: row.service_id,
+  };
 }
 
 export default function NotificationsPage() {
-  // Sprint Performance 14D: only the datasets this page actually reads
-  // (services, assignments, busLotConfigs, inboundEmails — verified via
-  // grep). Scoped to a [-7, +30] day window so alerts stay actionable
-  // instead of surfacing every historical service with a missing pricing
-  // rule or driver.
-  const { loading, errorMessage, data } = useTenantOperationalData({
-    datasets: { services: true, assignments: true, busLotConfigs: true, inboundEmails: true },
-    serviceScope: computeNotificationsRangeScope()
-  });
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [rows, setRows] = useState<ServiceChangeLogRow[]>([]);
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
+  const [dismissingAll, setDismissingAll] = useState(false);
 
-  const assignmentsByServiceId = useMemo(() => new Map(data.assignments.map((item) => [item.service_id, item])), [data.assignments]);
-  const busLots = useMemo(() => buildBusLotAggregates(data.services.filter((service) => isBusLineService(service)), data.busLotConfigs), [data.services, data.busLotConfigs]);
-  const alerts = useMemo(() => {
-    const items: Array<{ id: string; title: string; detail: string; severity: "high" | "medium" | "low" }> = [];
-
-    for (const lot of busLots) {
-      for (const alert of lot.alerts) {
-        items.push({
-          id: `${lot.key}-${alert.label}`,
-          title: alert.label === "Completo" ? "Lotto linea bus completo" : `Lotto linea bus: ${alert.label}`,
-          detail: `${lot.billing_party_name ?? "N/D"} | ${lot.bus_city_origin ?? "Origine N/D"} | ${lot.pax_total} pax`,
-          severity: alert.severity
-        });
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      setErrorMessage(null);
+      if (!supabase) {
+        if (active) { setErrorMessage("Supabase non configurato."); setLoading(false); }
+        return;
       }
+      const session = await getClientSessionContext();
+      if (!session.tenantId) {
+        if (active) { setErrorMessage("Sessione non valida."); setLoading(false); }
+        return;
+      }
+      const since = new Date();
+      since.setDate(since.getDate() - LOOKBACK_DAYS);
+      const { data, error } = await supabase
+        .from("service_change_logs")
+        .select("id, service_id, action, changed_fields, after_data, operator_name, created_at")
+        .eq("tenant_id", session.tenantId)
+        .in("action", ["CREATED", "CANCELLED", "updated"])
+        .is("dismissed_at", null)
+        .gte("created_at", since.toISOString())
+        .order("created_at", { ascending: false })
+        .limit(MAX_ROWS);
+      if (!active) return;
+      if (error) {
+        setErrorMessage("Errore nel caricamento delle notifiche.");
+        setLoading(false);
+        return;
+      }
+      setRows((data ?? []) as ServiceChangeLogRow[]);
+      setLoading(false);
+    };
+    void load();
+    return () => { active = false; };
+  }, []);
+
+  // "Far sparire" una notifica: la marca come letta/gestita per tutto il
+  // tenant (mai una cancellazione della riga di audit sottostante — vedi
+  // migration 0249) e la rimuove subito dalla lista locale.
+  const dismiss = async (ids: string[]) => {
+    if (!supabase || ids.length === 0) return;
+    const session = await getClientSessionContext();
+    const { error } = await supabase
+      .from("service_change_logs")
+      .update({ dismissed_at: new Date().toISOString(), dismissed_by_user_id: session.userId })
+      .in("id", ids);
+    if (error) {
+      setErrorMessage("Errore nel segnare la notifica come letta.");
+      return;
     }
+    setRows((current) => current.filter((row) => !ids.includes(row.id)));
+  };
 
-    for (const service of data.services) {
-      if ((service.service_type ?? "transfer") === "bus_tour" && !isBusLineService(service)) {
-        const remainingSeats = service.capacity ? service.capacity - service.pax : null;
-        const lowSeatThreshold = service.low_seat_threshold ?? 4;
-        const minimumPassengers = service.minimum_passengers ?? null;
-        const waitlistCount = service.waitlist_count ?? 0;
+  const dismissOne = async (id: string) => {
+    if (dismissingId) return;
+    setDismissingId(id);
+    try { await dismiss([id]); } finally { setDismissingId(null); }
+  };
 
-        if (remainingSeats !== null && remainingSeats <= lowSeatThreshold) {
-          items.push({
-            id: `${service.id}-bus-low-seats`,
-            title: remainingSeats <= 0 ? "Bus tour completo" : "Bus tour con pochi posti",
-            detail: `${service.tour_name ?? service.customer_name} | restano ${Math.max(0, remainingSeats)} posti disponibili`,
-            severity: remainingSeats <= 0 ? "high" : "medium"
-          });
-        }
-        if (minimumPassengers && service.pax < minimumPassengers) {
-          items.push({
-            id: `${service.id}-bus-minimum`,
-            title: "Bus tour sotto minimo passeggeri",
-            detail: `${service.tour_name ?? service.customer_name} | ${service.pax}/${minimumPassengers} pax`,
-            severity: "medium"
-          });
-        }
-        if (service.waitlist_enabled && waitlistCount > 0) {
-          items.push({
-            id: `${service.id}-bus-waitlist`,
-            title: "Waiting list aperta",
-            detail: `${service.tour_name ?? service.customer_name} | ${waitlistCount} pax in attesa`,
-            severity: "high"
-          });
-        }
-      }
+  const dismissAll = async () => {
+    if (dismissingAll || rows.length === 0) return;
+    setDismissingAll(true);
+    try { await dismiss(rows.map((row) => row.id)); } finally { setDismissingAll(false); }
+  };
 
-      const pdfMeta = getServicePdfOperationalMeta(service, data.inboundEmails);
-      if (pdfMeta.reviewRecommended) {
-        items.push({
-          id: `${service.id}-review`,
-          title: "Review operativa consigliata",
-          detail: `${service.customer_name} | ${pdfMeta.agencyName ?? "PDF"} | parser ${pdfMeta.parserKey ?? "n/d"}`,
-          severity: "high"
-        });
-      }
-      if (!assignmentsByServiceId.get(service.id)?.driver_user_id && service.status !== "completato" && service.status !== "cancelled") {
-        items.push({
-          id: `${service.id}-dispatch`,
-          title: "Servizio da gestire internamente",
-          detail: `${service.customer_name} | stato ${service.status} | nessun autista assegnato`,
-          severity: "medium"
-        });
-      }
-      if (!service.applied_pricing_rule_id && service.status !== "cancelled") {
-        items.push({
-          id: `${service.id}-pricing`,
-          title: "Servizio senza regola tariffaria",
-          detail: `${service.customer_name} | ${service.booking_service_kind ?? service.service_type_code ?? "servizio"}`,
-          severity: "low"
-        });
-      }
-      if (service.reminder_status === "failed") {
-        items.push({
-          id: `${service.id}-reminder`,
-          title: "Reminder fallito",
-          detail: `${service.customer_name} | promemoria non inviato correttamente`,
-          severity: "high"
-        });
-      }
-    }
-
-    return items;
-  }, [assignmentsByServiceId, busLots, data.inboundEmails, data.services]);
+  const alerts = useMemo(() => rows.map(toAlert), [rows]);
 
   const groups = {
     high: alerts.filter((item) => item.severity === "high"),
@@ -122,7 +166,7 @@ export default function NotificationsPage() {
     <section className="page-section">
       <PageHeader
         title="Centro notifiche"
-        subtitle="Servizi urgenti, review mancanti, reminder falliti e anomalie pricing."
+        subtitle="Nuove prenotazioni, modifiche e cancellazioni degli ultimi 14 giorni."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Notifiche" }]}
       />
 
@@ -140,9 +184,23 @@ export default function NotificationsPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Lista notifiche" loading={loading} loadingLines={6}>
+      <SectionCard
+        title="Lista notifiche"
+        loading={loading}
+        loadingLines={6}
+        actions={alerts.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => void dismissAll()}
+            disabled={dismissingAll}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {dismissingAll ? "..." : "Segna tutte come lette"}
+          </button>
+        ) : undefined}
+      >
         {alerts.length === 0 ? (
-          <p className="text-sm text-muted">Nessuna notifica operativa aperta.</p>
+          <p className="text-sm text-muted">Nessuna prenotazione nuova, modificata o cancellata negli ultimi {LOOKBACK_DAYS} giorni.</p>
         ) : (
           <div className="space-y-2">
             {alerts.map((item) => (
@@ -153,7 +211,22 @@ export default function NotificationsPage() {
                     {item.severity}
                   </span>
                 </div>
-                <p className="mt-1 text-sm text-muted">{item.detail}</p>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-muted">{item.detail}</p>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Link href={`/services/${item.serviceId}/edit`} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                      Apri prenotazione
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void dismissOne(item.id)}
+                      disabled={dismissingId === item.id}
+                      className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                    >
+                      {dismissingId === item.id ? "..." : "✓ Letta"}
+                    </button>
+                  </div>
+                </div>
               </article>
             ))}
           </div>
