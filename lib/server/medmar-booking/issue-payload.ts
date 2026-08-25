@@ -408,3 +408,158 @@ export function buildBookingPayload(input: {
     urlPagamento: null,
   };
 }
+
+/**
+ * Test reale mirato (prenotazione GIANLUCA MEROLA, 2 adulti + 1 infant) —
+ * builder di mutazione per gruppi misti, analogo a buildBookingPayload ma
+ * generalizzato ad adult/child/infant invece del solo adulto. NON wired a
+ * issue-orchestrator.ts (grep statico verificabile): i gate esistenti
+ * (child_issue_payload_not_verified nel pre-check orchestrator,
+ * can_issue:false forzato nel preflight, assertNoMinorsInPreflight qui sopra)
+ * restano tutti attivi e bloccano l'emissione automatica minori in
+ * produzione. Questa funzione serve solo a costruire/ispezionare il payload
+ * reale con dati Medmar live, per verificare la correttezza prima di
+ * decidere se e quando sbloccare il flusso.
+ *
+ * id_gruppo: stesso schema deterministico usato da buildBookingPayload
+ * (indice progressivo del passeggero), esteso su 3 categorie con un
+ * contatore condiviso — adulti prima, poi bambini, poi infant — cosicché
+ * ogni passeggero fisico riceva lo STESSO id_gruppo su andata e ritorno
+ * (stessa composizione, stesso ordine di categoria su entrambe le gambe).
+ *
+ * Tassa collegata per categoria: derivata da deriveTaxLinkage (fonte
+ * collegati[] se disponibile, altrimenti euristica non verificata per
+ * adulto/bambino, mai per infant) — MAI un valore fisso, coerente con
+ * quanto già usato dal preflight per il ticket_breakdown.
+ *
+ * Matching frozen: per (id_corsa, id_log) invece che per ordine di arrivo
+ * nella coda — la risposta lock (congelati) non garantisce lo stesso ordine
+ * di invio delle richieste, mentre id_log identifica univocamente la
+ * categoria/tariffa del frozen consumato.
+ */
+export function buildMixedPassengerBookingPayload(input: {
+  preflight: MedmarPreflightResult;
+  services: MedmarIssueServiceRow[];
+  vendibiliByCorsa: Map<string, BigliettoVendibileRaw[]>;
+  frozenPassengers: MedmarLockedTicket[];
+  config: MedmarIssueConfig;
+  sessionContext: MedmarIssueSessionContext;
+  technicalEmail: string;
+}): MedmarBookingPayload {
+  const passengers = input.preflight.passengers;
+  if (!passengers) throw new MedmarIssuePayloadError("composizione passeggeri non disponibile.");
+
+  const dettaglio: MedmarBookingDetailLine[] = [];
+  let idRiga = 1;
+
+  const frozenByCorsaAndLog = new Map<string, MedmarLockedTicket[]>();
+  for (const row of input.frozenPassengers) {
+    const key = `${row.id_corsa}|${row.id_log}`;
+    const bucket = frozenByCorsaAndLog.get(key) ?? [];
+    bucket.push(row);
+    frozenByCorsaAndLog.set(key, bucket);
+  }
+
+  const categories: Array<[MedmarPassengerCategory, number]> = [
+    ["adult", passengers.adults],
+    ["child", passengers.children],
+    ["infant", passengers.infants],
+  ];
+
+  const groupIdsByCategory = new Map<MedmarPassengerCategory, number[]>();
+  let nextGroupId = 1;
+  for (const [category, count] of categories) {
+    const ids: number[] = [];
+    for (let i = 0; i < count; i++) {
+      ids.push(nextGroupId);
+      nextGroupId += 1;
+    }
+    groupIdsByCategory.set(category, ids);
+  }
+
+  for (const { leg, flagAr } of legsFromPreflight(input.preflight)) {
+    const vendibili = input.vendibiliByCorsa.get(String(leg.id_corsa)) ?? [];
+    const selection = selectPassengerTariffs(vendibili);
+
+    for (const [category, count] of categories) {
+      if (count <= 0) continue;
+      const categorySelection = category === "adult" ? selection.adult : category === "child" ? selection.child : selection.infant;
+      if (categorySelection.kind !== "found") throw new MedmarIssuePayloadError(`tariffa ${category} live non disponibile.`);
+      const ticket = categorySelection.ticket;
+      const label = requiredText(resolveBigliettoLabel(ticket).label, `label ${category}`);
+
+      const linkage = deriveTaxLinkage(category, ticket, selection.taxRows);
+      const tax = linkage.linked ? linkage.tax : null;
+      if (tax) assertTassaSbarcoTipologia(tax);
+      const taxLabel = tax ? requiredText(resolveBigliettoLabel(tax).label, "label tassa") : null;
+
+      const groupIds = groupIdsByCategory.get(category)!;
+      const frozenBucket = frozenByCorsaAndLog.get(`${leg.id_corsa}|${ticket.id_log}`) ?? [];
+
+      for (let i = 0; i < count; i++) {
+        const frozen = frozenBucket.shift();
+        if (!frozen) {
+          throw new MedmarIssuePayloadError(`id_biglietto_congelato ${category} mancante per uno o più passeggeri.`);
+        }
+        const passengerGroupId = groupIds[i]!;
+        const passengerRowId = idRiga;
+        dettaglio.push({
+          biglietto: label,
+          checkin: true,
+          flag_ar: flagAr,
+          flag_collegabile: 0,
+          flag_targa: 0,
+          id_biglietto_congelato: frozen.id_biglietto_congelato,
+          id_corsa: leg.id_corsa!,
+          id_gruppo: passengerGroupId,
+          id_iva: ticket.id_iva,
+          id_log: ticket.id_log ?? "",
+          id_riga: passengerRowId,
+          id_tariffa: ticket.id_tariffa,
+          id_tipologia_passeggero: ticket.id_tipologia_passeggero,
+          prezzo: toNumber(ticket.prezzo, `prezzo ${category}`),
+          prezzo_prevendita: ticket.prezzo_prevendita ?? 0,
+          quantita: 1,
+          re: false,
+        });
+        idRiga += 1;
+
+        if (tax) {
+          dettaglio.push({
+            biglietto: taxLabel!,
+            flag_ar: flagAr,
+            flag_collegabile: 0,
+            flag_targa: 0,
+            id_child_riga: passengerRowId,
+            id_corsa: leg.id_corsa!,
+            id_gruppo: passengerGroupId,
+            id_iva: tax.id_iva,
+            id_log: tax.id_log ?? "",
+            id_riga: idRiga,
+            id_tariffa: null,
+            id_tipologia_passeggero: tax.id_tipologia_passeggero,
+            prezzo: tax.prezzo ?? 0,
+            prezzo_prevendita: tax.prezzo_prevendita ?? 0,
+            quantita: 1,
+          });
+          idRiga += 1;
+        }
+      }
+    }
+  }
+
+  return {
+    cliente_sito: buildIssueCustomer(input.services, input.technicalEmail),
+    dettaglio,
+    dettaglioMezzo: [],
+    id_causale: input.config.causaleId,
+    id_cliente: input.sessionContext.clienteId,
+    id_modalita: input.config.modalitaId,
+    id_prenotazione: null,
+    id_turno: input.sessionContext.turnoId,
+    id_vettore_andata: input.config.vettoreAndataId,
+    id_vettore_ritorno: input.config.vettoreRitornoId,
+    targa: { dettagli: [] },
+    urlPagamento: null,
+  };
+}

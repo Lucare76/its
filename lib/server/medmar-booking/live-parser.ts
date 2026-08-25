@@ -508,6 +508,44 @@ export type PassengerTariffSelection = {
 };
 
 /**
+ * Fase test reale MEROLA — root cause confermata: su alcune corse Medmar
+ * espone la TASSA DI SBARCO SOLO annidata dentro collegati[] del biglietto
+ * passeggero (mai come riga sorella top-level), esattamente il caso già
+ * gestito da findArTariffAndTax via extractNestedTaxCandidates. taxRows qui
+ * prima guardava SOLO le righe top-level classificate "tax" — su una corsa
+ * con tassa solo annidata restituiva sempre [], quindi deriveTaxLinkage
+ * (taxRows.length===0) marcava "non collegata" per OGNI categoria, adulto
+ * incluso, indipendentemente dal prezzo reale della tassa. Innocuo quando la
+ * tassa annidata vale 0 (caso osservato), ma un bug reale su una tratta con
+ * tassa annidata a prezzo diverso da zero.
+ *
+ * Fix: unifica righe "tax" top-level con i candidati annidati estratti da
+ * OGNI riga della risposta (extractNestedTaxCandidates, stessa fonte usata
+ * da findArTariffAndTax), deduplicati per identità (taxIdentity) — lo stesso
+ * id_biglietto tassa può comparire annidato in più biglietti passeggero
+ * diversi (osservato: stesso id_biglietto 413 dentro adulto, bambino e
+ * varie righe veicolo). Più identità DISTINTE dopo la deduplica restano
+ * ambigue per costruzione (taxRows.length>1 già gestito da
+ * deriveTaxLinkage/buildTaxBreakdown), nessuna scelta arbitraria.
+ */
+function collectTaxCandidates(rows: BigliettoVendibileRaw[]): BigliettoVendibileRaw[] {
+  const topLevel = rows.filter((row) => classifyPassengerTicket(row).kind === "tax");
+  const nested = rows.flatMap((row) => extractNestedTaxCandidates(row));
+
+  const byIdentity = new Map<string, BigliettoVendibileRaw>();
+  const withoutIdentity: BigliettoVendibileRaw[] = [];
+  for (const candidate of [...topLevel, ...nested]) {
+    const id = taxIdentity(candidate);
+    if (id === null) {
+      withoutIdentity.push(candidate);
+      continue;
+    }
+    if (!byIdentity.has(id)) byIdentity.set(id, candidate);
+  }
+  return [...byIdentity.values(), ...withoutIdentity];
+}
+
+/**
  * Applica classifyPassengerTicket a tutte le righe di una risposta
  * biglietti/vendibili e seleziona, per ciascuna categoria passeggero, la
  * riga corrispondente (found/not_found/ambiguous/unsupported_passenger_type
@@ -522,7 +560,7 @@ export function selectPassengerTariffs(rows: BigliettoVendibileRaw[]): Passenger
     adult: selectCategory(classified, "adult"),
     child: selectCategory(classified, "child"),
     infant: selectCategory(classified, "infant"),
-    taxRows: classified.filter((c) => c.kind === "tax").map((c) => c.row),
+    taxRows: collectTaxCandidates(rows),
   };
 }
 
