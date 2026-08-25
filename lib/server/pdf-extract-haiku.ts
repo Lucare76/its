@@ -79,7 +79,7 @@ ISTRUZIONI CAMPO PER CAMPO:
     3) dopo "Cellulare/Tel."
     4) qualsiasi numero di 10 cifre che inizia con 3 nel documento
 - n_pax: colonna PAX (numero intero)
-- hotel: campo DESCRIZIONE della riga PROGRAMMA — rimuovi eventuale prefisso "AV " o "26/TRENOB" ecc.
+- hotel: PRIMA guarda il campo DESCRIZIONE della riga PROGRAMMA (rimuovi eventuale prefisso "AV " o "26/TRENOB" ecc.), MA SOLO se contiene un vero nome di struttura — NON un codice/riferimento trasporto (es. "TRASPORTO TRS-2026-1249 - BK-2026-32138" NON è un hotel). Se la riga PROGRAMMA non contiene un nome hotel, prendi il valore dopo "dest:" nel blocco operativo dell'ANDATA (es. "...CON SNAV a: CELL:3488803921 dest: ISOLA VERDE" → hotel: "ISOLA VERDE"). NON usare MAI un valore del tipo "HOTEL <città>" (es. "HOTEL ISCHIA", "HOTEL NAPOLI") come nome hotel: quel testo è il punto di ritiro generico del RITORNO ("M.p.: HOTEL ISCHIA"), non il nome della struttura — se non trovi altro, lascia il campo vuoto piuttosto che usare quel valore generico.
 - data_arrivo: colonna DAL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "19-apr-26" → "2026-04-19")
 - data_partenza: colonna AL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "26-apr-26" → "2026-04-26")
 - orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA (STAZIONE/HOTEL o PORTO/HOTEL): il valore dopo "Alle" (es: "13:43")

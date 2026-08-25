@@ -275,6 +275,7 @@ export default function InboxPage() {
   const [hasLoadedInbox, setHasLoadedInbox] = useState(false);
   const [inboxFilter, setInboxFilter] = useState<"all" | "needs_review" | "confirmed">("needs_review");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [hotelSuggestOpen, setHotelSuggestOpen] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [approvedServiceId, setApprovedServiceId] = useState<string | null>(null);
   const approvalInFlightRef = useRef(false);
@@ -631,6 +632,13 @@ export default function InboxPage() {
   }, [selectedEmail]);
 
   const canApprove = form.cliente_nome.trim() !== "" && form.hotel.trim() !== "" && form.data_arrivo.trim() !== "";
+
+  const hotelSuggestions = useMemo(() => {
+    const query = form.hotel.trim().toLowerCase();
+    if (!query) return [];
+    return hotels.filter((h) => h.name.toLowerCase().includes(query)).slice(0, 8);
+  }, [form.hotel, hotels]);
+  const hotelExactMatch = hotels.some((h) => h.name.trim().toLowerCase() === form.hotel.trim().toLowerCase());
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1409,11 +1417,33 @@ export default function InboxPage() {
                   <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
                     <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Soggiorno</p>
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                      <label className="relative text-xs font-medium text-slate-600 sm:col-span-2">
                         Hotel *
-                        <input value={form.hotel} onChange={(e) => setField("hotel", e.target.value)}
+                        <input value={form.hotel}
+                          onChange={(e) => { setField("hotel", e.target.value); setHotelSuggestOpen(true); }}
+                          onFocus={() => setHotelSuggestOpen(true)}
+                          onBlur={() => setTimeout(() => setHotelSuggestOpen(false), 150)}
+                          autoComplete="off"
                           className={`mt-1 input-saas w-full ${!form.hotel ? "border-amber-300 bg-amber-50" : ""}`}
                           placeholder="Nome hotel" />
+                        {hotelSuggestOpen && form.hotel.trim() !== "" && (
+                          <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                            {hotelSuggestions.length > 0 ? (
+                              hotelSuggestions.map((h) => (
+                                <button key={h.id} type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => { setField("hotel", h.name); setHotelSuggestOpen(false); }}
+                                  className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100">
+                                  {h.name}
+                                </button>
+                              ))
+                            ) : !hotelExactMatch ? (
+                              <p className="px-2 py-1.5 text-xs text-slate-500">
+                                Nessun hotel esistente trovato — verrà creato automaticamente <strong>&quot;{form.hotel.trim()}&quot;</strong> al momento dell&apos;approvazione.
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
                       </label>
                       <label className="text-xs font-medium text-slate-600">
                         Data arrivo *
