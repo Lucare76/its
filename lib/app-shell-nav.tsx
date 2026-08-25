@@ -305,6 +305,7 @@ export const MARIO_BOSS_GROUP: NavMainGroup = {
   items: [
     { href: "/mario-planning", label: "Planning", icon: "P" },
     { href: "/bus-network", label: "Linea Bus", icon: "B" },
+    { href: "/navette-hotel", label: "Navette Hotel", icon: "V" },
     { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
     { href: "/escursioni", label: "Escursioni", icon: "E" },
     { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true },
