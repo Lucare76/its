@@ -633,9 +633,9 @@ export default function OpsNewBookingPage() {
       <div className="flex min-w-0 flex-col gap-5">
 
         {/* Tipo servizio */}
-        <div className="pms-panel order-2 grid gap-4 p-5 md:grid-cols-2">
+        <div className="pms-panel order-1 grid gap-4 p-5 md:grid-cols-2">
         <div className="md:col-span-2">
-          <div className="pms-step-title"><span className="pms-step-number">2</span> Tipo di servizio</div>
+          <div className="pms-step-title"><span className="pms-step-number">1</span> Tipo di servizio</div>
         </div>
         <label className="text-sm md:col-span-2">
           Tipo servizio*
@@ -665,9 +665,9 @@ export default function OpsNewBookingPage() {
         </div>
 
         {/* Nome cliente */}
-        <div className="pms-panel order-1 grid gap-4 p-5 md:grid-cols-2 lg:grid-cols-12">
+        <div className="pms-panel order-2 grid gap-4 p-5 md:grid-cols-2 lg:grid-cols-12">
         <div className="md:col-span-2 lg:col-span-12">
-          <div className="pms-step-title"><span className="pms-step-number">1</span> Cliente e prenotazione</div>
+          <div className="pms-step-title"><span className="pms-step-number">2</span> Cliente e prenotazione</div>
         </div>
         {isSnavKind ? (
           <label className="text-sm md:col-span-2 lg:col-span-4">
