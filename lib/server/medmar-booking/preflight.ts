@@ -800,19 +800,38 @@ export async function runMedmarPreflight(
       };
     }
 
-    // Bambino/infant presenti: preflight e prezzo possono essere completi,
-    // ma l'emissione resta VOLUTAMENTE fail-closed (Fase 2B.5 non abilita
-    // ancora l'emissione automatica minori) — can_issue sempre false qui,
-    // indipendentemente da quanto sia completo ticket_breakdown.
-    warnings.push({
-      code: "child_issue_payload_not_verified",
-      message: "Il prezzo Medmar è stato verificato, ma l'emissione automatica dei minori non è ancora abilitata: revisione/emissione manuale richiesta.",
-    });
-
     const minorsAwareTotals = priced.map((p) => sumTicketBreakdownTotal(p.ticketBreakdown));
     const minorsAwareTotal = minorsAwareTotals.every((t) => t != null)
       ? minorsAwareTotals.reduce<number>((sum, t) => sum + (t as number), 0)
       : null;
+
+    // Test reale MEROLA (2026-08-25) — adulto+infant confermato con
+    // emissione reale (esenzione tassa infant verificata via collegati[],
+    // fix tassa annidata committato) e sbloccato in produzione: can_issue:true
+    // SOLO quando non c'e' bambino nel gruppo E il prezzo e' interamente
+    // determinato (minorsAwareTotal non-null — ogni categoria presente ha
+    // trovato la propria tariffa live, nessun prezzo indovinato/mancante).
+    // Bambino ancora MAI validato con un'emissione reale: resta
+    // volutamente fail-closed, stessa logica invariata di prima.
+    if (passengers.children === 0 && minorsAwareTotal != null) {
+      return {
+        ...baseResult,
+        outward: outwardLeg,
+        return: returnLeg,
+        can_issue: true,
+        tariff: referencePriced.tariff,
+        taxes: referencePriced.taxes,
+        expected_total_cents: minorsAwareTotal,
+        is_live: true,
+        ticket_breakdown: referencePriced.ticketBreakdown,
+        warnings,
+      };
+    }
+
+    warnings.push({
+      code: "child_issue_payload_not_verified",
+      message: "Il prezzo Medmar è stato verificato, ma l'emissione automatica non è ancora abilitata per questo gruppo (bambino presente, o prezzo non interamente determinato per una categoria): revisione/emissione manuale richiesta.",
+    });
 
     return {
       ...baseResult,

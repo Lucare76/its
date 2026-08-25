@@ -7,7 +7,15 @@ import { getMedmarIssueConfig, validateMedmarIssueConfig } from "./issue-config"
 import { loadPassengerComposition } from "./passenger-composition";
 import { createIssueRepository } from "./issue-repository";
 import { createMedmarMutationClient, MedmarMutationRemoteUnknownError } from "./medmar-mutation-client";
-import { buildBookingPayload, buildIssueCustomer, buildLockTickets, validateAdultFrozenTickets } from "./issue-payload";
+import {
+  buildBookingPayload,
+  buildIssueCustomer,
+  buildLockTickets,
+  buildMixedPassengerBookingPayload,
+  buildMixedPassengerLockTickets,
+  validateAdultFrozenTickets,
+  validatePassengerFrozenTickets,
+} from "./issue-payload";
 import { resolveMedmarIssueSessionContext } from "./issue-session-context";
 import { loadAgencyRecipient } from "./recipient-repository";
 import { resolveMedmarDelivery } from "./recipient-resolver";
@@ -177,14 +185,19 @@ export function createMedmarIssueOrchestrator(deps?: {
     if (!compositionResult.ok) {
       return { ok: false, status: "manual_review", error: "Impossibile verificare la composizione passeggeri prima dell'emissione.", retry_allowed: true };
     }
-    if (compositionResult.composition.children > 0 || compositionResult.composition.infants > 0) {
+    // Test reale MEROLA (2026-08-25) — adulto+infant sbloccato (esenzione
+    // tassa infant + fix tassa annidata confermati con emissione reale).
+    // Bambino resta VOLUTAMENTE bloccato: mai validato con un'emissione
+    // reale, solo il caso diagnostico corsa 133760 in codice/test.
+    if (compositionResult.composition.children > 0) {
       return {
         ok: false,
         status: "child_issue_payload_not_verified",
-        error: "Emissione automatica non ancora abilitata per prenotazioni con bambino/infant.",
+        error: "Emissione automatica non ancora abilitata per prenotazioni con bambino.",
         retry_allowed: false,
       };
     }
+    const hasInfant = compositionResult.composition.infants > 0;
 
     const repo = deps?.repo ?? createIssueRepository(input.admin);
 
@@ -286,7 +299,7 @@ export function createMedmarIssueOrchestrator(deps?: {
 
     let lockTickets;
     try {
-      lockTickets = buildLockTickets(preflight, vendibiliByCorsa);
+      lockTickets = hasInfant ? buildMixedPassengerLockTickets(preflight, vendibiliByCorsa) : buildLockTickets(preflight, vendibiliByCorsa);
     } catch (err) {
       await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "manual_review", eventType: "payload_not_ready", errorCode: sanitizeError(err) });
       return { ok: false, status: "manual_review", idempotency_key: idempotencyKey, attempt_id: attempt.id, error: "Payload Medmar non costruibile con dati verificati.", retry_allowed: false };
@@ -385,12 +398,14 @@ export function createMedmarIssueOrchestrator(deps?: {
     // dimostrabili; se anche lo scongela stesso fallisce in modo ambiguo,
     // non possiamo piu' provare che i posti siano stati rilasciati, quindi
     // diventa remote_state_unknown.
-    let frozenAdults;
+    let frozenPassengers;
     let bookingPayload;
     try {
-      frozenAdults = validateAdultFrozenTickets(lockTickets, lock.congelati);
-      attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "locked", eventType: "locked", patch: { lock_snapshot: { frozen_adults: frozenAdults } } });
-      bookingPayload = buildBookingPayload({ preflight, services, vendibiliByCorsa, frozenAdults, config, sessionContext, technicalEmail: delivery.medmar_recipient.email });
+      frozenPassengers = hasInfant ? validatePassengerFrozenTickets(lockTickets, lock.congelati) : validateAdultFrozenTickets(lockTickets, lock.congelati);
+      attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "locked", eventType: "locked", patch: { lock_snapshot: { frozen_adults: frozenPassengers } } });
+      bookingPayload = hasInfant
+        ? buildMixedPassengerBookingPayload({ preflight, services, vendibiliByCorsa, frozenPassengers, config, sessionContext, technicalEmail: delivery.medmar_recipient.email })
+        : buildBookingPayload({ preflight, services, vendibiliByCorsa, frozenAdults: frozenPassengers, config, sessionContext, technicalEmail: delivery.medmar_recipient.email });
       attempt = await transition({ repo, attempt, tenantId: input.tenantId, userId: input.userId, next: "booking_started", eventType: "booking_started", patch: { booking_payload_hash: hashPayload(bookingPayload) } });
     } catch (preSendErr) {
       let unlockedSafely = true;

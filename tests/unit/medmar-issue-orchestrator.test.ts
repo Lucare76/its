@@ -146,19 +146,43 @@ function passengerComposition(overrides: { adults?: number; children?: number; i
   };
 }
 
+function mixedVendibili() {
+  return [
+    ...vendibili(),
+    {
+      id_corsa: 131943,
+      id_biglietto: 20,
+      id_tipologia_passeggero: 1,
+      id_tariffa: 6,
+      id_iva: 32,
+      id_log: 45580,
+      nome: "INFANT",
+      descrizione: "PASSAGGIO PONTE INFANT (0-4 Anni)",
+      prezzo: 2.5,
+      prezzo_ar: 0,
+      prezzo_prevendita: 0,
+      flag_ar_obbligatorio: false,
+      flag_targa: 0,
+      quantita_min_per_esclusivo: null,
+      quantita_max_per_esclusivo: null,
+    },
+  ];
+}
+
 async function run(input: {
   repo?: IssueRepository;
   mutationClient?: MedmarMutationClient;
   preflightResult?: ReturnType<typeof preflight>;
   loadPassengerComposition?: ReturnType<typeof vi.fn>;
   resolveSessionContext?: ReturnType<typeof vi.fn>;
+  fetchVendibili?: ReturnType<typeof vi.fn>;
 }) {
   const { createMedmarIssueOrchestrator } = await import("@/lib/server/medmar-booking/issue-orchestrator");
   return createMedmarIssueOrchestrator({
     repo: input.repo ?? makeRepo(),
     mutationClient: input.mutationClient ?? mutationClient(),
     runPreflight: vi.fn().mockResolvedValue(input.preflightResult ?? preflight()),
-    fetchVendibili: vi.fn().mockResolvedValue(vendibili()),
+    fetchVendibili: (input.fetchVendibili ?? vi.fn().mockResolvedValue(vendibili())) as never,
     resolveSessionContext: (input.resolveSessionContext ?? vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT })) as never,
     config: { enabled: true, causaleId: 1, modalitaId: 5, vettoreAndataId: 1, vettoreRitornoId: 1 },
     loadPassengerComposition: (input.loadPassengerComposition ?? vi.fn().mockResolvedValue(passengerComposition())) as never,
@@ -221,18 +245,27 @@ describe("medmar issue orchestrator", () => {
     expect(client.payManual).not.toHaveBeenCalled();
   });
 
-  it("28. Fase 2B.5 — infant presente -> child_issue_payload_not_verified, ZERO resolveSessionContext/mutazioni", async () => {
-    const client = mutationClient();
-    const resolveSessionContextSpy = vi.fn().mockResolvedValue({ ok: true, context: SESSION_CONTEXT });
+  it("28. Test reale MEROLA (2026-08-25) — adulto+infant (senza bambino) sbloccato, arriva a completed usando i builder misti", async () => {
+    const client = mutationClient({
+      lockAvailability: vi.fn().mockResolvedValue({
+        nonDisponibili: [],
+        congelati: [
+          { id_corsa: 131943, quantita: 1, id_log: 58818, descrizione: "PASSAGGIO PONTE ADULTO - TARIFFA SPECIALE AR", id_biglietto: "370", id_biglietto_congelato: 207675 },
+          { id_corsa: 131943, quantita: 1, id_log: 45580, descrizione: "PASSAGGIO PONTE INFANT (0-4 Anni)", id_biglietto: "20", id_biglietto_congelato: 207676 },
+        ],
+      }),
+    });
     const result = await run({
       mutationClient: client,
-      resolveSessionContext: resolveSessionContextSpy,
+      preflightResult: preflight({ passengers: { adults: 1, children: 0, infants: 1, source: "medmar_counts" } }),
+      fetchVendibili: vi.fn().mockResolvedValue(mixedVendibili()),
       loadPassengerComposition: vi.fn().mockResolvedValue(passengerComposition({ adults: 1, infants: 1 })),
     });
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe("child_issue_payload_not_verified");
-    expect(resolveSessionContextSpy).not.toHaveBeenCalled();
-    expect(client.lockAvailability).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("completed");
+    expect(client.lockAvailability).toHaveBeenCalledTimes(1);
+    expect(client.createBooking).toHaveBeenCalledTimes(1);
+    expect(client.payManual).toHaveBeenCalledTimes(1);
   });
 
   it("Fase 2B.5 — composizione passeggeri non verificabile (errore DB) -> manual_review retryable, ZERO resolveSessionContext/mutazioni (fail-closed, non fail-open)", async () => {
