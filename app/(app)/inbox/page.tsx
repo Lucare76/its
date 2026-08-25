@@ -83,8 +83,15 @@ const TIPO_LABELS: Record<string, string> = {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+// Prima guardava solo tipo_servizio, assumendo Medmar per ogni transfer
+// porto<->hotel: un vettore SNAV estratto in treno_andata/treno_ritorno
+// (vedi lo stesso criterio già usato in agency-aleste-viaggi.ts:673) veniva
+// comunque etichettato "MEDMAR" nel badge/copia rapida, dato reale ignorato.
 function isMedmar(form: FormState): boolean {
-  return form.tipo_servizio === "transfer_port_hotel" || form.tipo_servizio === "transfer_hotel_port";
+  const isPortTransfer = form.tipo_servizio === "transfer_port_hotel" || form.tipo_servizio === "transfer_hotel_port";
+  if (!isPortTransfer) return false;
+  const carrier = `${form.treno_andata} ${form.treno_ritorno}`.toUpperCase();
+  return !carrier.includes("SNAV");
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -587,9 +594,15 @@ export default function InboxPage() {
       const status = (email.parsed_json as Record<string, unknown>)?.review_status;
       const confirmed = status === "confirmed" || status === "ready_operational";
       const parsedJson = (email.parsed_json as Record<string, unknown>) ?? null;
-      return inboxFilter === "confirmed"
-        ? confirmed
-        : !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
+      if (inboxFilter === "confirmed") return confirmed;
+      if (confirmed) return false;
+      // Pipeline IMAP+Claude (email-test-import.ts, source:"imap-claude") non usa
+      // lo shape pdf_import su cui e' costruita isInboxPdfReviewOpen: senza questo
+      // riconoscimento diretto, le email importate da quella pipeline restavano
+      // invisibili sotto "Da approvare" (visibili solo in "Tutte", mai in nessuna
+      // tab specifica) pur essendo genuinamente in attesa di revisione operatore.
+      if (status === "needs_operator_review") return true;
+      return !isInboxPdfTestNoise({ subject: email.subject, parsedJson }) && isInboxPdfReviewOpen(parsedJson);
     });
   }, [inboundEmails, inboxFilter]);
 
