@@ -208,6 +208,56 @@ function isBusyInWindow(driver: DriverAvailabilityOutput["drivers"][number], win
   });
 }
 
+// ─── its.get_assignment_plan ────────────────────────────────────────────────
+
+export type AssignmentPlanOutput = {
+  date: string;
+  plan: {
+    generated_at: string;
+    services_count: number;
+    auto_safe_count: number;
+    review_count: number;
+    unresolved_count: number;
+  } | null;
+};
+
+export function formatAssignmentPlanAnswer(output: AssignmentPlanOutput): MarioAnswer {
+  if (!output.plan) {
+    return {
+      answer: `Non ho ancora un piano di assegnazione per il ${output.date}. Genera prima il piano dalla pagina Assegnazione Intelligente.`,
+      actions: [{ label: "Apri Assegnazione Intelligente", href: "/piano-giorno/assegnazione-intelligente" }],
+    };
+  }
+
+  const { plan } = output;
+  const exceptions = plan.review_count + plan.unresolved_count;
+  const parts = [
+    `Piano del ${output.date}: ${plan.services_count} servizi analizzati, ${plan.auto_safe_count} risolti automaticamente.`,
+  ];
+  if (exceptions === 0) {
+    parts.push("Nessuna eccezione da gestire.");
+  } else {
+    parts.push(`${exceptions} eccezioni da gestire (${plan.review_count} da verificare, ${plan.unresolved_count} da risolvere).`);
+  }
+
+  return { answer: parts.join(" "), actions: [{ label: "Apri Assegnazione Intelligente", href: "/piano-giorno/assegnazione-intelligente" }] };
+}
+
+// ─── its.get_assignment_exceptions ─────────────────────────────────────────
+
+export type AssignmentExceptionsOutput = { date: string; review_count: number; unresolved_count: number; exceptions: Array<{ service_id: string }> };
+
+export function formatAssignmentExceptionsAnswer(output: AssignmentExceptionsOutput): MarioAnswer {
+  const total = output.review_count + output.unresolved_count;
+  if (total === 0) {
+    return { answer: `Nessuna eccezione nel piano del ${output.date}.`, actions: [] };
+  }
+  return {
+    answer: `${total} eccezioni nel piano del ${output.date}: ${output.review_count} da verificare, ${output.unresolved_count} da risolvere.`,
+    actions: [{ label: "Apri Assegnazione Intelligente", href: "/piano-giorno/assegnazione-intelligente" }],
+  };
+}
+
 export function formatDriverAvailabilityAnswer(output: DriverAvailabilityOutput, timeWindow?: TimeWindow): MarioAnswer {
   const activeDrivers = output.drivers.filter((d) => d.active && !d.access_suspended);
   if (activeDrivers.length === 0) {

@@ -55,8 +55,13 @@ describe("Sprint 5 — wiring e sicurezza (spec TEST MINIMI: Existing tools + Se
     }
   });
 
-  it("19. write tools invariati: its.assign_driver e its.update_service_status restano gli UNICI tool WRITE nell'allowlist", () => {
-    expect(ENABLED_WRITE_TOOLS).toEqual(["its.assign_driver", "its.update_service_status"]);
+  it("19. write tools: its.assign_driver e its.update_service_status restano nell'allowlist (Assegnazione Intelligente ha aggiunto its.recalculate_assignment_plan e its.lock_assignment, non li ha sostituiti)", () => {
+    expect(ENABLED_WRITE_TOOLS).toEqual([
+      "its.assign_driver",
+      "its.update_service_status",
+      "its.recalculate_assignment_plan",
+      "its.lock_assignment",
+    ]);
   });
 
   it("19b. i 4 nuovi tool Sprint 5 sono tutti category READ (nessuna estensione della superficie WRITE)", () => {

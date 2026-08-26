@@ -15,11 +15,15 @@ import {
   formatAlertsAnswer,
   formatUnassignedAnswer,
   formatDriverAvailabilityAnswer,
+  formatAssignmentPlanAnswer,
+  formatAssignmentExceptionsAnswer,
   type OperationalBriefOutput,
   type HealthStatusOutput,
   type OperationalAlertsOutput,
   type UnassignedServicesOutput,
   type DriverAvailabilityOutput,
+  type AssignmentPlanOutput,
+  type AssignmentExceptionsOutput,
 } from "./answer-formatter";
 
 export type MarioAssistantResult = {
@@ -36,6 +40,8 @@ const FAILURE_MESSAGE_BY_INTENT: Record<string, string> = {
   alerts: "Al momento non riesco a leggere gli alert.",
   unassigned: "Al momento non riesco a leggere i servizi senza autista.",
   driver_availability: "Al momento non riesco a leggere la disponibilità autisti.",
+  assignment_plan: "Al momento non riesco a leggere il piano di assegnazione.",
+  assignment_exceptions: "Al momento non riesco a leggere le eccezioni del piano di assegnazione.",
 };
 
 const TOOL_NAME_BY_INTENT: Record<string, string> = {
@@ -44,6 +50,8 @@ const TOOL_NAME_BY_INTENT: Record<string, string> = {
   alerts: "its.get_operational_alerts",
   unassigned: "its.get_unassigned_services",
   driver_availability: "its.get_driver_availability",
+  assignment_plan: "its.get_assignment_plan",
+  assignment_exceptions: "its.get_assignment_exceptions",
 };
 
 function isMcpToolContentResult(value: unknown): value is { isError?: boolean; content: Array<{ type: string; text?: string }> } {
@@ -74,7 +82,7 @@ export async function runMarioAssistant(
   // suo schema) — se l'utente non l'ha menzionata, default a oggi qui, non
   // nel parser (il parser resta un puro riconoscitore di testo).
   const input =
-    detected.intent === "driver_availability"
+    detected.intent === "driver_availability" || detected.intent === "assignment_plan" || detected.intent === "assignment_exceptions"
       ? { date: detected.params.date ?? new Date().toISOString().slice(0, 10) }
       : detected.params;
 
@@ -114,6 +122,14 @@ export async function runMarioAssistant(
     }
     case "driver_availability": {
       const { answer, actions } = formatDriverAvailabilityAnswer(parsed as DriverAvailabilityOutput, detected.params.timeWindow);
+      return { intent: detected.intent, answer, actions, data: parsed };
+    }
+    case "assignment_plan": {
+      const { answer, actions } = formatAssignmentPlanAnswer(parsed as AssignmentPlanOutput);
+      return { intent: detected.intent, answer, actions, data: parsed };
+    }
+    case "assignment_exceptions": {
+      const { answer, actions } = formatAssignmentExceptionsAnswer(parsed as AssignmentExceptionsOutput);
       return { intent: detected.intent, answer, actions, data: parsed };
     }
     default:

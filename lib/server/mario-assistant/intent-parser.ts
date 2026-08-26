@@ -12,6 +12,8 @@ export type MarioIntentResult =
   | { intent: "alerts"; params: { severity?: "warning" | "critical" | "all" } }
   | { intent: "unassigned"; params: { date?: string } }
   | { intent: "driver_availability"; params: { date?: string; timeWindow?: TimeWindow } }
+  | { intent: "assignment_plan"; params: { date?: string } }
+  | { intent: "assignment_exceptions"; params: { date?: string } }
   | { intent: "write_unsupported"; params: Record<string, never> }
   | { intent: "unsupported"; params: Record<string, never> };
 
@@ -39,6 +41,17 @@ export function detectMarioIntent(rawText: string, now: Date = new Date()): Mari
   // perche' e' il piu' specifico (evita che "problemi" da solo finisca qui).
   if (/\bfunzion|tecnic|salute (del )?sistema|come sta (il )?(sistema|its)|its\s+(va|sta)\b/.test(text)) {
     return { intent: "health_status", params: {} };
+  }
+
+  // Piano di assegnazione intelligente — controllato prima di operational_brief
+  // perche' "piano/assegnazioni" e' piu' specifico di "giornata/situazione".
+  if (/\b(piano (di assegnazione|automatico)|prepara(mi)?\s+(il piano|le assegnazioni)|assegnazioni di (oggi|domani|domenica|lunedì|lunedi|martedì|martedi|mercoledì|mercoledi|giovedì|giovedi|venerdì|venerdi|sabato))\b/.test(text)) {
+    const date = parseRelativeOrIsoDate(text, now);
+    return { intent: "assignment_plan", params: date ? { date } : {} };
+  }
+  if (/\b(eccezion|solo (i |le )?(servizi )?(non risolt|da verificare|da risolvere|review))\b/.test(text)) {
+    const date = parseRelativeOrIsoDate(text, now);
+    return { intent: "assignment_exceptions", params: date ? { date } : {} };
   }
 
   // Operational brief — richiede un contesto esplicito di "giornata".
@@ -78,7 +91,7 @@ export function detectMarioIntent(rawText: string, now: Date = new Date()): Mari
 }
 
 export const UNSUPPORTED_ANSWER =
-  "Questa richiesta non è ancora supportata. Posso aiutarti con situazione della giornata, salute sistema, alert, servizi senza autista e disponibilità autisti.";
+  "Questa richiesta non è ancora supportata. Posso aiutarti con situazione della giornata, salute sistema, alert, servizi senza autista, disponibilità autisti, piano di assegnazione intelligente ed eccezioni del piano.";
 
 export const WRITE_UNSUPPORTED_ANSWER =
   "Le operazioni di modifica richiedono ancora il flusso di conferma MCP e non sono disponibili in questa interfaccia.";

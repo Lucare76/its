@@ -11,3 +11,8 @@ import "@/lib/mcp/tools/get-operational-brief";
 import "@/lib/mcp/tools/get-health-status";
 import "@/lib/mcp/tools/get-operational-alerts";
 import "@/lib/mcp/tools/get-unassigned-services";
+import "@/lib/mcp/tools/get-assignment-plan";
+import "@/lib/mcp/tools/get-assignment-exceptions";
+import "@/lib/mcp/tools/explain-assignment";
+import "@/lib/mcp/tools/recalculate-assignment-plan";
+import "@/lib/mcp/tools/lock-assignment";

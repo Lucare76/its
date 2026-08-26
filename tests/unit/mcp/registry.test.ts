@@ -62,7 +62,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     await import("@/lib/mcp/tools/index");
   });
 
-  it("registra esattamente i 13 tool attesi dopo Sprint 5 (11 READ + 2 WRITE)", () => {
+  it("registra esattamente i 18 tool attesi dopo l'Assegnazione Intelligente (14 READ + 4 WRITE)", () => {
     const names = listTools()
       .map((tool) => tool.name)
       .sort();
@@ -82,6 +82,12 @@ describe("mcp production tool registry (its.* reali)", () => {
         "its.get_health_status",
         "its.get_operational_alerts",
         "its.get_unassigned_services",
+        // Assegnazione Intelligente — motore di scheduling operativo.
+        "its.get_assignment_plan",
+        "its.get_assignment_exceptions",
+        "its.explain_assignment",
+        "its.recalculate_assignment_plan",
+        "its.lock_assignment",
       ].sort()
     );
   });
@@ -99,7 +105,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     }
   });
 
-  it("esattamente due tool WRITE (its.assign_driver, its.update_service_status), nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
+  it("esattamente quattro tool WRITE, nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
     const nonReadTools = listTools()
       .filter((tool) => tool.category !== "READ")
       .map((tool) => ({ name: tool.name, category: tool.category }))
@@ -108,6 +114,8 @@ describe("mcp production tool registry (its.* reali)", () => {
       [
         { name: "its.assign_driver", category: "WRITE" },
         { name: "its.update_service_status", category: "WRITE" },
+        { name: "its.recalculate_assignment_plan", category: "WRITE" },
+        { name: "its.lock_assignment", category: "WRITE" },
       ].sort((a, b) => a.name.localeCompare(b.name))
     );
   });

@@ -22,7 +22,12 @@ export const ENABLED_TOOL_CATEGORIES: readonly McpToolCategory[] = ["READ"];
  * preview -> confirmation token -> execute). Aggiungere un tool WRITE qui
  * e' una decisione deliberata, non un effetto collaterale della registrazione.
  */
-export const ENABLED_WRITE_TOOLS: readonly string[] = ["its.assign_driver", "its.update_service_status"];
+export const ENABLED_WRITE_TOOLS: readonly string[] = [
+  "its.assign_driver",
+  "its.update_service_status",
+  "its.recalculate_assignment_plan",
+  "its.lock_assignment",
+];
 
 /**
  * Policy centralizzata: il singolo tool NON decide da solo se un ruolo puo'
