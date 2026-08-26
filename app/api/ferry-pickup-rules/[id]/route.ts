@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
+import { auditLog } from "@/lib/server/ops-audit";
+import { findConflictingRule, isTransportWindowValid, type FerryPickupRule } from "@/lib/ferry-pickup-rules";
+import { conflictErrorResponse } from "@/lib/server/ferry-pickup-rules-conflict";
 
 export const runtime = "nodejs";
 
@@ -10,9 +13,9 @@ const patchSchema = z.object({
   boat_type: z.enum(["traghetto", "aliscafo"]).optional(),
   transport_from: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   transport_to: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  company: z.string().min(1).max(60).optional(),
+  company: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).optional(),
   // departure_time intentionally excluded — read-only in the UI
-  arrival_port: z.string().min(1).max(60).optional(),
+  arrival_port: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).optional(),
   arrival_time: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
@@ -25,7 +28,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await authorizeServiceRoleRequest(request, {
-    roles: ["admin", "operator"],
+    roles: ["admin", "operator", "supervisor"],
     auditPrefix: "ferry_pickup_rules_update",
   });
   if (auth instanceof NextResponse) return auth;
@@ -44,6 +47,44 @@ export async function PATCH(
     return NextResponse.json({ error: "Nessun campo da aggiornare." }, { status: 400 });
   }
 
+  const { data: existing, error: existingError } = await auth.admin
+    .from("ferry_pickup_rules")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (existingError) {
+    return NextResponse.json({ error: existingError.message }, { status: 500 });
+  }
+  if (!existing) {
+    return NextResponse.json({ error: "Regola non trovata." }, { status: 404 });
+  }
+
+  const merged = { ...(existing as FerryPickupRule), ...parsed.data };
+
+  if (!isTransportWindowValid(merged.transport_from, merged.transport_to)) {
+    return NextResponse.json(
+      { error: "L'orario finale deve essere successivo all'orario iniziale." },
+      { status: 400 }
+    );
+  }
+
+  const { data: siblingRules, error: siblingsError } = await auth.admin
+    .from("ferry_pickup_rules")
+    .select("*")
+    .eq("agency_logic", merged.agency_logic)
+    .eq("transport_type", merged.transport_type)
+    .eq("boat_type", merged.boat_type);
+
+  if (siblingsError) {
+    return NextResponse.json({ error: siblingsError.message }, { status: 500 });
+  }
+
+  const conflict = findConflictingRule((siblingRules ?? []) as FerryPickupRule[], merged, id);
+  if (conflict) {
+    return conflictErrorResponse(conflict);
+  }
+
   const { data, error } = await auth.admin
     .from("ferry_pickup_rules")
     .update({ ...parsed.data, updated_at: new Date().toISOString() })
@@ -55,6 +96,16 @@ export async function PATCH(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  auditLog({
+    event: "ferry_pickup_rule_updated",
+    level: "info",
+    tenantId: auth.membership.tenant_id,
+    userId: auth.user.id,
+    role: auth.membership.role,
+    outcome: "updated",
+    details: { ruleId: id, previous: existing, next: data },
+  });
+
   return NextResponse.json({ ok: true, rule: data });
 }
 
@@ -63,12 +114,25 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await authorizeServiceRoleRequest(request, {
-    roles: ["admin", "operator"],
+    roles: ["admin", "operator", "supervisor"],
     auditPrefix: "ferry_pickup_rules_delete",
   });
   if (auth instanceof NextResponse) return auth;
 
   const { id } = await params;
+
+  const { data: existing, error: existingError } = await auth.admin
+    .from("ferry_pickup_rules")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (existingError) {
+    return NextResponse.json({ error: existingError.message }, { status: 500 });
+  }
+  if (!existing) {
+    return NextResponse.json({ error: "Regola non trovata." }, { status: 404 });
+  }
 
   const { error } = await auth.admin
     .from("ferry_pickup_rules")
@@ -78,6 +142,16 @@ export async function DELETE(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  auditLog({
+    event: "ferry_pickup_rule_deleted",
+    level: "info",
+    tenantId: auth.membership.tenant_id,
+    userId: auth.user.id,
+    role: auth.membership.role,
+    outcome: "deleted",
+    details: { ruleId: id, previous: existing, next: null },
+  });
 
   return NextResponse.json({ ok: true });
 }

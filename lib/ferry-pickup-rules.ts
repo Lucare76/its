@@ -17,7 +17,7 @@ export interface FerryPickupRule {
   updated_at: string;
 }
 
-function normalizeTime(t: string): string {
+export function normalizeTime(t: string): string {
   return t.slice(0, 5);
 }
 
@@ -30,17 +30,142 @@ function normalizeRuleDate(value: string | null): string | null {
   return year >= 2000 ? normalized : null;
 }
 
-function isRuleActiveOnDate(rule: FerryPickupRule, isoDate: string): boolean {
+/**
+ * Verifica solo la validità stagionale (valid_from/valid_to), senza guardare
+ * i giorni della settimana. valid_from/valid_to in questo schema sono sempre
+ * date complete con anno (mai pattern ricorrenti "mese/giorno" senza anno):
+ * un periodo che attraversa il capodanno (es. 2026-09-16 → 2027-04-30) è già
+ * gestito correttamente da un semplice confronto stringa, senza bisogno di
+ * logica di "wrap-around".
+ */
+export function isRuleWithinValidityPeriod(
+  rule: Pick<FerryPickupRule, "valid_from" | "valid_to">,
+  isoDate: string
+): boolean {
   if (!isoDate) return true;
   const validFrom = normalizeRuleDate(rule.valid_from);
   const validTo = normalizeRuleDate(rule.valid_to);
   if (validFrom && isoDate < validFrom) return false;
   if (validTo && isoDate > validTo) return false;
+  return true;
+}
+
+/** Verifica solo il giorno della settimana (days_of_week nullo/vuoto = tutti i giorni). */
+export function isRuleDayOfWeekAllowed(
+  rule: Pick<FerryPickupRule, "days_of_week">,
+  isoDate: string
+): boolean {
+  if (!isoDate) return true;
   if (rule.days_of_week?.length) {
+    // T12:00:00 (nessun suffisso "Z") evita che l'orario locale sposti la
+    // data attraverso la mezzanotte per via del fuso orario di esecuzione.
     const dow = new Date(`${isoDate}T12:00:00`).getDay();
     if (!rule.days_of_week.includes(dow)) return false;
   }
   return true;
+}
+
+function isRuleActiveOnDate(rule: FerryPickupRule, isoDate: string): boolean {
+  return isRuleWithinValidityPeriod(rule, isoDate) && isRuleDayOfWeekAllowed(rule, isoDate);
+}
+
+export type RuleActivityStatus = "active_today" | "off_season" | "inactive_today";
+
+/**
+ * Stato della regola rispetto a una data di riferimento (tipicamente oggi),
+ * per il badge mostrato in tabella:
+ * - "off_season": la data non rientra nel periodo valid_from/valid_to.
+ * - "inactive_today": la stagione è valida ma il giorno della settimana no.
+ * - "active_today": la regola si applicherebbe oggi.
+ */
+export function getRuleActivityStatus(
+  rule: Pick<FerryPickupRule, "valid_from" | "valid_to" | "days_of_week">,
+  isoDate: string
+): RuleActivityStatus {
+  if (!isRuleWithinValidityPeriod(rule, isoDate)) return "off_season";
+  if (!isRuleDayOfWeekAllowed(rule, isoDate)) return "inactive_today";
+  return "active_today";
+}
+
+const ROME_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Rome",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/** Data odierna (YYYY-MM-DD) nel fuso Europe/Rome, stabile rispetto a UTC/DST. */
+export function todayIsoDateRome(now: Date = new Date()): string {
+  return ROME_DATE_FORMATTER.format(now);
+}
+
+/** true se l'intervallo di arrivo del mezzo è valido (from < to, nessun attraversamento mezzanotte). */
+export function isTransportWindowValid(from: string, to: string): boolean {
+  return normalizeTime(from) < normalizeTime(to);
+}
+
+function timeRangesOverlap(aFrom: string, aTo: string, bFrom: string, bTo: string): boolean {
+  return normalizeTime(aFrom) < normalizeTime(bTo) && normalizeTime(bFrom) < normalizeTime(aTo);
+}
+
+function dateRangesOverlap(
+  aFrom: string | null,
+  aTo: string | null,
+  bFrom: string | null,
+  bTo: string | null
+): boolean {
+  const aStart = normalizeRuleDate(aFrom) ?? "0000-01-01";
+  const aEnd = normalizeRuleDate(aTo) ?? "9999-12-31";
+  const bStart = normalizeRuleDate(bFrom) ?? "0000-01-01";
+  const bEnd = normalizeRuleDate(bTo) ?? "9999-12-31";
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
+function daysOfWeekOverlap(a: number[] | null | undefined, b: number[] | null | undefined): boolean {
+  // Nessuna lista (o vuota) = "tutti i giorni": è un jolly che si sovrappone a qualunque altro insieme.
+  if (!a?.length || !b?.length) return true;
+  return a.some((d) => b.includes(d));
+}
+
+export type FerryPickupRuleCandidate = Pick<
+  FerryPickupRule,
+  "agency_logic" | "transport_type" | "boat_type" | "transport_from" | "transport_to" | "valid_from" | "valid_to" | "days_of_week"
+>;
+
+/**
+ * Trova, tra `rules`, la prima regola che potrebbe competere realmente con
+ * `candidate` per lo stesso servizio secondo il matcher reale
+ * (findFerryPickupRule): stessa terna agency_logic/transport_type/boat_type
+ * (l'unico filtro di uguaglianza che il matcher applica), finestra oraria di
+ * arrivo del mezzo sovrapposta, e periodo di validità (stagione + giorni
+ * della settimana) potenzialmente sovrapposto.
+ *
+ * Compagnia, porto e orario di sbarco NON sono discriminator del matcher: due
+ * regole con compagnie diverse (es. una SNAV e una CAREMAR) competono lo
+ * stesso se il resto coincide — è esattamente il caso ambiguo che il matcher
+ * risolverebbe in modo implicito/fragile via tie-break su valid_from.
+ * Viceversa, `agency_logic` non è "SNAV vs non-SNAV": è 'aleste' (tutte le
+ * agenzie tranne Sosandra) oppure 'sosandra' — la compagnia SNAV può in
+ * teoria comparire in entrambi i gruppi, quindi non viene mai usata come
+ * criterio di esclusione qui.
+ */
+export function findConflictingRule(
+  rules: FerryPickupRule[],
+  candidate: FerryPickupRuleCandidate,
+  excludeId?: string | null
+): FerryPickupRule | null {
+  return (
+    rules.find((r) => {
+      if (excludeId && r.id === excludeId) return false;
+      if (r.agency_logic !== candidate.agency_logic) return false;
+      if (r.transport_type !== candidate.transport_type) return false;
+      if (r.boat_type !== candidate.boat_type) return false;
+      if (!timeRangesOverlap(r.transport_from, r.transport_to, candidate.transport_from, candidate.transport_to)) return false;
+      if (!dateRangesOverlap(r.valid_from, r.valid_to, candidate.valid_from ?? null, candidate.valid_to ?? null)) return false;
+      if (!daysOfWeekOverlap(r.days_of_week, candidate.days_of_week)) return false;
+      return true;
+    }) ?? null
+  );
 }
 
 export interface FerryPickupMatch {

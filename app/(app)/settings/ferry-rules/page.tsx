@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { SidePanel } from "@/components/ui/side-panel";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
-import type { FerryPickupRule } from "@/lib/ferry-pickup-rules";
+import {
+  findConflictingRule,
+  getRuleActivityStatus,
+  isTransportWindowValid,
+  todayIsoDateRome,
+  type FerryPickupRule,
+  type RuleActivityStatus,
+} from "@/lib/ferry-pickup-rules";
 
 // ─── Costanti ─────────────────────────────────────────────────────────────────
 
@@ -22,6 +29,12 @@ const PORTS = [
 ];
 
 const DAYS_LABEL = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
+
+const STATUS_BADGE: Record<RuleActivityStatus, { icon: string; label: string; className: string }> = {
+  active_today: { icon: "🟢", label: "Attiva oggi", className: "text-emerald-700" },
+  off_season: { icon: "⚪", label: "Fuori stagione", className: "text-slate-400" },
+  inactive_today: { icon: "🟠", label: "Non attiva oggi", className: "text-amber-600" },
+};
 
 type Section = {
   transport_type: "train" | "flight";
@@ -152,8 +165,34 @@ export default function FerryRulesPage() {
 
   async function handleSave() {
     if (!token) return;
-    setSaving(true);
     setSaveError(null);
+
+    if (!isTransportWindowValid(form.transport_from, form.transport_to)) {
+      setSaveError("L'orario finale deve essere successivo all'orario iniziale.");
+      return;
+    }
+
+    const candidate = {
+      agency_logic: form.agency_logic,
+      transport_type: form.transport_type,
+      boat_type: form.boat_type,
+      transport_from: form.transport_from,
+      transport_to: form.transport_to,
+      valid_from: form.valid_from || null,
+      valid_to: form.valid_to || null,
+      days_of_week: form.days_of_week.length > 0 ? form.days_of_week : null,
+    };
+    const conflict = findConflictingRule(rules, candidate, editingRule?.id ?? null);
+    if (conflict) {
+      const from = conflict.transport_from.slice(0, 5);
+      const to = conflict.transport_to.slice(0, 5);
+      setSaveError(
+        `Questa fascia si sovrappone a una regola già esistente: ${(COMPANY_LABEL[conflict.company] ?? conflict.company)} ${from}–${to}.`
+      );
+      return;
+    }
+
+    setSaving(true);
 
     const payload = {
       agency_logic: form.agency_logic,
@@ -240,6 +279,7 @@ export default function FerryRulesPage() {
   if (error)   return <p className="text-sm text-rose-600 p-6">{error}</p>;
 
   const sections = activeTab === "aleste" ? ALESTE_SECTIONS : SOSANDRA_SECTIONS;
+  const today = todayIsoDateRome();
 
   return (
     <>
@@ -298,11 +338,14 @@ export default function FerryRulesPage() {
                         <th className="pb-2 pr-3">Porto</th>
                         <th className="pb-2 pr-3">Sbarco</th>
                         <th className="pb-2 pr-3">Validità</th>
+                        <th className="pb-2 pr-3">Stato</th>
                         <th className="pb-2" />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {sectionRules.map((rule) => (
+                      {sectionRules.map((rule) => {
+                        const status = STATUS_BADGE[getRuleActivityStatus(rule, today)];
+                        return (
                         <tr key={rule.id} className="hover:bg-slate-50/60">
                           <td className="py-2 pr-3 font-mono text-slate-700">
                             {rule.transport_from.slice(0, 5)}–{rule.transport_to.slice(0, 5)}
@@ -322,6 +365,9 @@ export default function FerryRulesPage() {
                           <td className="py-2 pr-3 text-[11px] text-slate-400">
                             {formatSeasonBadge(rule) || "tutto l'anno"}
                           </td>
+                          <td className={`py-2 pr-3 text-xs whitespace-nowrap ${status.className}`} title={status.label}>
+                            {status.icon} {status.label}
+                          </td>
                           <td className="py-2 text-right whitespace-nowrap">
                             <button
                               type="button"
@@ -339,7 +385,8 @@ export default function FerryRulesPage() {
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
