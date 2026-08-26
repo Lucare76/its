@@ -66,7 +66,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Nessun tenant trovato. Contatta l'amministratore." }, { status: 404 });
   }
 
-  // Check no pending request already exists for this tenant
+  // Check no pending request already exists for this tenant. A previously
+  // rejected request is reopened (same row, status back to "pending")
+  // instead of blocked forever — the unique(tenant_id, user_id) constraint
+  // means a plain insert would otherwise 500 on conflict.
   const { data: existingRequest } = await admin
     .from("tenant_access_requests")
     .select("id, status")
@@ -74,24 +77,36 @@ export async function POST(request: NextRequest) {
     .eq("tenant_id", tenantId)
     .maybeSingle();
 
-  if (existingRequest?.id) {
+  if (existingRequest?.id && existingRequest.status !== "rejected") {
     return NextResponse.json({
       error: "Hai già una richiesta accesso in attesa. Attendi l'approvazione dell'amministratore."
     }, { status: 409 });
   }
 
-  const { data: newRequest, error: insertErr } = await admin
-    .from("tenant_access_requests")
-    .insert({
-      tenant_id: tenantId,
-      user_id: user.id,
-      email: user.email ?? "",
-      full_name: full_name.trim(),
-      requested_role: requested_role ?? null,
-      status: "pending"
-    })
-    .select("id, tenant_id, status, created_at")
-    .single();
+  const requestPersistPayload = {
+    tenant_id: tenantId,
+    user_id: user.id,
+    email: user.email ?? "",
+    full_name: full_name.trim(),
+    requested_role: requested_role ?? null,
+    status: "pending",
+    review_notes: null,
+    reviewed_by_user_id: null,
+    reviewed_at: null
+  };
+
+  const { data: newRequest, error: insertErr } = existingRequest?.id
+    ? await admin
+        .from("tenant_access_requests")
+        .update(requestPersistPayload)
+        .eq("id", existingRequest.id)
+        .select("id, tenant_id, status, created_at")
+        .single()
+    : await admin
+        .from("tenant_access_requests")
+        .insert(requestPersistPayload)
+        .select("id, tenant_id, status, created_at")
+        .single();
 
   if (insertErr || !newRequest) {
     return NextResponse.json({ error: insertErr?.message ?? "Errore creazione richiesta." }, { status: 500 });

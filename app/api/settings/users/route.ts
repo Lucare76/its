@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { sendAccessApprovalEmail } from "@/lib/server/access-approval-email";
+import { sendAccessRejectionEmail } from "@/lib/server/access-rejection-email";
 import {
   ensureDriverProfileForMembership,
   reserveMembershipUsername,
@@ -525,6 +526,21 @@ export async function PATCH(request: NextRequest) {
 
       if (rejectUpdate.error || !rejectUpdate.data?.id) {
         return NextResponse.json({ error: rejectUpdate.error?.message ?? "Rifiuto richiesta fallito." }, { status: 500 });
+      }
+
+      // Best-effort: the reject decision is already persisted above — an
+      // email provider failure must never roll it back or fail this response.
+      try {
+        const rejectionEmailResult = await sendAccessRejectionEmail({
+          to: requestRow.email,
+          fullName: requestRow.full_name,
+          reasonForAgency: review_notes?.trim() || null
+        });
+        if (rejectionEmailResult.status === "failed") {
+          console.error(`[settings/users] rifiuto email fallita per ${requestRow.email}: ${rejectionEmailResult.error}`);
+        }
+      } catch (error) {
+        console.error(`[settings/users] rifiuto email eccezione per ${requestRow.email}:`, error);
       }
 
       return NextResponse.json({ ok: true, request: { id: request_id, status: "rejected" } });

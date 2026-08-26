@@ -5,6 +5,7 @@ import { hasDeliverableEmailDomain, isDisposableEmail } from "@/lib/email-valida
 import { checkRateLimit, RATE_LIMIT_DEFAULTS, type RateLimitConfig } from "@/lib/server/rate-limit";
 import { sendSecurityAlert } from "@/lib/server/security-alert-email";
 import { adminGetUserByEmail } from "@/lib/server/admin-user-lookup";
+import { sendAccessRequestReceivedEmail } from "@/lib/server/access-request-received-email";
 
 export const runtime = "nodejs";
 
@@ -60,12 +61,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Esiste gia una richiesta in attesa per questa email." }, { status: 409 });
   }
 
+  // A previously rejected request keeps its row (tenant_id IS NULL) forever
+  // because of the unique(user_id) WHERE tenant_id IS NULL index — re-request
+  // after rejection must reopen that same row instead of inserting a new one,
+  // otherwise the unique index would reject the insert with a false-positive
+  // "duplicate request" and lock the user out permanently.
+  const reopenRequestId = existingRequest.data?.id && existingRequest.data.status === "rejected" ? existingRequest.data.id : null;
+
   const { user: existingAuthUser, error: getUserError } = await adminGetUserByEmail(email);
   if (getUserError) {
     return NextResponse.json({ error: getUserError }, { status: 500 });
   }
 
   let userId = existingAuthUser?.id ?? null;
+  let userCreatedInThisRequest = false;
 
   // Check membership BEFORE touching auth.users — prevents password overwrite on existing accounts
   if (userId) {
@@ -105,36 +114,68 @@ export async function POST(request: NextRequest) {
     }
 
     userId = userResult.data.user.id;
+    userCreatedInThisRequest = true;
   }
 
-  const requestInsert = await admin
-    .from("tenant_access_requests")
-    .insert({
-      tenant_id: null,
-      user_id: userId,
-      email,
-      full_name: fullName,
-      agency_name: agencyName,
-      requested_role: parsed.data.requested_role ?? null,
-      status: "pending",
-      review_notes: null,
-      reviewed_by_user_id: null,
-      reviewed_at: null
-    })
-    .select("id")
-    .maybeSingle();
+  const requestPersistPayload = {
+    tenant_id: null,
+    user_id: userId,
+    email,
+    full_name: fullName,
+    agency_name: agencyName,
+    requested_role: parsed.data.requested_role ?? null,
+    status: "pending",
+    review_notes: null,
+    reviewed_by_user_id: null,
+    reviewed_at: null
+  };
+
+  const requestInsert = reopenRequestId
+    ? await admin
+        .from("tenant_access_requests")
+        .update(requestPersistPayload)
+        .eq("id", reopenRequestId)
+        .select("id")
+        .maybeSingle()
+    : await admin
+        .from("tenant_access_requests")
+        .insert(requestPersistPayload)
+        .select("id")
+        .maybeSingle();
 
   if (requestInsert.error || !requestInsert.data?.id) {
+    // 23505 = unique_violation (race condition: another request for the same
+    // user landed between our pre-check SELECT and this INSERT).
+    const isDuplicate = requestInsert.error?.code === "23505";
+
+    if (userCreatedInThisRequest) {
+      const deleteResult = await admin.auth.admin.deleteUser(userId!);
+      console.error(
+        `[auth/register] rollback: deleting orphaned auth user ${userId} after tenant_access_requests insert failure`,
+        requestInsert.error?.message,
+        deleteResult.error ? `rollback delete also failed: ${deleteResult.error.message}` : "rollback delete ok"
+      );
+    }
+
     await admin
       .from("auth_audit_log")
       .insert({
-        user_id: userId,
+        user_id: userCreatedInThisRequest ? null : userId,
         event_type: "register",
         status: "failed",
         ip_address: ipAddress,
-        details: { email, full_name: fullName, error: requestInsert.error?.message }
+        details: {
+          email,
+          full_name: fullName,
+          error: requestInsert.error?.message,
+          rolled_back_auth_user: userCreatedInThisRequest
+        }
       })
       .then(() => undefined, () => undefined);
+
+    if (isDuplicate) {
+      return NextResponse.json({ error: "Esiste gia una richiesta in attesa per questa email." }, { status: 409 });
+    }
 
     return NextResponse.json({ error: requestInsert.error?.message ?? "Richiesta accesso non registrata." }, { status: 500 });
   }
@@ -149,6 +190,17 @@ export async function POST(request: NextRequest) {
       details: { email, full_name: fullName, agency_name: agencyName }
     })
     .then(() => undefined, () => undefined);
+
+  // Best-effort: a broken email provider must never fail an otherwise valid
+  // registration — the pending request is already persisted at this point.
+  try {
+    const receivedEmailResult = await sendAccessRequestReceivedEmail({ to: email, fullName, agencyName });
+    if (receivedEmailResult.status === "failed") {
+      console.error(`[auth/register] richiesta ricevuta email fallita per ${email}: ${receivedEmailResult.error}`);
+    }
+  } catch (error) {
+    console.error(`[auth/register] richiesta ricevuta email eccezione per ${email}:`, error);
+  }
 
   return NextResponse.json(
     {

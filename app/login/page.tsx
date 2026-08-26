@@ -123,7 +123,7 @@ export default function LoginPage() {
       const emailRedirectTo = `${window.location.origin}/dashboard`;
       const { error } = await supabase.auth.signInWithOtp({
         email: normalizeIdentifier(identifier),
-        options: { emailRedirectTo }
+        options: { emailRedirectTo, shouldCreateUser: false }
       });
       if (error) {
         setMessage(`Invio link non riuscito: ${error.message}`);

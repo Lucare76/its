@@ -276,7 +276,7 @@ export const AGENZIE_GROUP: NavMainGroup = {
   label: "Agenzie",
   icon: "C",
   items: [
-    { href: "/agency-requests", label: "Richieste agenzie", icon: "🏨" },
+    { href: "/agency-requests", label: "Richieste prenotazioni agenzie", icon: "🏨" },
     { href: "/estratto-conto", label: "Estratto conto", icon: "€" },
     { href: "/agency-statement", label: "Contestazioni prezzo", icon: "⚠️" },
     { href: "/libro-mastro", label: "Libro mastro", icon: "📒" },
