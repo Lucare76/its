@@ -44,6 +44,14 @@ function formatDateTimeIt(iso: string): string {
 }
 
 type NotificationSeverity = "high" | "medium" | "low";
+type OperationalNotification = {
+  key: string;
+  title: string;
+  detail: string;
+  count: number;
+  href: string;
+  tone: "rose" | "amber" | "blue" | "violet" | "slate";
+};
 
 function toAlert(row: ServiceChangeLogRow): { id: string; title: string; detail: string; severity: NotificationSeverity; serviceId: string } {
   const customer = customerLabel(row);
@@ -80,10 +88,19 @@ function toAlert(row: ServiceChangeLogRow): { id: string; title: string; detail:
   };
 }
 
+function operationalToneClass(tone: OperationalNotification["tone"]) {
+  if (tone === "rose") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (tone === "amber") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (tone === "blue") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (tone === "violet") return "border-violet-200 bg-violet-50 text-violet-700";
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
 export default function NotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [rows, setRows] = useState<ServiceChangeLogRow[]>([]);
+  const [operationalItems, setOperationalItems] = useState<OperationalNotification[]>([]);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
   const [dismissingAll, setDismissingAll] = useState(false);
 
@@ -103,7 +120,15 @@ export default function NotificationsPage() {
       }
       const since = new Date();
       since.setDate(since.getDate() - LOOKBACK_DAYS);
-      const { data, error } = await supabase
+      const [
+        serviceLogsResult,
+        agencyBookingsResult,
+        agencyReviewsResult,
+        cancellationsResult,
+        vehiclesResult,
+        accessRequestsResult
+      ] = await Promise.all([
+        supabase
         .from("service_change_logs")
         .select("id, service_id, action, changed_fields, after_data, operator_name, created_at")
         .eq("tenant_id", session.tenantId)
@@ -111,14 +136,103 @@ export default function NotificationsPage() {
         .is("dismissed_at", null)
         .gte("created_at", since.toISOString())
         .order("created_at", { ascending: false })
-        .limit(MAX_ROWS);
+        .limit(MAX_ROWS),
+        session.role === "admin" || session.role === "operator"
+          ? supabase
+            .from("services")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", session.tenantId)
+            .eq("approval_status", "pending_operator")
+          : Promise.resolve({ count: 0, error: null }),
+        supabase
+          .from("agency_review_sessions")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", session.tenantId)
+          .eq("status", "modified"),
+        session.role === "admin" || session.role === "operator"
+          ? supabase
+            .from("cancellation_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", session.tenantId)
+            .in("status", ["pending_review", "pending_agency_approval"])
+          : Promise.resolve({ count: 0, error: null }),
+        supabase
+          .from("vehicles")
+          .select("id")
+          .eq("tenant_id", session.tenantId),
+        session.role === "admin"
+          ? supabase
+            .from("tenant_access_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", session.tenantId)
+            .eq("status", "pending")
+          : Promise.resolve({ count: 0, error: null })
+      ]);
+
+      const { data, error } = serviceLogsResult;
       if (!active) return;
       if (error) {
         setErrorMessage("Errore nel caricamento delle notifiche.");
         setLoading(false);
         return;
       }
+      let qrReportsCount = 0;
+      const vehicleIds = ((vehiclesResult.data ?? []) as Array<{ id: string }>).map((vehicle) => vehicle.id);
+      if (vehicleIds.length > 0) {
+        const { count } = await supabase
+          .from("vehicle_qr_reports")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "open")
+          .in("vehicle_id", vehicleIds);
+        if (!active) return;
+        qrReportsCount = count ?? 0;
+      }
+
+      const nextOperationalItems = [
+        {
+          key: "agency-bookings",
+          title: "Richieste agenzia",
+          detail: "Prenotazioni ricevute dalle agenzie da approvare.",
+          count: agencyBookingsResult.count ?? 0,
+          href: "/agency-requests",
+          tone: "blue",
+        },
+        {
+          key: "agency-reviews",
+          title: "Revisioni agenzie",
+          detail: "Modifiche agenzia da controllare prima di confermare.",
+          count: agencyReviewsResult.count ?? 0,
+          href: "/inbox/agency-reviews",
+          tone: "violet",
+        },
+        {
+          key: "cancellations",
+          title: "Cancellazioni",
+          detail: "Richieste di cancellazione ancora da gestire.",
+          count: cancellationsResult.count ?? 0,
+          href: "/cancellazioni",
+          tone: "amber",
+        },
+        {
+          key: "fleet-reports",
+          title: "Segnalazioni veicoli",
+          detail: "Segnalazioni QR aperte su mezzi o veicoli.",
+          count: qrReportsCount,
+          href: "/inbox/fleet-reports",
+          tone: "rose",
+        },
+        {
+          key: "access-requests",
+          title: "Accessi utenti",
+          detail: "Richieste di accesso team in attesa.",
+          count: accessRequestsResult.count ?? 0,
+          href: "/settings/users",
+          tone: "slate",
+        },
+      ] satisfies OperationalNotification[];
+
       setRows((data ?? []) as ServiceChangeLogRow[]);
+      setOperationalItems(nextOperationalItems.filter((item) => item.count > 0));
       setLoading(false);
     };
     void load();
@@ -161,26 +275,58 @@ export default function NotificationsPage() {
     medium: alerts.filter((item) => item.severity === "medium"),
     low: alerts.filter((item) => item.severity === "low")
   };
+  const operationalTotal = operationalItems.reduce((sum, item) => sum + item.count, 0);
 
   return (
     <section className="page-section">
       <PageHeader
         title="Centro notifiche"
-        subtitle="Nuove prenotazioni, modifiche e cancellazioni degli ultimi 14 giorni."
+        subtitle="Attivita operative da gestire e notifiche prenotazioni degli ultimi 14 giorni."
         breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Notifiche" }]}
       />
 
       {errorMessage ? <EmptyState title="Notifiche non disponibili" description={errorMessage} compact /> : null}
 
+      <SectionCard
+        title="Da gestire adesso"
+        loading={loading}
+        loadingLines={3}
+      >
+        {operationalItems.length === 0 ? (
+          <p className="text-sm text-muted">Nessuna attivita operativa pendente nei contatori della campanella.</p>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {operationalItems.map((item) => (
+              <Link
+                key={item.key}
+                href={item.href}
+                className={`rounded-2xl border p-4 transition hover:-translate-y-0.5 hover:shadow-md ${operationalToneClass(item.tone)}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-slate-950">{item.title}</p>
+                    <p className="mt-1 text-xs font-medium text-slate-600">{item.detail}</p>
+                  </div>
+                  <span className="inline-flex min-w-10 justify-center rounded-full bg-white px-3 py-1 text-lg font-black shadow-sm">
+                    {item.count > 99 ? "99+" : item.count}
+                  </span>
+                </div>
+                <p className="mt-3 text-xs font-bold uppercase tracking-wide">Apri sezione →</p>
+              </Link>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
       <div className="grid gap-3 md:grid-cols-3">
+        <SectionCard title="Azioni operative">
+          <p className="text-3xl font-semibold text-blue-700">{operationalTotal}</p>
+        </SectionCard>
         <SectionCard title="Alta priorita">
           <p className="text-3xl font-semibold text-rose-700">{groups.high.length}</p>
         </SectionCard>
         <SectionCard title="Media priorita">
           <p className="text-3xl font-semibold text-amber-700">{groups.medium.length}</p>
-        </SectionCard>
-        <SectionCard title="Bassa priorita">
-          <p className="text-3xl font-semibold text-slate-900">{groups.low.length}</p>
         </SectionCard>
       </div>
 
