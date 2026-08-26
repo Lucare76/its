@@ -141,6 +141,7 @@ export default function SettingsUsersPage() {
   const [passwordDrafts, setPasswordDrafts] = useState<Record<string, string>>({});
   const [genderDrafts, setGenderDrafts] = useState<Record<string, string>>({});
   const [requestRoleDrafts, setRequestRoleDrafts] = useState<Record<string, UserRole>>({});
+  const [rejectNotesDrafts, setRejectNotesDrafts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("Caricamento utenti tenant...");
 
   const sortedMemberships = useMemo(
@@ -468,6 +469,13 @@ export default function SettingsUsersPage() {
   const reviewAccessRequest = async (request: PendingAccessRequestRow, action: "approve" | "reject") => {
     if (!hasSupabaseEnv || !supabase || reviewingRequestId) return;
 
+    const agencyLabel = request.agency_name?.trim() || request.full_name;
+    const confirmed =
+      action === "approve"
+        ? window.confirm(`Confermi l'approvazione dell'agenzia ${agencyLabel}?`)
+        : window.confirm(`Confermi il rifiuto della richiesta di ${agencyLabel}?`);
+    if (!confirmed) return;
+
     setReviewingRequestId(request.id);
     setMessage(`${action === "approve" ? "Approvazione" : "Rifiuto"} richiesta di ${request.full_name}...`);
 
@@ -488,12 +496,17 @@ export default function SettingsUsersPage() {
       body: JSON.stringify({
         request_id: request.id,
         action,
-        role: action === "approve" ? requestRoleDrafts[request.id] ?? request.requested_role ?? "operator" : undefined
+        role: action === "approve" ? requestRoleDrafts[request.id] ?? request.requested_role ?? "operator" : undefined,
+        review_notes: action === "reject" ? rejectNotesDrafts[request.id]?.trim() || undefined : undefined
       })
     });
 
     const body = (await response.json().catch(() => null)) as
-      | { error?: string; approved_request?: { user_id: string; tenant_id: string; full_name: string; role: UserRole } }
+      | {
+          error?: string;
+          approved_request?: { user_id: string; tenant_id: string; full_name: string; role: UserRole; email_status?: "sent" | "failed" | "skipped" };
+          request?: { id: string; status: string; email_status?: "sent" | "failed" | "skipped" };
+        }
       | null;
 
     if (!response.ok) {
@@ -503,6 +516,10 @@ export default function SettingsUsersPage() {
     }
 
     setPendingAccessRequests((prev) => prev.filter((item) => item.id !== request.id));
+    setRejectNotesDrafts((prev) => {
+      const { [request.id]: _removed, ...rest } = prev;
+      return rest;
+    });
 
     const approvedRequest = body?.approved_request;
     if (approvedRequest) {
@@ -519,9 +536,22 @@ export default function SettingsUsersPage() {
         if (existingIndex < 0) return [...prev, nextRow];
         return prev.map((item, index) => (index === existingIndex ? { ...item, ...nextRow } : item));
       });
-      setMessage(`Richiesta approvata: ${approvedRequest.full_name} ora entra come ${approvedRequest.role}.`);
+      const approvalEmailNote =
+        approvedRequest.email_status === "failed"
+          ? " Attenzione: invio email di conferma non riuscito, l'account è comunque attivo — verifica il log."
+          : approvedRequest.email_status === "skipped"
+            ? " (email non inviata: provider non configurato)"
+            : " Email di conferma inviata.";
+      setMessage(`Richiesta approvata: account e accesso creati per ${approvedRequest.full_name} (${approvedRequest.role}).${approvalEmailNote}`);
     } else {
-      setMessage(`Richiesta rifiutata: ${request.full_name}.`);
+      const rejectionEmailStatus = body?.request?.email_status;
+      const rejectionEmailNote =
+        rejectionEmailStatus === "failed"
+          ? " Attenzione: invio email di notifica non riuscito — verifica il log."
+          : rejectionEmailStatus === "skipped"
+            ? " (email non inviata: provider non configurato)"
+            : " Email di notifica inviata.";
+      setMessage(`Richiesta rifiutata: ${request.full_name}.${rejectionEmailNote}`);
     }
 
     setReviewingRequestId(null);
@@ -805,9 +835,14 @@ export default function SettingsUsersPage() {
                     <p className="text-base font-semibold text-text">{request.full_name}</p>
                     <p className="mt-1 break-all text-sm text-muted">{request.email}</p>
                   </div>
-                  <span className={`rounded-full px-2 py-1 text-[11px] font-medium uppercase tracking-[0.08em] ${roleBadgeTone(request.requested_role ?? "agency")}`}>
-                    {request.requested_role ?? "non indicato"}
-                  </span>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-800 ring-1 ring-amber-200">
+                      In attesa di approvazione
+                    </span>
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-medium uppercase tracking-[0.08em] ${roleBadgeTone(request.requested_role ?? "agency")}`}>
+                      {request.requested_role ?? "non indicato"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px] xl:items-start">
@@ -849,6 +884,14 @@ export default function SettingsUsersPage() {
                   </div>
 
                   <div className="flex flex-col gap-2 xl:items-end">
+                    <textarea
+                      value={rejectNotesDrafts[request.id] ?? ""}
+                      onChange={(event) => setRejectNotesDrafts((prev) => ({ ...prev, [request.id]: event.target.value }))}
+                      placeholder="Motivo del rifiuto (opzionale, visibile all'agenzia)"
+                      rows={2}
+                      disabled={reviewingRequestId === request.id}
+                      className="input-saas w-full resize-none text-xs xl:w-full"
+                    />
                     <button
                       type="button"
                       className="btn-primary w-full px-3 py-2 text-xs xl:w-auto"

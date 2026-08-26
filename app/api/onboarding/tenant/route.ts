@@ -6,6 +6,28 @@ import { createAdminClient } from "@/lib/server/supabase-admin";
 
 export const runtime = "nodejs";
 
+/**
+ * Mirrors the bootstrap check enforced server-side in POST below (403 when a
+ * tenant already exists). This is purely informational for the client — it
+ * lets the UI hide the "Crea nuova azienda" option instead of showing a
+ * dead-end that always 403s, without being the actual security boundary.
+ */
+async function canCreateTenantSystemWide(admin: ReturnType<typeof createAdminClient>) {
+  const { count } = await admin.from("tenants").select("id", { count: "exact", head: true });
+  return (count ?? 0) === 0;
+}
+
+async function findLatestAccessRequestForUser(admin: ReturnType<typeof createAdminClient>, userId: string) {
+  const { data } = await admin
+    .from("tenant_access_requests")
+    .select("id, tenant_id, status, created_at, review_notes, email, tenants(name)")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
+
 async function getUserFromAuthHeader(admin: ReturnType<typeof createAdminClient>, request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -39,14 +61,19 @@ export async function GET(request: NextRequest) {
     }
 
     if (!memberships || memberships.length === 0) {
-      const { data: pendingRequest } = await admin!
-        .from("tenant_access_requests")
-        .select("id, tenant_id, status, created_at, tenants(name)")
-        .eq("user_id", user.id)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-        .maybeSingle();
-      return NextResponse.json({ hasTenant: false, pending_request: pendingRequest ?? null }, { status: 200 });
+      const [latestRequest, canCreateTenant] = await Promise.all([
+        findLatestAccessRequestForUser(admin!, user.id),
+        canCreateTenantSystemWide(admin!)
+      ]);
+      return NextResponse.json(
+        {
+          hasTenant: false,
+          pending_request: latestRequest?.status === "pending" ? latestRequest : null,
+          rejected_request: latestRequest?.status === "rejected" ? latestRequest : null,
+          can_create_tenant: canCreateTenant
+        },
+        { status: 200 }
+      );
     }
 
     const membershipRows = memberships as Array<{ tenant_id: string | null; role: string | null; suspended?: boolean | null }>;
@@ -59,14 +86,19 @@ export async function GET(request: NextRequest) {
       if (hasSuspendedMembership) {
         return NextResponse.json({ error: "Accesso sospeso per questo tenant." }, { status: 403 });
       }
-      const { data: pendingRequest } = await admin!
-        .from("tenant_access_requests")
-        .select("id, tenant_id, status, created_at, tenants(name)")
-        .eq("user_id", user.id)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-        .maybeSingle();
-      return NextResponse.json({ hasTenant: false, pending_request: pendingRequest ?? null }, { status: 200 });
+      const [latestRequest, canCreateTenant] = await Promise.all([
+        findLatestAccessRequestForUser(admin!, user.id),
+        canCreateTenantSystemWide(admin!)
+      ]);
+      return NextResponse.json(
+        {
+          hasTenant: false,
+          pending_request: latestRequest?.status === "pending" ? latestRequest : null,
+          rejected_request: latestRequest?.status === "rejected" ? latestRequest : null,
+          can_create_tenant: canCreateTenant
+        },
+        { status: 200 }
+      );
     }
     const { data: tenant } = await admin!.from("tenants").select("id, name").eq("id", membership.tenant_id).maybeSingle();
     const resolvedRole = parseRole(membership.role ?? undefined) ?? "admin";
@@ -160,6 +192,27 @@ export async function POST(request: NextRequest) {
 
     if (pendingRequest?.id) {
       return NextResponse.json({ error: "Hai gia una richiesta accesso in attesa. Attendi revisione admin." }, { status: 409 });
+    }
+
+    // Self-service tenant creation is only allowed for genuine first-run
+    // bootstrap (no tenant exists yet anywhere in the system). Once at least
+    // one tenant exists, a normal authenticated user must go through
+    // /api/onboarding/access-request (join an existing tenant, pending
+    // admin approval) instead of spinning up a new organization + admin
+    // membership on their own.
+    const { count: existingTenantCount, error: tenantCountError } = await admin!
+      .from("tenants")
+      .select("id", { count: "exact", head: true });
+
+    if (tenantCountError) {
+      return NextResponse.json({ error: tenantCountError.message }, { status: 500 });
+    }
+
+    if ((existingTenantCount ?? 0) > 0) {
+      return NextResponse.json(
+        { error: "Accesso negato. Richiedi l'accesso a un'agenzia esistente invece di crearne una nuova." },
+        { status: 403 }
+      );
     }
 
     const { data: tenant, error: tenantError } = await admin!

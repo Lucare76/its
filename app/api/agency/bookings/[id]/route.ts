@@ -307,7 +307,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
             ${cancelNote ? `<tr><td style="padding:8px 12px;background:#fef9c3;font-weight:600;color:#854d0e;">Motivo</td><td style="padding:8px 12px;color:#854d0e;">${cancelNote}</td></tr>` : ""}
           </table>
           <p style="color:#64748b;font-size:13px;background:#fef9c3;padding:12px 16px;border-radius:8px;border:1px solid #d97706;">
-            <strong>Azione richiesta:</strong> decidere se applicare una penale. Usa "Cancella con penale" nella sezione Richieste agenzie.
+            <strong>Azione richiesta:</strong> decidere se applicare una penale. Usa "Cancella con penale" nella sezione Richieste prenotazioni agenzie.
           </p>
         </div>`,
       });

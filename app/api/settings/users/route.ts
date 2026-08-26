@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { sendAccessApprovalEmail } from "@/lib/server/access-approval-email";
+import { sendAccessRejectionEmail } from "@/lib/server/access-rejection-email";
+import { auditLog } from "@/lib/server/ops-audit";
 import {
   ensureDriverProfileForMembership,
   reserveMembershipUsername,
@@ -510,28 +512,78 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (action === "reject") {
+      // `.eq("status", "pending")` makes this an atomic claim, not just a
+      // read-then-write: two concurrent reject clicks (or approve+reject)
+      // race on the same row, but only the first UPDATE that still sees
+      // "pending" affects a row. The loser gets 0 rows back and a clean 409
+      // instead of silently re-sending the rejection email or flipping an
+      // already-approved request back to rejected.
       const rejectUpdate = await auth.admin
         .from("tenant_access_requests")
         .update({
-          tenant_id: requestRow.tenant_id ?? auth.membership.tenant_id,
+          // Preserve tenant_id exactly as-is — do NOT fall back to the
+          // admin's tenant when it was null (self-service, unassigned
+          // request). Coercing it to a real tenant here would make the row
+          // invisible to the "tenant_id IS NULL" lookup that
+          // /api/auth/register uses to reopen a previously rejected request,
+          // causing a duplicate row on the next registration attempt instead
+          // of a deterministic reopen.
+          tenant_id: requestRow.tenant_id,
           status: "rejected",
           review_notes: review_notes?.trim() || null,
           reviewed_by_user_id: auth.actorUserId,
           reviewed_at: new Date().toISOString()
         })
         .eq("id", request_id)
+        .eq("status", "pending")
         .select("id")
         .maybeSingle();
 
-      if (rejectUpdate.error || !rejectUpdate.data?.id) {
-        return NextResponse.json({ error: rejectUpdate.error?.message ?? "Rifiuto richiesta fallito." }, { status: 500 });
+      if (rejectUpdate.error) {
+        return NextResponse.json({ error: rejectUpdate.error.message }, { status: 500 });
+      }
+      if (!rejectUpdate.data?.id) {
+        return NextResponse.json({ error: "La richiesta è già stata gestita nel frattempo." }, { status: 409 });
       }
 
-      return NextResponse.json({ ok: true, request: { id: request_id, status: "rejected" } });
+      // Best-effort: the reject decision is already persisted above — an
+      // email provider failure must never roll it back or fail this response.
+      let rejectionEmailStatus: "sent" | "failed" | "skipped" = "skipped";
+      try {
+        const rejectionEmailResult = await sendAccessRejectionEmail({
+          to: requestRow.email,
+          fullName: requestRow.full_name,
+          reasonForAgency: review_notes?.trim() || null
+        });
+        rejectionEmailStatus = rejectionEmailResult.status;
+        if (rejectionEmailResult.status === "failed") {
+          console.error(`[settings/users] rifiuto email fallita per ${requestRow.email}: ${rejectionEmailResult.error}`);
+        }
+      } catch (error) {
+        rejectionEmailStatus = "failed";
+        console.error(`[settings/users] rifiuto email eccezione per ${requestRow.email}:`, error);
+      }
+
+      auditLog({
+        event: "access_request_rejected",
+        level: rejectionEmailStatus === "failed" ? "warn" : "info",
+        tenantId: auth.membership.tenant_id,
+        userId: auth.actorUserId,
+        details: {
+          request_id,
+          subject_user_id: requestRow.user_id,
+          subject_email: requestRow.email,
+          review_notes: review_notes?.trim() || null,
+          email_status: rejectionEmailStatus
+        }
+      });
+
+      return NextResponse.json({ ok: true, request: { id: request_id, status: "rejected", email_status: rejectionEmailStatus } });
     }
 
     const approvedRole = accessRequestParsed.data.role ?? requestRow.requested_role ?? "operator";
     let approvedAgencyId: string | null = null;
+    let agencyCreatedInThisRequest = false;
     if (approvedRole === "agency") {
       const supportsSetupRequired = await hasColumn(auth.admin, "agencies", "setup_required");
       const externalCode = `auth_user:${requestRow.user_id}`;
@@ -560,10 +612,27 @@ export async function PATCH(request: NextRequest) {
           agencyInsertPayload.setup_required = true;
         }
         const agencyInsert = await auth.admin.from("agencies").insert(agencyInsertPayload).select("id").maybeSingle();
-        if (agencyInsert.error || !agencyInsert.data?.id) {
+        if (agencyInsert.error?.code === "23505") {
+          // Lost a race against a concurrent approval of the same request:
+          // the other request's insert won on unique(tenant_id, external_code).
+          // Re-read instead of failing — the unique constraint already
+          // guarantees there is exactly one agency row to find.
+          const reread = await auth.admin
+            .from("agencies")
+            .select("id")
+            .eq("tenant_id", auth.membership.tenant_id)
+            .eq("external_code", externalCode)
+            .maybeSingle();
+          if (reread.error || !reread.data?.id) {
+            return NextResponse.json({ error: reread.error?.message ?? "Creazione anagrafica agenzia fallita." }, { status: 500 });
+          }
+          approvedAgencyId = reread.data.id;
+        } else if (agencyInsert.error || !agencyInsert.data?.id) {
           return NextResponse.json({ error: agencyInsert.error?.message ?? "Creazione anagrafica agenzia fallita." }, { status: 500 });
+        } else {
+          approvedAgencyId = agencyInsert.data.id;
+          agencyCreatedInThisRequest = true;
         }
-        approvedAgencyId = agencyInsert.data.id;
       } else if (supportsSetupRequired) {
         const agencyUpdate = await auth.admin
           .from("agencies")
@@ -610,7 +679,37 @@ export async function PATCH(request: NextRequest) {
         username: approvedUsername,
         suspended: false
       });
-      if (membershipInsert.error) {
+      if (membershipInsert.error?.code === "23505") {
+        // Same race as the agency insert above, on primary key
+        // (user_id, tenant_id): converge to the same final values via update
+        // instead of failing — the concurrent winner already created the
+        // row, this just makes sure it reflects this approval's data.
+        const membershipUpdateAfterRace = await auth.admin
+          .from("memberships")
+          .update({
+            agency_id: approvedRole === "agency" ? approvedAgencyId : null,
+            role: approvedRole,
+            full_name: requestRow.full_name,
+            username: approvedUsername,
+            suspended: false
+          })
+          .eq("tenant_id", auth.membership.tenant_id)
+          .eq("user_id", requestRow.user_id);
+        if (membershipUpdateAfterRace.error) {
+          return NextResponse.json({ error: membershipUpdateAfterRace.error.message }, { status: 500 });
+        }
+      } else if (membershipInsert.error) {
+        // The agency row (if freshly created above) would otherwise be left
+        // orphaned — no owning membership, status still "pending" so ITS can
+        // retry Approve, but a dangling agencies row in the meantime.
+        if (agencyCreatedInThisRequest && approvedAgencyId) {
+          await auth.admin
+            .from("agencies")
+            .delete()
+            .eq("tenant_id", auth.membership.tenant_id)
+            .eq("id", approvedAgencyId)
+            .then(() => undefined, () => undefined);
+        }
         return NextResponse.json({ error: membershipInsert.error.message }, { status: 500 });
       }
     } else {
@@ -642,6 +741,12 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
+    // `.eq("status", "pending")` — same atomic-claim reasoning as the reject
+    // branch above: agency/membership creation just above is itself
+    // idempotent (unique constraints on agencies(tenant_id, external_code)
+    // and memberships(user_id, tenant_id) mean a concurrent duplicate insert
+    // fails cleanly rather than corrupting data), but without this guard a
+    // race could still flip status twice and send the approval email twice.
     const approvalUpdate = await auth.admin
       .from("tenant_access_requests")
       .update({
@@ -653,18 +758,48 @@ export async function PATCH(request: NextRequest) {
         reviewed_at: new Date().toISOString()
       })
       .eq("id", request_id)
+      .eq("status", "pending")
       .select("id")
       .maybeSingle();
 
-    if (approvalUpdate.error || !approvalUpdate.data?.id) {
-      return NextResponse.json({ error: approvalUpdate.error?.message ?? "Approvazione richiesta fallita." }, { status: 500 });
+    if (approvalUpdate.error) {
+      return NextResponse.json({ error: approvalUpdate.error.message }, { status: 500 });
     }
-    await sendAccessApprovalEmail({
-      to: requestRow.email,
-      fullName: requestRow.full_name,
+    if (!approvalUpdate.data?.id) {
+      return NextResponse.json({ error: "La richiesta è già stata gestita nel frattempo." }, { status: 409 });
+    }
+
+    let approvalEmailStatus: "sent" | "failed" | "skipped" = "skipped";
+    try {
+      const approvalEmailResult = await sendAccessApprovalEmail({
+        to: requestRow.email,
+        fullName: requestRow.full_name,
+        role: approvedRole,
+        agencyName: requestRow.agency_name ?? null
+      });
+      approvalEmailStatus = approvalEmailResult.status;
+      if (approvalEmailResult.status === "failed") {
+        console.error(`[settings/users] approvazione email fallita per ${requestRow.email}: ${approvalEmailResult.error}`);
+      }
+    } catch (error) {
+      approvalEmailStatus = "failed";
+      console.error(`[settings/users] approvazione email eccezione per ${requestRow.email}:`, error);
+    }
+
+    auditLog({
+      event: "access_request_approved",
+      level: approvalEmailStatus === "failed" ? "warn" : "info",
+      tenantId: auth.membership.tenant_id,
+      userId: auth.actorUserId,
       role: approvedRole,
-      agencyName: requestRow.agency_name ?? null
-    }).then(() => undefined, () => undefined);
+      details: {
+        request_id,
+        subject_user_id: requestRow.user_id,
+        subject_email: requestRow.email,
+        agency_id: approvedAgencyId,
+        email_status: approvalEmailStatus
+      }
+    });
 
     return NextResponse.json({
       ok: true,
@@ -672,6 +807,7 @@ export async function PATCH(request: NextRequest) {
         id: request_id,
         user_id: requestRow.user_id,
         tenant_id: auth.membership.tenant_id,
+        email_status: approvalEmailStatus,
         full_name: requestRow.full_name,
         email: requestRow.email,
         role: approvedRole

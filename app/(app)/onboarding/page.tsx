@@ -107,8 +107,10 @@ export default function OnboardingPage() {
   const [zonesText, setZonesText] = useState("");
   const [portsText, setPortsText] = useState("");
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
-  const [pendingRequest, setPendingRequest] = useState<{ id: string; tenant_id?: string; status?: string; tenants?: { name?: string } | null } | null>(null);
-  const [mode, setMode] = useState<OnboardingMode>("create");
+  const [pendingRequest, setPendingRequest] = useState<{ id: string; tenant_id?: string; status?: string; email?: string | null; tenants?: { name?: string } | null } | null>(null);
+  const [rejectedRequest, setRejectedRequest] = useState<{ id: string; review_notes?: string | null } | null>(null);
+  const [canCreateTenant, setCanCreateTenant] = useState(false);
+  const [mode, setMode] = useState<OnboardingMode>("request");
   const [requestFullName, setRequestFullName] = useState("");
   const [requestRole, setRequestRole] = useState<"operator" | "driver" | "agency">("operator");
   const [requestSubmitted, setRequestSubmitted] = useState(false);
@@ -139,7 +141,9 @@ export default function OnboardingPage() {
           error?: string;
           hasTenant?: boolean;
           tenant?: { id: string; name: string };
-          pending_request?: { id: string; tenant_id?: string; status?: string; tenants?: { name?: string } | null } | null;
+          pending_request?: { id: string; tenant_id?: string; status?: string; email?: string | null; tenants?: { name?: string } | null } | null;
+          rejected_request?: { id: string; review_notes?: string | null } | null;
+          can_create_tenant?: boolean;
         }
       | null;
     if (!response.ok) {
@@ -148,6 +152,11 @@ export default function OnboardingPage() {
     }
 
     setPendingRequest(body?.pending_request ?? null);
+    setRejectedRequest(body?.rejected_request ?? null);
+    setCanCreateTenant(Boolean(body?.can_create_tenant));
+    if (!body?.can_create_tenant) {
+      setMode("request");
+    }
 
     if (body?.hasTenant && body.tenant?.id) {
       setTenantId(body.tenant.id);
@@ -462,6 +471,7 @@ export default function OnboardingPage() {
         return;
       }
       setRequestSubmitted(true);
+      setRejectedRequest(null);
       setPendingRequest({
         id: body.request?.id ?? "",
         tenant_id: body.request?.tenant_id,
@@ -481,29 +491,50 @@ export default function OnboardingPage() {
 
         {pendingRequest ? (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            <div className="font-semibold text-amber-800 mb-1">Richiesta in attesa di approvazione</div>
+            <div className="font-semibold text-amber-800 mb-1">Richiesta di accesso in attesa di approvazione</div>
             <p>
-              La tua richiesta per il tenant <strong>{pendingRequest.tenants?.name ?? "selezionato"}</strong> è stata inviata.
-              Un amministratore la revisionerà a breve. Non devi fare altro.
+              La tua richiesta per il tenant <strong>{pendingRequest.tenants?.name ?? "selezionato"}</strong>
+              {pendingRequest.email ? (
+                <>
+                  {" "}(email <strong>{pendingRequest.email}</strong>)
+                </>
+              ) : null}{" "}
+              è stata inviata. Ischia Transfer Service la sta esaminando: riceverai una email non appena sarà stata valutata. Non devi fare altro.
             </p>
           </div>
         ) : (
           <>
-            <p className="text-sm text-muted">Scegli come procedere:</p>
-            <div className="flex overflow-hidden rounded-xl border border-border text-sm">
-              <button
-                type="button"
-                onClick={() => setMode("request")}
-                className={`flex-1 px-4 py-2.5 font-medium transition-colors ${mode === "request" ? "bg-indigo-600 text-white" : "bg-surface text-muted hover:bg-surface-2"}`}>
-                Unisciti a un team esistente
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("create")}
-                className={`flex-1 px-4 py-2.5 font-medium transition-colors ${mode === "create" ? "bg-indigo-600 text-white" : "bg-surface text-muted hover:bg-surface-2"}`}>
-                Crea nuova azienda
-              </button>
-            </div>
+            {rejectedRequest ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+                <div className="font-semibold text-rose-800 mb-1">Richiesta precedente non approvata</div>
+                <p>
+                  La tua richiesta di accesso precedente non è stata approvata.
+                  {rejectedRequest.review_notes?.trim() ? ` Motivazione: ${rejectedRequest.review_notes.trim()}.` : ""}
+                  {" "}Puoi inviare una nuova richiesta qui sotto.
+                </p>
+              </div>
+            ) : null}
+            {canCreateTenant ? (
+              <>
+                <p className="text-sm text-muted">Scegli come procedere:</p>
+                <div className="flex overflow-hidden rounded-xl border border-border text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setMode("request")}
+                    className={`flex-1 px-4 py-2.5 font-medium transition-colors ${mode === "request" ? "bg-indigo-600 text-white" : "bg-surface text-muted hover:bg-surface-2"}`}>
+                    Unisciti a un team esistente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode("create")}
+                    className={`flex-1 px-4 py-2.5 font-medium transition-colors ${mode === "create" ? "bg-indigo-600 text-white" : "bg-surface text-muted hover:bg-surface-2"}`}>
+                    Crea nuova azienda
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted">Richiedi l&apos;accesso all&apos;organizzazione esistente:</p>
+            )}
           </>
         )}
       </header>
@@ -550,7 +581,7 @@ export default function OnboardingPage() {
         </article>
       )}
 
-      {!pendingRequest && mode === "create" && (
+      {!pendingRequest && canCreateTenant && mode === "create" && (
         <article className="card space-y-3 p-4">
           <h2 className="text-base font-semibold">Step 1 — Crea azienda</h2>
           <div className="flex flex-col gap-2 sm:flex-row">

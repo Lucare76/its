@@ -191,7 +191,7 @@ export default function NotificationsPage() {
       const nextOperationalItems = [
         {
           key: "agency-bookings",
-          title: "Richieste agenzia",
+          title: "Richieste prenotazioni agenzie",
           detail: "Prenotazioni ricevute dalle agenzie da approvare.",
           count: agencyBookingsResult.count ?? 0,
           href: "/agency-requests",

@@ -458,34 +458,39 @@ export default function InboxPage() {
         if (active) setHasLoadedInbox(true);
       }
 
-      // Costo AI: caricamento separato e non bloccante, la card resta vuota se fallisce.
-      try {
-        const supabaseSession = await supabase.auth.getSession();
-        const token = supabaseSession.data.session?.access_token;
-        if (!token) return;
-        const response = await fetch("/api/ops/ai-usage-stats", {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const body = (await response.json().catch(() => null)) as {
-          ok?: boolean;
-          month_cost_usd?: number;
-          month_cost_eur?: number;
-          last_import?: { cost_usd: number; cost_eur: number; failed: boolean; created_at: string } | null;
-        } | null;
-        if (active && response.ok && body?.ok) {
-          setAiUsageStats({
-            month_cost_usd: body.month_cost_usd ?? 0,
-            month_cost_eur: body.month_cost_eur ?? 0,
-            last_import: body.last_import ?? null
-          });
-        }
-      } catch {
-        // Non bloccante: se fallisce, la card costo AI resta nascosta.
-      }
+      await loadAiUsageStats();
     };
     void boot();
     return () => { active = false; };
   }, []);
+
+  // Costo AI: caricamento separato e non bloccante, la card resta vuota se fallisce.
+  const loadAiUsageStats = async () => {
+    if (!supabase) return;
+    try {
+      const supabaseSession = await supabase.auth.getSession();
+      const token = supabaseSession.data.session?.access_token;
+      if (!token) return;
+      const response = await fetch("/api/ops/ai-usage-stats", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const body = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        month_cost_usd?: number;
+        month_cost_eur?: number;
+        last_import?: { cost_usd: number; cost_eur: number; failed: boolean; created_at: string } | null;
+      } | null;
+      if (response.ok && body?.ok) {
+        setAiUsageStats({
+          month_cost_usd: body.month_cost_usd ?? 0,
+          month_cost_eur: body.month_cost_eur ?? 0,
+          last_import: body.last_import ?? null
+        });
+      }
+    } catch {
+      // Non bloccante: se fallisce, la card costo AI resta nascosta.
+    }
+  };
 
   useEffect(() => {
     if (!supabase || !tenantId) return;
@@ -575,6 +580,7 @@ export default function InboxPage() {
         ? claudeExtractedToForm(body.claude_extracted as Record<string, unknown>)
         : normalizedPdfToForm(body.normalized ?? null);
       setPdfEditForm(computed);
+      void loadAiUsageStats();
     } catch (error) {
       setPdfUploadError(error instanceof Error ? error.message : "Anteprima PDF non riuscita.");
     } finally {
@@ -774,6 +780,7 @@ export default function InboxPage() {
       return;
     }
     await loadData(token);
+    void loadAiUsageStats();
     setImportRefreshing(false);
     if (body?.status === "skipped_in_progress") {
       setMessage("Import email già in corso (avviato da un'altra sessione/scheduler). Riprova tra qualche secondo.");

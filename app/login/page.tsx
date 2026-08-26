@@ -1,8 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Script from "next/script";
 import { AUTH_PERSISTENCE_KEY, hasSupabaseEnv, setAuthPersistence, supabase } from "@/lib/supabase/client";
 import { PasswordStrengthMeter } from "@/components/password-strength-meter";
+
+// Turnstile protects ONLY the "Richiedi accesso" (new agency registration)
+// form below — never the normal password login or magic link, which must
+// keep working exactly as before for day-to-day operator/agency use.
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (container: HTMLElement, options: Record<string, unknown>) => string;
+      reset: (widgetId?: string) => void;
+      remove: (widgetId?: string) => void;
+    };
+  }
+}
 
 function normalizeIdentifier(value: string) {
   return value.trim().toLowerCase();
@@ -32,6 +48,10 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string>(defaultLoginMessage);
+  const [turnstileScriptLoaded, setTurnstileScriptLoaded] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileWidgetId, setTurnstileWidgetId] = useState<string | null>(null);
+  const turnstileContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!hasSupabaseEnv || !supabase) {
@@ -47,13 +67,46 @@ export default function LoginPage() {
       clearStoredSupabaseAuth();
     });
 
-    const suspended = new URLSearchParams(window.location.search).get("suspended");
+    const searchParams = new URLSearchParams(window.location.search);
+    const suspended = searchParams.get("suspended");
     if (suspended === "1") {
       setMessage("Accesso sospeso per questo tenant. Contatta un admin del tenant per riattivarti.");
       return;
     }
+    // Persists the post-registration feedback across a refresh: no session,
+    // no sensitive data in the URL, just a plain status flag. The real
+    // authenticated pending/rejected state lives in /onboarding — this is
+    // only the public-page acknowledgement for someone who isn't logged in.
+    if (searchParams.get("request") === "received") {
+      setMessage(
+        "Richiesta inviata correttamente. ITS deve approvare il tuo accesso. Riceverai una comunicazione appena la richiesta sarà esaminata."
+      );
+      return;
+    }
     setMessage(defaultLoginMessage);
   }, [defaultLoginMessage]);
+
+  // Loads the widget only when the register tab is active — removed again
+  // (which also clears its token) when leaving that tab or unmounting, so
+  // the token is never held longer than the time needed to submit.
+  useEffect(() => {
+    if (mode !== "register" || !turnstileScriptLoaded || !TURNSTILE_SITE_KEY) return;
+    if (!turnstileContainerRef.current || !window.turnstile) return;
+
+    const widgetId = window.turnstile.render(turnstileContainerRef.current, {
+      sitekey: TURNSTILE_SITE_KEY,
+      callback: (token: string) => setTurnstileToken(token),
+      "expired-callback": () => setTurnstileToken(null),
+      "error-callback": () => setTurnstileToken(null)
+    });
+    setTurnstileWidgetId(widgetId);
+
+    return () => {
+      window.turnstile?.remove(widgetId);
+      setTurnstileWidgetId(null);
+      setTurnstileToken(null);
+    };
+  }, [mode, turnstileScriptLoaded]);
 
   const hardRedirect = (target: string) => {
     window.location.assign(target);
@@ -123,7 +176,7 @@ export default function LoginPage() {
       const emailRedirectTo = `${window.location.origin}/dashboard`;
       const { error } = await supabase.auth.signInWithOtp({
         email: normalizeIdentifier(identifier),
-        options: { emailRedirectTo }
+        options: { emailRedirectTo, shouldCreateUser: false }
       });
       if (error) {
         setMessage(`Invio link non riuscito: ${error.message}`);
@@ -163,6 +216,17 @@ export default function LoginPage() {
 
   const handleRegister = async () => {
     if (loading) return;
+    if (!TURNSTILE_SITE_KEY) {
+      // Fail closed on the client too — mirrors the server, which treats a
+      // missing secret as verification failure rather than bypassing it.
+      setMessage("Verifica di sicurezza non disponibile. Contatta l'amministratore.");
+      return;
+    }
+    if (!turnstileToken) {
+      setMessage("Completa la verifica di sicurezza prima di inviare la richiesta.");
+      return;
+    }
+
     setLoading(true);
     setMessage("Invio richiesta accesso...");
     try {
@@ -174,7 +238,8 @@ export default function LoginPage() {
           full_name: fullName,
           email: normalizeIdentifier(identifier),
           password,
-          requested_role: "agency"
+          requested_role: "agency",
+          turnstile_token: turnstileToken
         })
       });
       const body = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
@@ -182,22 +247,39 @@ export default function LoginPage() {
         setMessage(body?.error ?? "Richiesta accesso non inviata.");
         return;
       }
-      setMessage(body?.message ?? "Richiesta accesso inviata. Un admin la vedra nella coda di approvazione.");
       setFullName("");
       setAgencyName("");
       setIdentifier("");
       setPassword("");
       setMode("login");
+      // Query param (no email/password/token/user id) so the acknowledgement
+      // survives a refresh without a new page — see the mount effect above.
+      window.history.replaceState(null, "", "/login?request=received");
+      setMessage(
+        "Richiesta inviata correttamente. ITS deve approvare il tuo accesso. Riceverai una comunicazione appena la richiesta sarà esaminata."
+      );
     } catch (error) {
       setMessage(error instanceof Error ? `Errore registrazione: ${error.message}` : "Errore registrazione inatteso.");
     } finally {
+      // Turnstile tokens are single-use — always reset after a submit
+      // attempt (success or failure) rather than trying to reuse it.
+      if (turnstileWidgetId) window.turnstile?.reset(turnstileWidgetId);
+      setTurnstileToken(null);
       setLoading(false);
     }
   };
 
   return (
-    <section className="mx-auto max-w-lg page-section">
-      <h1 className="section-title">Login Supabase</h1>
+    <>
+      {TURNSTILE_SITE_KEY ? (
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+          strategy="lazyOnload"
+          onLoad={() => setTurnstileScriptLoaded(true)}
+        />
+      ) : null}
+      <section className="mx-auto max-w-lg page-section">
+        <h1 className="section-title">Login Supabase</h1>
       <div className="card space-y-3 p-4">
         <p className="text-sm leading-6 text-slate-600">
           Ischia Transfer Service e attivo dal 2006. L&apos;area riservata consente al team di coordinare con rapidita i
@@ -229,6 +311,17 @@ export default function LoginPage() {
               <input className="input-saas mt-1" value="Agenzia" disabled />
             </label>
           </>
+        ) : null}
+        {mode === "register" ? (
+          <div className="pt-1">
+            {TURNSTILE_SITE_KEY ? (
+              <div ref={turnstileContainerRef} />
+            ) : (
+              <p className="text-xs text-amber-600">
+                Turnstile non configurato in locale (manca NEXT_PUBLIC_TURNSTILE_SITE_KEY): la registrazione resta bloccata finché non lo imposti nel tuo .env.
+              </p>
+            )}
+          </div>
         ) : null}
         <label className="block text-sm">
           {mode === "login" ? "Email o username" : "Email"}
@@ -295,7 +388,7 @@ export default function LoginPage() {
           data-testid="login-submit"
           type="button"
           onClick={mode === "login" ? handleSignIn : mode === "register" ? handleRegister : handleResetPassword}
-          disabled={loading}
+          disabled={loading || (mode === "register" && (!TURNSTILE_SITE_KEY || !turnstileToken))}
           className="btn-primary w-full disabled:opacity-60"
         >
           {loading
@@ -317,6 +410,7 @@ export default function LoginPage() {
         <p data-testid="login-message" className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>
       </div>
-    </section>
+      </section>
+    </>
   );
 }

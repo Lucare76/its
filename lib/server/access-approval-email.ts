@@ -1,7 +1,7 @@
 import { emailHtml, emailDataTable } from "@/lib/server/email-layout";
-import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { sendOnboardingTransactionalEmail, type OnboardingEmailResult } from "@/lib/server/onboarding-email-transport";
 
-export type AccessApprovalEmailStatus = "sent" | "failed" | "skipped";
+export type AccessApprovalEmailStatus = OnboardingEmailResult["status"];
 
 export interface AccessApprovalEmailInput {
   to: string | null;
@@ -10,10 +10,7 @@ export interface AccessApprovalEmailInput {
   agencyName?: string | null;
 }
 
-export interface AccessApprovalEmailResult {
-  status: AccessApprovalEmailStatus;
-  error: string | null;
-}
+export type AccessApprovalEmailResult = OnboardingEmailResult;
 
 function roleLabel(role: AccessApprovalEmailInput["role"]) {
   if (role === "admin") return "Admin";
@@ -68,32 +65,11 @@ function buildHtml(input: AccessApprovalEmailInput) {
 }
 
 export async function sendAccessApprovalEmail(input: AccessApprovalEmailInput): Promise<AccessApprovalEmailResult> {
-  if (!input.to) {
-    return { status: "skipped", error: "Destinatario email non disponibile." };
-  }
-
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = getVerifiedFromEmail();
-  if (!apiKey || !from) {
-    return { status: "skipped", error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
-  }
-
-  const subject = "Richiesta approvata - accesso Ischia Transfer";
-  const response = await resendFetch(apiKey, {
-    from,
-    to: [input.to],
-    subject,
+  return sendOnboardingTransactionalEmail({
+    to: input.to,
+    subject: "Richiesta approvata - accesso Ischia Transfer",
     html: buildHtml(input),
-    text: buildPlainText(input)
+    text: buildPlainText(input),
+    failureLabel: "Invio email approvazione fallito"
   });
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return {
-      status: "failed",
-      error: `Invio email approvazione fallito (${response.status}). ${bodyText.slice(0, 240)}`
-    };
-  }
-
-  return { status: "sent", error: null };
 }

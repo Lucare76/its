@@ -358,7 +358,8 @@ export const tenantAccessRequestCreateSchema = z.object({
   full_name: z.string().min(2).max(120),
   email: z.string().email().max(160),
   password: z.string().min(8).max(120),
-  requested_role: z.literal("agency").default("agency")
+  requested_role: z.literal("agency").default("agency"),
+  turnstile_token: z.string({ required_error: "Verifica di sicurezza mancante." }).min(1, "Verifica di sicurezza mancante.")
 });
 
 export const agencyProfileSetupSchema = z.object({
