@@ -184,6 +184,9 @@ export interface Service {
   bus_operational_resolution_source?: "allocation" | "bus_city_origin" | "service_fields" | "unresolved" | null;
   orario_barca?: string | null;
   barca_compagnia?: string | null;
+  /** Orario prelievo dall'hotel (HH:MM), calcolato da calcPickupTime — vedi supabase/migrations/0106_pickup_calc_fields.sql. */
+  pickup_hotel?: string | null;
+  pickup_alert?: string | null;
   include_ferry_tickets?: boolean | null;
   continent_dispatch_target?: "bruno" | "continent_dispatch" | null;
   continent_dispatch_source?: "rule" | "manual" | null;

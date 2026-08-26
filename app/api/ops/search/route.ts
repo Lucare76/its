@@ -661,6 +661,11 @@ export async function GET(req: NextRequest) {
           agency_id: r.agency_id ?? null,
           owner_label: owner,
           meeting_point: r.meeting_point ?? null,
+          // Selezionato ma mai inoltrato prima: calcolato da calcPickupTime solo per
+          // partenze treno/aereo (0106_pickup_calc_fields.sql), quindi spesso null per
+          // i transfer porto-hotel importati — bookingListTransportTimes lo usa come
+          // fallback dedicato, MAI come sostituto di return_pickup_time già esistente.
+          pickup_hotel: departureLeg?.pickup_hotel ?? r.pickup_hotel ?? null,
           notes: r.notes ?? null,
           linked_service_id: r.linked_service_id ?? null,
           practice_number: r.practice_number ?? null,

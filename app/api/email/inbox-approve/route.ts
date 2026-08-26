@@ -14,6 +14,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
+import { getPickupRule, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -86,6 +87,19 @@ function slug(v: string | null | undefined) {
 
 function hashString(v: string) {
   return createHash("sha256").update(v).digest("hex");
+}
+
+// Deriva la compagnia diretta (SNAV/MEDMAR) dai codici mezzo estratti da Claude
+// (numero_mezzo_andata/ritorno — per transfer_port_hotel contengono "SNAV" o
+// "MEDMAR", non un vero numero corsa). Necessario per interrogare le tabelle
+// SNAV_DIRECT/MEDMAR_DIRECT di lib/departure-pickup-rules.ts, che richiedono
+// transport_type "snav"|"medmar" — diverso da calcPickupTime.ts (calc-pickup-time.ts),
+// che copre solo mezzo treno/aereo e non si applica ai transfer porto-hotel puri.
+function derivePortCarrier(value: string | null | undefined): "snav" | "medmar" | null {
+  const v = (value ?? "").toUpperCase();
+  if (v.includes("SNAV")) return "snav";
+  if (v.includes("MEDMAR")) return "medmar";
+  return null;
 }
 
 function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: string } {
@@ -167,6 +181,9 @@ export async function POST(request: NextRequest) {
   const practiceNumber = clean(form.numero_pratica);
   const trainArrivalNumber = clean(form.treno_andata);
   const trainDepartureNumber = clean(form.treno_ritorno);
+  const transportCode = trainArrivalNumber && trainDepartureNumber
+    ? `${trainArrivalNumber} / ${trainDepartureNumber}`
+    : trainArrivalNumber ?? trainDepartureNumber ?? null;
   const arrivalPlace = clean(form.citta_partenza);
   const passengers = Math.max(1, Math.min(99, Number(form.n_pax) || 1));
   const totalAmount = form.totale_pratica ? parseFloat(form.totale_pratica.replace(",", ".")) : null;
@@ -197,6 +214,36 @@ export async function POST(request: NextRequest) {
 
   // ── Note servizio ─────────────────────────────────────────────────────────
   const agency = form.agenzia ?? "unknown";
+
+  // ── Pickup hotel per transfer_port_hotel puri (SNAV/MEDMAR diretti) ──────
+  // calcPickupTime.ts (0106_pickup_calc_fields.sql) copre solo treno/aereo e non
+  // è comunque collegato a questo flusso (solo a app/api/inbound/email e
+  // app/api/excel/import) — qui usiamo invece le tabelle SNAV_DIRECT/MEDMAR_DIRECT
+  // di lib/departure-pickup-rules.ts, già usate da app/api/ops/search per le
+  // prenotazioni con gamba di ritorno collegata, con lookup esatto su
+  // orario+zona hotel. Se manca un dato anagrafico (zona hotel o compagnia
+  // riconoscibile) o l'orario non corrisponde a nessuna corsa nota, NON si
+  // inventa un pickup: si lascia null e si segnala in pickup_alert.
+  let pickupHotel: string | null = null;
+  let pickupAlert: string | null = null;
+  if (bookingKind === "transfer_port_hotel" && returnTime) {
+    const carrier = derivePortCarrier(trainDepartureNumber) ?? derivePortCarrier(trainArrivalNumber);
+    const { data: hotelZoneRow } = await auth.admin.from("hotels").select("zone").eq("id", hotelId).maybeSingle();
+    const zoneRaw = (hotelZoneRow as { zone?: string | null } | null)?.zone ?? null;
+    if (!carrier) {
+      pickupAlert = `Pickup hotel non calcolato: compagnia traghetto/aliscafo non riconosciuta (nessun SNAV/MEDMAR in treno_andata/treno_ritorno) — verificare manualmente.`;
+    } else if (!zoneRaw) {
+      pickupAlert = `Pickup hotel non calcolato: zona non impostata per l'hotel "${hotelName ?? hotelId}" — impostare la zona hotel e ricalcolare.`;
+    } else {
+      const zona = normalizeZonaIschia(zoneRaw);
+      const rule = getPickupRule(agency, carrier, returnTime, zona);
+      if (rule) {
+        pickupHotel = rule.pickup || null;
+      } else {
+        pickupAlert = `Pickup hotel non calcolato: nessuna regola ${carrier.toUpperCase()} per zona "${zona}" orario ${returnTime} — verificare manualmente (orario non standard o regola mancante).`;
+      }
+    }
+  }
   const notesParts = [
     "[email_import] Booking approvato da email",
     `[source:claude_email]`,
@@ -230,6 +277,19 @@ export async function POST(request: NextRequest) {
       billing_party_name: agency,
       outbound_time: outboundTime,
       return_time: returnTime,
+      // Campi operativi letti dalla card/edit prenotazione (bookingListTransportTimes,
+      // app/(app)/services/[id]/edit) senza fallback su date/time/outbound_time/return_time:
+      // vanno valorizzati qui allo stesso modo del flusso di creazione manuale
+      // (app/api/ops/new-booking), altrimenti la card mostra "—" anche quando il
+      // parser ha estratto correttamente arrivo/partenza dal PDF.
+      arrival_date: arrivalDate,
+      arrival_time: outboundTime,
+      departure_date: departureDate,
+      departure_time: returnTime,
+      meeting_point: arrivalPlace,
+      transport_code: transportCode,
+      pickup_hotel: pickupHotel,
+      pickup_alert: pickupAlert,
       source_total_amount_cents: sourceTotalCents,
       source_price_per_pax_cents: sourcePricePerPaxCents,
       source_amount_currency: "EUR",

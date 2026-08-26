@@ -2,7 +2,7 @@ import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca" | "bus_city_origin"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel"
 >> & {
   pickup_time?: string | null;
   bus_outward_pickup_point?: string | null;
@@ -65,6 +65,35 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     };
   }
 
+  // transfer_port_hotel (import IMAP+Claude, es. Aleste Viaggi via SNAV/MEDMAR): a
+  // differenza delle "formula_*" non ha quasi mai i campi ferry dedicati calcolati
+  // (outbound_ferry_*/return_pickup_time), popolati solo se esiste una gamba di
+  // ritorno collegata (linked_service_id) risolta da app/api/ops/search — per le
+  // prenotazioni legacy a riga singola restano null, ed è corretto così.
+  // departure_time è l'orario del traghetto/aliscafo di PARTENZA (mai il pickup
+  // hotel: vedi fix del 2026-08-26, prima veniva mostrato erroneamente come tale).
+  // Il vero orario di pickup in hotel va SOLO da return_pickup_time (calcolato,
+  // stessa fonte usata da bus/treno/aeroporto) o da pickup_hotel (calcPickupTime,
+  // supabase/migrations/0106_pickup_calc_fields.sql) — mai da departure_time.
+  if (kind === "transfer_port_hotel") {
+    const hasReturn = Boolean(cleanDate(service.departure_date));
+    const [outwardCompany, returnCompanyCandidate] = splitTransportCode(service.transport_code);
+    return {
+      serviceLabel: "Trasferimento porto - hotel",
+      outwardLabel: "Arrivo traghetto/aliscafo",
+      outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
+      outwardTime: cleanTime(service.arrival_time) ?? cleanTime(service.time),
+      outwardArrivalTime: cleanTime(service.outbound_ferry_arrival_time) ?? null,
+      outwardPickupPoint: service.meeting_point ?? null,
+      outwardCompany,
+      returnLabel: "Partenza traghetto/aliscafo",
+      returnDate: cleanDate(service.departure_date),
+      returnTime: cleanTime(service.orario_barca) ?? cleanTime(service.departure_time),
+      returnPickupTime: hasReturn ? (cleanTime(service.return_pickup_time) ?? cleanTime(service.pickup_hotel)) : null,
+      returnCompany: hasReturn ? returnCompanyCandidate : null,
+    };
+  }
+
   const isAirport = kind === "transfer_airport_hotel"
     || kind === "transfer_airport_hotel_exclusive"
     || kind === "transfer_airport_hotel_aliscafo";
@@ -112,4 +141,11 @@ function cleanTime(value: string | null | undefined) {
 
 function routeLabel(from: string | null | undefined, to: string | null | undefined) {
   return from && to ? `${from} → ${to}` : null;
+}
+
+/** "SNAV / MEDMAR" -> ["SNAV", "MEDMAR"]; "SNAV" -> ["SNAV", "SNAV"]; vuoto -> [null, null]. */
+function splitTransportCode(value: string | null | undefined): [string | null, string | null] {
+  const parts = String(value ?? "").split("/").map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) return [null, null];
+  return [parts[0], parts[1] ?? parts[0]];
 }
