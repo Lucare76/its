@@ -10,6 +10,7 @@ import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
 import { ensureSupabaseClientReady, getClientSessionContext } from "@/lib/supabase/client-session";
 import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 import { bookingListTransportTimes } from "@/lib/booking-list-display";
+import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
@@ -31,6 +32,7 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  pickup_hotel: string;
 };
 
 type GlobalBookingSearchResult = Partial<Service> & {
@@ -70,7 +72,8 @@ const EMPTY_FORM: FormState = {
   tipo_servizio: "transfer_station_hotel",
   treno_andata: "", treno_ritorno: "",
   citta_partenza: "", totale_pratica: "",
-  note: "", numero_pratica: "", agenzia: ""
+  note: "", numero_pratica: "", agenzia: "",
+  pickup_hotel: "",
 };
 
 const TIPO_LABELS: Record<string, string> = {
@@ -133,7 +136,8 @@ function claudeExtractedToForm(claudeExtracted: Record<string, unknown> | null):
     totale_pratica: f.totale_pratica ?? "",
     note: f.note ?? "",
     numero_pratica: f.numero_pratica ?? "",
-    agenzia: f.agenzia ?? ""
+    agenzia: f.agenzia ?? "",
+    pickup_hotel: f.pickup_hotel ?? "",
   };
 }
 
@@ -229,7 +233,8 @@ function normalizedPdfToForm(normalized: Record<string, unknown> | null): FormSt
     })(),
     note: text(normalized.notes),
     numero_pratica: text((normalized.dedupe_components as Record<string, unknown> | undefined)?.practice_number ?? normalized.external_reference),
-    agenzia: text(normalized.billing_party_name || normalized.agency_name)
+    agenzia: text(normalized.billing_party_name || normalized.agency_name),
+    pickup_hotel: "",
   };
 }
 
@@ -346,6 +351,29 @@ export default function InboxPage() {
   function setField(field: keyof FormState, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
+
+  // Suggerimento pickup/traghetto live per transfer_port_hotel (fix: prima
+  // invisibile in Inbox — il calcolo esisteva solo server-side al momento
+  // dell'approvazione, senza possibilità per l'operatore di vederlo/correggerlo
+  // prima). Stessa regola esatta di app/api/email/inbox-approve/route.ts
+  // (getPickupRule + derivePortCarrier), condivisa via lib/departure-pickup-rules.ts
+  // — nessuna logica duplicata, solo eseguita anche qui per il preview.
+  const portTransferCarrier = useMemo(
+    () => derivePortCarrier(form.treno_ritorno) ?? derivePortCarrier(form.treno_andata),
+    [form.treno_ritorno, form.treno_andata]
+  );
+  const portTransferZona = useMemo(() => {
+    const match = hotels.find((h) => h.name.trim().toLowerCase() === form.hotel.trim().toLowerCase());
+    return normalizeZonaIschia(match?.zone ?? null);
+  }, [hotels, form.hotel]);
+  const portTransferDepartures = useMemo(() => {
+    if (form.tipo_servizio !== "transfer_port_hotel" || !portTransferCarrier) return [];
+    return listAvailableDepartures(form.agenzia || "unknown", portTransferCarrier, portTransferZona);
+  }, [form.tipo_servizio, form.agenzia, portTransferCarrier, portTransferZona]);
+  const portTransferPickupSuggestion = useMemo(() => {
+    if (form.tipo_servizio !== "transfer_port_hotel" || !portTransferCarrier || !form.orario_partenza) return null;
+    return getPickupRule(form.agenzia || "unknown", portTransferCarrier, form.orario_partenza, portTransferZona);
+  }, [form.tipo_servizio, form.agenzia, portTransferCarrier, form.orario_partenza, portTransferZona]);
 
   // Sprint Performance 11: Inbox usa la propria route leggera invece di
   // /api/ops/dispatch-data (pensata per il Dispatch: storico servizi, assignments,
@@ -1566,6 +1594,65 @@ export default function InboxPage() {
                           className="mt-1 input-saas w-full" placeholder="Es. 104.00" />
                       </label>
                     </div>
+
+                    {form.tipo_servizio === "transfer_port_hotel" && (
+                      <div className="mt-1 grid gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 sm:grid-cols-2">
+                        <label className="text-xs font-medium text-slate-600">
+                          Traghetto
+                          {portTransferCarrier ? (
+                            portTransferDepartures.length > 0 ? (
+                              <select
+                                className="mt-1 input-saas w-full"
+                                value={form.orario_partenza}
+                                onChange={(e) => setField("orario_partenza", e.target.value)}
+                              >
+                                <option value="">— Seleziona corsa —</option>
+                                {portTransferDepartures.map((rule) => (
+                                  <option key={`${rule.t_from}-${rule.pickup}`} value={rule.t_from}>
+                                    {rule.boat_co} {rule.t_from} ({rule.porto_p} → {rule.porto_a}) — pickup {rule.pickup}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <p className="mt-1 text-xs text-amber-600">
+                                Compagnia {portTransferCarrier.toUpperCase()} rilevata, ma nessuna corsa nota per la zona{" "}
+                                {form.hotel ? `dell'hotel "${form.hotel}"` : "(imposta prima l'hotel)"}.
+                              </p>
+                            )
+                          ) : (
+                            <p className="mt-1 text-xs text-slate-500">
+                              Nessuna compagnia rilevata da N. mezzo andata/ritorno (cerca &quot;SNAV&quot; o &quot;MEDMAR&quot;).
+                            </p>
+                          )}
+                        </label>
+                        <label className="text-xs font-medium text-slate-600">
+                          Orario pickup hotel
+                          <div className="mt-1 flex gap-1">
+                            <input
+                              value={form.pickup_hotel}
+                              onChange={(e) => setField("pickup_hotel", e.target.value)}
+                              className="input-saas flex-1"
+                              placeholder="HH:MM"
+                            />
+                            {portTransferPickupSuggestion?.pickup && form.pickup_hotel !== portTransferPickupSuggestion.pickup ? (
+                              <button
+                                type="button"
+                                onClick={() => setField("pickup_hotel", portTransferPickupSuggestion.pickup)}
+                                title="Usa il pickup suggerito"
+                                className="whitespace-nowrap rounded-lg border border-emerald-300 bg-emerald-50 px-2 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                              >
+                                Usa {portTransferPickupSuggestion.pickup}
+                              </button>
+                            ) : null}
+                          </div>
+                          {!form.pickup_hotel && !portTransferPickupSuggestion ? (
+                            <p className="mt-1 text-xs text-slate-500">
+                              Nessun suggerimento automatico (orario partenza non coincide con una corsa nota) — inserisci l&apos;orario manualmente.
+                            </p>
+                          ) : null}
+                        </label>
+                      </div>
+                    )}
                   </section>
 
                   {/* Note */}

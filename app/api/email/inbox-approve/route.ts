@@ -14,7 +14,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
-import { getPickupRule, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
+import { getPickupRule, normalizeZonaIschia, derivePortCarrier } from "@/lib/departure-pickup-rules";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -36,6 +36,12 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  /** Opzionale: orario pickup hotel scelto/corretto manualmente dall'operatore
+   * nel pannello Inbox (vedi app/(app)/inbox/page.tsx). Se presente ha priorità
+   * sul calcolo automatico sotto (getPickupRule) — l'operatore vede già un
+   * suggerimento calcolato con la stessa regola, questo campo permette solo di
+   * confermarlo o correggerlo prima di approvare. */
+  pickup_hotel?: string;
 };
 
 // ─── Helpers (identici a claude-save-draft) ────────────────────────────────
@@ -95,13 +101,6 @@ function hashString(v: string) {
 // SNAV_DIRECT/MEDMAR_DIRECT di lib/departure-pickup-rules.ts, che richiedono
 // transport_type "snav"|"medmar" — diverso da calcPickupTime.ts (calc-pickup-time.ts),
 // che copre solo mezzo treno/aereo e non si applica ai transfer porto-hotel puri.
-function derivePortCarrier(value: string | null | undefined): "snav" | "medmar" | null {
-  const v = (value ?? "").toUpperCase();
-  if (v.includes("SNAV")) return "snav";
-  if (v.includes("MEDMAR")) return "medmar";
-  return null;
-}
-
 function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: string } {
   if (tipo === "transfer_airport_hotel") return { bookingKind: "transfer_airport_hotel", transportMode: "unknown" };
   if (tipo === "transfer_port_hotel") return { bookingKind: "transfer_port_hotel", transportMode: "hydrofoil" };
@@ -226,7 +225,14 @@ export async function POST(request: NextRequest) {
   // inventa un pickup: si lascia null e si segnala in pickup_alert.
   let pickupHotel: string | null = null;
   let pickupAlert: string | null = null;
-  if (bookingKind === "transfer_port_hotel" && returnTime) {
+  const operatorPickupHotel = clean(form.pickup_hotel);
+  if (operatorPickupHotel) {
+    // L'operatore ha visto il suggerimento calcolato in Inbox (stessa regola
+    // sotto, eseguita client-side in app/(app)/inbox/page.tsx) e lo ha
+    // confermato o corretto: la sua scelta ha sempre priorità sul calcolo
+    // automatico, nessun pickupAlert in questo caso.
+    pickupHotel = operatorPickupHotel;
+  } else if (bookingKind === "transfer_port_hotel" && returnTime) {
     const carrier = derivePortCarrier(trainDepartureNumber) ?? derivePortCarrier(trainArrivalNumber);
     const { data: hotelZoneRow } = await auth.admin.from("hotels").select("zone").eq("id", hotelId).maybeSingle();
     const zoneRaw = (hotelZoneRow as { zone?: string | null } | null)?.zone ?? null;

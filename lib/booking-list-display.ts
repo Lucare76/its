@@ -2,7 +2,7 @@ import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction"
 >> & {
   pickup_time?: string | null;
   bus_outward_pickup_point?: string | null;
@@ -115,17 +115,26 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     : isBusLine
       ? (service.bus_city_origin ? `Partenza da ${service.bus_city_origin}` : "Partenza bus")
       : "Arrivo treno";
+  // Un servizio a riga singola rappresenta UNA gamba (direction 'arrival' o
+  // 'departure'): se direction='departure' non deve mai mostrare una sezione
+  // "andata", anche se arrival_date/arrival_time contengono valori residui
+  // (es. bug form "Solo partenza" che copiava li' i default — vedi
+  // app/(app)/services/new/page.tsx). Simmetrico per direction='arrival'.
+  // direction assente (dati storici/test) -> nessun filtro, comportamento
+  // invariato.
+  const hideOutward = service.direction === "departure";
+  const hideReturn = service.direction === "arrival";
   return {
     serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : isBusLine ? "Linea Bus" : "Trasferimento stazione - hotel"}${suffix}`,
     outwardLabel,
-    outwardDate: cleanDate(service.arrival_date) ?? cleanDate(service.date),
-    outwardTime,
-    outwardArrivalTime: isBusLine && outwardArrivalTime === outwardTime ? null : outwardArrivalTime,
-    outwardPickupPoint: isBusLine ? service.bus_outward_pickup_point ?? null : null,
+    outwardDate: hideOutward ? null : cleanDate(service.arrival_date) ?? cleanDate(service.date),
+    outwardTime: hideOutward ? null : outwardTime,
+    outwardArrivalTime: hideOutward ? null : isBusLine && outwardArrivalTime === outwardTime ? null : outwardArrivalTime,
+    outwardPickupPoint: hideOutward ? null : isBusLine ? service.bus_outward_pickup_point ?? null : null,
     returnLabel: isAirport ? "Partenza volo" : isBusLine ? "Partenza bus" : "Partenza treno",
-    returnDate: cleanDate(service.departure_date),
-    returnTime: cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
-    returnPickupTime: cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),
+    returnDate: hideReturn ? null : cleanDate(service.departure_date),
+    returnTime: hideReturn ? null : cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
+    returnPickupTime: hideReturn ? null : cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),
   };
 }
 

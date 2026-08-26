@@ -52,6 +52,64 @@ describe("bookingListTransportTimes", () => {
     })).toMatchObject({ outwardDate: "12/08/2026", outwardTime: "10:25", returnDate: "19/08/2026", returnTime: "18:15" });
   });
 
+  describe("direction gate su transfer_train_hotel/airport/bus (fix: bug BIRAGO)", () => {
+    it("direction='departure' con arrival_date/arrival_time residui (bug form 'Solo partenza'): nasconde comunque l'andata", () => {
+      // Dati reali della prenotazione ANNAMARIA BIRAGO prima del fix: il form
+      // "Solo partenza" copiava i default (oggi, 18:00) nei campi arrivo
+      // invece di svuotarli — qui verifichiamo che la card non li mostri MAI
+      // per una riga direction='departure', anche se il DB li contiene ancora.
+      const result = bookingListTransportTimes({
+        booking_service_kind: "transfer_train_hotel",
+        direction: "departure",
+        date: "2026-08-27",
+        time: "12:10",
+        arrival_date: "2026-08-26",
+        arrival_time: "18:00",
+        departure_date: "2026-08-27",
+        departure_time: "12:10",
+      });
+      expect(result).toMatchObject({
+        outwardDate: null,
+        outwardTime: null,
+        returnDate: "27/08/2026",
+        returnTime: "12:10",
+      });
+    });
+
+    it("direction='arrival' con departure_date/departure_time residui: nasconde comunque il ritorno", () => {
+      const result = bookingListTransportTimes({
+        booking_service_kind: "transfer_airport_hotel",
+        direction: "arrival",
+        arrival_date: "2026-08-27",
+        arrival_time: "10:00",
+        departure_date: "2026-08-26",
+        departure_time: "18:00",
+      });
+      expect(result).toMatchObject({
+        outwardDate: "27/08/2026",
+        outwardTime: "10:00",
+        returnDate: null,
+        returnTime: null,
+      });
+    });
+
+    it("senza direction (dati storici): comportamento invariato, mostra entrambe le gambe", () => {
+      const result = bookingListTransportTimes({
+        booking_service_kind: "transfer_train_hotel",
+        arrival_date: "2026-08-30",
+        arrival_time: "13:43",
+        departure_date: "2026-09-06",
+        departure_time: "13:20",
+      });
+      expect(result).toMatchObject({
+        outwardDate: "30/08/2026",
+        outwardTime: "13:43",
+        returnDate: "06/09/2026",
+        returnTime: "13:20",
+      });
+    });
+  });
+
   describe("transfer_port_hotel (fix: ramo prima assente, tornava null)", () => {
     it("con arrivo + partenza ma senza pickup calcolato: departure_time va su Partenza traghetto/aliscafo, MAI su Pickup hotel (dati reali STROZZI GIANLUCA prima del fix semantico)", () => {
       const result = bookingListTransportTimes({

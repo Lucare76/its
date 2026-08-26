@@ -344,6 +344,17 @@ export const ALL_PICKUP_RULES: PickupRule[] = [
 // ---------------------------------------------------------------------------
 // Normalizzazione zona Ischia → chiave regola
 // ---------------------------------------------------------------------------
+/** Riconosce SNAV/MEDMAR da un testo libero (es. treno_andata/treno_ritorno
+ * di un import PDF). Condiviso da app/api/email/inbox-approve/route.ts (server)
+ * e app/(app)/inbox/page.tsx (client, per il suggerimento pickup live) — questo
+ * file non ha dipendenze server-only, quindi è sicuro importarlo da entrambi. */
+export function derivePortCarrier(value: string | null | undefined): "snav" | "medmar" | null {
+  const v = (value ?? "").toUpperCase();
+  if (v.includes("SNAV")) return "snav";
+  if (v.includes("MEDMAR")) return "medmar";
+  return null;
+}
+
 export function normalizeZonaIschia(raw: string | null | undefined): string {
   const z = (raw ?? "").toLowerCase().trim();
   if (z.includes("forio"))        return "forio";

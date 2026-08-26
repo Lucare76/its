@@ -897,9 +897,17 @@ export default function OpsNewBookingPage() {
                   onClick={() => {
                     setTripLeg(value);
                     if (value === "outbound_only") {
-                      setForm((prev) => ({ ...prev, departure_date: prev.arrival_date, departure_time: prev.arrival_time }));
+                      // Solo arrivo: nessuna gamba di partenza — svuota i campi
+                      // partenza invece di copiarvi i valori (di default) dei
+                      // campi arrivo, per non salvare una partenza fittizia.
+                      setForm((prev) => ({ ...prev, departure_date: "", departure_time: "" }));
                     } else if (value === "return_only") {
-                      setForm((prev) => ({ ...prev, arrival_date: prev.departure_date, arrival_time: prev.departure_time }));
+                      // Solo partenza: nessuna gamba di arrivo — svuota i campi
+                      // arrivo invece di copiarvi i valori (spesso ancora ai
+                      // default iniziali: oggi/18:00) dei campi partenza. Bug
+                      // reale: salvava un "arrivo" fittizio con data odierna e
+                      // 18:00, mostrato dalla card come andata inesistente.
+                      setForm((prev) => ({ ...prev, arrival_date: "", arrival_time: "" }));
                     }
                   }}
                   className={`flex-1 rounded-xl border py-2.5 text-xs font-semibold transition ${tripLeg === value ? "border-indigo-600 bg-indigo-600 text-white shadow-sm" : "border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-700"}`}

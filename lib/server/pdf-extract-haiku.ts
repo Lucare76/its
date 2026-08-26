@@ -71,15 +71,15 @@ export const AGENCY_PROMPTS: Record<string, string> = {
   aleste: `Stai leggendo una CONFERMA D'ORDINE di Aleste Viaggi (Ischia).
 
 ISTRUZIONI CAMPO PER CAMPO:
-- numero_pratica: campo PRATICA (es: "26/002739")
+- numero_pratica: campo PRATICA, formato SEMPRE "AA/NNNNNN" (2 cifre anno, slash, ESATTAMENTE 6 cifre — es: "26/002739"). ATTENZIONE: nel testo estratto la colonna PRATICA è spesso incollata SENZA spazio alla colonna DATA subito dopo, con lo stesso schema dell'esempio già mostrato sopra (pratica + data appiccicate, es. "26/00273926-ago-26" = pratica "26/002739" + data "26-ago-26"): prendi SEMPRE E SOLO le 6 cifre di QUESTO documento subito dopo la barra come numero_pratica — non riusare mai un numero visto in un documento precedente o in questo esempio, leggi solo dal testo che hai ricevuto ora. Le cifre successive che iniziano una sequenza "GG-mese-AA" appartengono al campo DATA, non alla pratica. Non troncare né inventare cifre: se non riesci a contare esattamente 6 cifre dopo la barra prima dell'inizio della data, ricontrolla il testo invece di indovinare.
 - cliente_nome: campo "1° BENEFICIARIO" — scrivilo tutto su una riga senza spazi in più (es: "ALLEGRI ORNELLA" non "AL LEGRI ORNELLA")
 - cliente_cellulare: cerca in QUESTO ORDINE:
     1) dopo "a: CELL:" (con due punti, es: "a: CELL:3282653533")
     2) dopo "a: CELL." (con punto, es: "a: CELL. 3515859941")
     3) dopo "Cellulare/Tel."
     4) qualsiasi numero di 10 cifre che inizia con 3 nel documento
-- n_pax: colonna PAX (numero intero)
-- hotel: PRIMA guarda il campo DESCRIZIONE della riga PROGRAMMA (rimuovi eventuale prefisso "AV " o "26/TRENOB" ecc.), MA SOLO se contiene un vero nome di struttura — NON un codice/riferimento trasporto (es. "TRASPORTO TRS-2026-1249 - BK-2026-32138" NON è un hotel). Se la riga PROGRAMMA non contiene un nome hotel, prendi il valore dopo "dest:" nel blocco operativo dell'ANDATA (es. "...CON SNAV a: CELL:3488803921 dest: ISOLA VERDE" → hotel: "ISOLA VERDE"). NON usare MAI un valore del tipo "HOTEL <città>" (es. "HOTEL ISCHIA", "HOTEL NAPOLI") come nome hotel: quel testo è il punto di ritiro generico del RITORNO ("M.p.: HOTEL ISCHIA"), non il nome della struttura — se non trovi altro, lascia il campo vuoto piuttosto che usare quel valore generico.
+- n_pax: SOLO il numero nella colonna "PAX" della TABELLA INTESTAZIONE in alto (riga con "PRATICA DATA 1° BENEFICIARIO ... NS REFERENTE PAX", es. "...MENAPACE MARIA ROBERTA Staff Aleste 2" → n_pax: 2). ATTENZIONE: più in basso c'è un'altra tabella "DAL AL DESCRIZIONE IMPORTO TASSE PAX NUM TOTALE" con righe tipo "28,00 2 (1) 56,00" — qui il "2" (senza parentesi) è di nuovo il PAX corretto, ma il numero TRA PARENTESI, es. "(1)", è un moltiplicatore di riga (quante volte si applica quella tariffa), NON il numero di persone: non usarlo mai come n_pax.
+- hotel: PRIMA guarda il campo DESCRIZIONE della riga PROGRAMMA (rimuovi eventuale prefisso "AV " o "26/TRENOB" ecc.), MA SOLO se contiene un vero nome di struttura — NON un codice/riferimento trasporto (es. "TRASPORTO TRS-2026-1249 - BK-2026-32138" NON è un hotel). Se la riga PROGRAMMA non contiene un nome hotel, prendi il valore dopo "dest:" nel blocco operativo dell'ANDATA (es. "...CON SNAV a: CELL:3488803921 dest: ISOLA VERDE" → hotel: "ISOLA VERDE"). ATTENZIONE: nel testo estratto il valore dopo "dest:" va spesso a capo prima di finire (es. "dest: LA\nVILLA" significa hotel: "LA VILLA", non "LA"): unisci sempre le righe che seguono "dest:" rimuovendo l'a-capo, fino alla prima riga vuota o all'inizio di un nuovo blocco ("Il DD-mese-AA", "Cliente:") — non fermarti alla prima riga se il nome hotel potrebbe continuare. NON usare MAI un valore del tipo "HOTEL <città>" (es. "HOTEL ISCHIA", "HOTEL NAPOLI") come nome hotel: quel testo è il punto di ritiro generico del RITORNO ("M.p.: HOTEL ISCHIA"), non il nome della struttura — se non trovi altro, lascia il campo vuoto piuttosto che usare quel valore generico.
 - data_arrivo: colonna DAL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "19-apr-26" → "2026-04-19")
 - data_partenza: colonna AL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "26-apr-26" → "2026-04-26")
 - orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA (STAZIONE/HOTEL o PORTO/HOTEL): il valore dopo "Alle" (es: "13:43")
@@ -418,6 +418,21 @@ function jsonToForm(json: ClaudeJson, agency: string): ClaudeFormState {
   };
 }
 
+// Il campo numero_pratica letto dal PDF da Haiku si è dimostrato inaffidabile
+// (la colonna PRATICA è incollata senza spazio alla colonna DATA nel testo
+// estratto — vedi commento sopra — e il modello sbaglia in modo diverso ad
+// ogni tentativo anche con istruzioni esplicite). L'oggetto email Aleste
+// contiene invece SEMPRE il riferimento pratica pulito ("... | pr. 26/014686
+// ..."), fuori da qualunque tabella: usalo come fonte autoritativa quando
+// presente, invece di continuare a fidarsi della lettura PDF per questo solo
+// campo. Non tocca gli altri campi (letti solo dal PDF, dove funzionano).
+function overrideNumeroPraticaFromSubject(form: ClaudeFormState, agency: string, emailSubject: string): ClaudeFormState {
+  if (agency !== "aleste") return form;
+  const match = emailSubject.match(/\bpr\.?\s*(\d{2}\/\d{6})\b/i);
+  if (!match) return form;
+  return { ...form, numero_pratica: match[1] };
+}
+
 // ─── Funzione principale ─────────────────────────────────────────────────────
 
 export async function extractWithHaiku(
@@ -534,7 +549,7 @@ export async function extractWithHaiku(
           const rawJson2 = JSON.parse(match2[0]) as ClaudeJson & { agency_key?: string };
           return {
             agency: finalAgency,
-            form: jsonToForm(rawJson2, finalAgency),
+            form: overrideNumeroPraticaFromSubject(jsonToForm(rawJson2, finalAgency), finalAgency, emailSubject),
             rawJson: rawJson2 as Record<string, unknown>,
             textMode,
             usage: addUsage(usage, usage2)
@@ -544,7 +559,7 @@ export async function extractWithHaiku(
           // ma conserva comunque i token consumati anche dal secondo tentativo per il costo.
           return {
             agency: finalAgency,
-            form: jsonToForm(rawJson, finalAgency),
+            form: overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject),
             rawJson: rawJson as Record<string, unknown>,
             textMode,
             usage: addUsage(usage, usage2)
@@ -553,7 +568,7 @@ export async function extractWithHaiku(
       }
       return {
         agency: finalAgency,
-        form: jsonToForm(rawJson, finalAgency),
+        form: overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject),
         rawJson: rawJson as Record<string, unknown>,
         textMode,
         usage: addUsage(usage, usage2)
@@ -561,7 +576,7 @@ export async function extractWithHaiku(
     }
   }
 
-  const form = jsonToForm(rawJson, finalAgency);
+  const form = overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject);
 
   return {
     agency: finalAgency,

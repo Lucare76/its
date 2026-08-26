@@ -50,6 +50,7 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  pickup_hotel?: string;
 };
 
 /** Dati reali del caso di bug: conferma Aleste Viaggi, treno A/R. */
@@ -359,6 +360,34 @@ describe("POST /api/email/inbox-approve — pickup hotel calcolato per transfer_
     expect(row.pickup_hotel).toBeNull();
     expect(String(row.pickup_alert)).toMatch(/nessuna regola/i);
     expect(row.departure_time).toBe("14:07");
+  });
+
+  it("form.pickup_hotel valorizzato dall'operatore in Inbox: ha priorità sul calcolo automatico, nessun pickup_alert (fix: campo prima invisibile in Inbox)", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          // Orario non standard: senza override, produrrebbe un pickup_alert
+          // ("nessuna regola ... orario non standard") come nel test sopra.
+          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa", zone: "Ischia Porto" }],
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        form: portForm({ orario_partenza: "14:07", pickup_hotel: "12:45" }),
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const row = serviceInserts[0]!;
+    expect(row.pickup_hotel).toBe("12:45");
+    expect(row.pickup_alert).toBeNull();
   });
 
   it("compagnia non riconosciuta (né SNAV né MEDMAR nel form): pickup_hotel resta null, pickup_alert lo segnala", async () => {
