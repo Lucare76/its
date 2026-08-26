@@ -502,7 +502,11 @@ export default function SettingsUsersPage() {
     });
 
     const body = (await response.json().catch(() => null)) as
-      | { error?: string; approved_request?: { user_id: string; tenant_id: string; full_name: string; role: UserRole } }
+      | {
+          error?: string;
+          approved_request?: { user_id: string; tenant_id: string; full_name: string; role: UserRole; email_status?: "sent" | "failed" | "skipped" };
+          request?: { id: string; status: string; email_status?: "sent" | "failed" | "skipped" };
+        }
       | null;
 
     if (!response.ok) {
@@ -532,9 +536,22 @@ export default function SettingsUsersPage() {
         if (existingIndex < 0) return [...prev, nextRow];
         return prev.map((item, index) => (index === existingIndex ? { ...item, ...nextRow } : item));
       });
-      setMessage(`Richiesta approvata: ${approvedRequest.full_name} ora entra come ${approvedRequest.role}.`);
+      const approvalEmailNote =
+        approvedRequest.email_status === "failed"
+          ? " Attenzione: invio email di conferma non riuscito, l'account è comunque attivo — verifica il log."
+          : approvedRequest.email_status === "skipped"
+            ? " (email non inviata: provider non configurato)"
+            : " Email di conferma inviata.";
+      setMessage(`Richiesta approvata: account e accesso creati per ${approvedRequest.full_name} (${approvedRequest.role}).${approvalEmailNote}`);
     } else {
-      setMessage(`Richiesta rifiutata: ${request.full_name}.`);
+      const rejectionEmailStatus = body?.request?.email_status;
+      const rejectionEmailNote =
+        rejectionEmailStatus === "failed"
+          ? " Attenzione: invio email di notifica non riuscito — verifica il log."
+          : rejectionEmailStatus === "skipped"
+            ? " (email non inviata: provider non configurato)"
+            : " Email di notifica inviata.";
+      setMessage(`Richiesta rifiutata: ${request.full_name}.${rejectionEmailNote}`);
     }
 
     setReviewingRequestId(null);

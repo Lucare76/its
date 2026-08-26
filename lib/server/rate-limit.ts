@@ -10,6 +10,10 @@ export const RATE_LIMIT_DEFAULTS = {
   authEndpoints: { maxAttempts: 5, windowMs: 15 * 60 * 1000 },
   resetPassword: { maxAttempts: 3, windowMs: 60 * 60 * 1000 },
   register: { maxAttempts: 10, windowMs: 60 * 60 * 1000 },
+  // Looser than per-email: a single IP can legitimately host several users
+  // behind NAT/shared networks. This only needs to catch an attacker cycling
+  // through many emails from one IP, not throttle normal shared-IP traffic.
+  registerByIp: { maxAttempts: 30, windowMs: 60 * 60 * 1000 },
 };
 
 // ── In-memory fallback (dev / Upstash non configurato) ───────────────────────

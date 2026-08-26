@@ -15,7 +15,8 @@ const mocks = vi.hoisted(() => ({
   insertRequestMaybeSingle: vi.fn(),
   membershipMaybeSingle: vi.fn(),
   auditInsert: vi.fn(),
-  sendAccessRequestReceivedEmail: vi.fn()
+  sendAccessRequestReceivedEmail: vi.fn(),
+  verifyTurnstileToken: vi.fn()
 }));
 
 vi.mock("@/lib/server/whatsapp", () => ({
@@ -46,6 +47,10 @@ vi.mock("@/lib/server/access-request-received-email", () => ({
   sendAccessRequestReceivedEmail: mocks.sendAccessRequestReceivedEmail
 }));
 
+vi.mock("@/lib/server/turnstile", () => ({
+  verifyTurnstileToken: mocks.verifyTurnstileToken
+}));
+
 import { POST } from "@/app/api/auth/register/route";
 
 function makeRequest(overrides: Partial<Record<string, string>> = {}) {
@@ -61,6 +66,7 @@ function makeRequest(overrides: Partial<Record<string, string>> = {}) {
       email: "mario@example.com",
       password: "password123",
       requested_role: "agency",
+      turnstile_token: "valid-turnstile-token",
       ...overrides
     })
   });
@@ -137,6 +143,7 @@ describe("POST /api/auth/register", () => {
     });
     mocks.insertRequestMaybeSingle.mockResolvedValue({ data: { id: "request-1" }, error: null });
     mocks.sendAccessRequestReceivedEmail.mockResolvedValue({ status: "sent", error: null });
+    mocks.verifyTurnstileToken.mockResolvedValue({ success: true, errorCode: null });
   });
 
   it("creates the auth user and a pending request for a brand new email", async () => {
@@ -248,6 +255,84 @@ describe("POST /api/auth/register", () => {
 
     expect(response.status).toBe(201);
     expect(body.request_id).toBe("request-1");
+  });
+
+  it("Turnstile: missing token is rejected before touching Auth or DB", async () => {
+    const rawBody = {
+      agency_name: "Agenzia Test",
+      full_name: "Mario Rossi",
+      email: "mario@example.com",
+      password: "password123",
+      requested_role: "agency"
+      // turnstile_token intentionally omitted
+    };
+    const request = new NextRequest("http://localhost:3010/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-forwarded-for": "127.0.0.1" },
+      body: JSON.stringify(rawBody)
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("Verifica di sicurezza mancante.");
+    expect(mocks.verifyTurnstileToken).not.toHaveBeenCalled();
+    expect(mocks.createUser).not.toHaveBeenCalled();
+    expect(mocks.insertRequestMaybeSingle).not.toHaveBeenCalled();
+    expect(mocks.sendAccessRequestReceivedEmail).not.toHaveBeenCalled();
+  });
+
+  it("Turnstile: invalid token (Siteverify success:false) is rejected before touching Auth or DB", async () => {
+    mocks.verifyTurnstileToken.mockResolvedValue({ success: false, errorCode: "verification_failed" });
+
+    const response = await POST(makeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("Verifica di sicurezza non riuscita. Riprova.");
+    expect(body.error).not.toMatch(/siteverify|cloudflare|challenge/i);
+    expect(mocks.createUser).not.toHaveBeenCalled();
+    expect(mocks.sendAccessRequestReceivedEmail).not.toHaveBeenCalled();
+  });
+
+  it("Turnstile: unreachable Siteverify fails closed — no Auth, no DB", async () => {
+    mocks.verifyTurnstileToken.mockResolvedValue({ success: false, errorCode: "network_error" });
+
+    const response = await POST(makeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("Verifica di sicurezza non riuscita. Riprova.");
+    expect(mocks.createUser).not.toHaveBeenCalled();
+  });
+
+  it("Turnstile: missing secret at runtime is treated as failure, never silently bypassed", async () => {
+    mocks.verifyTurnstileToken.mockResolvedValue({ success: false, errorCode: "missing_secret" });
+
+    const response = await POST(makeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("Verifica di sicurezza non riuscita. Riprova.");
+    expect(mocks.createUser).not.toHaveBeenCalled();
+  });
+
+  it("Turnstile: logs the failure reason to the audit log without ever including the raw token", async () => {
+    mocks.verifyTurnstileToken.mockResolvedValue({ success: false, errorCode: "verification_failed" });
+
+    await POST(makeRequest({ turnstile_token: "super-secret-raw-token-value" }));
+
+    expect(mocks.auditInsert).toHaveBeenCalled();
+    const insertedPayload = JSON.stringify(mocks.auditInsert.mock.calls[0][0]);
+    expect(insertedPayload).not.toContain("super-secret-raw-token-value");
+  });
+
+  it("Turnstile: a valid token lets registration proceed exactly as before", async () => {
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(201);
+    expect(mocks.verifyTurnstileToken).toHaveBeenCalledWith({ token: "valid-turnstile-token", remoteIp: "127.0.0.1" });
+    expect(mocks.createUser).toHaveBeenCalled();
   });
 
   it("does not silently skip account creation for an unseen email", async () => {

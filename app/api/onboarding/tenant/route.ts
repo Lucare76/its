@@ -20,7 +20,7 @@ async function canCreateTenantSystemWide(admin: ReturnType<typeof createAdminCli
 async function findLatestAccessRequestForUser(admin: ReturnType<typeof createAdminClient>, userId: string) {
   const { data } = await admin
     .from("tenant_access_requests")
-    .select("id, tenant_id, status, created_at, review_notes, tenants(name)")
+    .select("id, tenant_id, status, created_at, review_notes, email, tenants(name)")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)

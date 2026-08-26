@@ -107,7 +107,7 @@ export default function OnboardingPage() {
   const [zonesText, setZonesText] = useState("");
   const [portsText, setPortsText] = useState("");
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
-  const [pendingRequest, setPendingRequest] = useState<{ id: string; tenant_id?: string; status?: string; tenants?: { name?: string } | null } | null>(null);
+  const [pendingRequest, setPendingRequest] = useState<{ id: string; tenant_id?: string; status?: string; email?: string | null; tenants?: { name?: string } | null } | null>(null);
   const [rejectedRequest, setRejectedRequest] = useState<{ id: string; review_notes?: string | null } | null>(null);
   const [canCreateTenant, setCanCreateTenant] = useState(false);
   const [mode, setMode] = useState<OnboardingMode>("request");
@@ -141,7 +141,7 @@ export default function OnboardingPage() {
           error?: string;
           hasTenant?: boolean;
           tenant?: { id: string; name: string };
-          pending_request?: { id: string; tenant_id?: string; status?: string; tenants?: { name?: string } | null } | null;
+          pending_request?: { id: string; tenant_id?: string; status?: string; email?: string | null; tenants?: { name?: string } | null } | null;
           rejected_request?: { id: string; review_notes?: string | null } | null;
           can_create_tenant?: boolean;
         }
@@ -493,8 +493,13 @@ export default function OnboardingPage() {
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             <div className="font-semibold text-amber-800 mb-1">Richiesta di accesso in attesa di approvazione</div>
             <p>
-              La tua richiesta per il tenant <strong>{pendingRequest.tenants?.name ?? "selezionato"}</strong> è stata inviata.
-              Ischia Transfer Service la sta esaminando. Non devi fare altro.
+              La tua richiesta per il tenant <strong>{pendingRequest.tenants?.name ?? "selezionato"}</strong>
+              {pendingRequest.email ? (
+                <>
+                  {" "}(email <strong>{pendingRequest.email}</strong>)
+                </>
+              ) : null}{" "}
+              è stata inviata. Ischia Transfer Service la sta esaminando: riceverai una email non appena sarà stata valutata. Non devi fare altro.
             </p>
           </div>
         ) : (

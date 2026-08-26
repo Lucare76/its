@@ -1,7 +1,7 @@
 import { emailHtml, emailDataTable } from "@/lib/server/email-layout";
-import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { sendOnboardingTransactionalEmail, type OnboardingEmailResult } from "@/lib/server/onboarding-email-transport";
 
-export type AccessRequestReceivedEmailStatus = "sent" | "failed" | "skipped";
+export type AccessRequestReceivedEmailStatus = OnboardingEmailResult["status"];
 
 export interface AccessRequestReceivedEmailInput {
   to: string | null;
@@ -9,10 +9,7 @@ export interface AccessRequestReceivedEmailInput {
   agencyName: string;
 }
 
-export interface AccessRequestReceivedEmailResult {
-  status: AccessRequestReceivedEmailStatus;
-  error: string | null;
-}
+export type AccessRequestReceivedEmailResult = OnboardingEmailResult;
 
 function buildPlainText(input: AccessRequestReceivedEmailInput) {
   const lines = [
@@ -56,32 +53,11 @@ function buildHtml(input: AccessRequestReceivedEmailInput) {
 export async function sendAccessRequestReceivedEmail(
   input: AccessRequestReceivedEmailInput
 ): Promise<AccessRequestReceivedEmailResult> {
-  if (!input.to) {
-    return { status: "skipped", error: "Destinatario email non disponibile." };
-  }
-
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = getVerifiedFromEmail();
-  if (!apiKey || !from) {
-    return { status: "skipped", error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
-  }
-
-  const subject = "Richiesta di accesso ricevuta - Ischia Transfer Service";
-  const response = await resendFetch(apiKey, {
-    from,
-    to: [input.to],
-    subject,
+  return sendOnboardingTransactionalEmail({
+    to: input.to,
+    subject: "Richiesta di accesso ricevuta - Ischia Transfer Service",
     html: buildHtml(input),
-    text: buildPlainText(input)
+    text: buildPlainText(input),
+    failureLabel: "Invio email richiesta ricevuta fallito"
   });
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return {
-      status: "failed",
-      error: `Invio email richiesta ricevuta fallito (${response.status}). ${bodyText.slice(0, 240)}`
-    };
-  }
-
-  return { status: "sent", error: null };
 }

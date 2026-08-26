@@ -57,6 +57,9 @@ vi.mock("@supabase/supabase-js", () => ({
           }))
         };
       }
+      if (table === "auth_audit_log") {
+        return { insert: vi.fn(() => Promise.resolve({ error: null })) };
+      }
       throw new Error(`Unexpected table: ${table}`);
     })
   })

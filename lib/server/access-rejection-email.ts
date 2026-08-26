@@ -1,7 +1,7 @@
 import { emailHtml } from "@/lib/server/email-layout";
-import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
+import { sendOnboardingTransactionalEmail, type OnboardingEmailResult } from "@/lib/server/onboarding-email-transport";
 
-export type AccessRejectionEmailStatus = "sent" | "failed" | "skipped";
+export type AccessRejectionEmailStatus = OnboardingEmailResult["status"];
 
 export interface AccessRejectionEmailInput {
   to: string | null;
@@ -16,10 +16,7 @@ export interface AccessRejectionEmailInput {
   reasonForAgency?: string | null;
 }
 
-export interface AccessRejectionEmailResult {
-  status: AccessRejectionEmailStatus;
-  error: string | null;
-}
+export type AccessRejectionEmailResult = OnboardingEmailResult;
 
 function buildPlainText(input: AccessRejectionEmailInput) {
   const lines = [
@@ -61,32 +58,11 @@ function buildHtml(input: AccessRejectionEmailInput) {
 }
 
 export async function sendAccessRejectionEmail(input: AccessRejectionEmailInput): Promise<AccessRejectionEmailResult> {
-  if (!input.to) {
-    return { status: "skipped", error: "Destinatario email non disponibile." };
-  }
-
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = getVerifiedFromEmail();
-  if (!apiKey || !from) {
-    return { status: "skipped", error: "Provider email non configurato (RESEND_API_KEY / AGENCY_BOOKING_FROM_EMAIL)." };
-  }
-
-  const subject = "Richiesta di accesso - Ischia Transfer Service";
-  const response = await resendFetch(apiKey, {
-    from,
-    to: [input.to],
-    subject,
+  return sendOnboardingTransactionalEmail({
+    to: input.to,
+    subject: "Richiesta di accesso - Ischia Transfer Service",
     html: buildHtml(input),
-    text: buildPlainText(input)
+    text: buildPlainText(input),
+    failureLabel: "Invio email rifiuto fallito"
   });
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return {
-      status: "failed",
-      error: `Invio email rifiuto fallito (${response.status}). ${bodyText.slice(0, 240)}`
-    };
-  }
-
-  return { status: "sent", error: null };
 }
