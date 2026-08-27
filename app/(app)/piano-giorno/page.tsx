@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, hasSupabaseEnv } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
+import { openAuthenticatedHtml } from "@/lib/open-authenticated-html";
 import { DateInput } from "@/components/ui";
 import { WhatsAppButton } from "@/components/whatsapp-button";
 import { getPianoServiceDisplay } from "@/lib/piano-service-display";
@@ -3315,7 +3316,7 @@ export default function PianoGiornoPage() {
             </button>
             <button
               className="h-11 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={() => printDriverPlans(driverEntries, data?.trip_groups ?? [], tripServices, hotelMap, date, data?.ferry_schedules ?? [])}
+              onClick={() => void openAuthenticatedHtml(`/api/ops/piano-giorno/print-giornata?date=${date}`)}
             >
               Stampa
             </button>
@@ -3439,14 +3440,7 @@ export default function PianoGiornoPage() {
             </button>
             <button
               className="btn-secondary text-xs"
-              onClick={() => printDriverPlans(
-                driverEntries,
-                data?.trip_groups ?? [],
-                tripServices,
-                hotelMap,
-                date,
-                data?.ferry_schedules ?? []
-              )}
+              onClick={() => void openAuthenticatedHtml(`/api/ops/piano-giorno/print-giornata?date=${date}`)}
             >
               Stampa piani
             </button>
@@ -4772,7 +4766,7 @@ export default function PianoGiornoPage() {
                 <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                   <h2 className="text-base font-black text-slate-950">Azioni rapide</h2>
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <button className="rounded-lg border border-slate-200 px-2 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50" onClick={() => printDriverPlans(driverEntries, data?.trip_groups ?? [], tripServices, hotelMap, date, data?.ferry_schedules ?? [])}>
+                    <button className="rounded-lg border border-slate-200 px-2 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50" onClick={() => void openAuthenticatedHtml(`/api/ops/piano-giorno/print-giornata?date=${date}`)}>
                       ▤<span className="mt-1 block">Foglio</span>
                     </button>
                     <a href="/whatsapp" className="rounded-lg border border-slate-200 px-2 py-3 text-center text-xs font-bold text-slate-700 hover:bg-slate-50">

@@ -660,7 +660,7 @@ export async function POST(request: NextRequest) {
         const pickupFields = meta.service_type === "transfer"
           ? applyPickupCalc({
               direction: String(insertPayload.direction),
-              place_type: null,
+              booking_service_kind: typeof insertPayload.booking_service_kind === "string" ? insertPayload.booking_service_kind : null,
               time: String(insertPayload.time),
               billing_party_name: typeof insertPayload.billing_party_name === "string" ? insertPayload.billing_party_name : null,
               vessel: typeof insertPayload.vessel === "string" ? insertPayload.vessel : null,
@@ -744,7 +744,7 @@ export async function POST(request: NextRequest) {
         const pickupFields = meta.service_type === "transfer"
           ? applyPickupCalc({
               direction: String(payloadAny.direction ?? ""),
-              place_type: null,
+              booking_service_kind: typeof payloadAny.booking_service_kind === "string" ? payloadAny.booking_service_kind : null,
               time: String(payloadAny.time ?? ""),
               billing_party_name: typeof insertPayload.billing_party_name === "string" ? insertPayload.billing_party_name : null,
               vessel: typeof payloadAny.vessel === "string" ? payloadAny.vessel : null,
@@ -960,7 +960,7 @@ export async function POST(request: NextRequest) {
           const baseAny = base as Record<string, unknown>;
           const pickupFields = applyPickupCalc({
             direction: (baseAny.direction as string) ?? "",
-            place_type: (baseAny.place_type as string | null) ?? null,
+            booking_service_kind: (baseAny.booking_service_kind as string | null) ?? null,
             time: (baseAny.time as string) ?? "",
             billing_party_name: base.billing_party_name,
             vessel: (baseAny.vessel as string | null) ?? null,

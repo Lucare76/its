@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, EmptyState, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
+import { openAuthenticatedHtml } from "@/lib/open-authenticated-html";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceOutward } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
@@ -895,7 +896,7 @@ export default function ArrivalsPage() {
   };
 
   const handleCombinedPrint = () => {
-    void printCombined(buildRows(), buildDepartureRows(), formatIsoDateShort(selectedDate));
+    void openAuthenticatedHtml(`/api/ops/piano-giorno/print-giornata?date=${selectedDate}`);
   };
 
   return (

@@ -24,25 +24,6 @@ export function normalizeBookingAncillaries(input: BookingAncillaries) {
   return { infantCount, medmarInfantCount, medmarChildCount, medmarAdultCount, petCount, petNotes };
 }
 
-export function appendBookingAncillaryNotes(notes: string, input: BookingAncillaries) {
-  const { infantCount, medmarInfantCount, medmarChildCount, medmarAdultCount, petCount, petNotes } = normalizeBookingAncillaries(input);
-  const lines: string[] = [];
-
-  if (infantCount > 0) {
-    lines.push(`Infant 0-1,99 anni: ${infantCount} (quota fissa EUR ${(INFANT_FIXED_FEE_CENTS / 100).toFixed(2)} cad.)`);
-  }
-  if (medmarInfantCount + medmarChildCount + medmarAdultCount > 0) {
-    lines.push(`Formula MEDMAR - Infant 0-4: ${medmarInfantCount}; Bambini 4-12: ${medmarChildCount}; Adulti 12+: ${medmarAdultCount}.`);
-  }
-
-  if (petCount > 0) {
-    const suffix = petNotes ? ` - ${petNotes}` : "";
-    lines.push(`Animali piccola taglia max ${PET_MAX_WEIGHT_KG} kg: ${petCount}. Biglietto animale a cura del cliente in biglietteria${suffix}.`);
-  }
-
-  return [notes.trim(), ...lines].filter(Boolean).join("\n");
-}
-
 export function buildBookingAncillaryDetails(input: BookingAncillaries) {
   const { infantCount, medmarInfantCount, medmarChildCount, medmarAdultCount, petCount, petNotes } = normalizeBookingAncillaries(input);
   return {

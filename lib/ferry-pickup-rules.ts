@@ -1,14 +1,31 @@
+export type FerryPickupRuleDirection = "to_ischia" | "from_ischia";
+
 export interface FerryPickupRule {
   id: string;
   agency_logic: "aleste" | "sosandra";
   transport_type: "train" | "flight";
+  /**
+   * to_ischia = ARRIVO (default legacy, tutte le 60 righe seed 0187 sono così).
+   * from_ischia = PARTENZA (nuovo, hotel/zona-based). Vedi findFerryPickupRule
+   * (solo to_ischia) e resolveOperationalConnection in
+   * lib/operational-connection-resolver.ts (entrambe le direzioni).
+   */
+  direction: FerryPickupRuleDirection;
   boat_type: "traghetto" | "aliscafo";
+  /** Solo from_ischia: FK verso hotels.id. Regola hotel-specifica, batte zone/generale. */
+  hotel_id: string | null;
+  /** Solo from_ischia: null = jolly (zona qualunque, o generale se hotel_id è anche null). */
+  zone: string | null;
   transport_from: string;
   transport_to: string;
   company: string;
   departure_time: string;
+  /** Solo from_ischia: porto di partenza barca da Ischia. */
+  embark_port: string | null;
   arrival_port: string;
   arrival_time: string | null;
+  /** Solo from_ischia: orario di prelievo hotel. */
+  pickup_time: string | null;
   valid_from: string | null;
   valid_to: string | null;
   days_of_week: number[] | null;
@@ -129,16 +146,42 @@ function daysOfWeekOverlap(a: number[] | null | undefined, b: number[] | null | 
 
 export type FerryPickupRuleCandidate = Pick<
   FerryPickupRule,
-  "agency_logic" | "transport_type" | "boat_type" | "transport_from" | "transport_to" | "valid_from" | "valid_to" | "days_of_week"
->;
+  | "agency_logic"
+  | "transport_type"
+  | "boat_type"
+  | "transport_from"
+  | "transport_to"
+  | "valid_from"
+  | "valid_to"
+  | "days_of_week"
+> &
+  Partial<Pick<FerryPickupRule, "direction" | "hotel_id" | "zone">>;
+
+/** Livello di specificità di una regola: HOTEL (1) > ZONA (2) > GENERALE (3). Solo from_ischia. */
+type RuleScope = { level: 1 | 2 | 3; hotelId: string | null; zone: string | null };
+
+function scopeOf(rule: Pick<FerryPickupRule, "hotel_id" | "zone">): RuleScope {
+  if (rule.hotel_id != null) return { level: 1, hotelId: rule.hotel_id, zone: null };
+  if (rule.zone != null) return { level: 2, hotelId: null, zone: rule.zone };
+  return { level: 3, hotelId: null, zone: null };
+}
+
+/** Due scope competono realmente solo se sono lo STESSO livello con lo STESSO valore (stesso hotel, o stessa zona, o entrambi generali). Un hotel non è mai in conflitto con una zona: è un override lecito (vedi report). */
+function scopesCompete(a: RuleScope, b: RuleScope): boolean {
+  if (a.level !== b.level) return false;
+  if (a.level === 1) return a.hotelId === b.hotelId;
+  if (a.level === 2) return a.zone === b.zone;
+  return true; // entrambi generali (livello 3): stesso scope per definizione
+}
 
 /**
  * Trova, tra `rules`, la prima regola che potrebbe competere realmente con
  * `candidate` per lo stesso servizio secondo il matcher reale
- * (findFerryPickupRule): stessa terna agency_logic/transport_type/boat_type
- * (l'unico filtro di uguaglianza che il matcher applica), finestra oraria di
- * arrivo del mezzo sovrapposta, e periodo di validità (stagione + giorni
- * della settimana) potenzialmente sovrapposto.
+ * (findFerryPickupRule per to_ischia, resolveOperationalConnection per
+ * from_ischia): stessa terna agency_logic/transport_type/boat_type, stessa
+ * direction, stesso scope effettivo (hotel/zona/generale — vedi scopesCompete),
+ * finestra oraria sovrapposta, e periodo di validità (stagione + giorni della
+ * settimana) potenzialmente sovrapposto.
  *
  * Compagnia, porto e orario di sbarco NON sono discriminator del matcher: due
  * regole con compagnie diverse (es. una SNAV e una CAREMAR) competono lo
@@ -148,18 +191,26 @@ export type FerryPickupRuleCandidate = Pick<
  * agenzie tranne Sosandra) oppure 'sosandra' — la compagnia SNAV può in
  * teoria comparire in entrambi i gruppi, quindi non viene mai usata come
  * criterio di esclusione qui.
+ *
+ * Una regola HOTEL non è MAI conflitto con una regola ZONA o GENERALE per lo
+ * stesso hotel/zona: è la gerarchia di specificità voluta (override lecito),
+ * non un'ambiguità da segnalare all'operatore.
  */
 export function findConflictingRule(
   rules: FerryPickupRule[],
   candidate: FerryPickupRuleCandidate,
   excludeId?: string | null
 ): FerryPickupRule | null {
+  const candidateDirection = candidate.direction ?? "to_ischia";
+  const candidateScope = scopeOf({ hotel_id: candidate.hotel_id ?? null, zone: candidate.zone ?? null });
   return (
     rules.find((r) => {
       if (excludeId && r.id === excludeId) return false;
       if (r.agency_logic !== candidate.agency_logic) return false;
+      if ((r.direction ?? "to_ischia") !== candidateDirection) return false;
       if (r.transport_type !== candidate.transport_type) return false;
       if (r.boat_type !== candidate.boat_type) return false;
+      if (!scopesCompete(scopeOf(r), candidateScope)) return false;
       if (!timeRangesOverlap(r.transport_from, r.transport_to, candidate.transport_from, candidate.transport_to)) return false;
       if (!dateRangesOverlap(r.valid_from, r.valid_to, candidate.valid_from ?? null, candidate.valid_to ?? null)) return false;
       if (!daysOfWeekOverlap(r.days_of_week, candidate.days_of_week)) return false;
@@ -177,7 +228,13 @@ export interface FerryPickupMatch {
 }
 
 /**
- * Trova la corsa nave per un cliente che arriva con treno o volo.
+ * Trova la corsa nave per un cliente che arriva con treno o volo (ARRIVO,
+ * mainland -> Ischia). Filtra sempre `direction === 'to_ischia'` in modo
+ * esplicito: questa funzione ha un contratto arrivi-only per definizione,
+ * anche dopo l'introduzione delle regole PARTENZA (from_ischia) nella stessa
+ * tabella — le righe legacy senza `direction` esplicita sono trattate come
+ * 'to_ischia' (default di migrazione). Per le PARTENZE usare
+ * resolveOperationalConnection() in lib/operational-connection-resolver.ts.
  *
  * @param agencyLogic  'aleste' per tutte le agenzie eccetto Sosandra
  * @param transportType  'train' | 'flight'
@@ -196,6 +253,7 @@ export function findFerryPickupRule(
   const time = normalizeTime(transportArrivalTime);
 
   const matches = rules.filter((r) => {
+    if ((r.direction ?? "to_ischia") !== "to_ischia") return false;
     if (r.agency_logic !== agencyLogic) return false;
     if (r.transport_type !== transportType) return false;
     if (r.boat_type !== boatType) return false;

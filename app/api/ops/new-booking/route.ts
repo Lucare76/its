@@ -14,7 +14,8 @@ import { buildServiceLabelShort } from "@/lib/service-label";
 import { auditLog } from "@/lib/server/ops-audit";
 import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-booking-qr";
 import { computeIschiaArrivalTime, findArrivalScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
-import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
+import { buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
+import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 import { getOperatorName, logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
     const busCityOrigin = (d.bus_city_origin ?? "").trim();
     const excursionTitle = (d.excursion_title ?? "").trim();
     const customerName = `${(d.customer_first_name ?? "").trim()} ${d.customer_last_name.trim()}`.trim();
-    const notes = appendBookingAncillaryNotes(d.notes, d);
+    const notes = d.notes.trim();
     // Porto e dati extra per SNAV/MEDMAR
     const meetingPoint = typeof bodyRaw.meeting_point === "string" ? bodyRaw.meeting_point.trim() || null : null;
     const ferryDepTime = typeof bodyRaw.ferry_dep_time === "string" ? bodyRaw.ferry_dep_time.trim() || null : null;
@@ -158,6 +159,15 @@ export async function POST(request: NextRequest) {
     // Direzione base per la tratta
     const baseDirection = tripLeg === "return_only" ? "departure" : "arrival";
     const baseVessel = vesselFromKind(bookingKind, transportCode, busCityOrigin);
+    // Pickup automatico per vere partenze treno/aeroporto (transfer_train_hotel*, transfer_airport_hotel*).
+    // No-op per ogni altro kind (formula ferry, navette, escursioni, hotel-hotel, ecc.) — vedi apply-pickup-calc.ts.
+    const departurePickupFields = applyPickupCalc({
+      direction: "departure",
+      booking_service_kind: bookingKind,
+      time: d.departure_time,
+      billing_party_name: billingPartyName,
+      vessel: baseVessel,
+    });
     const ferryVesselTime = tripLeg === "return_only" ? ferryDepTime : d.arrival_time;
     let resolvedFerryArrivalTime = computeIschiaArrivalTime(bookingKind, d.arrival_time ?? "") ?? d.arrival_time;
     if (isFerryKind && tripLeg !== "return_only") {
@@ -251,6 +261,7 @@ export async function POST(request: NextRequest) {
       created_by_user_id: auth.user.id,
       pickup_time: tripLeg === "return_only" ? (pickupTimeReturn || null) : (pickupTimeOutbound || null),
       ...(isPrivateIsland ? { time_from: d.arrival_time, time_to: d.departure_time } : {}),
+      ...(baseDirection === "departure" ? departurePickupFields : {}),
     };
 
     const { data: firstInsert, error: insertError } = await auth.admin
@@ -300,6 +311,7 @@ export async function POST(request: NextRequest) {
         // barca_compagnia sopra); se manca -> null -> fail-closed
         // (manual_review nel preflight Medmar), mai un porto ereditato.
         ...(isFerryKind ? { meeting_point: portoPartenza } : {}),
+        ...departurePickupFields,
       };
       const { data: retData } = await auth.admin
         .from("services").insert(returnInsert).select("id").single();

@@ -15,13 +15,18 @@ function rule(overrides: Partial<FerryPickupRule> = {}): FerryPickupRule {
     id: `rule-${ruleCounter}`,
     agency_logic: "aleste",
     transport_type: "flight",
+    direction: "to_ischia",
     boat_type: "traghetto",
+    hotel_id: null,
+    zone: null,
     transport_from: "08:00",
     transport_to: "09:00",
     company: "medmar",
     departure_time: "09:30",
+    embark_port: null,
     arrival_port: "ischia_porto",
     arrival_time: "10:30",
+    pickup_time: null,
     valid_from: null,
     valid_to: null,
     days_of_week: null,
@@ -225,5 +230,56 @@ describe("resolveAgencyLogic — VINCOLO 2 (SNAV non è esclusiva di Sosandra)",
     expect(resolveAgencyLogic("Aleste Viaggi")).toBe("aleste");
     expect(resolveAgencyLogic("Qualunque Altra Agenzia")).toBe("aleste");
     expect(resolveAgencyLogic(null)).toBe("aleste");
+  });
+});
+
+describe("findFerryPickupRule — solo direction=to_ischia (ARRIVI), mai regole PARTENZA", () => {
+  it("una regola from_ischia con la stessa fascia/agenzia/tipo non viene mai proposta per un arrivo", () => {
+    const rules = [
+      rule({ direction: "from_ischia", hotel_id: "hotel-x", transport_from: "08:00", transport_to: "09:00", company: "snav", pickup_time: "07:00" }),
+      rule({ direction: "to_ischia", transport_from: "08:00", transport_to: "09:00", company: "medmar" }),
+    ];
+    const match = findFerryPickupRule(rules, "aleste", "flight", "traghetto", "08:30", "2026-07-01");
+    expect(match?.company).toBe("medmar");
+  });
+
+  it("righe legacy senza direction esplicita (undefined) sono trattate come to_ischia (default di migrazione)", () => {
+    const legacyRow = rule({ company: "caremar" });
+    // simula una riga letta dal DB prima della migration (colonna assente = undefined a runtime)
+    delete (legacyRow as { direction?: unknown }).direction;
+    const match = findFerryPickupRule([legacyRow], "aleste", "flight", "traghetto", "08:30", "2026-07-01");
+    expect(match?.company).toBe("caremar");
+  });
+});
+
+describe("findConflictingRule — direction e scope hotel/zona/generale", () => {
+  it("stessa fascia ma direction diversa (to_ischia vs from_ischia) NON è conflitto", () => {
+    const existing = [rule({ direction: "to_ischia", transport_from: "08:00", transport_to: "09:00" })];
+    const candidate = rule({ direction: "from_ischia", hotel_id: "hotel-colella", zone: "forio", transport_from: "08:00", transport_to: "09:00" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("una regola HOTEL non è mai in conflitto con una regola ZONA per la stessa fascia: è un override lecito", () => {
+    const existing = [rule({ direction: "from_ischia", hotel_id: null, zone: "forio", transport_from: "13:20", transport_to: "16:50" })];
+    const candidate = rule({ direction: "from_ischia", hotel_id: "hotel-colella", zone: "forio", transport_from: "13:20", transport_to: "16:50" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("due regole HOTEL identiche (stesso hotel_id) con fasce sovrapposte SONO in conflitto reale", () => {
+    const existing = [rule({ direction: "from_ischia", hotel_id: "hotel-colella", zone: "forio", transport_from: "13:00", transport_to: "15:00" })];
+    const candidate = rule({ direction: "from_ischia", hotel_id: "hotel-colella", zone: "forio", transport_from: "14:00", transport_to: "17:00" });
+    expect(findConflictingRule(existing, candidate)).not.toBeNull();
+  });
+
+  it("due regole ZONA diverse (forio vs lacco) con fasce sovrapposte NON sono in conflitto", () => {
+    const existing = [rule({ direction: "from_ischia", hotel_id: null, zone: "forio", transport_from: "13:00", transport_to: "15:00" })];
+    const candidate = rule({ direction: "from_ischia", hotel_id: null, zone: "lacco", transport_from: "13:00", transport_to: "15:00" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("due regole GENERALI (hotel_id e zone entrambi null) con fasce sovrapposte SONO in conflitto", () => {
+    const existing = [rule({ direction: "from_ischia", hotel_id: null, zone: null, transport_from: "13:00", transport_to: "15:00" })];
+    const candidate = rule({ direction: "from_ischia", hotel_id: null, zone: null, transport_from: "14:00", transport_to: "16:00" });
+    expect(findConflictingRule(existing, candidate)).not.toBeNull();
   });
 });

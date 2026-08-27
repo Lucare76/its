@@ -483,7 +483,8 @@ export async function GET(req: NextRequest) {
         ? auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId).in("id", agencyIds)
         : Promise.resolve({ data: [], error: null }),
       auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
-      auth.admin.from("ferry_pickup_rules").select("*"),
+      // Usato solo per arrivalLeg (vedi sotto) -> solo regole ARRIVO (to_ischia), mai PARTENZA.
+      auth.admin.from("ferry_pickup_rules").select("*").eq("direction", "to_ischia"),
       serviceIds.length
         ? auth.admin
           .from("ops_bus_allocation_details")

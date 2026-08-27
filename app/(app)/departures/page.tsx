@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
+import { openAuthenticatedHtml } from "@/lib/open-authenticated-html";
 
 import { formatIsoDateShort, getCustomerFullName, getDepartureFerryLabel, getDepartureTransportReference } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
@@ -695,7 +696,9 @@ export default function DeparturesPage() {
   , [departures, resolveHotelName]);
 
   const handleExcel = () => void exportToExcel(buildRows(), `partenze-${selectedDate}.xlsx`);
-  const handlePrint = () => void printTable(buildRows(), formatIsoDateShort(selectedDate));
+  const handlePrint = () => {
+    void openAuthenticatedHtml(`/api/ops/piano-giorno/print-giornata?date=${selectedDate}`);
+  };
 
   // Arrivi della stessa data per export combinato
   const buildArrivalRows = useCallback((): ExportRow[] => {
@@ -715,7 +718,9 @@ export default function DeparturesPage() {
   }, [data.services, selectedDate, resolveHotelName]);
 
   const handleCombinedExcel = () => void exportCombinedExcel(buildArrivalRows(), buildRows(), selectedDate);
-  const handleCombinedPrint = () => void printCombined(buildArrivalRows(), buildRows(), formatIsoDateShort(selectedDate));
+  const handleCombinedPrint = () => {
+    void openAuthenticatedHtml(`/api/ops/piano-giorno/print-giornata?date=${selectedDate}`);
+  };
 
   const assignmentByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
   const driverById = new Map(data.memberships.map((member) => [member.user_id, member.full_name]));

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
-import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
+import { buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 
 export const runtime = "nodejs";
 
@@ -89,7 +89,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     departure_time: d.departure_time,
     date: d.arrival_date,
     time: d.arrival_time,
-    notes: appendBookingAncillaryNotes(d.notes, d),
+    notes: d.notes.trim(),
     ferry_details: buildBookingAncillaryDetails(d),
     transport_code: d.transport_code ?? null,
     bus_city_origin: d.bus_city_origin ?? null,

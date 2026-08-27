@@ -10,13 +10,19 @@ export const runtime = "nodejs";
 const patchSchema = z.object({
   agency_logic: z.enum(["aleste", "sosandra"]).optional(),
   transport_type: z.enum(["train", "flight"]).optional(),
+  // direction intenzionalmente esclusa: cambiare direzione di una regola esistente
+  // (arrivo<->partenza) è un'operazione semanticamente diversa, non un update di campo.
   boat_type: z.enum(["traghetto", "aliscafo"]).optional(),
+  hotel_id: z.string().uuid().nullable().optional(),
+  zone: z.string().min(1).max(40).nullable().optional(),
   transport_from: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   transport_to: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   company: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).optional(),
   // departure_time intentionally excluded — read-only in the UI
+  embark_port: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).nullable().optional(),
   arrival_port: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).optional(),
   arrival_time: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  pickup_time: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   days_of_week: z.array(z.number().int().min(0).max(6)).nullable().optional(),
@@ -74,7 +80,8 @@ export async function PATCH(
     .select("*")
     .eq("agency_logic", merged.agency_logic)
     .eq("transport_type", merged.transport_type)
-    .eq("boat_type", merged.boat_type);
+    .eq("boat_type", merged.boat_type)
+    .eq("direction", merged.direction ?? "to_ischia");
 
   if (siblingsError) {
     return NextResponse.json({ error: siblingsError.message }, { status: 500 });

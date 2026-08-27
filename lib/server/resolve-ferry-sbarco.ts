@@ -66,13 +66,16 @@ export async function resolveFerrySbarco(opts: {
     if (agency?.name) agencyLogic = resolveAgencyLogic(agency.name);
   }
 
-  // Carica le regole (tabella globale, non tenant-scoped)
+  // Carica le regole (tabella globale, non tenant-scoped). direction='to_ischia'
+  // esplicito: questa funzione risolve solo ARRIVI, mai regole PARTENZA
+  // (from_ischia) introdotte per hotel/zona.
   const { data: rulesData } = await admin
     .from("ferry_pickup_rules")
     .select("*")
     .eq("agency_logic", agencyLogic)
     .eq("transport_type", transportType)
-    .eq("boat_type", boatType);
+    .eq("boat_type", boatType)
+    .eq("direction", "to_ischia");
 
   if (!rulesData?.length) return null;
 

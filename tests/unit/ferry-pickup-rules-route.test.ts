@@ -9,6 +9,7 @@ function baseRule(overrides: Row = {}): Row {
   return {
     id: "rule-1",
     agency_logic: "aleste",
+    direction: "to_ischia",
     transport_type: "flight",
     boat_type: "traghetto",
     transport_from: "08:05",

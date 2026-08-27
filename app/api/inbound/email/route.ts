@@ -396,10 +396,10 @@ export async function POST(request: NextRequest) {
     customer_name: draftCustomer,
     phone: draftPhone,
     notes: draftNotes,
-    // Calcola pickup per partenze verso stazione/aeroporto
+    // Calcola pickup per partenze treno/aeroporto (draft email non ha booking_service_kind affidabile: no-op)
     ...applyPickupCalc({
       direction: draftDirection,
-      place_type: (parsedFields as Record<string, unknown>).place_type as string ?? null,
+      booking_service_kind: (parsedFields as Record<string, unknown>).booking_service_kind as string ?? null,
       time: draftTime,
       billing_party_name: null, // non disponibile a questo livello, si corregge in inbox-approve
       vessel: draftVessel,

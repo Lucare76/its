@@ -1,20 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { agencyBookingCreateSchema } from "@/lib/validation";
-import { appendBookingAncillaryNotes, buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
+import { buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 
 describe("booking ancillaries", () => {
-  it("appende infant e animali alle note operative", () => {
-    const notes = appendBookingAncillaryNotes("Nota base", {
+  it("il breakdown infant/medmar/animali resta solo nei campi strutturati, mai in notes", () => {
+    const details = buildBookingAncillaryDetails({
       infant_count: 2,
+      medmar_infant_count: 1,
+      medmar_child_count: 0,
+      medmar_adult_count: 3,
       pet_count: 1,
       pet_notes: "cane 6 kg nel trasportino"
     });
 
-    expect(notes).toContain("Nota base");
-    expect(notes).toContain("Infant 0-1,99 anni: 2");
-    expect(notes).toContain("EUR 2.50 cad.");
-    expect(notes).toContain("Animali piccola taglia max 10 kg: 1");
-    expect(notes).toContain("Biglietto animale a cura del cliente in biglietteria");
+    expect(details).toMatchObject({
+      infant_count: 2,
+      medmar_infant_count: 1,
+      medmar_child_count: 0,
+      medmar_adult_count: 3,
+      pet_count: 1,
+      pet_notes: "cane 6 kg nel trasportino"
+    });
   });
 
   it("calcola quota infant fissa a 2,50 euro", () => {
