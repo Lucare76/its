@@ -324,10 +324,28 @@ export function resolveOperationalConnection(input: OperationalConnectionInput):
       warnings: [`booking_service_kind '${input.bookingServiceKind}' non è treno/aereo: nessun collegamento da calcolare.`],
     };
   } else {
-    // Policy Aleste-like: mai aliscafo automatico (sez. 6). Sosandra: entrambi ammessi,
-    // la regola canonica stessa disambigua quale boat_type usare per la fascia.
+    // La regola canonica (DB, ferry_pickup_rules) porta gia' il proprio
+    // agency_logic ed e' gia' filtrata su quello in findCanonicalRule
+    // (baseMatch: r.agency_logic !== args.agencyLogic -> scartata) — ma
+    // "esiste una regola configurata" NON basta da sola per autorizzare
+    // l'aliscafo per un'agenzia standard (Aleste): l'aliscafo li' e'
+    // un'eccezione operativa (es. Birago), non il comportamento di default.
+    // Serve un segnale esplicito di richiesta al momento della prenotazione.
+    // Fonte verificata nel modello dati: booking_service_kind con suffisso
+    // '_aliscafo' (transfer_train_hotel_aliscafo / transfer_airport_hotel_
+    // aliscafo) — opzione selezionabile esplicitamente sia nel form agenzia
+    // (agency/new-booking/page.tsx) sia in quello operatore (services/new/
+    // page.tsx), distinta dal kind generico (default traghetto). Nessun altro
+    // campo strutturato equivalente esiste (transport_code/notes sono testo
+    // libero). Sosandra resta autorizzata sempre (comportamento invariato,
+    // regola operativa gia' confermata per quell'agenzia); per le altre
+    // agenzie l'aliscafo entra tra i tipi ammessi SOLO se il servizio lo
+    // richiede esplicitamente — la regola canonica resta comunque necessaria
+    // (una richiesta esplicita senza regola configurata cade nel fallback
+    // legacy, mai un'invenzione).
+    const explicitAliscafoRequest = input.bookingServiceKind.endsWith("_aliscafo");
     const allowedBoatTypes: Array<"traghetto" | "aliscafo"> =
-      agencyLogic === "sosandra" ? ["traghetto", "aliscafo"] : ["traghetto"];
+      agencyLogic === "sosandra" || explicitAliscafoRequest ? ["traghetto", "aliscafo"] : ["traghetto"];
 
     const zoneRecognized = input.zoneRecognized ?? true;
     const rule = findCanonicalRule(input.operationalRules, {

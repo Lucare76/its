@@ -98,7 +98,7 @@ function normalizeText(value?: string | null) {
     .replace(/\p{Diacritic}/gu, "") ?? "";
 }
 
-function readablePort(value?: string | null) {
+export function readablePort(value?: string | null) {
   const raw = clean(value);
   if (!raw) return null;
   const text = normalizeText(raw).replace(/[_-]+/g, " ");
@@ -158,7 +158,7 @@ function companyFromVesselText(vessel?: string | null): string | null {
   return match ? match[1].toUpperCase() : null;
 }
 
-function resolveCompany(service: PrintService): string | null {
+export function resolveCompany(service: PrintService): string | null {
   return companyFromKind(service.booking_service_kind) ?? companyFromVesselText(service.vessel);
 }
 
@@ -170,7 +170,7 @@ function resolveCompany(service: PrintService): string | null {
 // (appartiene sempre alla gamba di ritorno, anche quando valorizzato su una
 // riga di arrivo: vedi audit A/R MEROLA/DI BERNARDO).
 // ---------------------------------------------------------------------------
-function parseVesselTime(vessel?: string | null): string | null {
+export function parseVesselTime(vessel?: string | null): string | null {
   const raw = clean(vessel);
   if (!raw || !FERRY_COMPANY_PATTERN.test(raw)) return null;
   const match = raw.match(/(\d{1,2}:\d{2})\s*$/);
