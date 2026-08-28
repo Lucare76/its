@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { resolveQrToken, markQrUsed } from "@/lib/server/booking-qr";
+import { updateServiceStatusCore } from "@/lib/server/update-service-status-core";
 
 export const runtime = "nodejs";
 
@@ -153,32 +154,29 @@ export async function POST(
 
     const alreadyDone = service.status === "completato";
 
-    await auth.admin.from("service_scan_log").insert({
+    const scanLogResult = await auth.admin.from("service_scan_log").insert({
       tenant_id: tenantId,
       service_id: serviceId,
       scanned_by_user_id: auth.user.id,
       action: alreadyDone ? "double_complete_attempt" : "complete",
     });
+    if (scanLogResult.error) throw new Error(scanLogResult.error.message);
 
     if (alreadyDone) {
       return NextResponse.json({ ok: true, already_completed: true });
     }
 
     const now = new Date().toISOString();
-    await Promise.all([
-      auth.admin
-        .from("services")
-        .update({ status: "completato" })
-        .eq("id", serviceId)
-        .eq("tenant_id", tenantId),
-      auth.admin.from("status_events").insert({
-        tenant_id: tenantId,
-        service_id: serviceId,
-        status: "completato",
-        at: now,
-        by_user_id: auth.user.id,
-      }),
-    ]);
+    const updateResult = await updateServiceStatusCore(auth.admin, {
+      tenantId,
+      userId: auth.user.id,
+      serviceId,
+      targetStatus: "completato",
+      expectedCurrentStatus: service.status,
+    });
+    if (updateResult.status !== 200) {
+      return NextResponse.json(updateResult.body, { status: updateResult.status });
+    }
 
     // Marca il QR come usato se la scansione è avvenuta tramite token
     if (qrToken) {

@@ -1,11 +1,27 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-const email = process.env.PDF_PREVIEW_USER_EMAIL ?? "";
-const password = process.env.PDF_PREVIEW_USER_PASSWORD ?? "";
+function readEnvFile(): Record<string, string> {
+  const parse = (filePath: string): Record<string, string> => {
+    if (!fs.existsSync(filePath)) return {};
+    return Object.fromEntries(
+      fs.readFileSync(filePath, "utf8")
+        .split(/\r?\n/).map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#") && l.includes("="))
+        .map((l) => { const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^"|"$/g, "")]; })
+    );
+  };
+  return { ...parse(path.resolve(".env")), ...parse(path.resolve(".env.local")) };
+}
+
+const localEnv = readEnvFile();
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || localEnv.NEXT_PUBLIC_SUPABASE_URL || "";
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || localEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY || localEnv.SUPABASE_SERVICE_ROLE_KEY || "";
+const email = process.env.PDF_PREVIEW_USER_EMAIL || localEnv.PDF_PREVIEW_USER_EMAIL || "";
+const password = process.env.PDF_PREVIEW_USER_PASSWORD || localEnv.PDF_PREVIEW_USER_PASSWORD || "";
 
 let storageKey = "";
 let storageValue = "";

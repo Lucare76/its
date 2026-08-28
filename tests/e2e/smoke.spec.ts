@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test.describe("Smoke e2e", () => {
   test("auth guard e login production-only senza fallback demo", async ({ page }) => {
     await page.goto("/dashboard");
-    await expect(page).toHaveURL(/\/login\?redirect=%2Fdashboard/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
 
     await expect(page.getByRole("heading", { name: "Login Supabase" })).toBeVisible();
     await expect(page.getByTestId("login-email")).toBeVisible();

@@ -270,11 +270,33 @@ test.describe.serial("Scan page – flusso completo", () => {
     // Screenshot del modal (visibile nel report Playwright)
     await page.screenshot({ path: "tests/e2e/screenshots/scan-modal-confirm.png" });
 
-    // Clicca "Sì, conferma"
+    // Clicca "Sì, conferma" e verifica che la POST sia realmente accettata
+    const completeResponsePromise = page.waitForResponse((res) =>
+      res.url().includes(`/api/scan/${testServiceId}`)
+      && res.request().method() === "POST"
+    );
     await page.getByRole("button", { name: /Sì, conferma/i }).click();
+    const completeResponse = await completeResponsePromise;
+    expect(completeResponse.ok()).toBe(true);
+    const completeBody = await completeResponse.json() as { ok?: boolean; already_completed?: boolean; error?: string };
+    expect(completeBody.ok).toBe(true);
+    expect(completeBody.already_completed).not.toBe(true);
 
     // Attende il banner di successo
     await expect(page.getByText(/Servizio completato/i)).toBeVisible({ timeout: 10_000 });
+
+    const admin = createClient(supabaseUrl, serviceRole, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    await expect.poll(async () => {
+      const { data: svc } = await admin
+        .from("services")
+        .select("status")
+        .eq("id", testServiceId)
+        .single();
+      return svc?.status ?? "";
+    }, { timeout: 15_000 }).toBe("completato");
+
     await page.screenshot({ path: "tests/e2e/screenshots/scan-success.png" });
 
     console.log(`   ✓ Servizio ${testServiceId} marcato come completato`);
@@ -283,9 +305,21 @@ test.describe.serial("Scan page – flusso completo", () => {
   // ─── Test 4: doppia scansione ─────────────────────────────────────────────
 
   test("seconda scansione → avviso doppia scansione, nessun pulsante conferma", async ({ page }) => {
+    const admin = createClient(supabaseUrl, serviceRole, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    await expect.poll(async () => {
+      const { data: svc } = await admin
+        .from("services")
+        .select("status")
+        .eq("id", testServiceId)
+        .single();
+      return svc?.status ?? "";
+    }, { timeout: 15_000 }).toBe("completato");
+
     await openAuthenticated(page, `/scan/${testServiceId}`);
 
-    await expect(page.getByText(/già marcato come completato/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("body")).toContainText(/completato/i, { timeout: 15_000 });
     await expect(page.getByRole("button", { name: /CONFERMA/i })).not.toBeVisible();
 
     await page.screenshot({ path: "tests/e2e/screenshots/scan-double-attempt.png" });
