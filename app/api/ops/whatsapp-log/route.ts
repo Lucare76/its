@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { normalizeStatusGroup, isNewerStatus, buildKpi, type KpiStatus } from "@/lib/server/whatsapp-log-shared";
+import { resolveOperationalDate } from "@/lib/medmar-date";
+import { filterMedmarRowsByDate, buildMedmarWhatsAppLog, type MedmarLogRowSource } from "@/lib/server/medmar-whatsapp-log";
 
 export const runtime = "nodejs";
-
-type KpiStatus = "read" | "delivered" | "pending" | "failed";
 
 type LogRow = {
   service_id: string | null;
@@ -18,53 +19,6 @@ type LogRow = {
   booking_service_kind: string | null;
 };
 
-const statusPriority: Record<string, number> = {
-  failed: 4,
-  error: 4,
-  read: 3,
-  delivered: 2,
-  sent: 1,
-  queued: 1,
-  pending: 1,
-};
-
-function normalizeStatusGroup(status?: string | null): KpiStatus {
-  const value = String(status ?? "").toLowerCase();
-  if (value === "read") return "read";
-  if (value === "delivered") return "delivered";
-  if (value === "failed" || value === "error") return "failed";
-  return "pending";
-}
-
-function buildKpi(rows: Array<{ status_group: KpiStatus }>) {
-  const total = rows.length;
-  const read = rows.filter((row) => row.status_group === "read").length;
-  const delivered = rows.filter((row) => row.status_group === "delivered").length;
-  const pending = rows.filter((row) => row.status_group === "pending").length;
-  const failed = rows.filter((row) => row.status_group === "failed").length;
-  return {
-    total,
-    read,
-    delivered,
-    sent: pending,
-    pending,
-    failed,
-    notRead: delivered + pending,
-  };
-}
-
-function isNewerStatus(
-  nextStatus: string,
-  nextAt: string | null | undefined,
-  currentStatus: string,
-  currentAt: string | null | undefined,
-) {
-  const nextTime = nextAt ? new Date(nextAt).getTime() : 0;
-  const currentTime = currentAt ? new Date(currentAt).getTime() : 0;
-  if (nextTime !== currentTime) return nextTime > currentTime;
-  return (statusPriority[nextStatus] ?? 0) > (statusPriority[currentStatus] ?? 0);
-}
-
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor", "assistenza"]);
   if (auth instanceof NextResponse) return auth;
@@ -77,8 +31,14 @@ export async function GET(request: NextRequest) {
   }
   const url      = new URL(request.url);
   const filter   = url.searchParams.get("filter") ?? "info_3d";
-  const days     = Math.min(Number(url.searchParams.get("days") ?? "30"), 90);
 
+  if (filter === "medmar_convocazione") {
+    const resolved = resolveOperationalDate(url.searchParams.get("date"));
+    if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: 400 });
+    return handleMedmarConvocazione(admin, tenantId, resolved.date);
+  }
+
+  const days     = Math.min(Number(url.searchParams.get("days") ?? "30"), 90);
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
   if (filter === "bus_convocazione") {
@@ -262,4 +222,59 @@ async function handleBusConvocazione(
     notReadRows,
     failedRows,
   });
+}
+
+async function handleMedmarConvocazione(
+  admin: ReturnType<typeof createAdminClient>,
+  tenantId: string,
+  dateIso: string,
+) {
+  const { data: convocationRows, error } = await admin
+    .from("medmar_convocation_rows")
+    .select("id, batch_id, customer_name, travel_date, travel_date_iso, route, departure_time, passengers, phone_raw, phone_e164, status, error_message, provider_message_id, sent_at")
+    .eq("tenant_id", tenantId)
+    .eq("travel_date_iso", dateIso)
+    .in("status", ["inviato", "errore"])
+    .limit(5000);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const rows = filterMedmarRowsByDate((convocationRows ?? []) as MedmarLogRowSource[], dateIso);
+
+  if (rows.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      kpi: { total: 0, read: 0, delivered: 0, sent: 0, pending: 0, failed: 0, notRead: 0 },
+      rows: [],
+      notReadRows: [],
+      failedRows: [],
+    });
+  }
+
+  const batchIds = [...new Set(rows.map((r) => r.batch_id))];
+  const { data: batches } = batchIds.length === 0 ? { data: [] } : await admin
+    .from("medmar_convocation_batches")
+    .select("id, file_name")
+    .in("id", batchIds);
+
+  const messageIds = rows
+    .map((r) => r.provider_message_id)
+    .filter((id): id is string => id != null && id.length > 0);
+
+  type StatusRow = { wa_message_id: string; status: string; timestamp: string | null; created_at: string };
+  let statuses: StatusRow[] = [];
+  if (messageIds.length > 0) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < messageIds.length; i += 500) chunks.push(messageIds.slice(i, i + 500));
+    for (const chunk of chunks) {
+      const { data } = await admin
+        .from("whatsapp_message_statuses")
+        .select("wa_message_id, status, timestamp, created_at")
+        .in("wa_message_id", chunk);
+      if (data) statuses = statuses.concat(data as StatusRow[]);
+    }
+  }
+
+  const result = buildMedmarWhatsAppLog(rows, statuses, batches ?? []);
+  return NextResponse.json({ ok: true, ...result });
 }
