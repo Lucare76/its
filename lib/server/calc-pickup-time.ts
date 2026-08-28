@@ -141,8 +141,11 @@ export function calcPickupTime(input: RulesInput): PickupResult {
   }
 
   const isDimhotels = agency_key === "sosandra";
-  // Aleste è sempre traghetto anche se non specificato
-  const effectiveBarca = agency_key === "aleste" ? "traghetto" : tipo_barca;
+  // tipo_barca riflette gia' la richiesta esplicita (_aliscafo nel
+  // booking_service_kind, via tipoBarcaFor()): mai reinterpretato qui in base
+  // all'agenzia. "Aleste sempre traghetto" resta vero solo come comportamento
+  // di default quando tipo_barca non e' esplicitamente "aliscafo".
+  const effectiveBarca = tipo_barca;
 
   // Seleziona la tabella giusta
   let table: Array<{ da: string; a: string; pickup: string; barca: string; orario_barca: string; porto: string }>;
@@ -158,8 +161,20 @@ export function calcPickupTime(input: RulesInput): PickupResult {
       table = DIMHOTELS_AEREO_ALISCAFO;
       pickupTable = DIMHOTELS_AEREO_ALISCAFO_PICKUP;
     }
+  } else if (effectiveBarca === "aliscafo") {
+    // Nessuna tabella statica aliscafo esiste per queste agenzie (solo
+    // traghetto Medmar). Una richiesta esplicita di aliscafo non deve
+    // silenziosamente ricadere sul traghetto: nessun mezzo diverso da quello
+    // richiesto viene proposto senza conferma dell'operatore.
+    return {
+      pickup_hotel: null,
+      barca_compagnia: null,
+      orario_barca: null,
+      porto_bruno: null,
+      alert: "Aliscafo richiesto esplicitamente ma nessuna tabella fallback statica disponibile per questa agenzia — verificare manualmente.",
+    };
   } else {
-    // Tutte le altre agenzie — stessa logica Aleste
+    // Tutte le altre agenzie — stessa logica Aleste (traghetto Medmar)
     if (mezzo === "treno") table = ALESTE_TRENO_TRAGHETTO;
     else table = ALESTE_AEREO_TRAGHETTO;
   }

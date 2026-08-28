@@ -33,7 +33,7 @@ describe("Parita' canali — Caso 1: Aleste + treno + traghetto standard", () =>
 });
 
 describe("Parita' canali — Caso 2: Aleste + treno + _aliscafo", () => {
-  it("kind _aliscafo per Aleste: comportamento pre-esistente invariato (calc-pickup-time.ts non ha mai avuto tabelle aliscafo per Aleste, resta forzato a traghetto/Medmar) — la centralizzazione non introduce alcuna differenza qui, stesso identico risultato in qualunque canale", () => {
+  it("kind _aliscafo per Aleste: richiesta esplicita rispettata — nessuna tabella statica aliscafo per Aleste, quindi null + alert, MAI traghetto/Medmar", () => {
     const result = applyPickupCalc({
       direction: "departure",
       booking_service_kind: "transfer_train_hotel_aliscafo",
@@ -41,8 +41,9 @@ describe("Parita' canali — Caso 2: Aleste + treno + _aliscafo", () => {
       billing_party_name: "ALESTE VIAGGI",
       vessel: null,
     });
-    expect(result.pickup_alert === null || typeof result.pickup_hotel === "string").toBe(true);
-    expect(result.barca_compagnia).toBe("Medmar");
+    expect(result.barca_compagnia).toBeNull();
+    expect(result.pickup_hotel).toBeNull();
+    expect(result.pickup_alert).toMatch(/[Aa]liscafo/);
   });
 });
 
@@ -60,7 +61,7 @@ describe("Parita' canali — Caso 3: Aleste + volo standard", () => {
 });
 
 describe("Parita' canali — Caso 4: Aleste + volo _aliscafo", () => {
-  it("stesso comportamento pre-esistente del caso treno: Aleste resta traghetto/Medmar anche col kind _aliscafo (nessuna tabella aliscafo Aleste in calc-pickup-time.ts)", () => {
+  it("stesso comportamento del caso treno: richiesta esplicita aliscafo rispettata, MAI traghetto/Medmar (nessuna tabella aliscafo Aleste in calc-pickup-time.ts)", () => {
     const result = applyPickupCalc({
       direction: "departure",
       booking_service_kind: "transfer_airport_hotel_aliscafo",
@@ -68,7 +69,9 @@ describe("Parita' canali — Caso 4: Aleste + volo _aliscafo", () => {
       billing_party_name: "ALESTE VIAGGI",
       vessel: null,
     });
-    expect(result.barca_compagnia).toBe("Medmar");
+    expect(result.barca_compagnia).toBeNull();
+    expect(result.pickup_hotel).toBeNull();
+    expect(result.pickup_alert).toMatch(/[Aa]liscafo/);
   });
 });
 

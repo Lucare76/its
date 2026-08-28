@@ -139,6 +139,7 @@ function fromConnectionResult(
     result.source === "canonical_rule" ? "ferry_pickup_rules (regola canonica)"
       : result.source === "manual_override" ? "override manuale confermato"
       : staticFallback?.pickup_hotel ? "calc-pickup-time.ts (fallback statico, nessuna regola canonica)"
+      : staticFallback?.alert ? "calc-pickup-time.ts (fallback statico non disponibile per il mezzo richiesto)"
       : "travel-connection-resolver (fallback legacy, nessuna regola canonica configurata)";
   const status: OperationalTimingResult["status"] =
     result.confidence === "NESSUNA" ? "warning" : result.warnings.length > 0 ? "warning" : "ok";
@@ -160,7 +161,7 @@ function fromConnectionResult(
     connectionTime,
     connectionType,
     ruleSource,
-    status: staticFallback?.pickup_hotel ? "warning" : status,
+    status: staticFallback?.pickup_hotel || staticFallback?.alert ? "warning" : status,
     warnings,
   };
 }

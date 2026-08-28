@@ -281,13 +281,38 @@ describe("Parita' write/read SENZA regola canonica — fallback statico condivis
     expect(readResult.pickupSource).toBe("legacy_static");
   });
 
-  it("3. Aleste _aliscafo, nessuna regola canonica -> comportamento coerente (Aleste resta forzato a traghetto anche nel fallback statico, gia' cosi' prima di questa modifica)", () => {
+  it("3. Aleste _aliscafo, nessuna regola canonica -> nessuna tabella statica aliscafo per Aleste: write == read, pickup null + warning, MAI traghetto", () => {
     const { writeResult, readResult } = compare({
       kind: "transfer_train_hotel_aliscafo", time: "14:00", agencyName: "ALESTE VIAGGI",
       rules: [], schedules: [],
     });
     expect(writeResult.pickup_hotel).toBe(readResult.pickupTime);
+    expect(writeResult.pickup_hotel).toBeNull();
+    expect(writeResult.barca_compagnia).toBeNull();
+    expect(writeResult.pickup_alert).toMatch(/[Aa]liscafo/);
+    expect(readResult.status).toBe("warning");
+    expect(readResult.warnings.join(" ")).toMatch(/[Aa]liscafo/);
+  });
+
+  it("3b. Aleste volo _aliscafo, nessuna regola canonica -> stesso comportamento del treno", () => {
+    const { writeResult, readResult } = compare({
+      kind: "transfer_airport_hotel_aliscafo", time: "12:00", agencyName: "ALESTE VIAGGI",
+      rules: [], schedules: [],
+    });
+    expect(writeResult.pickup_hotel).toBe(readResult.pickupTime);
+    expect(writeResult.pickup_hotel).toBeNull();
+    expect(writeResult.barca_compagnia).toBeNull();
+    expect(writeResult.pickup_alert).toMatch(/[Aa]liscafo/);
+  });
+
+  it("3c. Aleste standard (senza _aliscafo), nessuna regola canonica -> non usa mai automaticamente l'aliscafo", () => {
+    const { writeResult, readResult } = compare({
+      kind: "transfer_train_hotel", time: "14:00", agencyName: "ALESTE VIAGGI",
+      rules: [], schedules: [],
+    });
     expect(writeResult.barca_compagnia).toBe("Medmar");
+    expect(writeResult.pickup_hotel).toBe(readResult.pickupTime);
+    expect(writeResult.pickup_hotel).not.toBeNull();
   });
 
   it("4. Sosandra senza regola canonica -> comportamento coerente (tabelle DIMHOTELS, aliscafo genuino)", () => {

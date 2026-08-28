@@ -49,9 +49,11 @@ describe("calcPickupTime — Aleste Viaggi (sempre Medmar traghetto)", () => {
     expect(result.alert).toBeNull();
   });
 
-  it("tipo_barca aliscafo ignorato per Aleste → usa comunque Medmar", () => {
+  it("tipo_barca aliscafo esplicito per Aleste → nessuna tabella statica, NON ricade su Medmar/traghetto", () => {
     const result = calcPickupTime({ agency_key: "aleste", mezzo: "treno", tipo_barca: "aliscafo", orario: "10:00" });
-    expect(result.barca_compagnia).toBe("Medmar");
+    expect(result.barca_compagnia).toBeNull();
+    expect(result.pickup_hotel).toBeNull();
+    expect(result.alert).toMatch(/[Aa]liscafo/);
   });
 
   it("treno 12:00 → pickup 09:00", () => {
