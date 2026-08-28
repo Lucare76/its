@@ -111,11 +111,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Valida hotel (non obbligatorio per private_island)
-    let hotelData: { id: string; name: string } | null = null;
+    let hotelData: { id: string; name: string; zone?: string | null } | null = null;
     if (!isPrivateIsland) {
       const { data: hd } = await auth.admin
         .from("hotels")
-        .select("id, name")
+        .select("id, name, zone")
         .eq("tenant_id", tenantId)
         .eq("id", d.hotel_id ?? "")
         .maybeSingle();
@@ -159,23 +159,52 @@ export async function POST(request: NextRequest) {
     // Direzione base per la tratta
     const baseDirection = tripLeg === "return_only" ? "departure" : "arrival";
     const baseVessel = vesselFromKind(bookingKind, transportCode, busCityOrigin);
-    // Pickup automatico per vere partenze treno/aeroporto (transfer_train_hotel*, transfer_airport_hotel*).
-    // No-op per ogni altro kind (formula ferry, navette, escursioni, hotel-hotel, ecc.) — vedi apply-pickup-calc.ts.
+    // Regole canoniche + orari nave: caricati UNA volta (singola richiesta,
+    // un solo servizio creato — non un batch, quindi non e' un problema N+1),
+    // passati come context ad applyPickupCalc cosi' che il dominio A
+    // (treno/aeroporto) possa usare la STESSA regola canonica DB del
+    // read-path (/departures) invece del solo fallback statico quando una
+    // regola e' configurata — vedi lib/server/apply-pickup-calc.ts.
+    const isTrainOrFlightKind = bookingKind === "transfer_train_hotel" || bookingKind === "transfer_train_hotel_exclusive" || bookingKind === "transfer_train_hotel_aliscafo"
+      || bookingKind === "transfer_airport_hotel" || bookingKind === "transfer_airport_hotel_exclusive" || bookingKind === "transfer_airport_hotel_aliscafo";
+    const [scheduleRows, operationalRulesRows] = await Promise.all([
+      (isFerryKind || isTrainOrFlightKind)
+        ? auth.admin.from("ferry_schedules")
+            .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
+            .then((r) => r.data ?? [])
+        : Promise.resolve([]),
+      isTrainOrFlightKind
+        ? auth.admin.from("ferry_pickup_rules").select("*").then((r) => r.data ?? [])
+        : Promise.resolve([]),
+    ]);
+    // Pickup automatico: canonico via apply-pickup-calc.ts, che ora copre sia
+    // treno/aeroporto (transfer_train_hotel*/transfer_airport_hotel*) sia
+    // Formula SNAV/MEDMAR diretta — stessa funzione, stesso risultato del
+    // canale agenzia/Excel/email per uno scenario equivalente. Per Formula
+    // l'orario-ancora e' quello della nave (ferryDepTime), non d.departure_time
+    // (che per queste prenotazioni e' un campo diverso — vedi UI operatore).
     const departurePickupFields = applyPickupCalc({
       direction: "departure",
       booking_service_kind: bookingKind,
-      time: d.departure_time,
+      time: isFerryKind ? (ferryDepTime ?? d.departure_time) : d.departure_time,
       billing_party_name: billingPartyName,
       vessel: baseVessel,
+      hotel_zone: hotelData?.zone ?? null,
+      hotel_name: hotelData?.name ?? null,
+      context: isTrainOrFlightKind
+        ? {
+            operationalRules: operationalRulesRows as never,
+            ferrySchedules: scheduleRows as never,
+            date: tripLeg === "return_only" ? d.departure_date : d.arrival_date,
+            hotelId: hotelData?.id ?? null,
+          }
+        : undefined,
     });
     const ferryVesselTime = tripLeg === "return_only" ? ferryDepTime : d.arrival_time;
     let resolvedFerryArrivalTime = computeIschiaArrivalTime(bookingKind, d.arrival_time ?? "") ?? d.arrival_time;
     if (isFerryKind && tripLeg !== "return_only") {
-      const { data: scheduleRows } = await auth.admin
-        .from("ferry_schedules")
-        .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to");
       const schedule = findArrivalScheduleForService(
-        (scheduleRows ?? []) as FerryScheduleRow[],
+        scheduleRows as FerryScheduleRow[],
         d.arrival_date,
         d.arrival_time,
         bookingKind

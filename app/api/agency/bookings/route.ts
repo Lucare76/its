@@ -11,6 +11,7 @@ import { appUrlFromRequest, ensureBusBookingQrCodes } from "@/lib/server/bus-boo
 import { computeIschiaArrivalTime } from "@/lib/ferry-schedule-options";
 import { buildBookingAncillaryDetails } from "@/lib/booking-ancillaries";
 import { resolveFerryScbarcoTime } from "@/lib/server/resolve-ferry-sbarco";
+import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 
@@ -310,7 +311,7 @@ export async function POST(request: NextRequest) {
 
     const { data: hotelData } = await auth.admin
       .from("hotels")
-      .select("id, name")
+      .select("id, name, zone")
       .eq("tenant_id", auth.membership.tenant_id)
       .eq("id", parsed.data.hotel_id)
       .maybeSingle();
@@ -318,6 +319,21 @@ export async function POST(request: NextRequest) {
     if (!hotelData?.id) {
       return NextResponse.json({ error: "Hotel non valido per il tenant corrente." }, { status: 400 });
     }
+
+    // Nome agenzia per la logica agency_key del calcolo pickup (Sosandra vs
+    // Aleste/altre — vedi apply-pickup-calc.ts). Richiesta singola per-booking,
+    // non un batch: non e' un problema N+1 su questo endpoint (crea un solo
+    // servizio per chiamata). Stesso discorso per operationalRules/ferrySchedules
+    // sotto — una singola query ciascuna, non un problema di scala qui.
+    const [{ data: agencyForPickup }, operationalRulesRows, scheduleRows] = await Promise.all([
+      agencyIdResult.agencyId
+        ? auth.admin.from("agencies").select("name").eq("id", agencyIdResult.agencyId).maybeSingle()
+        : Promise.resolve({ data: null }),
+      auth.admin.from("ferry_pickup_rules").select("*").then((r) => r.data ?? []),
+      auth.admin.from("ferry_schedules")
+        .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
+        .then((r) => r.data ?? []),
+    ]);
 
     const bookingKind = parsed.data.booking_service_kind;
     const serviceType = bookingKind === "excursion" ? "bus_tour" : "transfer";
@@ -425,7 +441,29 @@ export async function POST(request: NextRequest) {
               title: excursionTitle
             }
           : {},
-      agency_quoted_price_cents: quotedPriceCents ?? null
+      agency_quoted_price_cents: quotedPriceCents ?? null,
+      // Pickup automatico: canonico via apply-pickup-calc.ts (stesso calcolatore
+      // usato da new-booking/Excel/inbox-approve). Questa riga rappresenta
+      // ANCHE la gamba di partenza (departure_date/time sopra), pur avendo
+      // direction='arrival' — modello A/R su riga singola gia' in uso per le
+      // Formula. Si passa direction='departure' esplicitamente al calcolatore
+      // per attivare il calcolo sul dato di partenza di questa riga, non su
+      // quello (diverso) del campo `direction` colonna DB.
+      ...applyPickupCalc({
+        direction: "departure",
+        booking_service_kind: bookingKind,
+        time: parsed.data.departure_time,
+        billing_party_name: agencyForPickup?.name ?? null,
+        vessel: vesselFromKind(bookingKind, transportCode, busCityOrigin),
+        hotel_zone: hotelData.zone ?? null,
+        hotel_name: hotelData.name ?? null,
+        context: {
+          operationalRules: operationalRulesRows as never,
+          ferrySchedules: scheduleRows as never,
+          date: parsed.data.departure_date,
+          hotelId: hotelData.id,
+        },
+      }),
     };
 
     // Nessuna finestra temporale — rileva duplicati a prescindere da quando sono stati inseriti

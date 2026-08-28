@@ -93,6 +93,7 @@ type HotelRow = {
   name: string;
   normalized_name?: string | null;
   aliases?: string[];
+  zone?: string | null;
 };
 
 const presetConfig = {
@@ -417,7 +418,7 @@ export async function POST(request: NextRequest) {
 
   const { data: hotels, error: hotelsError } = await auth.admin
     .from("hotels")
-    .select("id, name, normalized_name")
+    .select("id, name, normalized_name, zone")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("name", { ascending: true });
 
@@ -431,6 +432,16 @@ export async function POST(request: NextRequest) {
     .eq("tenant_id", auth.membership.tenant_id)
     .limit(5000);
 
+  // Regole canoniche + orari nave per il dominio A (treno/aeroporto) di
+  // apply-pickup-calc.ts: caricati UNA volta per l'intero batch, MAI per
+  // riga — passati come context a ogni chiamata applyPickupCalc sotto.
+  const { data: operationalRulesData } = await auth.admin.from("ferry_pickup_rules").select("*");
+  const { data: ferryScheduleData } = await auth.admin
+    .from("ferry_schedules")
+    .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to");
+  const operationalRulesRows = operationalRulesData ?? [];
+  const scheduleRows = ferryScheduleData ?? [];
+
   const aliasesByHotel = new Map<string, string[]>();
   for (const row of (aliasRows ?? []) as Array<{ hotel_id: string; alias: string }>) {
     const bucket = aliasesByHotel.get(row.hotel_id) ?? [];
@@ -442,6 +453,11 @@ export async function POST(request: NextRequest) {
     ...hotel,
     aliases: aliasesByHotel.get(hotel.id) ?? []
   }));
+  // Zona hotel per il calcolo pickup (dominio B, Formula/porto-porto in
+  // apply-pickup-calc.ts) — mappa costruita UNA volta dal batch gia' caricato
+  // sopra, nessuna query aggiuntiva per riga.
+  const hotelZoneById = new Map(hotelRows.map((hotel) => [hotel.id, hotel.zone ?? null]));
+  const hotelNameById = new Map(hotelRows.map((hotel) => [hotel.id, hotel.name]));
   const places = await loadTenantPlaces(auth.admin, auth.membership.tenant_id);
   const preset = presetConfig[parsed.data.preset_key];
   const needsBusResolver = parsed.data.rows.some((row) => isBusImportCandidate(row, parsed.data.preset_key));
@@ -664,6 +680,14 @@ export async function POST(request: NextRequest) {
               time: String(insertPayload.time),
               billing_party_name: typeof insertPayload.billing_party_name === "string" ? insertPayload.billing_party_name : null,
               vessel: typeof insertPayload.vessel === "string" ? insertPayload.vessel : null,
+              hotel_zone: resolvedHotelId ? hotelZoneById.get(resolvedHotelId) ?? null : null,
+              hotel_name: resolvedHotelId ? hotelNameById.get(resolvedHotelId) ?? null : null,
+              context: {
+                operationalRules: operationalRulesRows as never,
+                ferrySchedules: scheduleRows as never,
+                date: String(insertPayload.date),
+                hotelId: resolvedHotelId,
+              },
             })
           : {};
 
@@ -748,6 +772,14 @@ export async function POST(request: NextRequest) {
               time: String(payloadAny.time ?? ""),
               billing_party_name: typeof insertPayload.billing_party_name === "string" ? insertPayload.billing_party_name : null,
               vessel: typeof payloadAny.vessel === "string" ? payloadAny.vessel : null,
+              hotel_zone: resolvedHotelId ? hotelZoneById.get(resolvedHotelId) ?? null : null,
+              hotel_name: resolvedHotelId ? hotelNameById.get(resolvedHotelId) ?? null : null,
+              context: {
+                operationalRules: operationalRulesRows as never,
+                ferrySchedules: scheduleRows as never,
+                date: String(payloadAny.date ?? ""),
+                hotelId: resolvedHotelId,
+              },
             })
           : {};
 
@@ -958,12 +990,21 @@ export async function POST(request: NextRequest) {
             bus_city_origin: item.payload.bus_city_origin || null
           };
           const baseAny = base as Record<string, unknown>;
+          const rowHotelId = (baseAny.hotel_id as string | null) ?? null;
           const pickupFields = applyPickupCalc({
             direction: (baseAny.direction as string) ?? "",
             booking_service_kind: (baseAny.booking_service_kind as string | null) ?? null,
             time: (baseAny.time as string) ?? "",
             billing_party_name: base.billing_party_name,
             vessel: (baseAny.vessel as string | null) ?? null,
+            hotel_zone: rowHotelId ? hotelZoneById.get(rowHotelId) ?? null : null,
+            hotel_name: rowHotelId ? hotelNameById.get(rowHotelId) ?? null : null,
+            context: {
+              operationalRules: operationalRulesRows as never,
+              ferrySchedules: scheduleRows as never,
+              date: String(baseAny.date ?? baseAny.arrival_date ?? ""),
+              hotelId: rowHotelId,
+            },
           });
           return { ...base, ...pickupFields };
         })()

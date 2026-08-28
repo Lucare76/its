@@ -12,6 +12,11 @@ import type { Service, Hotel } from "@/lib/types";
 import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
 import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
 import type { BusLine } from "@/lib/bus-line-pickup-rules";
+import type { OperationalTimingContext } from "@/lib/operational-timing-resolver";
+import type { OperationalPickupRule } from "@/lib/operational-connection-resolver";
+import type { FerryScheduleRow } from "@/lib/travel-connection-resolver";
+import type { PrintService } from "@/lib/piano-giorno-print";
+import { buildTrainOrFlightPickupHint, shouldUseTrainOrFlightResolver } from "@/lib/departures-pickup-hint";
 
 function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
@@ -355,6 +360,36 @@ export default function DeparturesPage() {
   const [departureView, setDepartureView] = useState<"transfers" | "shuttles">("transfers");
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Fonti per resolveOperationalTiming (treno/volo -> nave): caricate UNA
+  // volta a mount, non per riga — evita N+1. ferry_pickup_rules e'
+  // relativamente statica (poche decine di righe, editata da settings/ferry-
+  // rules) e ferry_schedules e' l'intero orario nave, entrambe gia' filtrate
+  // internamente dal resolver per data/fascia/agenzia al momento dell'uso.
+  const [operationalRules, setOperationalRules] = useState<OperationalPickupRule[]>([]);
+  const [ferrySchedules, setFerrySchedules] = useState<FerryScheduleRow[]>([]);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!supabase) return;
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      const [rulesRes, schedulesRes] = await Promise.all([
+        token
+          ? fetch("/api/ferry-pickup-rules", { headers: { Authorization: `Bearer ${token}` } })
+              .then((r) => r.json())
+              .catch(() => null)
+          : Promise.resolve(null),
+        supabase
+          .from("ferry_schedules")
+          .select("id, company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to"),
+      ]);
+      if (!active) return;
+      if (rulesRes?.ok) setOperationalRules(rulesRes.rules ?? []);
+      if (!schedulesRes.error) setFerrySchedules(schedulesRes.data ?? []);
+    })();
+    return () => { active = false; };
+  }, []);
+
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
 
   const resolvePickupNote = useCallback((service: Service): string | null => {
@@ -436,29 +471,37 @@ export default function DeparturesPage() {
           if (final) hint = { pickup: final.pickup, label: `MEDMAR ${final.nave_time} · ${final.porto}` };
         }
       } else if (tFrom && zona) {
-        let rule = null;
         if (kind === "transfer_port_hotel") {
+          // Formula/porto-porto puro: fuori dal dominio di resolveOperationalTiming
+          // per il Livello 1 (treno/volo) — resta sulla regola diretta esistente,
+          // invariata (task: non forzare qui la logica connessione treno/volo).
+          let rule = null;
           const v = svc.vessel?.toLowerCase() ?? "";
           if (v.includes("snav")) rule = getPickupRule(agency, "snav", tFrom, zona);
           else if (v.includes("medmar")) rule = getPickupRule(agency, "medmar", tFrom, zona);
-        } else if (kind === "transfer_train_hotel") {
-          rule = getPickupRule(agency, "treno_traghetto", tFrom, zona)
-            ?? getPickupRuleByRange(agency, "treno_traghetto", tFrom, zona)
-            ?? getPickupRule(agency, "treno_aliscafo", tFrom, zona)
-            ?? getPickupRuleByRange(agency, "treno_aliscafo", tFrom, zona);
-        } else if (kind === "transfer_airport_hotel") {
-          rule = getPickupRule("", "volo_traghetto", tFrom, zona)
-            ?? getPickupRuleByRange("", "volo_traghetto", tFrom, zona)
-            ?? getPickupRule("", "volo_aliscafo", tFrom, zona)
-            ?? getPickupRuleByRange("", "volo_aliscafo", tFrom, zona);
+          if (rule) hint = { pickup: rule.pickup, label: `${rule.boat_co} ${rule.boat_t} · ${rule.porto_p}` };
+        } else if (shouldUseTrainOrFlightResolver(kind)) {
+          // Collegamento treno/volo -> nave: unica fonte resolveOperationalTiming,
+          // regola canonica ferry_pickup_rules (aperta a tutte le agenzie quando
+          // configurata) con fallback al motore commerciale legacy (Sosandra-only
+          // per l'aliscafo li', dato reale confermato — invariato).
+          const zoneRecognized = /forio|lacco|casamicciola|barano|ischia/.test((hotel?.zone ?? "").toLowerCase());
+          const context: OperationalTimingContext = {
+            operationalRules,
+            ferrySchedules,
+            hotelId: svc.hotel_id ?? null,
+            zone: zona,
+            zoneRecognized,
+            agencyName: agency || null,
+          };
+          hint = buildTrainOrFlightPickupHint(svc as unknown as PrintService, context);
         }
-        if (rule) hint = { pickup: rule.pickup, label: `${rule.boat_co} ${rule.boat_t} · ${rule.porto_p}` };
       }
 
       hints.set(svc.id, hint);
     }
     return hints;
-  }, [departures, hotelsById]);
+  }, [departures, hotelsById, operationalRules, ferrySchedules]);
 
   const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [qrServiceId, setQrServiceId] = useState<string | null>(null);

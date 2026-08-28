@@ -14,7 +14,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
-import { getPickupRule, normalizeZonaIschia, derivePortCarrier } from "@/lib/departure-pickup-rules";
+import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -38,7 +38,7 @@ type FormState = {
   agenzia: string;
   /** Opzionale: orario pickup hotel scelto/corretto manualmente dall'operatore
    * nel pannello Inbox (vedi app/(app)/inbox/page.tsx). Se presente ha priorità
-   * sul calcolo automatico sotto (getPickupRule) — l'operatore vede già un
+   * sul calcolo automatico sotto (applyPickupCalc) — l'operatore vede già un
    * suggerimento calcolato con la stessa regola, questo campo permette solo di
    * confermarlo o correggerlo prima di approvare. */
   pickup_hotel?: string;
@@ -215,14 +215,13 @@ export async function POST(request: NextRequest) {
   const agency = form.agenzia ?? "unknown";
 
   // ── Pickup hotel per transfer_port_hotel puri (SNAV/MEDMAR diretti) ──────
-  // calcPickupTime.ts (0106_pickup_calc_fields.sql) copre solo treno/aereo e non
-  // è comunque collegato a questo flusso (solo a app/api/inbound/email e
-  // app/api/excel/import) — qui usiamo invece le tabelle SNAV_DIRECT/MEDMAR_DIRECT
-  // di lib/departure-pickup-rules.ts, già usate da app/api/ops/search per le
-  // prenotazioni con gamba di ritorno collegata, con lookup esatto su
-  // orario+zona hotel. Se manca un dato anagrafico (zona hotel o compagnia
-  // riconoscibile) o l'orario non corrisponde a nessuna corsa nota, NON si
-  // inventa un pickup: si lascia null e si segnala in pickup_alert.
+  // Canonico via apply-pickup-calc.ts (stesso calcolatore usato da
+  // new-booking/agency-bookings/Excel per lo stesso scenario operativo — vedi
+  // audit centralizzazione write-path pickup) invece di una logica locale
+  // duplicata. Il testo compagnia per transfer_port_hotel non e' nel campo
+  // vessel qui ma in treno_andata/treno_ritorno (per questo tipo contengono
+  // "SNAV"/"MEDMAR", non un vero numero corsa) — passato come `vessel` alla
+  // funzione condivisa, che usa lo stesso derivePortCarrier() su quel testo.
   let pickupHotel: string | null = null;
   let pickupAlert: string | null = null;
   const operatorPickupHotel = clean(form.pickup_hotel);
@@ -233,22 +232,19 @@ export async function POST(request: NextRequest) {
     // automatico, nessun pickupAlert in questo caso.
     pickupHotel = operatorPickupHotel;
   } else if (bookingKind === "transfer_port_hotel" && returnTime) {
-    const carrier = derivePortCarrier(trainDepartureNumber) ?? derivePortCarrier(trainArrivalNumber);
     const { data: hotelZoneRow } = await auth.admin.from("hotels").select("zone").eq("id", hotelId).maybeSingle();
     const zoneRaw = (hotelZoneRow as { zone?: string | null } | null)?.zone ?? null;
-    if (!carrier) {
-      pickupAlert = `Pickup hotel non calcolato: compagnia traghetto/aliscafo non riconosciuta (nessun SNAV/MEDMAR in treno_andata/treno_ritorno) — verificare manualmente.`;
-    } else if (!zoneRaw) {
-      pickupAlert = `Pickup hotel non calcolato: zona non impostata per l'hotel "${hotelName ?? hotelId}" — impostare la zona hotel e ricalcolare.`;
-    } else {
-      const zona = normalizeZonaIschia(zoneRaw);
-      const rule = getPickupRule(agency, carrier, returnTime, zona);
-      if (rule) {
-        pickupHotel = rule.pickup || null;
-      } else {
-        pickupAlert = `Pickup hotel non calcolato: nessuna regola ${carrier.toUpperCase()} per zona "${zona}" orario ${returnTime} — verificare manualmente (orario non standard o regola mancante).`;
-      }
-    }
+    const pickupFields = applyPickupCalc({
+      direction: "departure",
+      booking_service_kind: bookingKind,
+      time: returnTime,
+      billing_party_name: agency,
+      vessel: trainDepartureNumber ?? trainArrivalNumber ?? null,
+      hotel_zone: zoneRaw,
+      hotel_name: hotelName ?? null,
+    });
+    pickupHotel = pickupFields.pickup_hotel ?? null;
+    pickupAlert = pickupFields.pickup_alert ?? null;
   }
   const notesParts = [
     "[email_import] Booking approvato da email",
