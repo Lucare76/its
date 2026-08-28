@@ -91,7 +91,7 @@ export type OperationalTimingResult = {
  */
 export type OperationalTimingContext = Pick<
   OperationalConnectionInput,
-  "operationalRules" | "ferrySchedules" | "hotelId" | "zone" | "zoneRecognized" | "agencyName" | "currentOverride"
+  "operationalRules" | "ferrySchedules" | "hotelId" | "zone" | "zoneRecognized" | "agencyName" | "currentOverride" | "pax"
 >;
 
 const TRAIN_KINDS = new Set(["transfer_train_hotel", "transfer_train_hotel_exclusive", "transfer_train_hotel_aliscafo"]);
@@ -224,6 +224,7 @@ export function resolveOperationalTiming(service: PrintService, context?: Operat
         operationalRules: context.operationalRules,
         ferrySchedules: context.ferrySchedules,
         currentOverride: context.currentOverride,
+        pax: context.pax ?? service.pax ?? null,
       });
       return fromConnectionResult(result, connectionType, connectionTimeRaw, {
         direction: "departure",
@@ -245,6 +246,7 @@ export function resolveOperationalTiming(service: PrintService, context?: Operat
         operationalRules: context.operationalRules,
         ferrySchedules: context.ferrySchedules,
         currentOverride: context.currentOverride,
+        pax: context.pax ?? service.pax ?? null,
       });
       // Nessun fallback statico per l'arrivo: pickup_hotel non ha senso per
       // una gamba di arrivo (nessun prelievo hotel prima di uno sbarco).

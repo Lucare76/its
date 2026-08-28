@@ -149,7 +149,22 @@ describe("resolveOperationalTiming — 6. servizio ferry diretto (Formula, nessu
 });
 
 describe("resolveOperationalTiming — 7. SNAV Sosandra", () => {
-  it("agenzia Sosandra: la regola canonica aliscafo viene proposta senza bisogno di override", () => {
+  it("agenzia Sosandra CON richiesta esplicita (kind '_aliscafo'): la regola canonica aliscafo viene proposta senza bisogno di override", () => {
+    const snavRule = rule({ agency_logic: "sosandra", boat_type: "aliscafo", company: "snav", departure_time: "09:45", pickup_time: "08:40" });
+    const context: OperationalTimingContext = {
+      operationalRules: [snavRule],
+      ferrySchedules: [ferryRow({ company: "snav", departure_time: "09:45", arrival_time: "10:50" })],
+      agencyName: "SOSANDRA TOUR BY ROSSELLA VIAGGI S.r.L.",
+    };
+    // regola confermata da Mario: "Sosandra -> aliscafo SE richiesto" (kind con suffisso _aliscafo), mai automatico.
+    const svc = service({ booking_service_kind: "transfer_train_hotel_aliscafo", departure_time: "14:00", time: "14:00", pickup_hotel: null });
+    const result = resolveOperationalTiming(svc, context);
+    expect(result.pickupTime).toBe("08:40");
+    expect(result.ferryCompany).toBe("snav");
+    expect(result.pickupSource).toBe("canonical_rule");
+  });
+
+  it("agenzia Sosandra SENZA richiesta esplicita (kind generico): l'aliscafo non è più automatico", () => {
     const snavRule = rule({ agency_logic: "sosandra", boat_type: "aliscafo", company: "snav", departure_time: "09:45", pickup_time: "08:40" });
     const context: OperationalTimingContext = {
       operationalRules: [snavRule],
@@ -158,9 +173,7 @@ describe("resolveOperationalTiming — 7. SNAV Sosandra", () => {
     };
     const svc = service({ booking_service_kind: "transfer_train_hotel", departure_time: "14:00", time: "14:00", pickup_hotel: null });
     const result = resolveOperationalTiming(svc, context);
-    expect(result.pickupTime).toBe("08:40");
-    expect(result.ferryCompany).toBe("snav");
-    expect(result.pickupSource).toBe("canonical_rule");
+    expect(result.pickupSource).not.toBe("canonical_rule");
   });
 });
 

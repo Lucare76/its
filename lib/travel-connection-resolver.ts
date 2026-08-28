@@ -2,18 +2,27 @@
  * resolveTravelConnection — collegamento nave/aliscafo canonico per i
  * transfer treno/aereo, sia in ARRIVO che in PARTENZA.
  *
- * Pipeline (in quest'ordine, mai al contrario):
- *   1. policy agenzia (tipi/compagnie nave ammessi)
+ * Pipeline (in quest'ordine, mai al contrario — gerarchia confermata da
+ * Mario, audit 2026-08-28, vedi lib/server/mario-connection-policy.ts):
+ *   1. policy agenzia (tipi/compagnie nave ammessi — aliscafo solo su
+ *      richiesta esplicita, Sosandra inclusa)
  *   2. filtro corse non ammesse dalla policy
- *   3. compatibilità temporale (vincoli A/B)
- *   4. preferenza commerciale SNAV ±30min (solo tra corse già ammesse)
- *   5. proposta + motivazione
+ *   3. compatibilità temporale (buffer CONFERMATI: treno<->nave 70/90min,
+ *      nave->volo 160min; arrivo in volo = caso speciale, vedi resolveArrival)
+ *   4. preferenza porto continentale Napoli > Pozzuoli (Pozzuoli solo
+ *      fallback, solo pax <= pozzuoliMaxPax)
+ *   5. preferenza commerciale SNAV ±30min — DISATTIVATA di default
+ *      (MARIO_CONNECTION_POLICY.snavPreferenceEnabled), solo tra corse già
+ *      ammesse quando riattivata
+ *   6. proposta + motivazione
  *
  * Fonte dati nave: tabella reale `ferry_schedules` (mai valori statici di
  * calcPickupTime()). Margini: vedi commenti sotto — quelli non rintracciabili
  * nel repository sono etichettati esplicitamente come STIMA non confermata,
  * non vengono presentati come dato certo (non danno mai confidence ALTA).
  */
+
+import { MARIO_CONNECTION_POLICY, type MainlandPort } from "@/lib/server/mario-connection-policy";
 
 export type TravelDirection = "arrival" | "departure";
 export type FerryType = "traghetto" | "aliscafo";
@@ -48,6 +57,12 @@ export type ResolveTravelConnectionInput = {
    * hotel-zona → minuti hotel→porto indipendente da lib/departure-pickup-rules.ts.
    */
   knownPickupTime?: string | null;
+  /**
+   * Pax totali del servizio/gruppo. Determina se Pozzuoli è ammessa come
+   * fallback (vedi MARIO_CONNECTION_POLICY.pozzuoliMaxPax) — null/assente =
+   * pax non noti, Pozzuoli NON viene proposta automaticamente per prudenza.
+   */
+  pax?: number | null;
 };
 
 export type ExcludedCandidate = {
@@ -105,56 +120,103 @@ type AgencyPolicyDefinition = {
   allowedCompanies: Set<string> | null;
 };
 
-/** Sosandra: unica agenzia autorizzata all'aliscafo secondo la regola operativa confermata. */
-const SOSANDRA_POLICY: AgencyPolicyDefinition = { allowedFerryTypes: ["traghetto", "aliscafo"], allowedCompanies: null };
-/** Tutte le altre agenzie note: solo traghetto, salvo override manuale esplicito (mai automatico). */
+/** Traghetto standard, per tutte le agenzie incluse Sosandra: l'aliscafo NON è più un privilegio automatico di agenzia (vedi ALISCAFO_POLICY sotto). */
 const STANDARD_POLICY: AgencyPolicyDefinition = { allowedFerryTypes: ["traghetto"], allowedCompanies: null };
+/** Aliscafo ammesso, usata solo quando la richiesta è esplicita (vedi explicitAliscafoRequest). */
+const ALISCAFO_POLICY: AgencyPolicyDefinition = { allowedFerryTypes: ["traghetto", "aliscafo"], allowedCompanies: null };
 
-const KNOWN_AGENCY_POLICIES: Record<string, AgencyPolicyDefinition> = {
-  sosandra: SOSANDRA_POLICY,
-  aleste: STANDARD_POLICY,
-  zigolo: STANDARD_POLICY,
-  angelino: STANDARD_POLICY,
-};
+const KNOWN_AGENCY_KEYS = ["sosandra", "aleste", "zigolo", "angelino"] as const;
 
-export function resolveAgencyConnectionPolicy(agencyName: string | null | undefined): ConnectionPolicyInfo & { definition: AgencyPolicyDefinition } {
+/**
+ * Regola confermata da Mario (audit 2026-08-28): "Sosandra → aliscafo se
+ * richiesto", non più "Sosandra = aliscafo automatico". L'aliscafo è ammesso
+ * SOLO quando la richiesta è esplicita al momento della prenotazione
+ * (booking_service_kind con suffisso '_aliscafo', stesso segnale già usato
+ * per le altre agenzie in lib/operational-connection-resolver.ts) — mai
+ * dedotto automaticamente dal solo nome agenzia, Sosandra inclusa.
+ */
+export function resolveAgencyConnectionPolicy(
+  agencyName: string | null | undefined,
+  explicitAliscafoRequest = false
+): ConnectionPolicyInfo & { definition: AgencyPolicyDefinition } {
   const n = (agencyName ?? "").toLowerCase();
-  if (n.includes("sosandra") || n.includes("dimhotel")) {
-    return { agencyKey: "sosandra", source: "known", allowedFerryTypes: SOSANDRA_POLICY.allowedFerryTypes, definition: SOSANDRA_POLICY };
-  }
-  if (n.includes("aleste")) return { agencyKey: "aleste", source: "known", allowedFerryTypes: STANDARD_POLICY.allowedFerryTypes, definition: KNOWN_AGENCY_POLICIES.aleste };
-  if (n.includes("zigolo")) return { agencyKey: "zigolo", source: "known", allowedFerryTypes: STANDARD_POLICY.allowedFerryTypes, definition: KNOWN_AGENCY_POLICIES.zigolo };
-  if (n.includes("angelino")) return { agencyKey: "angelino", source: "known", allowedFerryTypes: STANDARD_POLICY.allowedFerryTypes, definition: KNOWN_AGENCY_POLICIES.angelino };
-  // Agenzia non mappata (es. "Sun & sea", null, o qualunque altra): policy default conservativa,
-  // MAI aliscafo automatico finché non esiste una regola operativa confermata per quell'agenzia.
-  return { agencyKey: n || "sconosciuta", source: "default", allowedFerryTypes: STANDARD_POLICY.allowedFerryTypes, definition: STANDARD_POLICY };
+  const definition = explicitAliscafoRequest ? ALISCAFO_POLICY : STANDARD_POLICY;
+  const agencyKey: string = n.includes("sosandra") || n.includes("dimhotel") ? "sosandra"
+    : n.includes("aleste") ? "aleste"
+    : n.includes("zigolo") ? "zigolo"
+    : n.includes("angelino") ? "angelino"
+    : n || "sconosciuta";
+  const source: "known" | "default" = (KNOWN_AGENCY_KEYS as readonly string[]).includes(agencyKey) ? "known" : "default";
+  // Agenzia non mappata (es. "Sun & sea", null, o qualunque altra): policy
+  // default conservativa, MAI aliscafo automatico anche con richiesta
+  // esplicita finché non esiste una regola operativa confermata per
+  // quell'agenzia — la richiesta esplicita da sola autorizza l'aliscafo solo
+  // per le agenzie note.
+  return {
+    agencyKey,
+    source,
+    allowedFerryTypes: source === "known" ? definition.allowedFerryTypes : STANDARD_POLICY.allowedFerryTypes,
+    definition: source === "known" ? definition : STANDARD_POLICY,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Porto continentale canonico per compagnia — PREFERENZA (non esclusione
-// assoluta: se nessun candidato nel porto preferito è temporalmente valido,
-// si ricade sugli altri porti della stessa compagnia).
-//
-// Fonte: lib/server/calc-pickup-time.ts — ALESTE_TRENO_TRAGHETTO,
-// ALESTE_AEREO_TRAGHETTO, DIMHOTELS_TRENO_TRAGHETTO, DIMHOTELS_AEREO_TRAGHETTO
-// usano SEMPRE "Napoli Beverello" per Medmar, MAI Pozzuoli (6 tabelle
-// indipendenti, nessuna eccezione). Alilauro: sempre Napoli Beverello nelle
-// tabelle aliscafo Dimhotels. SNAV non incluso qui: le tabelle aliscafo
-// Dimhotels associano Snav a Pozzuoli, ma l'unico dato reale confermato per
-// Snav (override BIRAGO) è invece Napoli Beverello — evidenza contraddittoria,
-// quindi nessuna preferenza di porto applicata a Snav/Caremar.
+// Porto continentale — PREFERENZA operativa confermata da Mario (audit
+// 2026-08-28, vedi lib/server/mario-connection-policy.ts): Napoli è sempre
+// tentata per prima, indipendentemente da compagnia/hotel/margine — Pozzuoli
+// è vietata al bus per transito, quindi entra in gioco SOLO come fallback
+// (nessuna corsa Napoli temporalmente valida) e solo sotto il limite pax
+// (pozzuoliMaxPax). NON è più una preferenza per-compagnia né legata
+// all'hotel: quella ipotesi (es. "Hotel Colella -> Ischia Porto/Napoli") non
+// rappresentava la regola reale ed è stata rimossa.
 // ---------------------------------------------------------------------------
-const CANONICAL_MAINLAND_PORT_BY_COMPANY: Record<string, string> = {
-  medmar: "napoli_beverello",
-  alilauro: "napoli_beverello",
+
+type PortPreferenceCandidate = { row: Pick<FerryScheduleRow, "arrival_port" | "departure_port"> };
+
+type PortPreferenceResult<C> = {
+  pool: C[];
+  appliedPort: MainlandPort | null;
+  /** true se l'unico porto con candidati validi era Pozzuoli ma è stata esclusa per limite pax (nessuna soluzione automatica). */
+  pozzuoliBlockedForPax: boolean;
 };
+
+/**
+ * Applica la preferenza Napoli > Pozzuoli (fallback + limite pax) ai
+ * candidati già temporalmente validi. `portField` seleziona il porto
+ * continentale rilevante: 'arrival_port' per le partenze (Ischia -> mainland),
+ * 'departure_port' per gli arrivi (mainland -> Ischia).
+ */
+function applyMainlandPortPreference<C extends PortPreferenceCandidate>(
+  candidates: C[],
+  pax: number | null,
+  portField: "arrival_port" | "departure_port"
+): PortPreferenceResult<C> {
+  let pozzuoliBlockedForPax = false;
+  for (const port of MARIO_CONNECTION_POLICY.mainlandPortPreference) {
+    if (port === "pozzuoli") {
+      const pozzuoliAllowed = pax != null && pax <= MARIO_CONNECTION_POLICY.pozzuoliMaxPax;
+      if (!pozzuoliAllowed) {
+        if (candidates.some((c) => c.row[portField] === "pozzuoli")) pozzuoliBlockedForPax = true;
+        continue;
+      }
+    }
+    const pool = candidates.filter((c) => c.row[portField] === port);
+    if (pool.length > 0) return { pool, appliedPort: port, pozzuoliBlockedForPax };
+  }
+  // Nessun porto della lista preferenza ha candidati ammessi: eventuali
+  // candidati residui su porti non censiti nella preferenza (nessuno oggi,
+  // ma non si esclude a priori) restano disponibili; Pozzuoli bloccata per
+  // pax non rientra mai qui.
+  const pool = candidates.filter((c) => c.row[portField] !== "pozzuoli");
+  return { pool, appliedPort: null, pozzuoliBlockedForPax };
+}
 
 // ---------------------------------------------------------------------------
 // Margini — fonti esplicite. Quelli senza fonte nel repo sono STIME, mai
 // spacciate per dato confermato (confidence non sarà mai ALTA se usate).
 // ---------------------------------------------------------------------------
 
-/** STIMA non confermata nel repo: nessuna tabella porto↔stazione/aeroporto esistente per il lato continente. */
+/** STIMA non confermata nel repo: nessuna tabella porto↔stazione/aeroporto esistente per il lato continente. Usata SOLO nel ramo arrivo-volo (nessun buffer confermato per quel caso, vedi resolveArrival). */
 const MAINLAND_TRANSFER_MINUTES_ESTIMATE: Record<string, Partial<Record<ContinentPlaceType, number>>> = {
   napoli_beverello: { station: 25, airport: 40 },
   pozzuoli: { station: 20, airport: 35 },
@@ -162,13 +224,16 @@ const MAINLAND_TRANSFER_MINUTES_ESTIMATE: Record<string, Partial<Record<Continen
   ischia_porto: {},
 };
 
-/** STIMA non confermata nel repo: margine di sicurezza generico oltre al transfer terraferma. */
-const SAFETY_MARGIN_MINUTES_ESTIMATE = 15;
-
-/** STIMA non confermata nel repo: tempo sbarco+ritiro bagagli aeroporto prima di poter partire verso il porto. */
+/** STIMA non confermata nel repo: tempo sbarco+ritiro bagagli aeroporto prima di poter partire verso il porto. Usata SOLO nel ramo arrivo-volo. */
 const AIRPORT_BAGGAGE_MARGIN_MINUTES_ESTIMATE = 20;
 
-/** Regola commerciale confermata dal task: preferenza SNAV entro questa finestra rispetto alla migliore alternativa, SOLO tra le corse già ammesse dalla policy agenzia. */
+/**
+ * Preferenza commerciale SNAV entro questa finestra rispetto alla migliore
+ * alternativa, SOLO tra le corse già ammesse dalla policy agenzia. NON
+ * applicata automaticamente (vedi MARIO_CONNECTION_POLICY.snavPreferenceEnabled
+ * = false): la conferma di Mario riguarda solo casi puntuali già gestiti via
+ * override manuale (es. BIRAGO), non una regola commerciale globale.
+ */
 export const SNAV_PREFERENCE_WINDOW_MINUTES = 30;
 
 const TRAIN_KINDS = new Set(["transfer_train_hotel", "transfer_train_hotel_exclusive", "transfer_train_hotel_aliscafo"]);
@@ -283,7 +348,7 @@ function buildResult(
   };
 }
 
-/** Applica la preferenza commerciale SNAV entro ±30min dalla migliore alternativa, SOLO tra i candidati già ammessi dalla policy e temporalmente validi. */
+/** Applica la preferenza commerciale SNAV entro ±30min dalla migliore alternativa, SOLO tra i candidati già ammessi dalla policy e temporalmente validi. Chiamata solo se MARIO_CONNECTION_POLICY.snavPreferenceEnabled è true (oggi disattivata, vedi commento sulla costante). */
 function applySnavPreference(best: Candidate, valid: Candidate[], rankKey: (c: Candidate) => number): Candidate {
   const snavCandidates = valid.filter((c) => isSnav(c.row.company));
   if (snavCandidates.length === 0) return best;
@@ -295,17 +360,22 @@ function applySnavPreference(best: Candidate, valid: Candidate[], rankKey: (c: C
 }
 
 function resolveDeparture(input: ResolveTravelConnectionInput, gaps: string[]): ResolveTravelConnectionResult {
-  const policyResolved = resolveAgencyConnectionPolicy(input.agencyName);
+  const policyResolved = resolveAgencyConnectionPolicy(input.agencyName, input.bookingServiceKind.endsWith("_aliscafo"));
   const policyInfo: ConnectionPolicyInfo = { agencyKey: policyResolved.agencyKey, source: policyResolved.source, allowedFerryTypes: policyResolved.allowedFerryTypes };
   const placeType = placeTypeFromKind(input.bookingServiceKind);
   const transportMin = toMinutes(input.transportTime);
   const proposedPickupTime = input.knownPickupTime ?? null;
+  const pax = input.pax ?? null;
   if (!input.knownPickupTime) {
     gaps.push("Nessun pickup noto in input: manca nel repo una tabella hotel-zona -> minuti hotel->porto indipendente da lib/departure-pickup-rules.ts; il resolver non calcola un pickup autonomo (usa getPickupRule() a monte per quello).");
   }
   if (!placeType) {
     return buildResult(null, { proposedPickupTime, marginMinutes: null, reason: `booking_service_kind '${input.bookingServiceKind}' non è treno/aereo: nessun collegamento nave da calcolare.`, confidence: "NESSUNA", candidatesEvaluated: 0, excludedByPolicy: [], policy: policyInfo, gaps });
   }
+
+  // Buffer CONFERMATO da Mario (mario-connection-policy.ts): nave -> treno 90min, nave -> volo 160min.
+  // Sostituisce interamente la vecchia stima port-specifica + margine di sicurezza generico.
+  const requiredBufferMin = placeType === "station" ? MARIO_CONNECTION_POLICY.ferryToTrainMin : MARIO_CONNECTION_POLICY.ferryToFlightMin;
 
   const rows = input.ferrySchedules.filter((r) => r.direction === "ischia_to_mainland" && isActiveOnDate(r, input.date));
   const allCandidates: Candidate[] = rows
@@ -329,17 +399,10 @@ function resolveDeparture(input: ResolveTravelConnectionInput, gaps: string[]): 
     return false;
   });
 
-  // STEP 3: compatibilità temporale, solo tra le corse già ammesse dalla policy.
-  const mainlandMinutesByPort = (port: string) => MAINLAND_TRANSFER_MINUTES_ESTIMATE[port]?.[placeType];
+  // STEP 3: compatibilità temporale (buffer confermato), solo tra le corse già ammesse dalla policy.
   const localGaps: string[] = [];
-
+  const requiredArrivalBy = transportMin - requiredBufferMin;
   const valid = policyAllowed.filter((c) => {
-    const mainlandMin = mainlandMinutesByPort(c.row.arrival_port);
-    if (mainlandMin == null) {
-      localGaps.push(`Margine porto '${c.row.arrival_port}' -> ${placeType} non configurato (stima assente): corsa '${c.row.company} ${c.row.departure_time}' esclusa dal confronto per prudenza.`);
-      return false;
-    }
-    const requiredArrivalBy = transportMin - mainlandMin - SAFETY_MARGIN_MINUTES_ESTIMATE;
     if (c.ferryArrival > requiredArrivalBy) return false; // Vincolo B
     if (proposedPickupTime != null && c.ferryDeparture < toMinutes(proposedPickupTime)) return false; // Vincolo A (nave non puo' partire prima del pickup)
     return true;
@@ -351,7 +414,7 @@ function resolveDeparture(input: ResolveTravelConnectionInput, gaps: string[]): 
       marginMinutes: null,
       reason: excludedByPolicy.length === allCandidates.length && allCandidates.length > 0
         ? `Nessuna corsa ammessa dalla policy agenzia '${policyInfo.agencyKey}' è temporalmente valida (tutte le corse ammesse escluse dai vincoli).`
-        : "Nessuna corsa ischia_to_mainland compatibile con l'orario treno/volo, i margini disponibili e la policy agenzia.",
+        : `Nessuna corsa ischia_to_mainland compatibile con l'orario treno/volo (buffer confermato ${requiredBufferMin}min) e la policy agenzia.`,
       confidence: "NESSUNA",
       candidatesEvaluated: allCandidates.length,
       excludedByPolicy,
@@ -360,33 +423,49 @@ function resolveDeparture(input: ResolveTravelConnectionInput, gaps: string[]): 
     });
   }
 
-  // STEP 3b: preferenza porto continentale canonico per compagnia (fonte:
-  // calc-pickup-time.ts). Preferenza, non esclusione: se nessun candidato nel
-  // porto preferito è valido, si ricade sul pool completo.
-  const preferredPort = (c: Candidate) => CANONICAL_MAINLAND_PORT_BY_COMPANY[c.row.company.toLowerCase()];
-  const portPreferredPool = valid.filter((c) => {
-    const p = preferredPort(c);
-    return p == null || c.row.arrival_port === p;
-  });
-  const rankPool = portPreferredPool.length > 0 ? portPreferredPool : valid;
-  const portPreferenceApplied = portPreferredPool.length > 0 && portPreferredPool.length < valid.length;
+  // STEP 3b: preferenza porto continentale Napoli > Pozzuoli (regola operativa
+  // confermata: divieto transito bus a Pozzuoli). Pozzuoli ammessa solo come
+  // fallback e solo con pax <= pozzuoliMaxPax.
+  const { pool: rankPool, appliedPort, pozzuoliBlockedForPax } = applyMainlandPortPreference(valid, pax, "arrival_port");
 
-  // STEP 4: "migliore" = la corsa con maggior margine di sicurezza tra quelle valide
-  // (arrivo più anticipato rispetto al limite) — non "l'ultima utile": a parità di
-  // vincoli rispettati, privilegia il margine più ampio (comportamento osservato
-  // nelle scelte operative confermate, es. SUORATO).
+  if (rankPool.length === 0) {
+    return buildResult(null, {
+      proposedPickupTime,
+      marginMinutes: null,
+      reason: pozzuoliBlockedForPax
+        ? `Nessuna corsa Napoli disponibile; Pozzuoli sarebbe l'unico fallback ma esclusa perché pax ${pax ?? "non noti"} > ${MARIO_CONNECTION_POLICY.pozzuoliMaxPax} (o pax non noti): nessuna soluzione automatica, richiede verifica manuale.`
+        : "Nessuna corsa compatibile con la preferenza porto continentale (Napoli/Pozzuoli).",
+      confidence: "NESSUNA",
+      candidatesEvaluated: allCandidates.length,
+      excludedByPolicy,
+      policy: policyInfo,
+      gaps: [...gaps, ...localGaps],
+    });
+  }
+
+  // STEP 4: "migliore" = la corsa più tardiva tra quelle valide nel pool
+  // porto-preferito (arrivo più vicino al limite, margine minimo ma
+  // sufficiente) — MAI la più mattutina/con margine massimo: su un orario
+  // reale con corse distribuite su tutta la giornata (verificato contro
+  // ferry_schedules live, caso SUORATO: scegliere la corsa con margine
+  // assoluto massimo restituiva le 06:25 invece delle 10:35 attese),
+  // "margine massimo" non è mai il criterio operativo giusto — si sceglie
+  // sempre la corsa più a ridosso del buffer confermato, non la più libera.
   const rankKey = (c: Candidate) => c.ferryArrival;
-  const best = rankPool.reduce((a, b) => (rankKey(b) < rankKey(a) ? b : a));
-  const chosen = applySnavPreference(best, valid, rankKey);
+  const best = rankPool.reduce((a, b) => (rankKey(b) > rankKey(a) ? b : a));
+  const chosen = MARIO_CONNECTION_POLICY.snavPreferenceEnabled ? applySnavPreference(best, valid, rankKey) : best;
 
-  const mainlandMin = mainlandMinutesByPort(chosen.row.arrival_port)!;
-  const requiredArrivalBy = transportMin - mainlandMin - SAFETY_MARGIN_MINUTES_ESTIMATE;
   const margin = requiredArrivalBy - chosen.ferryArrival;
   const snavPreferred = chosen !== best;
 
+  const portLabel = appliedPort === "pozzuoli"
+    ? `Pozzuoli (fallback: nessuna corsa Napoli valida, pax ${pax} <= ${MARIO_CONNECTION_POLICY.pozzuoliMaxPax})`
+    : appliedPort === "napoli_beverello"
+      ? "Napoli Beverello (porto continentale preferito, regola confermata)"
+      : "porto continentale disponibile";
   const reason = snavPreferred
-    ? `SNAV ${chosen.row.departure_time.slice(0, 5)} preferita (regola commerciale, entro ±${SNAV_PREFERENCE_WINDOW_MINUTES}min dalla migliore alternativa ammessa ${best.row.company} ${best.row.departure_time.slice(0, 5)}), margine ${margin}min prima del limite per orario treno/volo ${input.transportTime}. Policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}).`
-    : `Corsa con maggior margine${portPreferenceApplied ? ` nel porto continentale canonico per ${best.row.company} (fonte: calc-pickup-time.ts)` : ""} tra quelle ammesse dalla policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}) (nessuna SNAV ammessa entro ±${SNAV_PREFERENCE_WINDOW_MINUTES}min o già SNAV), margine ${margin}min prima del limite per orario treno/volo ${input.transportTime}.`;
+    ? `SNAV ${chosen.row.departure_time.slice(0, 5)} preferita (regola commerciale legacy, entro ±${SNAV_PREFERENCE_WINDOW_MINUTES}min dalla migliore alternativa ammessa ${best.row.company} ${best.row.departure_time.slice(0, 5)}), margine ${margin}min sul buffer confermato ${requiredBufferMin}min prima di ${input.transportTime}. Policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}).`
+    : `Corsa più tardiva compatibile su ${portLabel} tra quelle ammesse dalla policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}), margine ${margin}min sul buffer confermato ${requiredBufferMin}min prima di ${input.transportTime}.`;
 
   return buildResult(chosen, {
     proposedPickupTime,
@@ -401,18 +480,16 @@ function resolveDeparture(input: ResolveTravelConnectionInput, gaps: string[]): 
 }
 
 function resolveArrival(input: ResolveTravelConnectionInput, gaps: string[]): ResolveTravelConnectionResult {
-  const policyResolved = resolveAgencyConnectionPolicy(input.agencyName);
+  const policyResolved = resolveAgencyConnectionPolicy(input.agencyName, input.bookingServiceKind.endsWith("_aliscafo"));
   const policyInfo: ConnectionPolicyInfo = { agencyKey: policyResolved.agencyKey, source: policyResolved.source, allowedFerryTypes: policyResolved.allowedFerryTypes };
   const placeType = placeTypeFromKind(input.bookingServiceKind);
   const transportArrivalMin = toMinutes(input.transportTime);
+  const pax = input.pax ?? null;
   if (!placeType) {
     return buildResult(null, { proposedPickupTime: null, marginMinutes: null, reason: `booking_service_kind '${input.bookingServiceKind}' non è treno/aereo: nessun collegamento nave da calcolare.`, confidence: "NESSUNA", candidatesEvaluated: 0, excludedByPolicy: [], policy: policyInfo, gaps });
   }
 
   const localGaps: string[] = [];
-  const baggageMin = placeType === "airport" ? AIRPORT_BAGGAGE_MARGIN_MINUTES_ESTIMATE : 0;
-  if (placeType === "airport") localGaps.push(`Margine sbarco+bagagli aeroporto = ${AIRPORT_BAGGAGE_MARGIN_MINUTES_ESTIMATE}min: STIMA non confermata nel repo.`);
-
   const rows = input.ferrySchedules.filter((r) => r.direction === "mainland_to_ischia" && isActiveOnDate(r, input.date));
   const allCandidates: Candidate[] = rows
     .map((row) => {
@@ -434,23 +511,63 @@ function resolveArrival(input: ResolveTravelConnectionInput, gaps: string[]): Re
     return false;
   });
 
-  const mainlandMinutesByPort = (port: string) => MAINLAND_TRANSFER_MINUTES_ESTIMATE[port]?.[placeType];
+  if (placeType === "airport") {
+    // Regola confermata da Mario (nessun buffer fisso): solo corse MEDMAR da
+    // Napoli, prima corsa realmente raggiungibile. Nessun fallback su
+    // Pozzuoli o altre compagnie: se non esiste una Medmar/Napoli fattibile,
+    // segnala "COLLEGAMENTO DA CONFERMARE" invece di inventare una soluzione.
+    // La raggiungibilità usa comunque un margine STIMA (sbarco+bagagli+
+    // trasferimento a Napoli): nessun numero confermato esiste per questa
+    // tratta, ma senza un margine minimo la "prima corsa raggiungibile"
+    // sarebbe indistinguibile da una fisicamente impossibile.
+    localGaps.push(
+      `Margine sbarco+bagagli+trasferimento aeroporto -> Napoli = ${AIRPORT_BAGGAGE_MARGIN_MINUTES_ESTIMATE + (MAINLAND_TRANSFER_MINUTES_ESTIMATE.napoli_beverello!.airport ?? 0)}min: STIMA non confermata nel repo (Mario non ha indicato un buffer fisso per questa tratta, solo la regola "prima Medmar da Napoli raggiungibile").`
+    );
+    const medmarNapoli = policyAllowed.filter(
+      (c) => c.row.company.toLowerCase() === MARIO_CONNECTION_POLICY.airportArrivalPreferredCompany && c.row.departure_port === MARIO_CONNECTION_POLICY.airportArrivalPreferredPort
+    );
+    const earliestReachable = transportArrivalMin + AIRPORT_BAGGAGE_MARGIN_MINUTES_ESTIMATE + (MAINLAND_TRANSFER_MINUTES_ESTIMATE.napoli_beverello!.airport ?? 0);
+    const valid = medmarNapoli.filter((c) => c.ferryDeparture >= earliestReachable);
 
-  const valid = policyAllowed.filter((c) => {
-    const mainlandMin = mainlandMinutesByPort(c.row.departure_port);
-    if (mainlandMin == null) {
-      localGaps.push(`Margine ${placeType} -> porto '${c.row.departure_port}' non configurato (stima assente): corsa '${c.row.company} ${c.row.departure_time}' esclusa dal confronto per prudenza.`);
-      return false;
+    if (valid.length === 0) {
+      return buildResult(null, {
+        proposedPickupTime: null,
+        marginMinutes: null,
+        reason: "COLLEGAMENTO DA CONFERMARE — nessuna corsa MEDMAR da Napoli realmente raggiungibile dopo l'arrivo del volo (regola confermata: solo Medmar/Napoli per gli arrivi in volo, nessun fallback Pozzuoli/altra compagnia).",
+        confidence: "NESSUNA",
+        candidatesEvaluated: allCandidates.length,
+        excludedByPolicy,
+        policy: policyInfo,
+        gaps: [...gaps, ...localGaps],
+      });
     }
-    const earliestReachable = transportArrivalMin + baggageMin + mainlandMin; // Vincolo A
-    return c.ferryDeparture >= earliestReachable;
-  });
+
+    const rankKey = (c: Candidate) => c.ferryDeparture;
+    const chosen = valid.reduce((a, b) => (rankKey(b) < rankKey(a) ? b : a));
+    const margin = chosen.ferryDeparture - earliestReachable;
+
+    return buildResult(chosen, {
+      proposedPickupTime: null,
+      marginMinutes: margin,
+      reason: `Prima corsa MEDMAR da Napoli Beverello realmente raggiungibile dopo l'arrivo volo ${input.transportTime} (regola confermata: solo Medmar/Napoli per gli arrivi in volo), margine ${margin}min sulla stima di raggiungibilità.`,
+      confidence: "MEDIA", // mai ALTA: la raggiungibilità usa una stima, non un buffer confermato.
+      candidatesEvaluated: allCandidates.length,
+      excludedByPolicy,
+      policy: policyInfo,
+      gaps: [...gaps, ...localGaps],
+    });
+  }
+
+  // Treno: buffer CONFERMATO da Mario (arrivo treno -> nave: 70min).
+  const requiredBufferMin = MARIO_CONNECTION_POLICY.trainToFerryMin;
+  const earliestReachable = transportArrivalMin + requiredBufferMin;
+  const valid = policyAllowed.filter((c) => c.ferryDeparture >= earliestReachable);
 
   if (valid.length === 0) {
     return buildResult(null, {
       proposedPickupTime: null,
       marginMinutes: null,
-      reason: "Nessuna corsa mainland_to_ischia raggiungibile dopo l'arrivo del volo/treno con i margini disponibili e la policy agenzia.",
+      reason: `Nessuna corsa mainland_to_ischia raggiungibile dopo l'arrivo del treno (buffer confermato ${requiredBufferMin}min) con la policy agenzia.`,
       confidence: "NESSUNA",
       candidatesEvaluated: allCandidates.length,
       excludedByPolicy,
@@ -459,19 +576,39 @@ function resolveArrival(input: ResolveTravelConnectionInput, gaps: string[]): Re
     });
   }
 
-  // "Migliore" = la corsa più vicina (prima raggiungibile) tra quelle valide (minimizza attesa in aeroporto/stazione).
-  const rankKey = (c: Candidate) => c.ferryDeparture;
-  const best = valid.reduce((a, b) => (rankKey(b) < rankKey(a) ? b : a));
-  const chosen = applySnavPreference(best, valid, rankKey);
+  const { pool: rankPool, appliedPort, pozzuoliBlockedForPax } = applyMainlandPortPreference(valid, pax, "departure_port");
 
-  const mainlandMin = mainlandMinutesByPort(chosen.row.departure_port)!;
-  const earliestReachable = transportArrivalMin + baggageMin + mainlandMin;
+  if (rankPool.length === 0) {
+    return buildResult(null, {
+      proposedPickupTime: null,
+      marginMinutes: null,
+      reason: pozzuoliBlockedForPax
+        ? `Nessuna corsa da Napoli disponibile; Pozzuoli sarebbe l'unico fallback ma esclusa perché pax ${pax ?? "non noti"} > ${MARIO_CONNECTION_POLICY.pozzuoliMaxPax} (o pax non noti): nessuna soluzione automatica, richiede verifica manuale.`
+        : "Nessuna corsa compatibile con la preferenza porto continentale (Napoli/Pozzuoli).",
+      confidence: "NESSUNA",
+      candidatesEvaluated: allCandidates.length,
+      excludedByPolicy,
+      policy: policyInfo,
+      gaps: [...gaps, ...localGaps],
+    });
+  }
+
+  // "Migliore" = la corsa più vicina (prima raggiungibile) tra quelle valide nel pool porto-preferito (minimizza attesa in stazione).
+  const rankKey = (c: Candidate) => c.ferryDeparture;
+  const best = rankPool.reduce((a, b) => (rankKey(b) < rankKey(a) ? b : a));
+  const chosen = MARIO_CONNECTION_POLICY.snavPreferenceEnabled ? applySnavPreference(best, valid, rankKey) : best;
+
   const margin = chosen.ferryDeparture - earliestReachable;
   const snavPreferred = chosen !== best;
+  const portLabel = appliedPort === "pozzuoli"
+    ? `Pozzuoli (fallback: nessuna corsa da Napoli valida, pax ${pax} <= ${MARIO_CONNECTION_POLICY.pozzuoliMaxPax})`
+    : appliedPort === "napoli_beverello"
+      ? "Napoli Beverello (porto continentale preferito, regola confermata)"
+      : "porto continentale disponibile";
 
   const reason = snavPreferred
-    ? `SNAV ${chosen.row.departure_time.slice(0, 5)} preferita (regola commerciale, entro ±${SNAV_PREFERENCE_WINDOW_MINUTES}min dalla migliore alternativa ammessa ${best.row.company} ${best.row.departure_time.slice(0, 5)}), margine ${margin}min dopo l'orario minimo raggiungibile. Policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}).`
-    : `Prima corsa raggiungibile dopo l'arrivo di ${input.transportTime} tra quelle ammesse dalla policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}) (nessuna SNAV ammessa entro ±${SNAV_PREFERENCE_WINDOW_MINUTES}min o già SNAV), margine ${margin}min.`;
+    ? `SNAV ${chosen.row.departure_time.slice(0, 5)} preferita (regola commerciale legacy, entro ±${SNAV_PREFERENCE_WINDOW_MINUTES}min dalla migliore alternativa ammessa ${best.row.company} ${best.row.departure_time.slice(0, 5)}), margine ${margin}min dopo l'orario minimo raggiungibile (buffer confermato ${requiredBufferMin}min). Policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}).`
+    : `Prima corsa raggiungibile da ${portLabel} dopo l'arrivo di ${input.transportTime} (buffer confermato ${requiredBufferMin}min) tra quelle ammesse dalla policy agenzia '${policyInfo.agencyKey}' (${policyInfo.source}), margine ${margin}min.`;
 
   return buildResult(chosen, {
     proposedPickupTime: null,

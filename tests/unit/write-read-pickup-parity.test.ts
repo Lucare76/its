@@ -356,14 +356,13 @@ describe("Parita' write/read SENZA regola canonica — fallback statico condivis
 
   it("10. dati ferry gia' noti (da un match reale in ferry_schedules) non vengono degradati dal fallback statico del pickup", () => {
     // Treno alle 16:00: una corsa Medmar Ischia->Napoli Beverello delle 14:00
-    // (arrivo 15:00) rispetta i vincoli temporali del motore legacy
-    // (resolveTravelConnection: margine porto 25' + margine sicurezza 15' =
-    // deve arrivare entro le 15:20) e viene trovata come match reale —
-    // nessuna regola canonica configurata, quindi il pickup arriva dal
-    // fallback statico, ma company/orario nave devono restare quelli del
-    // match REALE trovato dal motore legacy, non quelli (potenzialmente
-    // diversi) della tabella statica flat di calc-pickup-time.ts.
-    const realSchedule = schedule({ company: "medmar", departure_time: "14:00", arrival_time: "15:00", direction: "ischia_to_mainland" });
+    // (arrivo 14:20) rispetta il buffer confermato nave->treno (90min: deve
+    // arrivare entro le 14:30) e viene trovata come match reale — nessuna
+    // regola canonica configurata, quindi il pickup arriva dal fallback
+    // statico, ma company/orario nave devono restare quelli del match REALE
+    // trovato dal motore legacy, non quelli (potenzialmente diversi) della
+    // tabella statica flat di calc-pickup-time.ts.
+    const realSchedule = schedule({ company: "medmar", departure_time: "14:00", arrival_time: "14:20", direction: "ischia_to_mainland" });
     const readResult = resolveOperationalTiming(
       service({ booking_service_kind: "transfer_train_hotel", time: "16:00", departure_time: "16:00" }),
       { operationalRules: [], ferrySchedules: [realSchedule], agencyName: "ALESTE VIAGGI" }

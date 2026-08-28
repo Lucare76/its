@@ -49,12 +49,17 @@ function rule(overrides: Partial<OperationalPickupRule>): OperationalPickupRule 
   };
 }
 
-// Regola Suorato — hotel-specifica (Livello 1), NON di zona: cosi' non intercetta
-// altri hotel Forio come LA VILLA (vedi sezione LA VILLA sotto).
-const COLELLA_RULE = rule({ hotel_id: HOTEL_COLELLA_ID, zone: "forio" });
-const COLELLA_SCHEDULE = [ferryRow({})];
+// Regola hotel-specifica (Livello 1) usata per testare la gerarchia
+// hotel > zona > generale del matcher canonico. NON rappresenta più "hotel
+// Colella determina il porto Napoli/Pozzuoli" — quell'ipotesi non era la
+// regola reale di Mario (vedi lib/travel-connection-resolver.ts, sezione
+// preferenza porto). Qui hotel_id resta un asse di specificità legittimo
+// dello schema (es. un pickup_time confermato per un hotel specifico), del
+// tutto indipendente dalla scelta Napoli/Pozzuoli.
+const HOTEL_SPECIFIC_RULE = rule({ hotel_id: HOTEL_COLELLA_ID, zone: "forio" });
+const HOTEL_SPECIFIC_SCHEDULE = [ferryRow({})];
 
-describe("resolveOperationalConnection — SUORATO / HOTEL TERME COLELLA (regola hotel-specifica)", () => {
+describe("resolveOperationalConnection — regola hotel-specifica in DB (Livello 1 del matcher, non usata per scegliere il porto)", () => {
   const baseInput: OperationalConnectionInput = {
     direction: "from_ischia",
     bookingServiceKind: "transfer_train_hotel",
@@ -63,11 +68,11 @@ describe("resolveOperationalConnection — SUORATO / HOTEL TERME COLELLA (regola
     hotelId: HOTEL_COLELLA_ID,
     zone: "forio",
     agencyName: "ALESTE VIAGGI",
-    operationalRules: [COLELLA_RULE],
-    ferrySchedules: COLELLA_SCHEDULE,
+    operationalRules: [HOTEL_SPECIFIC_RULE],
+    ferrySchedules: HOTEL_SPECIFIC_SCHEDULE,
   };
 
-  it("propone pickup 09:00 e Medmar 10:35 Ischia Porto -> Napoli Beverello, confidence ALTA", () => {
+  it("propone pickup 09:00 e Medmar 10:35 Ischia Porto -> Napoli Beverello, confidence ALTA (dato dalla regola DB configurata per quell'hotel, non da una logica hotel->porto)", () => {
     const result = resolveOperationalConnection(baseInput);
     expect(result.pickupTime).toBe("09:00");
     expect(result.company).toBe("medmar");
@@ -93,21 +98,78 @@ describe("resolveOperationalConnection — SUORATO / HOTEL TERME COLELLA (regola
   });
 });
 
-describe("resolveOperationalConnection — LA VILLA (stessa zona/agenzia/fascia di Colella, ma NON deve prendere la sua regola)", () => {
-  it("senza hotelId Colella, la regola hotel-specifica non fa match: nessuna regola canonica -> fallback legacy, mai 09:00/10:35 di Colella", () => {
+describe("resolveOperationalConnection — LA VILLA (stessa zona/agenzia/fascia dell'hotel con regola dedicata, ma NON deve prendere la sua regola)", () => {
+  it("senza hotelId dedicato, la regola hotel-specifica non fa match: nessuna regola canonica -> fallback legacy, mai 09:00/10:35 dell'altro hotel", () => {
     const result = resolveOperationalConnection({
       direction: "from_ischia",
       bookingServiceKind: "transfer_train_hotel",
-      transportTime: "13:20", // stessa fascia 13:20-16:50 di Colella
+      transportTime: "13:20", // stessa fascia 13:20-16:50 della regola dedicata
       date: DATE,
-      hotelId: HOTEL_LA_VILLA_ID, // LODI BARBARA / CATULLO LUCIA — hotel diverso
-      zone: "forio", // stessa zona di Colella
+      hotelId: HOTEL_LA_VILLA_ID, // hotel diverso, nessuna regola propria
+      zone: "forio", // stessa zona
       agencyName: "ALESTE VIAGGI", // stessa agenzia
-      operationalRules: [COLELLA_RULE],
-      ferrySchedules: COLELLA_SCHEDULE,
+      operationalRules: [HOTEL_SPECIFIC_RULE],
+      ferrySchedules: HOTEL_SPECIFIC_SCHEDULE,
     });
     expect(result.source).not.toBe("canonical_rule");
     expect(result.pickupTime).not.toBe("09:00");
+  });
+});
+
+describe("resolveOperationalConnection — SENZA regola canonica, la preferenza Napoli/Pozzuoli si applica via fallback legacy (regola reale di Mario, non hotel-based)", () => {
+  it("nessuna regola DB configurata: il fallback legacy sceglie Napoli Beverello anche se Pozzuoli avrebbe margine maggiore, indipendentemente dall'hotel", () => {
+    const bothMedmar: FerryScheduleRow[] = [
+      ferryRow({ id: "medmar-pozzuoli", company: "medmar", departure_port: "casamicciola", arrival_port: "pozzuoli", departure_time: "10:10", arrival_time: "11:15" }),
+      ferryRow({ id: "medmar-napoli", company: "medmar", departure_port: "ischia_porto", arrival_port: "napoli_beverello", departure_time: "10:35", arrival_time: "12:05" }),
+    ];
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "transfer_train_hotel",
+      transportTime: "14:00",
+      date: DATE,
+      hotelId: "qualunque-hotel-senza-regola-dedicata",
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [], // nessuna regola canonica configurata
+      ferrySchedules: bothMedmar,
+    });
+    expect(result.source).toBe("legacy_fallback");
+    expect(result.company).toBe("medmar");
+    expect(result.ferryDepartureTime).toBe("10:35");
+    expect(result.arrivalPort).toBe("napoli_beverello");
+  });
+
+  it("Pozzuoli come fallback (nessuna corsa Napoli) richiede pax <= 8, propagato dall'input", () => {
+    const onlyPozzuoli: FerryScheduleRow[] = [
+      ferryRow({ id: "medmar-pozzuoli", company: "medmar", departure_port: "casamicciola", arrival_port: "pozzuoli", departure_time: "10:10", arrival_time: "11:15" }),
+    ];
+    const withPax4 = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "transfer_train_hotel",
+      transportTime: "14:00",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [],
+      ferrySchedules: onlyPozzuoli,
+      pax: 4,
+    });
+    expect(withPax4.company).toBe("medmar");
+    expect(withPax4.arrivalPort).toBe("pozzuoli");
+
+    const withPax9 = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "transfer_train_hotel",
+      transportTime: "14:00",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [],
+      ferrySchedules: onlyPozzuoli,
+      pax: 9,
+    });
+    expect(withPax9.confidence).toBe("NESSUNA");
+    expect(withPax9.company).toBeNull();
   });
 });
 
@@ -124,8 +186,8 @@ describe("resolveOperationalConnection — gerarchia HOTEL > ZONA > GENERALE", (
       hotelId: HOTEL_COLELLA_ID,
       zone: "forio",
       agencyName: "ALESTE VIAGGI",
-      operationalRules: [generalRule, zoneRule, COLELLA_RULE],
-      ferrySchedules: COLELLA_SCHEDULE,
+      operationalRules: [generalRule, zoneRule, HOTEL_SPECIFIC_RULE],
+      ferrySchedules: HOTEL_SPECIFIC_SCHEDULE,
     });
     expect(result.pickupTime).toBe("09:00");
     expect(result.ferryDepartureTime).toBe("10:35");
@@ -140,7 +202,7 @@ describe("resolveOperationalConnection — gerarchia HOTEL > ZONA > GENERALE", (
       hotelId: "hotel-senza-regola-dedicata",
       zone: "forio",
       agencyName: "ALESTE VIAGGI",
-      operationalRules: [generalRule, zoneRule, COLELLA_RULE],
+      operationalRules: [generalRule, zoneRule, HOTEL_SPECIFIC_RULE],
       ferrySchedules: [ferryRow({ departure_time: "10:10", arrival_port: "pozzuoli", departure_port: "casamicciola" })],
     });
     expect(result.pickupTime).toBe("08:30");
@@ -156,7 +218,7 @@ describe("resolveOperationalConnection — gerarchia HOTEL > ZONA > GENERALE", (
       hotelId: "hotel-senza-regola-dedicata",
       zone: "barano", // nessuna regola per questa zona
       agencyName: "ALESTE VIAGGI",
-      operationalRules: [generalRule, zoneRule, COLELLA_RULE],
+      operationalRules: [generalRule, zoneRule, HOTEL_SPECIFIC_RULE],
       ferrySchedules: [ferryRow({ departure_time: "08:10", arrival_port: "pozzuoli", departure_port: "ischia_porto" })],
     });
     expect(result.pickupTime).toBe("07:00");
@@ -207,8 +269,8 @@ describe("resolveOperationalConnection — BIRAGO (override manuale preservato, 
       date: DATE,
       zone: "ischia",
       agencyName: null,
-      operationalRules: [COLELLA_RULE],
-      ferrySchedules: COLELLA_SCHEDULE,
+      operationalRules: [HOTEL_SPECIFIC_RULE],
+      ferrySchedules: HOTEL_SPECIFIC_SCHEDULE,
       currentOverride: manualOverride,
     });
     expect(result.source).toBe("manual_override");
@@ -221,7 +283,7 @@ describe("resolveOperationalConnection — BIRAGO (override manuale preservato, 
     const result = resolveOperationalConnection({
       direction: "from_ischia",
       bookingServiceKind: "transfer_train_hotel",
-      transportTime: "12:10",
+      transportTime: "13:00",
       date: DATE,
       zone: "ischia",
       agencyName: "ALESTE VIAGGI",
@@ -236,8 +298,8 @@ describe("resolveOperationalConnection — BIRAGO (override manuale preservato, 
   });
 });
 
-describe("resolveOperationalConnection — Sosandra ammette aliscafo automaticamente", () => {
-  it("una regola canonica aliscafo per Sosandra viene proposta senza bisogno di override", () => {
+describe("resolveOperationalConnection — Sosandra: aliscafo solo su richiesta esplicita (mai automatico per agenzia)", () => {
+  it("una regola canonica aliscafo per Sosandra NON viene applicata senza richiesta esplicita (kind generico): cade sul fallback legacy", () => {
     const sosandraRule = rule({
       agency_logic: "sosandra",
       boat_type: "aliscafo",
@@ -250,7 +312,31 @@ describe("resolveOperationalConnection — Sosandra ammette aliscafo automaticam
     });
     const result = resolveOperationalConnection({
       direction: "from_ischia",
-      bookingServiceKind: "transfer_train_hotel",
+      bookingServiceKind: "transfer_train_hotel", // nessun suffisso _aliscafo
+      transportTime: "14:00",
+      date: DATE,
+      zone: "ischia",
+      agencyName: "SOSANDRA TOUR",
+      operationalRules: [sosandraRule],
+      ferrySchedules: [ferryRow({ id: "alil-1", company: "alilauro", departure_time: "11:45", arrival_time: "12:30" })],
+    });
+    expect(result.source).not.toBe("canonical_rule");
+  });
+
+  it("CON richiesta esplicita (kind '_aliscafo'), la regola canonica aliscafo per Sosandra viene proposta", () => {
+    const sosandraRule = rule({
+      agency_logic: "sosandra",
+      boat_type: "aliscafo",
+      hotel_id: null,
+      zone: null,
+      company: "alilauro",
+      departure_time: "11:45",
+      arrival_port: "napoli_beverello",
+      pickup_time: "09:00",
+    });
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "transfer_train_hotel_aliscafo",
       transportTime: "14:00",
       date: DATE,
       zone: "ischia",
@@ -301,8 +387,8 @@ describe("resolveOperationalConnection — ARRIVI (backward compatibility, immut
   });
 });
 
-describe("resolveOperationalConnection — NIKOLAENKO (arrivo, confidence non definitiva)", () => {
-  it("senza regola canonica configurata per 'Sun & sea', propone via motore legacy con confidence BASSA e warning esplicito", () => {
+describe("resolveOperationalConnection — NIKOLAENKO (arrivo in volo, regola confermata: solo Medmar da Napoli)", () => {
+  it("senza regola canonica configurata per 'Sun & sea', propone via motore legacy la prima Medmar da Napoli raggiungibile, confidence mai ALTA (margine stimato, nessun buffer confermato per questa tratta)", () => {
     const result = resolveOperationalConnection({
       direction: "to_ischia",
       bookingServiceKind: "transfer_airport_hotel",
@@ -311,13 +397,33 @@ describe("resolveOperationalConnection — NIKOLAENKO (arrivo, confidence non de
       agencyName: "Sun & sea",
       operationalRules: [],
       ferrySchedules: [
-        ferryRow({ id: "medmar-arr", departure_port: "pozzuoli", arrival_port: "ischia_porto", departure_time: "13:30", arrival_time: "14:35", direction: "mainland_to_ischia" }),
-        ferryRow({ id: "snav-arr", company: "snav", departure_port: "napoli_beverello", arrival_port: "casamicciola", departure_time: "13:50", arrival_time: "14:55", direction: "mainland_to_ischia" }),
+        ferryRow({ id: "medmar-pozzuoli", company: "medmar", departure_port: "pozzuoli", arrival_port: "ischia_porto", departure_time: "13:30", arrival_time: "14:35", direction: "mainland_to_ischia" }),
+        ferryRow({ id: "snav-napoli", company: "snav", departure_port: "napoli_beverello", arrival_port: "casamicciola", departure_time: "13:50", arrival_time: "14:55", direction: "mainland_to_ischia" }),
+        ferryRow({ id: "medmar-napoli-1420", company: "medmar", departure_port: "napoli_beverello", arrival_port: "ischia_porto", departure_time: "14:20", arrival_time: "15:50", direction: "mainland_to_ischia" }),
       ],
     });
     expect(result.source).toBe("legacy_fallback");
-    expect(["BASSA", "NESSUNA"]).toContain(result.confidence);
+    expect(result.company).toBe("medmar");
+    expect(result.embarkPort).toBe("napoli_beverello");
+    expect(result.ferryDepartureTime).toBe("14:20");
     expect(result.confidence).not.toBe("ALTA");
+  });
+
+  it("nessuna Medmar/Napoli raggiungibile -> confidence NESSUNA, nessun fallback Pozzuoli inventato", () => {
+    const result = resolveOperationalConnection({
+      direction: "to_ischia",
+      bookingServiceKind: "transfer_airport_hotel",
+      transportTime: "12:30",
+      date: DATE,
+      agencyName: "Sun & sea",
+      operationalRules: [],
+      ferrySchedules: [
+        ferryRow({ id: "medmar-pozzuoli", company: "medmar", departure_port: "pozzuoli", arrival_port: "ischia_porto", departure_time: "13:30", arrival_time: "14:35", direction: "mainland_to_ischia" }),
+        ferryRow({ id: "snav-napoli", company: "snav", departure_port: "napoli_beverello", arrival_port: "casamicciola", departure_time: "13:50", arrival_time: "14:55", direction: "mainland_to_ischia" }),
+      ],
+    });
+    expect(["BASSA", "NESSUNA"]).toContain(result.confidence);
+    expect(result.company).not.toBe("snav");
   });
 });
 

@@ -78,14 +78,15 @@ describe("buildTrainOrFlightPickupHint — /departures collegato a resolveOperat
     expect(hint === null || typeof hint?.pickup === "string").toBe(true);
   });
 
-  it("3. treno + SNAV + Sosandra: la regola canonica aliscafo Sosandra viene applicata", () => {
+  it("3. treno + SNAV + Sosandra CON richiesta esplicita: la regola canonica aliscafo Sosandra viene applicata", () => {
     const snavRule = rule({ agency_logic: "sosandra", boat_type: "aliscafo", company: "snav", departure_time: "09:45", pickup_time: "08:40" });
     const context: OperationalTimingContext = {
       operationalRules: [snavRule],
       ferrySchedules: [ferryRow({ company: "snav", departure_time: "09:45", arrival_time: "10:50" })],
       agencyName: "SOSANDRA TOUR",
     };
-    const hint = buildTrainOrFlightPickupHint(service(), context);
+    // regola confermata da Mario: "Sosandra -> aliscafo SE richiesto", mai automatico per agenzia.
+    const hint = buildTrainOrFlightPickupHint(service({ booking_service_kind: "transfer_train_hotel_aliscafo" }), context);
     expect(hint?.pickup).toBe("08:40");
     expect(hint?.label).toContain("snav");
   });

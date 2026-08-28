@@ -105,6 +105,8 @@ export type OperationalConnectionInput = {
   ferrySchedules: FerryScheduleRow[];
   /** Override manuale già confermato per questo servizio, se presente. */
   currentOverride?: ConnectionRecord | null;
+  /** Pax totali del servizio/gruppo — usato dal fallback legacy per il limite Pozzuoli (vedi mario-connection-policy.ts). */
+  pax?: number | null;
 };
 
 export type OperationalConnectionSource = "canonical_rule" | "legacy_fallback" | "manual_override";
@@ -281,6 +283,7 @@ function fromLegacyFallback(
     ferrySchedules: input.ferrySchedules,
     agencyName: input.agencyName,
     knownPickupTime: null,
+    pax: input.pax ?? null,
   });
   const warnings = [
     `⚠ Nessuna regola canonica configurata per questa fascia (agency_logic='${agencyLogic}', ` +
@@ -327,25 +330,24 @@ export function resolveOperationalConnection(input: OperationalConnectionInput):
     // La regola canonica (DB, ferry_pickup_rules) porta gia' il proprio
     // agency_logic ed e' gia' filtrata su quello in findCanonicalRule
     // (baseMatch: r.agency_logic !== args.agencyLogic -> scartata) — ma
-    // "esiste una regola configurata" NON basta da sola per autorizzare
-    // l'aliscafo per un'agenzia standard (Aleste): l'aliscafo li' e'
-    // un'eccezione operativa (es. Birago), non il comportamento di default.
-    // Serve un segnale esplicito di richiesta al momento della prenotazione.
-    // Fonte verificata nel modello dati: booking_service_kind con suffisso
-    // '_aliscafo' (transfer_train_hotel_aliscafo / transfer_airport_hotel_
-    // aliscafo) — opzione selezionabile esplicitamente sia nel form agenzia
+    // "esiste una regola configurata" NON basta da sola ad autorizzare
+    // l'aliscafo, Sosandra inclusa (regola confermata da Mario, audit
+    // 2026-08-28: "Sosandra → aliscafo SE richiesto", non più automatico per
+    // agenzia — vedi lib/server/mario-connection-policy.ts). Serve un segnale
+    // esplicito di richiesta al momento della prenotazione. Fonte verificata
+    // nel modello dati: booking_service_kind con suffisso '_aliscafo'
+    // (transfer_train_hotel_aliscafo / transfer_airport_hotel_aliscafo) —
+    // opzione selezionabile esplicitamente sia nel form agenzia
     // (agency/new-booking/page.tsx) sia in quello operatore (services/new/
     // page.tsx), distinta dal kind generico (default traghetto). Nessun altro
     // campo strutturato equivalente esiste (transport_code/notes sono testo
-    // libero). Sosandra resta autorizzata sempre (comportamento invariato,
-    // regola operativa gia' confermata per quell'agenzia); per le altre
-    // agenzie l'aliscafo entra tra i tipi ammessi SOLO se il servizio lo
-    // richiede esplicitamente — la regola canonica resta comunque necessaria
-    // (una richiesta esplicita senza regola configurata cade nel fallback
-    // legacy, mai un'invenzione).
+    // libero). L'aliscafo entra tra i tipi ammessi SOLO se il servizio lo
+    // richiede esplicitamente, per qualunque agenzia — la regola canonica
+    // resta comunque necessaria (una richiesta esplicita senza regola
+    // configurata cade nel fallback legacy, mai un'invenzione).
     const explicitAliscafoRequest = input.bookingServiceKind.endsWith("_aliscafo");
     const allowedBoatTypes: Array<"traghetto" | "aliscafo"> =
-      agencyLogic === "sosandra" || explicitAliscafoRequest ? ["traghetto", "aliscafo"] : ["traghetto"];
+      explicitAliscafoRequest ? ["traghetto", "aliscafo"] : ["traghetto"];
 
     const zoneRecognized = input.zoneRecognized ?? true;
     const rule = findCanonicalRule(input.operationalRules, {

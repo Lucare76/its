@@ -493,6 +493,7 @@ export default function DeparturesPage() {
             zone: zona,
             zoneRecognized,
             agencyName: agency || null,
+            pax: svc.pax ?? null,
           };
           hint = buildTrainOrFlightPickupHint(svc as unknown as PrintService, context);
         }
