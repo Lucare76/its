@@ -155,6 +155,76 @@ describe("operational_v2 parser", () => {
     expect(first.classification.requires_db_rules).toBe(true);
   });
 
+  it("NOTE con 'ALISCAFO' esplicito su AEROPORTO HOTEL -> transfer_airport_hotel_aliscafo", () => {
+    const parsed = parseOperationalV2Rows([
+      row({
+        "SERVIZIO": "AEROPORTO HOTEL",
+        "TIPO": "ANDATA",
+        "NOTE": "SUPPL. ALISCAFO richiesto",
+      }),
+    ]);
+    expect(parsed.rows[0].classification.booking_service_kind).toBe("transfer_airport_hotel_aliscafo");
+  });
+
+  it("NOTE con 'aliscafo' esplicito su STAZIONE HOTEL RITORNO -> transfer_hotel_train_aliscafo (collassato poi a transfer_train_hotel_aliscafo dall'import route)", () => {
+    const parsed = parseOperationalV2Rows([
+      row({
+        "SERVIZIO": "STAZIONE HOTEL",
+        "TIPO": "RITORNO",
+        "ORARIO DI ARRIVO": "",
+        "ORARIO DI PARTENZA": "14:30",
+        "NOTE": "aliscafo per rientro",
+      }),
+    ]);
+    expect(parsed.rows[0].classification.booking_service_kind).toBe("transfer_hotel_train_aliscafo");
+  });
+
+  it("solo 'SNAV' in COMPAGNIA NAVE su un transfer AEROPORTO HOTEL -> NON transfer_airport_hotel_aliscafo (SNAV non affidabile da solo)", () => {
+    const parsed = parseOperationalV2Rows([
+      row({
+        "SERVIZIO": "AEROPORTO HOTEL",
+        "TIPO": "ANDATA",
+        "COMPAGNIA NAVE": "SNAV",
+        "NOTE": "",
+      }),
+    ]);
+    expect(parsed.rows[0].classification.booking_service_kind).toBe("transfer_airport_hotel");
+  });
+
+  it("solo 'MEDMAR' in NOTE -> NON transfer_train_hotel_aliscafo", () => {
+    const parsed = parseOperationalV2Rows([
+      row({
+        "SERVIZIO": "STAZIONE HOTEL",
+        "TIPO": "ANDATA",
+        "NOTE": "MEDMAR confermato",
+      }),
+    ]);
+    expect(parsed.rows[0].classification.booking_service_kind).toBe("transfer_train_hotel");
+  });
+
+  it("NOTE ambigua (nessuna parola pertinente) -> resta standard, non aliscafo", () => {
+    const parsed = parseOperationalV2Rows([
+      row({
+        "SERVIZIO": "AEROPORTO HOTEL",
+        "TIPO": "ANDATA",
+        "NOTE": "cliente VIP camera vista mare",
+      }),
+    ]);
+    expect(parsed.rows[0].classification.booking_service_kind).toBe("transfer_airport_hotel");
+  });
+
+  it("AGENZIA 'sosandra'/dimhotels non cambia automaticamente il kind solo per nome agenzia", () => {
+    const parsed = parseOperationalV2Rows([
+      row({
+        "SERVIZIO": "AEROPORTO HOTEL",
+        "TIPO": "ANDATA",
+        "AGENZIA": "DIMHOTELS SOSANDRA",
+        "NOTE": "",
+      }),
+    ]);
+    expect(parsed.rows[0].classification.booking_service_kind).toBe("transfer_airport_hotel");
+  });
+
   it("classifica SNAV ANDATA come island_only", () => {
     const parsed = parseOperationalV2Rows([
       row({

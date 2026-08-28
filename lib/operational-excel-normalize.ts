@@ -1,3 +1,5 @@
+import { detectExplicitHydrofoilIntent } from "@/lib/excel-hydrofoil-intent";
+
 export const OPERATIONAL_V2_TEMPLATE_KIND = "operational_v2" as const;
 
 export type RawOperationalExcelRow = Record<string, unknown>;
@@ -190,13 +192,19 @@ function isRoomReferenceName(value: string | null): boolean {
     || /^CAM\s+\d+[A-Z]?\s*X\d+(?:\s*-\s*\d+[A-Z]?\s*X\d+)*$/i.test(normalized);
 }
 
-function serviceKindForTransfer(service: string | null, tripType: "ANDATA" | "RITORNO" | "UNKNOWN"): string | null {
+function serviceKindForTransfer(service: string | null, notes: string | null, tripType: "ANDATA" | "RITORNO" | "UNKNOWN"): string | null {
   const normalized = compareText(service);
+  // Segnale esplicito aliscafo: SOLO detectExplicitHydrofoilIntent (parola
+  // "aliscafo"/"hydrofoil" in SERVIZIO/NOTE). Mai dedotto da COMPAGNIA NAVE:
+  // quella e' letta solo da serviceKindForFerry (dominio Formula, diverso).
+  const hasExplicitHydrofoilIntent = detectExplicitHydrofoilIntent(service, notes);
   if (normalized === "AEROPORTO HOTEL") {
-    return tripType === "RITORNO" ? "transfer_hotel_airport" : "transfer_airport_hotel";
+    const base = tripType === "RITORNO" ? "transfer_hotel_airport" : "transfer_airport_hotel";
+    return hasExplicitHydrofoilIntent ? `${base}_aliscafo` : base;
   }
   if (normalized === "STAZIONE HOTEL") {
-    return tripType === "RITORNO" ? "transfer_hotel_train" : "transfer_train_hotel";
+    const base = tripType === "RITORNO" ? "transfer_hotel_train" : "transfer_train_hotel";
+    return hasExplicitHydrofoilIntent ? `${base}_aliscafo` : base;
   }
   return null;
 }
@@ -226,7 +234,7 @@ function buildClassification(normalized: OperationalV2NormalizedRow): Operationa
   const aliasResolution = requiresAliasResolution(normalized.from, normalized.to);
 
   if (category === "TRANSFER") {
-    const bookingKind = serviceKindForTransfer(normalized.service, tripType);
+    const bookingKind = serviceKindForTransfer(normalized.service, normalized.notes, tripType);
     const isAirport = compareText(normalized.service) === "AEROPORTO HOTEL";
     const direction = tripType === "RITORNO" ? "departure" : tripType === "ANDATA" ? "arrival" : "unknown";
     return {

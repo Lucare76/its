@@ -59,6 +59,8 @@ function dbBookingKind(row: OperationalV2PreviewRow, serverRow: OperationalV2Ser
   const proposed = row.classification.booking_service_kind;
   if (proposed === "transfer_hotel_airport") return "transfer_airport_hotel";
   if (proposed === "transfer_hotel_train") return "transfer_train_hotel";
+  if (proposed === "transfer_hotel_airport_aliscafo") return "transfer_airport_hotel_aliscafo";
+  if (proposed === "transfer_hotel_train_aliscafo") return "transfer_train_hotel_aliscafo";
   if (proposed === "formula_medmar_unknown") {
     return hasCasamicciola(row.normalized.from, row.normalized.to, serverRow.computed.porto_bruno)
       ? "formula_medmar_pozzuoli"

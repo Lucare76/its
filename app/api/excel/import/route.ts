@@ -27,6 +27,7 @@ import {
   type BusResolverContext
 } from "@/lib/server/bus-service-resolver";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
+import { detectExplicitHydrofoilIntent } from "@/lib/excel-hydrofoil-intent";
 
 export const runtime = "nodejs";
 
@@ -180,7 +181,7 @@ function mapImportedStatus(notes: string) {
   return "new" as const;
 }
 
-function inferTransferMeta(reference: string, pickup: string, externalDestination: string, category: ImportCategory) {
+function inferTransferMeta(reference: string, pickup: string, externalDestination: string, category: ImportCategory, notes?: string) {
   if (category === "excursion") {
     return {
       service_type: "bus_tour" as const,
@@ -191,11 +192,17 @@ function inferTransferMeta(reference: string, pickup: string, externalDestinatio
   }
 
   const source = normalizeLooseText([reference, pickup, externalDestination].filter(Boolean).join(" "));
+  // Segnale esplicito aliscafo: SOLO la parola "aliscafo"/"hydrofoil" (vedi
+  // detectExplicitHydrofoilIntent — fonte dati reali nel suo commento). Mai
+  // dedotto da compagnia/porto/orario: quelli restano traghetto di default
+  // per tutte le agenzie non-Sosandra, coerente con la scelta esplicita
+  // richiesta nei form operatore/agenzia.
+  const hasExplicitHydrofoilIntent = detectExplicitHydrofoilIntent(reference, pickup, externalDestination, notes);
   if (/\bvolo\b|\bapt\b|\baeroporto\b|\bairport\b|\bfr\b|\blx\b|\baz\b|\bsn\b/.test(source)) {
     return {
       service_type: "transfer" as const,
       vessel: reference ? `Volo ${reference.trim()}` : "Aeroporto Napoli",
-      booking_service_kind: "transfer_airport_hotel",
+      booking_service_kind: hasExplicitHydrofoilIntent ? "transfer_airport_hotel_aliscafo" : "transfer_airport_hotel",
       service_type_code: "transfer_airport_hotel"
     };
   }
@@ -203,7 +210,7 @@ function inferTransferMeta(reference: string, pickup: string, externalDestinatio
     return {
       service_type: "transfer" as const,
       vessel: reference.trim() || "Stazione Napoli",
-      booking_service_kind: "transfer_train_hotel",
+      booking_service_kind: hasExplicitHydrofoilIntent ? "transfer_train_hotel_aliscafo" : "transfer_train_hotel",
       service_type_code: "transfer_station_hotel"
     };
   }
@@ -616,7 +623,7 @@ export async function POST(request: NextRequest) {
       const customerName = sanitizeImportCustomerName(row.customer_name, row.row_index);
       const phone = sanitizeImportPhone(row.phone);
       const importedStatus = mapImportedStatus(row.notes);
-      const meta = inferTransferMeta(row.transport_code || row.company_name, row.pickup, row.destination, category);
+      const meta = inferTransferMeta(row.transport_code || row.company_name, row.pickup, row.destination, category, row.notes);
       const confidence = Math.min(originMatch.confidence, destinationMatch.confidence);
       const rowDirection = directionForTemplateRow(category, row.route_kind, originType, destinationType);
 
@@ -722,7 +729,7 @@ export async function POST(request: NextRequest) {
       const importedStatus = mapImportedStatus(row.notes);
       const directDirection = directionForTemplateRow(category, row.route_kind, row.origin_place_type, row.destination_place_type);
       const externalDestination = row.external_destination || row.pickup || row.destination;
-      const meta = inferTransferMeta(row.transport_code, row.pickup, externalDestination, category);
+      const meta = inferTransferMeta(row.transport_code, row.pickup, externalDestination, category, row.notes);
 
       for (const [chunkIndex, paxChunk] of paxChunks.entries()) {
         const baseNotes = appendSplitImportNote(row.notes, row.pax, chunkIndex + 1, paxChunks.length);
