@@ -93,7 +93,16 @@ function directCarrierFromKind(kind: string | null | undefined, vessel: string |
   return null;
 }
 
-function mezzoFromKind(kind: string | null | undefined): "treno" | "aereo" | null {
+/**
+ * Esportate (non solo per uso interno) perche' il fallback statico
+ * (calcPickupTime) e' condiviso anche dal read-path (resolveOperationalTiming,
+ * lib/operational-timing-resolver.ts) — stessa mappatura kind/agenzia/vessel
+ * -> input di calcPickupTime, mai duplicata. Import a senso unico (il
+ * read-path importa queste funzioni pure; questo file non importa mai nulla
+ * dal read-path) — nessuna dipendenza circolare, nessuna chiamata di
+ * resolveOperationalTiming/applyPickupCalc l'una verso l'altra.
+ */
+export function mezzoFromKind(kind: string | null | undefined): "treno" | "aereo" | null {
   if (!kind) return null;
   if (TRAIN_KINDS.has(kind)) return "treno";
   if (AIRPORT_KINDS.has(kind)) return "aereo";
@@ -105,7 +114,7 @@ function mezzoFromKind(kind: string | null | undefined): "treno" | "aereo" | nul
  * Sosandra/Dimhotels hanno regole diverse (aliscafo alternato, nessun pickup_hotel).
  * Tutte le altre agenzie usano le stesse regole di Aleste (Medmar traghetto).
  */
-function billingToAgencyKey(name: string | null | undefined): string {
+export function billingToAgencyKey(name: string | null | undefined): string {
   const n = (name ?? "").toLowerCase();
   if (n.includes("sosandra") || n.includes("dimhotel")) return "sosandra";
   if (n.includes("aleste")) return "aleste";
@@ -118,7 +127,7 @@ function billingToAgencyKey(name: string | null | undefined): string {
  * Deriva tipo_barca. Priorita': variante "_aliscafo" nel booking_service_kind
  * (esplicita), poi fallback sul nome vessel gia' noto (Alilauro/Snav = aliscafo).
  */
-function tipoBarcaFor(kind: string | null | undefined, vessel: string | null | undefined): "traghetto" | "aliscafo" {
+export function tipoBarcaFor(kind: string | null | undefined, vessel: string | null | undefined): "traghetto" | "aliscafo" {
   if (kind && ALISCAFO_KINDS.has(kind)) return "aliscafo";
   const v = (vessel ?? "").toLowerCase();
   if (v.includes("alilauro") || v.includes("snav")) return "aliscafo";

@@ -49,6 +49,15 @@ import {
   fmtTime,
   type PrintService,
 } from "@/lib/piano-giorno-print";
+// Fallback statico storico, condiviso col write-path (applyPickupCalc) senza
+// mai chiamare applyPickupCalc() ne' duplicare le tabelle: calcPickupTime()
+// e' gia' una funzione pura, indipendente, importabile direttamente da qui.
+// Le 3 funzioni di mappatura (kind/agenzia/vessel -> input di calcPickupTime)
+// sono quelle gia' scritte in apply-pickup-calc.ts, solo esportate — import a
+// senso unico (apply-pickup-calc.ts non importa mai questo file), nessuna
+// dipendenza circolare.
+import { calcPickupTime } from "@/lib/server/calc-pickup-time";
+import { mezzoFromKind, billingToAgencyKey, tipoBarcaFor } from "@/lib/server/apply-pickup-calc";
 
 export type OperationalTimingConnectionType = "flight" | "train" | "ferry" | null;
 
@@ -57,6 +66,7 @@ export type OperationalTimingPickupSource =
   | "pickup_time"
   | "canonical_rule"
   | "legacy_fallback"
+  | "legacy_static"
   | "manual_override"
   | "missing";
 
@@ -98,20 +108,51 @@ export function connectionTypeFromKind(kind: string | null | undefined): Operati
 function fromConnectionResult(
   result: OperationalConnectionResult,
   connectionType: OperationalTimingConnectionType,
-  connectionTime: string | null
+  connectionTime: string | null,
+  staticFallbackInput: { direction: "arrival" | "departure"; bookingServiceKind: string | null | undefined; vessel: string | null | undefined; agencyName: string | null | undefined } | null
 ): OperationalTimingResult {
+  const isUnresolvedLegacy = result.source === "legacy_fallback" && !result.pickupTime;
+
+  // Nessuna regola canonica ne' override, e il motore commerciale legacy
+  // (resolveTravelConnection) non calcola mai pickup_hotel (non e' il suo
+  // dominio) -> stesso fallback statico storico gia' usato dal write-path
+  // (calc-pickup-time.ts), MAI applyPickupCalc() stesso. Solo per partenze:
+  // il pickup hotel non ha senso per un arrivo (nessuna gamba di prelievo).
+  const staticFallback =
+    isUnresolvedLegacy && staticFallbackInput && staticFallbackInput.direction === "departure" && connectionTime
+      ? (() => {
+          const mezzo = mezzoFromKind(staticFallbackInput.bookingServiceKind);
+          if (!mezzo) return null;
+          const agency_key = billingToAgencyKey(staticFallbackInput.agencyName);
+          const tipo_barca = tipoBarcaFor(staticFallbackInput.bookingServiceKind, staticFallbackInput.vessel);
+          return calcPickupTime({ agency_key, mezzo, tipo_barca, orario: connectionTime });
+        })()
+      : null;
+
   const pickupSource: OperationalTimingPickupSource =
     result.source === "canonical_rule" ? "canonical_rule"
       : result.source === "manual_override" ? "manual_override"
-      : result.pickupTime ? "legacy_fallback" : "missing";
+      : result.pickupTime ? "legacy_fallback"
+      : staticFallback?.pickup_hotel ? "legacy_static"
+      : "missing";
   const ruleSource =
     result.source === "canonical_rule" ? "ferry_pickup_rules (regola canonica)"
       : result.source === "manual_override" ? "override manuale confermato"
+      : staticFallback?.pickup_hotel ? "calc-pickup-time.ts (fallback statico, nessuna regola canonica)"
       : "travel-connection-resolver (fallback legacy, nessuna regola canonica configurata)";
   const status: OperationalTimingResult["status"] =
     result.confidence === "NESSUNA" ? "warning" : result.warnings.length > 0 ? "warning" : "ok";
+  const warnings = staticFallback?.pickup_hotel
+    ? [...result.warnings, "Pickup derivato dal fallback statico: nessuna regola canonica applicabile."]
+    : staticFallback?.alert
+      ? [...result.warnings, staticFallback.alert]
+      : result.warnings;
   return {
-    pickupTime: result.pickupTime,
+    // Il pickup del fallback statico riempie SOLO pickupTime — company/
+    // ferryTime/ferryPort restano quelli gia' derivati da result (ferry
+    // reale, via resolveTravelConnection/ferry_schedules quando disponibili):
+    // mai degradati con i valori della tabella statica flat, meno affidabili.
+    pickupTime: staticFallback?.pickup_hotel ?? result.pickupTime,
     pickupSource,
     ferryTime: result.ferryDepartureTime,
     ferryCompany: result.company,
@@ -119,8 +160,8 @@ function fromConnectionResult(
     connectionTime,
     connectionType,
     ruleSource,
-    status,
-    warnings: result.warnings,
+    status: staticFallback?.pickup_hotel ? "warning" : status,
+    warnings,
   };
 }
 
@@ -183,7 +224,12 @@ export function resolveOperationalTiming(service: PrintService, context?: Operat
         ferrySchedules: context.ferrySchedules,
         currentOverride: context.currentOverride,
       });
-      return fromConnectionResult(result, connectionType, connectionTimeRaw);
+      return fromConnectionResult(result, connectionType, connectionTimeRaw, {
+        direction: "departure",
+        bookingServiceKind: service.booking_service_kind,
+        vessel: service.vessel,
+        agencyName: context.agencyName ?? service.billing_party_name,
+      });
     }
   }
   if ((connectionType === "train" || connectionType === "flight") && context && direction === "arrival") {
@@ -199,7 +245,9 @@ export function resolveOperationalTiming(service: PrintService, context?: Operat
         ferrySchedules: context.ferrySchedules,
         currentOverride: context.currentOverride,
       });
-      return fromConnectionResult(result, connectionType, connectionTimeRaw);
+      // Nessun fallback statico per l'arrivo: pickup_hotel non ha senso per
+      // una gamba di arrivo (nessun prelievo hotel prima di uno sbarco).
+      return fromConnectionResult(result, connectionType, connectionTimeRaw, null);
     }
   }
 

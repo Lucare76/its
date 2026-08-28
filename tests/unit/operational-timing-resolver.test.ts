@@ -266,7 +266,7 @@ describe("resolveOperationalTiming — 10. dati insufficienti", () => {
 });
 
 describe("resolveOperationalTiming — 11. regola ferry non trovata (context presente ma nessun match)", () => {
-  it("nessuna regola canonica applicabile alla fascia oraria -> legacy_fallback, mai un errore silenzioso", () => {
+  it("nessuna regola canonica applicabile alla fascia oraria -> fallback statico condiviso (legacy_static) quando calcolabile, mai un errore silenzioso", () => {
     const ruleOutsideWindow = rule({ transport_from: "06:00", transport_to: "08:00" });
     const context: OperationalTimingContext = {
       operationalRules: [ruleOutsideWindow],
@@ -276,7 +276,10 @@ describe("resolveOperationalTiming — 11. regola ferry non trovata (context pre
     const svc = service({ booking_service_kind: "transfer_train_hotel", departure_time: "18:00", time: "18:00", pickup_hotel: null });
     const result = resolveOperationalTiming(svc, context);
     expect(result.pickupSource).not.toBe("canonical_rule");
-    expect(["legacy_fallback", "missing"]).toContain(result.pickupSource);
+    // 18:00 rientra nella fascia statica ALESTE_TRENO_TRAGHETTO (16:55-18:40):
+    // il fallback statico condiviso produce un pickup reale -> "legacy_static",
+    // mai spacciato per una regola canonica DB.
+    expect(["legacy_fallback", "legacy_static", "missing"]).toContain(result.pickupSource);
     expect(result.status).toBe("warning");
   });
 });
