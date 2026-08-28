@@ -268,6 +268,8 @@ export const GESTIONE_GROUP: NavMainGroup = {
     { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
     { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
     { href: "/medmar-convocations", label: "Convocazioni MEDMAR", icon: "🚢" },
+    { href: "/snav-convocations", label: "Convocazioni SNAV", icon: "🚢" },
+    { href: "/excel-templates", label: "Template Excel", icon: "📊" },
   ]
 };
 

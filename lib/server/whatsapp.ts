@@ -127,7 +127,7 @@ export interface WhatsAppEventInsert {
   tenant_id: string;
   service_id: string | null;
   to_phone: string;
-  kind?: "24h" | "2h" | "48h_departure" | "24h_reminder" | "info_3d" | "manual" | "webhook" | "bus_convocazione" | "medmar_convocazione" | null;
+  kind?: "24h" | "2h" | "48h_departure" | "24h_reminder" | "info_3d" | "manual" | "webhook" | "bus_convocazione" | "medmar_convocazione" | "snav_convocazione" | null;
   template: string | null;
   status: WhatsAppEventStatus;
   provider_message_id: string | null;

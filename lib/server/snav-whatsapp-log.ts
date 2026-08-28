@@ -1,15 +1,15 @@
-// Pure aggregation logic for the MEDMAR tab of /api/ops/whatsapp-log.
+// Pure aggregation logic for the SNAV tab of /api/ops/whatsapp-log.
 // Kept separate from the Supabase queries in the route handler so the
 // date-filtering / status-resolution / KPI rules can be unit tested without
-// a database.
+// a database. Mirrors lib/server/medmar-whatsapp-log.ts.
 //
 // Data sources joined here:
-//   - medmar_convocation_rows        → one row per convocation (current state)
-//   - medmar_convocation_send_logs   → per-attempt detail (template, params,
-//                                       operator, Meta error, attempt number)
-//   - whatsapp_message_statuses      → real delivery/read state from webhooks
-//   - medmar_convocation_batches     → file name / label of the source Excel
-//   - memberships                    → operator display name
+//   - snav_convocation_rows        → one row per convocation (current state)
+//   - snav_convocation_send_logs   → per-attempt detail (template, params,
+//                                     operator, Meta error, attempt number)
+//   - whatsapp_message_statuses    → real delivery/read state from webhooks
+//   - snav_convocation_batches     → file name / label of the source Excel
+//   - memberships                  → operator display name
 
 import {
   normalizeStatusGroup,
@@ -18,15 +18,17 @@ import {
   type MessageStatusSource,
 } from "@/lib/server/whatsapp-log-shared";
 
-export type MedmarLogRowSource = {
+export type SnavLogRowSource = {
   id: string;
   batch_id: string;
+  inviare: boolean | null;
   customer_name: string;
-  travel_date: string;
-  travel_date_iso: string | null;
-  route: string;
-  departure_time: string;
+  departure_date_label: string;
+  departure_date: string | null;
+  hotel: string;
   passengers: string;
+  pickup_time: string;
+  vessel_time: string;
   phone_raw: string;
   phone_e164: string | null;
   status: string;
@@ -35,7 +37,7 @@ export type MedmarLogRowSource = {
   sent_at: string | null;
 };
 
-export type MedmarSendLogSource = {
+export type SnavSendLogSource = {
   id: string;
   row_id: string;
   operator_user_id: string | null;
@@ -50,21 +52,22 @@ export type MedmarSendLogSource = {
   attempted_at: string | null;
 };
 
-export type MedmarBatchSource = { id: string; file_name: string; label?: string | null };
-export type MedmarOperatorSource = { user_id: string; full_name: string | null; email: string | null };
+export type SnavBatchSource = { id: string; file_name: string; label?: string | null };
+export type SnavOperatorSource = { user_id: string; full_name: string | null; email: string | null };
 
-export type MedmarSendState = "sent" | "failed" | "not_sent";
+export type SnavSendState = "sent" | "failed" | "not_sent";
 
-export type MedmarLogRow = {
+export type SnavLogRow = {
   row_id: string;
   to_phone: string;
   customer_name: string;
-  travel_date: string;
-  travel_date_iso: string | null;
-  route: string;
-  departure_time: string;
+  departure_date_label: string;
+  departure_date: string | null;
+  hotel: string;
   passengers: string;
-  send_state: MedmarSendState;
+  pickup_time: string;
+  vessel_time: string;
+  send_state: SnavSendState;
   status: string;
   status_group: KpiStatus;
   happened_at: string | null;
@@ -80,52 +83,60 @@ export type MedmarLogRow = {
   batch_label: string | null;
 };
 
-export type MedmarLogSummary = {
+export type SnavLogSummary = {
   total: number;
+  expected: number; // convocazioni che DEVONO ricevere un WhatsApp (inviare=true, non escluse/duplicate)
   sent: number;
   failed: number;
   notSent: number;
+  missing: number; // expected - sent, mai negativo — "N convocazioni non inviate"
   delivered: number;
   read: number;
-  successRate: number; // % of the day's rows that were sent (0 when total = 0)
+  pending: number;
+  successRate: number; // % inviati sul totale del giorno
+  readRate: number; // % letti sugli inviati
 };
 
-// Ordered labels for the 6 params of the "partenze_medmar" Meta template —
-// see lib/medmar-convocation-template.ts. Purely presentational.
-export const MEDMAR_PARAM_LABELS = [
+// Ordered labels for the 6 params of the "partenze_snav" Meta template —
+// see lib/snav-convocation-template.ts. Purely presentational.
+export const SNAV_PARAM_LABELS = [
   "Cliente",
   "Data partenza",
   "Hotel",
   "Pax",
   "Ora prelevamento",
-  "Ora nave",
+  "Ora aliscafo",
 ];
 
 const SENT_STATUSES = new Set(["inviato"]);
 const FAILED_STATUSES = new Set(["errore", "numero_non_valido"]);
-// Everything else (pronto / da_inviare / da_reinviare / escluso / duplicato)
-// has no WhatsApp send attempt yet → "non inviato".
+const NOT_EXPECTED_STATUSES = new Set(["escluso", "duplicato"]);
 
-export function classifyRowState(status: string): MedmarSendState {
+export function classifyRowState(status: string): SnavSendState {
   if (SENT_STATUSES.has(status)) return "sent";
   if (FAILED_STATUSES.has(status)) return "failed";
   return "not_sent";
 }
 
-// Day filtering uses the canonical `travel_date_iso` DATE column (Supabase
-// returns it as a plain "YYYY-MM-DD" string), so this is an exact value
-// match — never a fragile substring / locale-string comparison. The route
-// already scopes the query with .eq("travel_date_iso", dateIso); this second
-// pass keeps the pure function self-contained and unit-testable.
-export function filterMedmarRowsByDate(rows: MedmarLogRowSource[], dateIso: string): MedmarLogRowSource[] {
-  return rows.filter((r) => r.travel_date_iso === dateIso);
+// A convocation is "expected" (must get a WhatsApp) when inviare is not
+// false and its status is not escluso/duplicato. Used for previste-vs-inviate.
+export function isExpectedConvocation(row: { inviare: boolean | null; status: string }): boolean {
+  return row.inviare !== false && !NOT_EXPECTED_STATUSES.has(row.status);
 }
 
-function attemptRank(log: MedmarSendLogSource): number {
+// Day filtering uses the canonical `departure_date` DATE column (Supabase
+// returns it as a plain "YYYY-MM-DD" string), so this is an exact value
+// match — never a fragile substring / locale-string comparison. This is the
+// SNAV departure day, NOT the day the WhatsApp was sent.
+export function filterSnavRowsByDate(rows: SnavLogRowSource[], dateIso: string): SnavLogRowSource[] {
+  return rows.filter((r) => r.departure_date === dateIso);
+}
+
+function attemptRank(log: SnavSendLogSource): number {
   return typeof log.attempt_number === "number" ? log.attempt_number : 0;
 }
 
-function isLaterAttempt(next: MedmarSendLogSource, current: MedmarSendLogSource): boolean {
+function isLaterAttempt(next: SnavSendLogSource, current: SnavSendLogSource): boolean {
   const dr = attemptRank(next) - attemptRank(current);
   if (dr !== 0) return dr > 0;
   const nt = next.attempted_at ? new Date(next.attempted_at).getTime() : 0;
@@ -133,9 +144,6 @@ function isLaterAttempt(next: MedmarSendLogSource, current: MedmarSendLogSource)
   return nt >= ct;
 }
 
-// Best-effort Meta/WhatsApp error code extraction. `medmar_convocation_send_logs`
-// stores a formatted string (e.g. "[#131049] ..." or "... - code 131049") in
-// error_message, and optionally the raw payload in api_response_json.
 export function extractMetaErrorCode(errorMessage: string | null, apiResponseJson: unknown): string | null {
   if (apiResponseJson && typeof apiResponseJson === "object") {
     const err = (apiResponseJson as { error?: { code?: unknown } }).error;
@@ -164,27 +172,25 @@ function paramsFromVariables(variables: Record<string, unknown> | null | undefin
     .map((k) => String(variables[k] ?? ""));
 }
 
-export function buildMedmarWhatsAppLog(
-  rows: MedmarLogRowSource[],
+export function buildSnavWhatsAppLog(
+  rows: SnavLogRowSource[],
   statuses: MessageStatusSource[],
-  batches: MedmarBatchSource[],
-  sendLogs: MedmarSendLogSource[],
-  operators: MedmarOperatorSource[],
-): { summary: MedmarLogSummary; rows: MedmarLogRow[]; failedRows: MedmarLogRow[]; notSentRows: MedmarLogRow[] } {
+  batches: SnavBatchSource[],
+  sendLogs: SnavSendLogSource[],
+  operators: SnavOperatorSource[],
+): { summary: SnavLogSummary; rows: SnavLogRow[]; failedRows: SnavLogRow[]; notSentRows: SnavLogRow[] } {
   const bestStatusByMsg = resolveLatestStatusByMessageId(statuses);
   const fileNameByBatch = new Map(batches.map((b) => [b.id, b.file_name]));
   const labelByBatch = new Map(batches.map((b) => [b.id, b.label ?? null]));
   const operatorById = new Map(operators.map((o) => [o.user_id, o]));
 
-  // Latest attempt per row — a manual resend inserts a new send-log row with
-  // a higher attempt_number for the same medmar_convocation_rows.id.
-  const latestLogByRow = new Map<string, MedmarSendLogSource>();
+  const latestLogByRow = new Map<string, SnavSendLogSource>();
   for (const log of sendLogs) {
     const current = latestLogByRow.get(log.row_id);
     if (!current || isLaterAttempt(log, current)) latestLogByRow.set(log.row_id, log);
   }
 
-  const mapped: MedmarLogRow[] = rows.map((row) => {
+  const mapped: SnavLogRow[] = rows.map((row) => {
     const log = latestLogByRow.get(row.id);
     const sendState = classifyRowState(row.status);
 
@@ -199,7 +205,7 @@ export function buildMedmarWhatsAppLog(
       ? normalizeStatusGroup(latestWa.status)
       : sendState === "failed"
         ? "failed"
-        : "pending"; // sent-without-webhook or not-yet-sent both read as pending
+        : "pending";
 
     const happenedAt =
       latestWa?.timestamp ??
@@ -215,11 +221,12 @@ export function buildMedmarWhatsAppLog(
       row_id: row.id,
       to_phone: row.phone_e164 ?? row.phone_raw,
       customer_name: row.customer_name,
-      travel_date: row.travel_date,
-      travel_date_iso: row.travel_date_iso,
-      route: row.route,
-      departure_time: row.departure_time,
+      departure_date_label: row.departure_date_label,
+      departure_date: row.departure_date,
+      hotel: row.hotel,
       passengers: row.passengers,
+      pickup_time: row.pickup_time,
+      vessel_time: row.vessel_time,
       send_state: sendState,
       status: resolvedStatus,
       status_group: statusGroup,
@@ -238,7 +245,7 @@ export function buildMedmarWhatsAppLog(
   });
 
   mapped.sort((a, b) => {
-    const t = (a.departure_time ?? "").localeCompare(b.departure_time ?? "");
+    const t = (a.vessel_time ?? "").localeCompare(b.vessel_time ?? "");
     return t !== 0 ? t : a.customer_name.localeCompare(b.customer_name);
   });
 
@@ -247,16 +254,22 @@ export function buildMedmarWhatsAppLog(
   const notSent = mapped.filter((r) => r.send_state === "not_sent").length;
   const delivered = mapped.filter((r) => r.status_group === "delivered").length;
   const read = mapped.filter((r) => r.status_group === "read").length;
+  const pending = mapped.filter((r) => r.status_group === "pending").length;
   const total = mapped.length;
+  const expected = rows.filter((r) => isExpectedConvocation(r)).length;
 
-  const summary: MedmarLogSummary = {
+  const summary: SnavLogSummary = {
     total,
+    expected,
     sent,
     failed,
     notSent,
+    missing: Math.max(expected - sent, 0),
     delivered,
     read,
+    pending,
     successRate: total > 0 ? Math.round((sent / total) * 100) : 0,
+    readRate: sent > 0 ? Math.round((read / sent) * 100) : 0,
   };
 
   return {

@@ -1,21 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import {
-  detectMedmarHeader,
+  detectSnavHeader,
   missingRequiredFields,
-  parseMedmarRows,
-  MEDMAR_FIELD_LABELS,
-} from "@/lib/medmar-convocation-parse";
-import { formatMedmarDepartureDate, formatMedmarTime, parseMedmarDepartureDateIso } from "@/lib/medmar-convocation-format";
-import { buildMedmarConvocationPreviewText } from "@/lib/medmar-convocation-template";
+  parseSnavRows,
+  SNAV_FIELD_LABELS,
+} from "@/lib/snav-convocation-parse";
+import { formatSnavDepartureDate, formatSnavTime, parseSnavDepartureDateIso } from "@/lib/snav-convocation-format";
+import { buildSnavConvocationPreviewText } from "@/lib/snav-convocation-template";
 import { ExcelTemplateDownloadCard } from "@/components/excel-template-download-card";
 import { getExcelTemplate } from "@/lib/excel-templates";
 
-const MEDMAR_EXCEL_TEMPLATE = getExcelTemplate("medmar-convocations");
+const SNAV_EXCEL_TEMPLATE = getExcelTemplate("snav-convocations");
 
 type Step = "upload" | "preview" | "sending" | "results";
 
@@ -26,11 +26,11 @@ type ConvocationRow = {
   phone_raw: string;
   phone_e164: string | null;
   customer_name: string;
-  travel_date: string;
+  departure_date_label: string;
   hotel: string;
   passengers: string;
   pickup_time: string;
-  departure_time: string;
+  vessel_time: string;
   generated_message: string;
   status: string;
   error_message: string | null;
@@ -91,7 +91,7 @@ async function authHeaders(): Promise<Record<string, string>> {
   return h;
 }
 
-export default function MedmarConvocationsPage() {
+export default function SnavConvocationsPage() {
   const [step, setStep] = useState<Step>("upload");
   const [batchId, setBatchId] = useState<string | null>(null);
   const [rows, setRows] = useState<ConvocationRow[]>([]);
@@ -116,7 +116,7 @@ export default function MedmarConvocationsPage() {
 
   const loadBatch = useCallback(async (id: string) => {
     const headers = await authHeaders();
-    const res = await fetch(`/api/ops/medmar-convocations/${id}`, { headers });
+    const res = await fetch(`/api/ops/snav-convocations/${id}`, { headers });
     if (!res.ok) return;
     const data = await res.json();
     setBatchMeta(data.batch);
@@ -128,7 +128,7 @@ export default function MedmarConvocationsPage() {
     setLoadingBatches(true);
     try {
       const headers = await authHeaders();
-      const res = await fetch("/api/ops/medmar-convocations/list", { headers });
+      const res = await fetch("/api/ops/snav-convocations/list", { headers });
       if (res.ok) {
         const data = await res.json();
         setBatches(data.batches ?? []);
@@ -155,16 +155,16 @@ export default function MedmarConvocationsPage() {
       const raw: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
       if (raw.length < 2) throw new Error("Il file deve contenere almeno un'intestazione e una riga dati");
 
-      const detection = detectMedmarHeader(raw, 10);
+      const detection = detectSnavHeader(raw, 10);
       if (!detection.ok) throw new Error(detection.reason);
 
       const missing = missingRequiredFields(detection.colMap);
       if (missing.length > 0) {
         const foundHeaders = detection.header.filter((h) => h.length > 0).join(", ");
-        throw new Error(`Colonne non trovate: ${missing.map((f) => MEDMAR_FIELD_LABELS[f]).join(", ")}.\n\nColonne trovate nel file: ${foundHeaders}`);
+        throw new Error(`Colonne non trovate: ${missing.map((f) => SNAV_FIELD_LABELS[f]).join(", ")}.\n\nColonne trovate nel file: ${foundHeaders}`);
       }
 
-      const parsedRows = parseMedmarRows(raw, detection.headerRowIndex, detection.colMap);
+      const parsedRows = parseSnavRows(raw, detection.headerRowIndex, detection.colMap);
       if (parsedRows.length === 0) throw new Error("Nessuna riga dati valida trovata");
 
       const payloadRows = parsedRows.map((r) => ({
@@ -172,16 +172,16 @@ export default function MedmarConvocationsPage() {
         inviare: r.inviare,
         phoneRaw: r.phoneRaw,
         customerName: r.customerName,
-        travelDateLabel: formatMedmarDepartureDate(r.travelDateRaw),
-        travelDateIso: parseMedmarDepartureDateIso(r.travelDateRaw),
+        departureDateLabel: formatSnavDepartureDate(r.departureDateRaw),
+        departureDateIso: parseSnavDepartureDateIso(r.departureDateRaw),
         hotel: r.hotel,
         passengers: r.passengers,
-        pickupTime: formatMedmarTime(r.pickupTimeRaw),
-        vesselTime: formatMedmarTime(r.vesselTimeRaw),
+        pickupTime: formatSnavTime(r.pickupTimeRaw),
+        vesselTime: formatSnavTime(r.vesselTimeRaw),
       }));
 
       const headers = await authHeaders();
-      const res = await fetch("/api/ops/medmar-convocations/upload", {
+      const res = await fetch("/api/ops/snav-convocations/upload", {
         method: "POST",
         headers,
         body: JSON.stringify({ fileName: file.name, rows: payloadRows }),
@@ -223,7 +223,7 @@ export default function MedmarConvocationsPage() {
   const updateRows = useCallback(async (updates: Array<{ rowId: string; status?: string; phoneRaw?: string }>) => {
     if (!batchId || updates.length === 0) return;
     const headers = await authHeaders();
-    await fetch(`/api/ops/medmar-convocations/${batchId}/rows`, {
+    await fetch(`/api/ops/snav-convocations/${batchId}/rows`, {
       method: "PATCH",
       headers,
       body: JSON.stringify({ updates }),
@@ -263,7 +263,7 @@ export default function MedmarConvocationsPage() {
 
     try {
       const headers = await authHeaders();
-      const res = await fetch("/api/ops/medmar-convocations/send", {
+      const res = await fetch("/api/ops/snav-convocations/send", {
         method: "POST",
         headers,
         body: JSON.stringify({ batchId }),
@@ -295,7 +295,7 @@ export default function MedmarConvocationsPage() {
     setStep("sending");
     try {
       const headers = await authHeaders();
-      const res = await fetch("/api/ops/medmar-convocations/send", {
+      const res = await fetch("/api/ops/snav-convocations/send", {
         method: "POST",
         headers,
         body: JSON.stringify({ batchId }),
@@ -319,7 +319,7 @@ export default function MedmarConvocationsPage() {
     try {
       const headers = await authHeaders();
       delete headers["Content-Type"];
-      const res = await fetch(`/api/ops/medmar-convocations/report?batchId=${batchId}`, { headers });
+      const res = await fetch(`/api/ops/snav-convocations/report?batchId=${batchId}`, { headers });
       if (!res.ok) throw new Error("Errore download report");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -327,7 +327,7 @@ export default function MedmarConvocationsPage() {
       link.href = url;
       const disposition = res.headers.get("content-disposition");
       const match = disposition?.match(/filename="?([^"]+)"?/i);
-      link.download = match?.[1] ?? "convocazioni_medmar.xlsx";
+      link.download = match?.[1] ?? "convocazioni_snav.xlsx";
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -362,9 +362,9 @@ export default function MedmarConvocationsPage() {
   return (
     <div className="space-y-6 pb-12">
       <PageHeader
-        title="Convocazioni MEDMAR"
-        subtitle="Invio massivo convocazioni traversate MEDMAR via WhatsApp da file Excel"
-        breadcrumbs={[{ label: "Strumenti" }, { label: "Convocazioni MEDMAR" }]}
+        title="Convocazioni SNAV"
+        subtitle="Invio massivo convocazioni aliscafo SNAV via WhatsApp da file Excel"
+        breadcrumbs={[{ label: "Strumenti" }, { label: "Convocazioni SNAV" }]}
         actions={
           step !== "upload" && step !== "sending" ? (
             <button className="btn-secondary text-sm" onClick={resetToUpload}>
@@ -376,7 +376,7 @@ export default function MedmarConvocationsPage() {
 
       {/* STEP 1: UPLOAD */}
       {step === "upload" && (
-        <SectionCard title="Carica file Excel MEDMAR" subtitle="Seleziona il file .xlsx/.xls con i dati delle convocazioni MEDMAR">
+        <SectionCard title="Carica file Excel SNAV" subtitle="Seleziona il file .xlsx/.xls con i dati delle convocazioni SNAV">
           <div className="space-y-4">
             <div className="rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/50 p-8 text-center">
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600 text-2xl">
@@ -397,7 +397,7 @@ export default function MedmarConvocationsPage() {
               </p>
             </div>
 
-            {MEDMAR_EXCEL_TEMPLATE && <ExcelTemplateDownloadCard template={MEDMAR_EXCEL_TEMPLATE} />}
+            {SNAV_EXCEL_TEMPLATE && <ExcelTemplateDownloadCard template={SNAV_EXCEL_TEMPLATE} />}
 
             {uploadError && (
               <div className="whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -458,7 +458,7 @@ export default function MedmarConvocationsPage() {
             {confirmSend && (
               <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
                 <p className="text-sm font-medium text-blue-900">
-                  Stai per inviare {sendableCount} messaggi WhatsApp MEDMAR.
+                  Stai per inviare {sendableCount} messaggi WhatsApp SNAV.
                 </p>
                 <div className="mt-3 flex gap-2">
                   <button className="btn-primary text-xs px-4" onClick={doSend}>Conferma invio</button>
@@ -495,7 +495,7 @@ export default function MedmarConvocationsPage() {
                     <th>Hotel</th>
                     <th>Pax</th>
                     <th>Prelevamento</th>
-                    <th>Nave</th>
+                    <th>Aliscafo</th>
                     <th className="w-32">Stato</th>
                     <th className="w-10"></th>
                   </tr>
@@ -506,8 +506,8 @@ export default function MedmarConvocationsPage() {
                       <td colSpan={10} className="py-8 text-center text-muted">Nessuna riga con questo filtro</td>
                     </tr>
                   ) : filteredRows.map((row) => (
-                    <>
-                      <tr key={row.id} className={ROW_BG[row.status] ?? ""}>
+                    <Fragment key={row.id}>
+                      <tr className={ROW_BG[row.status] ?? ""}>
                         <td className="text-center text-xs text-muted">{row.row_index}</td>
                         <td className="font-medium">{row.customer_name}</td>
                         <td className="font-mono text-xs">
@@ -532,11 +532,11 @@ export default function MedmarConvocationsPage() {
                             </button>
                           )}
                         </td>
-                        <td>{row.travel_date}</td>
+                        <td>{row.departure_date_label}</td>
                         <td>{row.hotel}</td>
                         <td>{row.passengers}</td>
                         <td>{row.pickup_time}</td>
-                        <td>{row.departure_time}</td>
+                        <td>{row.vessel_time}</td>
                         <td>
                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status] ?? "bg-slate-100 text-slate-600 border-slate-200"}`}>
                             {STATUS_LABELS[row.status] ?? row.status}
@@ -554,17 +554,17 @@ export default function MedmarConvocationsPage() {
                         </td>
                       </tr>
                       {expandedRow === row.id && (
-                        <tr key={`${row.id}-preview`}>
+                        <tr>
                           <td colSpan={10} className="bg-slate-50 px-4 py-3">
-                            <p className="mb-1 text-xs font-medium text-muted">Anteprima messaggio (template Meta: partenze_medmar):</p>
+                            <p className="mb-1 text-xs font-medium text-muted">Anteprima messaggio (template Meta: partenze_snav):</p>
                             <pre className="whitespace-pre-wrap rounded-lg bg-white border border-slate-200 p-3 text-sm leading-relaxed">
-                              {row.generated_message || buildMedmarConvocationPreviewText({
+                              {row.generated_message || buildSnavConvocationPreviewText({
                                 customerName: row.customer_name,
-                                departureDateLabel: row.travel_date,
+                                departureDateLabel: row.departure_date_label,
                                 hotel: row.hotel,
                                 passengers: row.passengers,
                                 pickupTime: row.pickup_time,
-                                vesselTime: row.departure_time,
+                                vesselTime: row.vessel_time,
                               })}
                             </pre>
                             {(row.status === "pronto" || row.status === "da_inviare" || row.status === "duplicato") && (
@@ -588,7 +588,7 @@ export default function MedmarConvocationsPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -602,7 +602,7 @@ export default function MedmarConvocationsPage() {
         <SectionCard title="Invio in corso">
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="mb-6 h-12 w-12 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600" />
-            <p className="text-lg font-medium text-slate-700">Invio convocazioni MEDMAR in corso...</p>
+            <p className="text-lg font-medium text-slate-700">Invio convocazioni SNAV in corso...</p>
             <p className="mt-2 text-sm text-muted">Non chiudere questa pagina. L&apos;invio potrebbe richiedere alcuni minuti.</p>
           </div>
         </SectionCard>
@@ -666,7 +666,7 @@ export default function MedmarConvocationsPage() {
                     <th>Hotel</th>
                     <th>Pax</th>
                     <th>Prelevamento</th>
-                    <th>Nave</th>
+                    <th>Aliscafo</th>
                     <th className="w-32">Stato</th>
                     <th>Inviato alle</th>
                   </tr>
@@ -681,11 +681,11 @@ export default function MedmarConvocationsPage() {
                       <td className="text-center text-xs text-muted">{row.row_index}</td>
                       <td className="font-medium">{row.customer_name}</td>
                       <td className="font-mono text-xs">{row.phone_e164 ?? row.phone_raw}</td>
-                      <td>{row.travel_date}</td>
+                      <td>{row.departure_date_label}</td>
                       <td>{row.hotel}</td>
                       <td>{row.passengers}</td>
                       <td>{row.pickup_time}</td>
-                      <td>{row.departure_time}</td>
+                      <td>{row.vessel_time}</td>
                       <td>
                         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status] ?? "bg-slate-100 text-slate-600 border-slate-200"}`}>
                           {STATUS_LABELS[row.status] ?? row.status}
