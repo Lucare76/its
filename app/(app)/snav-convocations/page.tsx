@@ -14,6 +14,7 @@ import { formatSnavDepartureDate, formatSnavTime, parseSnavDepartureDateIso } fr
 import { buildSnavConvocationPreviewText } from "@/lib/snav-convocation-template";
 import { ExcelTemplateDownloadCard } from "@/components/excel-template-download-card";
 import { getExcelTemplate } from "@/lib/excel-templates";
+import type { CoverageStatus, ChangedField } from "@/lib/medmar-convocation-coverage";
 
 const SNAV_EXCEL_TEMPLATE = getExcelTemplate("snav-convocations");
 
@@ -21,6 +22,8 @@ type Step = "upload" | "preview" | "sending" | "results";
 
 type ConvocationRow = {
   id: string;
+  /** present only on rows generated from the management system. */
+  service_id?: string;
   row_index: number;
   inviare: boolean;
   phone_raw: string;
@@ -36,6 +39,9 @@ type ConvocationRow = {
   error_message: string | null;
   provider_message_id: string | null;
   sent_at: string | null;
+  /** coverage — only present on rows from generate-from-services. */
+  coverage_status?: CoverageStatus;
+  changed_fields?: ChangedField[];
 };
 
 type BatchMeta = {
@@ -51,6 +57,8 @@ type BatchMeta = {
 };
 
 type BatchListItem = BatchMeta & { created_by: string };
+
+type GenSummary = { found: number; new: number; sent: number; changed: number; invalid: number };
 
 const STATUS_LABELS: Record<string, string> = {
   pronto: "Pronto",
@@ -82,7 +90,22 @@ const ROW_BG: Record<string, string> = {
   escluso: "opacity-50",
 };
 
+const COVERAGE_LABELS: Record<CoverageStatus, string> = {
+  new: "Nuova da inviare",
+  sent: "Già inviata",
+  changed: "Modificata dopo invio",
+  invalid: "Da verificare",
+};
+
+const COVERAGE_COLORS: Record<CoverageStatus, string> = {
+  new: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  sent: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  changed: "bg-amber-50 text-amber-700 border-amber-200",
+  invalid: "bg-slate-100 text-slate-500 border-slate-200",
+};
+
 type FilterKey = "all" | "pronto" | "escluso" | "duplicato" | "numero_non_valido" | "errore" | "inviato";
+type CoverageFilterKey = "all" | CoverageStatus;
 
 async function authHeaders(): Promise<Record<string, string>> {
   const ctx = await getClientSessionContext();
@@ -101,6 +124,7 @@ export default function SnavConvocationsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [coverageFilter, setCoverageFilter] = useState<CoverageFilterKey>("all");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [editingPhoneRow, setEditingPhoneRow] = useState<string | null>(null);
   const [phoneDraft, setPhoneDraft] = useState("");
@@ -108,6 +132,15 @@ export default function SnavConvocationsPage() {
   const [loadingBatches, setLoadingBatches] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
+
+  // "Genera dal gestionale" — read-only preview + coverage.
+  const [genDate, setGenDate] = useState<string>(() =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" }).format(new Date()),
+  );
+  const [generating, setGenerating] = useState(false);
+  const [genSummary, setGenSummary] = useState<GenSummary | null>(null);
+  const [confirmSendNew, setConfirmSendNew] = useState(false);
+  const [confirmSendChanged, setConfirmSendChanged] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -201,11 +234,45 @@ export default function SnavConvocationsPage() {
     }
   }, [loadBatch, showToast]);
 
+  const generateFromServices = useCallback(async () => {
+    if (!genDate) return;
+    setGenerating(true);
+    setUploadError(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`/api/ops/snav-convocations/generate-from-services?date=${genDate}`, { headers });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Errore generazione dal gestionale");
+
+      // No batch yet: this is a read-only preview until "Invia solo nuove" /
+      // "Reinvia aggiornate" actually creates one.
+      setBatchId(null);
+      setBatchMeta(null);
+      setRows((data.rows ?? []) as ConvocationRow[]);
+      setGenSummary(data.summary ?? null);
+      setFilter("all");
+      setCoverageFilter("all");
+      setExpandedRow(null);
+      setStep("preview");
+      showToast(`Partenze SNAV previste: ${data.summary?.found ?? 0}`);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Errore generazione dal gestionale");
+    } finally {
+      setGenerating(false);
+    }
+  }, [genDate, showToast]);
+
+  const isGestionalePreview = step === "preview" && !batchId && !!genSummary;
+
   const filteredRows = useMemo(() => {
+    if (isGestionalePreview) {
+      if (coverageFilter === "all") return rows;
+      return rows.filter((r) => r.coverage_status === coverageFilter);
+    }
     if (filter === "all") return rows;
     if (filter === "errore") return rows.filter((r) => r.status === "errore" || r.status === "numero_non_valido");
     return rows.filter((r) => r.status === filter);
-  }, [rows, filter]);
+  }, [rows, filter, coverageFilter, isGestionalePreview]);
 
   const stats = useMemo(() => {
     const s = { total: rows.length, pronto: 0, da_inviare: 0, escluso: 0, duplicato: 0, non_valido: 0, errore: 0, inviato: 0 };
@@ -219,6 +286,9 @@ export default function SnavConvocationsPage() {
     }
     return s;
   }, [rows]);
+
+  const newCount = useMemo(() => rows.filter((r) => r.coverage_status === "new").length, [rows]);
+  const changedCount = useMemo(() => rows.filter((r) => r.coverage_status === "changed").length, [rows]);
 
   const updateRows = useCallback(async (updates: Array<{ rowId: string; status?: string; phoneRaw?: string }>) => {
     if (!batchId || updates.length === 0) return;
@@ -284,6 +354,50 @@ export default function SnavConvocationsPage() {
     }
   }, [batchId, rows, updateRows, loadBatch, showToast]);
 
+  // "Invia solo nuove" / "Reinvia aggiornate": creates a real batch from the
+  // gestionale preview (server recomputes coverage, never trusts client
+  // state) then reuses the exact same /send pipeline.
+  const sendGeneratedBatch = useCallback(async (mode: "new" | "changed") => {
+    setSending(true);
+    setStep("sending");
+    setConfirmSendNew(false);
+    setConfirmSendChanged(false);
+
+    try {
+      const headers = await authHeaders();
+      const createRes = await fetch("/api/ops/snav-convocations/create-batch-from-services", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ date: genDate, mode }),
+      });
+      const createData = await createRes.json();
+      if (!createRes.ok || !createData.ok) throw new Error(createData.error ?? "Errore creazione batch");
+
+      if (!createData.batchId) {
+        showToast("Nessuna riga da inviare");
+        setStep("preview");
+        return;
+      }
+
+      const sendRes = await fetch("/api/ops/snav-convocations/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ batchId: createData.batchId }),
+      });
+      const sendData = await sendRes.json();
+      if (!sendRes.ok) throw new Error(sendData.error ?? "Errore invio");
+
+      await loadBatch(createData.batchId);
+      setStep("results");
+      showToast(`Invio completato: ${sendData.sent ?? 0} inviati, ${sendData.failed ?? 0} errori`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Errore invio");
+      setStep("preview");
+    } finally {
+      setSending(false);
+    }
+  }, [genDate, loadBatch, showToast]);
+
   const handleRetrySend = useCallback(async () => {
     if (!batchId) return;
     const errorRows = rows.filter((r) => r.status === "errore");
@@ -345,9 +459,13 @@ export default function SnavConvocationsPage() {
     setRows([]);
     setBatchMeta(null);
     setFilter("all");
+    setCoverageFilter("all");
     setExpandedRow(null);
     setUploadError(null);
     setConfirmSend(false);
+    setConfirmSendNew(false);
+    setConfirmSendChanged(false);
+    setGenSummary(null);
     loadBatches();
   }, [loadBatches]);
 
@@ -363,7 +481,7 @@ export default function SnavConvocationsPage() {
     <div className="space-y-6 pb-12">
       <PageHeader
         title="Convocazioni SNAV"
-        subtitle="Invio massivo convocazioni aliscafo SNAV via WhatsApp da file Excel"
+        subtitle="Invio massivo convocazioni aliscafo SNAV via WhatsApp da file Excel o dal gestionale"
         breadcrumbs={[{ label: "Strumenti" }, { label: "Convocazioni SNAV" }]}
         actions={
           step !== "upload" && step !== "sending" ? (
@@ -373,6 +491,37 @@ export default function SnavConvocationsPage() {
           ) : undefined
         }
       />
+
+      {/* STEP 1: GENERA DAL GESTIONALE */}
+      {step === "upload" && (
+        <SectionCard
+          title="Genera dal gestionale"
+          subtitle="Recupera le partenze SNAV del giorno direttamente dai servizi del gestionale."
+        >
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Data partenza</span>
+              <input
+                type="date"
+                value={genDate}
+                onChange={(e) => setGenDate(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-primary text-sm px-4"
+              disabled={generating || !genDate}
+              onClick={generateFromServices}
+            >
+              {generating ? "Generazione..." : "Genera dal gestionale"}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Costruisce l&apos;anteprima e riconosce nuove/già inviate/modificate: nessun invio automatico. Il flusso Excel resta disponibile qui sotto.
+          </p>
+        </SectionCard>
+      )}
 
       {/* STEP 1: UPLOAD */}
       {step === "upload" && (
@@ -425,34 +574,74 @@ export default function SnavConvocationsPage() {
       {/* STEP 2: PREVIEW */}
       {step === "preview" && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <StatCard label="Totale righe" value={String(stats.total)} hint="Righe nel file" />
-            <StatCard label="Pronte" value={String(stats.pronto)} hint="Pronte per l'invio" />
-            <StatCard label="Escluse" value={String(stats.escluso)} hint="Inviare? = NO" />
-            <StatCard label="Non valide" value={String(stats.non_valido)} hint="Numero non valido" />
-            <StatCard label="Duplicate" value={String(stats.duplicato)} hint="Già convocate" />
-            <StatCard label="Errori" value={String(stats.errore)} hint="Campi mancanti" />
-          </div>
+          {isGestionalePreview && genSummary ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              <StatCard label="Partenze previste" value={String(genSummary.found)} hint="Servizi SNAV del giorno" />
+              <StatCard label="Nuove da inviare" value={String(genSummary.new)} hint="Mai convocate" />
+              <StatCard label="Già inviate" value={String(genSummary.sent)} hint="Invio riuscito, dati invariati" />
+              <StatCard label="Modificate dopo invio" value={String(genSummary.changed)} hint="Dati cambiati dopo l'invio" />
+              <StatCard label="Da verificare" value={String(genSummary.invalid)} hint="Dati mancanti o non validi" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <StatCard label="Totale righe" value={String(stats.total)} hint="Righe nel file" />
+              <StatCard label="Pronte" value={String(stats.pronto)} hint="Pronte per l'invio" />
+              <StatCard label="Escluse" value={String(stats.escluso)} hint="Inviare? = NO" />
+              <StatCard label="Non valide" value={String(stats.non_valido)} hint="Numero non valido" />
+              <StatCard label="Duplicate" value={String(stats.duplicato)} hint="Già convocate" />
+              <StatCard label="Errori" value={String(stats.errore)} hint="Campi mancanti" />
+            </div>
+          )}
 
           <SectionCard
             title="Anteprima righe"
-            subtitle={batchMeta ? `File: ${batchMeta.file_name}` : undefined}
+            subtitle={
+              batchMeta
+                ? `File: ${batchMeta.file_name}`
+                : genSummary
+                  ? `Origine: gestionale · ${genDate}`
+                  : undefined
+            }
             actions={
-              <div className="flex flex-wrap items-center gap-2">
-                <button className="btn-secondary text-xs" onClick={selectAllReady}>
-                  Seleziona tutte le pronte
-                </button>
-                <button className="btn-secondary text-xs" onClick={deselectAll}>
-                  Deseleziona tutte
-                </button>
-                <button
-                  className="btn-primary text-xs px-4"
-                  disabled={sendableCount === 0}
-                  onClick={() => setConfirmSend(true)}
-                >
-                  Conferma e Invia ({sendableCount})
-                </button>
-              </div>
+              batchId ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button className="btn-secondary text-xs" onClick={selectAllReady}>
+                    Seleziona tutte le pronte
+                  </button>
+                  <button className="btn-secondary text-xs" onClick={deselectAll}>
+                    Deseleziona tutte
+                  </button>
+                  <button
+                    className="btn-primary text-xs px-4"
+                    disabled={sendableCount === 0}
+                    onClick={() => setConfirmSend(true)}
+                  >
+                    Conferma e Invia ({sendableCount})
+                  </button>
+                </div>
+              ) : isGestionalePreview ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="btn-primary text-xs px-4"
+                    disabled={newCount === 0}
+                    onClick={() => setConfirmSendNew(true)}
+                  >
+                    Invia solo nuove ({newCount})
+                  </button>
+                  {changedCount > 0 && (
+                    <button
+                      className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                      onClick={() => setConfirmSendChanged(true)}
+                    >
+                      Reinvia aggiornate ({changedCount})
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <span className="text-xs text-muted">
+                  Anteprima dal gestionale — selezione e invio non disponibili in questo step
+                </span>
+              )
             }
           >
             {confirmSend && (
@@ -467,21 +656,62 @@ export default function SnavConvocationsPage() {
               </div>
             )}
 
+            {confirmSendNew && (
+              <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+                <p className="text-sm font-medium text-blue-900">
+                  Stai per inviare {newCount} nuove convocazioni SNAV.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <button className="btn-primary text-xs px-4" onClick={() => sendGeneratedBatch("new")}>Conferma invio</button>
+                  <button className="btn-secondary text-xs" onClick={() => setConfirmSendNew(false)}>Annulla</button>
+                </div>
+              </div>
+            )}
+
+            {confirmSendChanged && (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-medium text-amber-900">
+                  Stai per reinviare {changedCount} convocazioni SNAV i cui dati sono cambiati dopo l&apos;ultimo invio.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <button className="btn-primary text-xs px-4" onClick={() => sendGeneratedBatch("changed")}>Conferma reinvio</button>
+                  <button className="btn-secondary text-xs" onClick={() => setConfirmSendChanged(false)}>Annulla</button>
+                </div>
+              </div>
+            )}
+
             <div className="mb-3 flex flex-wrap gap-1.5">
-              {(["all", "pronto", "escluso", "duplicato", "numero_non_valido", "errore"] as FilterKey[]).map((key) => (
-                <button
-                  key={key}
-                  className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                    filter === key
-                      ? "border-blue-500 bg-blue-50 text-blue-700"
-                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                  }`}
-                  onClick={() => setFilter(key)}
-                >
-                  {key === "all" ? "Tutte" : STATUS_LABELS[key] ?? key}
-                  {key === "all" ? ` (${rows.length})` : ` (${rows.filter((r) => key === "errore" ? (r.status === "errore" || r.status === "numero_non_valido") : r.status === key).length})`}
-                </button>
-              ))}
+              {isGestionalePreview ? (
+                (["all", "new", "sent", "changed", "invalid"] as CoverageFilterKey[]).map((key) => (
+                  <button
+                    key={key}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      coverageFilter === key
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                    onClick={() => setCoverageFilter(key)}
+                  >
+                    {key === "all" ? "Tutte" : COVERAGE_LABELS[key]}
+                    {key === "all" ? ` (${rows.length})` : ` (${rows.filter((r) => r.coverage_status === key).length})`}
+                  </button>
+                ))
+              ) : (
+                (["all", "pronto", "escluso", "duplicato", "numero_non_valido", "errore"] as FilterKey[]).map((key) => (
+                  <button
+                    key={key}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      filter === key
+                        ? "border-blue-500 bg-blue-50 text-blue-700"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                    onClick={() => setFilter(key)}
+                  >
+                    {key === "all" ? "Tutte" : STATUS_LABELS[key] ?? key}
+                    {key === "all" ? ` (${rows.length})` : ` (${rows.filter((r) => key === "errore" ? (r.status === "errore" || r.status === "numero_non_valido") : r.status === key).length})`}
+                  </button>
+                ))
+              )}
             </div>
 
             <div className="overflow-x-auto">
@@ -496,7 +726,7 @@ export default function SnavConvocationsPage() {
                     <th>Pax</th>
                     <th>Prelevamento</th>
                     <th>Aliscafo</th>
-                    <th className="w-32">Stato</th>
+                    <th className="w-40">{isGestionalePreview ? "Copertura" : "Stato"}</th>
                     <th className="w-10"></th>
                   </tr>
                 </thead>
@@ -522,7 +752,7 @@ export default function SnavConvocationsPage() {
                               <button className="text-emerald-600" onClick={() => savePhoneEdit(row.id)}>✓</button>
                               <button className="text-slate-400" onClick={() => setEditingPhoneRow(null)}>✕</button>
                             </div>
-                          ) : (
+                          ) : batchId ? (
                             <button
                               className="hover:underline"
                               title="Modifica telefono"
@@ -530,6 +760,8 @@ export default function SnavConvocationsPage() {
                             >
                               {row.phone_raw}{row.phone_e164 ? <span className="ml-1 text-muted">({row.phone_e164})</span> : null}
                             </button>
+                          ) : (
+                            <span>{row.phone_raw}{row.phone_e164 ? <span className="ml-1 text-muted">({row.phone_e164})</span> : null}</span>
                           )}
                         </td>
                         <td>{row.departure_date_label}</td>
@@ -538,10 +770,26 @@ export default function SnavConvocationsPage() {
                         <td>{row.pickup_time}</td>
                         <td>{row.vessel_time}</td>
                         <td>
-                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status] ?? "bg-slate-100 text-slate-600 border-slate-200"}`}>
-                            {STATUS_LABELS[row.status] ?? row.status}
-                          </span>
-                          {row.error_message ? <p className="mt-0.5 text-xs text-red-600">{row.error_message}</p> : null}
+                          {isGestionalePreview && row.coverage_status ? (
+                            <>
+                              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${COVERAGE_COLORS[row.coverage_status]}`}>
+                                {COVERAGE_LABELS[row.coverage_status]}
+                              </span>
+                              {row.coverage_status === "changed" && row.changed_fields && (
+                                <p className="mt-0.5 text-xs text-amber-700">{row.changed_fields.length} dati modificati</p>
+                              )}
+                              {row.coverage_status === "invalid" && row.error_message && (
+                                <p className="mt-0.5 text-xs text-red-600">{row.error_message}</p>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[row.status] ?? "bg-slate-100 text-slate-600 border-slate-200"}`}>
+                                {STATUS_LABELS[row.status] ?? row.status}
+                              </span>
+                              {row.error_message ? <p className="mt-0.5 text-xs text-red-600">{row.error_message}</p> : null}
+                            </>
+                          )}
                         </td>
                         <td className="text-center">
                           <button
@@ -567,7 +815,19 @@ export default function SnavConvocationsPage() {
                                 vesselTime: row.vessel_time,
                               })}
                             </pre>
-                            {(row.status === "pronto" || row.status === "da_inviare" || row.status === "duplicato") && (
+                            {row.coverage_status === "changed" && row.changed_fields && row.changed_fields.length > 0 && (
+                              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <p className="mb-1 text-xs font-medium text-amber-800">Cosa è cambiato dall&apos;ultimo invio:</p>
+                                <ul className="space-y-0.5 text-xs text-amber-900">
+                                  {row.changed_fields.map((f) => (
+                                    <li key={f.field}>
+                                      <span className="font-medium">{f.label}</span>: {f.from || "—"} → {f.to || "—"}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {batchId && (row.status === "pronto" || row.status === "da_inviare" || row.status === "duplicato") && (
                               <div className="mt-2 flex gap-2">
                                 {row.status !== "da_inviare" && (
                                   <button
@@ -706,7 +966,7 @@ export default function SnavConvocationsPage() {
 
       {/* STORICO BATCH */}
       {step === "upload" && (
-        <SectionCard title="Storico batch" subtitle="Batch caricati in precedenza">
+        <SectionCard title="Storico batch" subtitle="Batch caricati in precedenza (Excel e gestionale)">
           {loadingBatches ? (
             <div className="py-4 text-center text-sm text-muted">Caricamento...</div>
           ) : batches.length === 0 ? (
@@ -717,7 +977,7 @@ export default function SnavConvocationsPage() {
                 <thead>
                   <tr>
                     <th>Data</th>
-                    <th>File</th>
+                    <th>File / Origine</th>
                     <th>Righe</th>
                     <th>Inviati</th>
                     <th>Errori</th>
@@ -729,7 +989,7 @@ export default function SnavConvocationsPage() {
                   {batches.map((b) => (
                     <tr key={b.id}>
                       <td className="text-xs">{new Date(b.created_at).toLocaleString("it-IT", { timeZone: "Europe/Rome" })}</td>
-                      <td>{b.file_name}</td>
+                      <td>{b.label || b.file_name}</td>
                       <td className="text-center">{b.total_rows}</td>
                       <td className="text-center text-emerald-600">{b.sent_count}</td>
                       <td className="text-center text-red-600">{b.error_count}</td>
