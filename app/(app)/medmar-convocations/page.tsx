@@ -21,6 +21,8 @@ type Step = "upload" | "preview" | "sending" | "results";
 
 type ConvocationRow = {
   id: string;
+  /** present only on rows generated from the management system (pilot). */
+  service_id?: string;
   row_index: number;
   inviare: boolean;
   phone_raw: string;
@@ -108,6 +110,13 @@ export default function MedmarConvocationsPage() {
   const [loadingBatches, setLoadingBatches] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
+
+  // Pilot "Genera dal gestionale" — read-only preview, no batch, no send.
+  const [genDate, setGenDate] = useState<string>(() =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" }).format(new Date()),
+  );
+  const [generating, setGenerating] = useState(false);
+  const [genSummary, setGenSummary] = useState<{ found: number; ready: number; toVerify: number } | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -200,6 +209,32 @@ export default function MedmarConvocationsPage() {
       e.target.value = "";
     }
   }, [loadBatch, showToast]);
+
+  const generateFromServices = useCallback(async () => {
+    if (!genDate) return;
+    setGenerating(true);
+    setUploadError(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`/api/ops/medmar-convocations/generate-from-services?date=${genDate}`, { headers });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Errore generazione dal gestionale");
+
+      // No batch: this is a read-only preview. Reuse the exact same table.
+      setBatchId(null);
+      setBatchMeta(null);
+      setRows((data.rows ?? []) as ConvocationRow[]);
+      setGenSummary(data.summary ?? null);
+      setFilter("all");
+      setExpandedRow(null);
+      setStep("preview");
+      showToast(`Partenze MEDMAR trovate: ${data.summary?.found ?? 0}`);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Errore generazione dal gestionale");
+    } finally {
+      setGenerating(false);
+    }
+  }, [genDate, showToast]);
 
   const filteredRows = useMemo(() => {
     if (filter === "all") return rows;
@@ -348,6 +383,7 @@ export default function MedmarConvocationsPage() {
     setExpandedRow(null);
     setUploadError(null);
     setConfirmSend(false);
+    setGenSummary(null);
     loadBatches();
   }, [loadBatches]);
 
@@ -373,6 +409,37 @@ export default function MedmarConvocationsPage() {
           ) : undefined
         }
       />
+
+      {/* STEP 1: GENERA DAL GESTIONALE (pilota) */}
+      {step === "upload" && (
+        <SectionCard
+          title="Genera dal gestionale"
+          subtitle="Recupera le partenze MEDMAR del giorno direttamente dai servizi del gestionale."
+        >
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Data partenza</span>
+              <input
+                type="date"
+                value={genDate}
+                onChange={(e) => setGenDate(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-primary text-sm px-4"
+              disabled={generating || !genDate}
+              onClick={generateFromServices}
+            >
+              {generating ? "Generazione..." : "Genera dal gestionale"}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Costruisce solo l&apos;anteprima: nessun invio WhatsApp, nessuna modifica ai servizi. Il flusso Excel resta disponibile qui sotto.
+          </p>
+        </SectionCard>
+      )}
 
       {/* STEP 1: UPLOAD */}
       {step === "upload" && (
@@ -434,25 +501,49 @@ export default function MedmarConvocationsPage() {
             <StatCard label="Errori" value={String(stats.errore)} hint="Campi mancanti" />
           </div>
 
+          {genSummary && (
+            <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm">
+              <span className="font-semibold text-slate-800">Partenze MEDMAR trovate: {genSummary.found}</span>
+              <span className="mx-3 text-slate-300">·</span>
+              <span className="text-emerald-700">Pronte: {genSummary.ready}</span>
+              <span className="mx-3 text-slate-300">·</span>
+              <span className={genSummary.toVerify > 0 ? "font-semibold text-amber-700" : "text-slate-600"}>
+                Da verificare: {genSummary.toVerify}
+              </span>
+            </div>
+          )}
+
           <SectionCard
             title="Anteprima righe"
-            subtitle={batchMeta ? `File: ${batchMeta.file_name}` : undefined}
+            subtitle={
+              batchMeta
+                ? `File: ${batchMeta.file_name}`
+                : genSummary
+                  ? `Origine: gestionale · ${genDate}`
+                  : undefined
+            }
             actions={
-              <div className="flex flex-wrap items-center gap-2">
-                <button className="btn-secondary text-xs" onClick={selectAllReady}>
-                  Seleziona tutte le pronte
-                </button>
-                <button className="btn-secondary text-xs" onClick={deselectAll}>
-                  Deseleziona tutte
-                </button>
-                <button
-                  className="btn-primary text-xs px-4"
-                  disabled={sendableCount === 0}
-                  onClick={() => setConfirmSend(true)}
-                >
-                  Conferma e Invia ({sendableCount})
-                </button>
-              </div>
+              batchId ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button className="btn-secondary text-xs" onClick={selectAllReady}>
+                    Seleziona tutte le pronte
+                  </button>
+                  <button className="btn-secondary text-xs" onClick={deselectAll}>
+                    Deseleziona tutte
+                  </button>
+                  <button
+                    className="btn-primary text-xs px-4"
+                    disabled={sendableCount === 0}
+                    onClick={() => setConfirmSend(true)}
+                  >
+                    Conferma e Invia ({sendableCount})
+                  </button>
+                </div>
+              ) : (
+                <span className="text-xs text-muted">
+                  Anteprima dal gestionale — selezione e invio non disponibili in questo step
+                </span>
+              )
             }
           >
             {confirmSend && (
