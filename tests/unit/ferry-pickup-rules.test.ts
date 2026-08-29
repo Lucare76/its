@@ -283,3 +283,64 @@ describe("findConflictingRule — direction e scope hotel/zona/generale", () => 
     expect(findConflictingRule(existing, candidate)).not.toBeNull();
   });
 });
+
+describe("findConflictingRule — regole DIRETTE (transport_type='direct', match su departure_time esatto)", () => {
+  function directRule(overrides: Partial<FerryPickupRule> = {}): FerryPickupRule {
+    return rule({
+      transport_type: "direct",
+      direction: "from_ischia",
+      boat_type: "aliscafo",
+      transport_from: null,
+      transport_to: null,
+      company: "snav",
+      departure_time: "07:10",
+      embark_port: "casamicciola",
+      arrival_port: "napoli_beverello",
+      zone: "forio",
+      pickup_time: "06:20",
+      ...overrides,
+    });
+  }
+
+  it("stesso departure_time, stessa zona/agenzia: conflitto reale (stessa nave configurata due volte)", () => {
+    const existing = [directRule({ departure_time: "07:10" })];
+    const candidate = directRule({ departure_time: "07:10" });
+    expect(findConflictingRule(existing, candidate)).not.toBeNull();
+  });
+
+  it("departure_time diversi: nessun conflitto (sono due corse diverse, non una finestra da confrontare)", () => {
+    const existing = [directRule({ departure_time: "07:10" })];
+    const candidate = directRule({ departure_time: "09:45" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("stesso departure_time ma zone diverse: nessun conflitto (scope diverso)", () => {
+    const existing = [directRule({ departure_time: "07:10", zone: "forio" })];
+    const candidate = directRule({ departure_time: "07:10", zone: "lacco" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("stesso departure_time ma agency_logic diversa: nessun conflitto", () => {
+    const existing = [directRule({ departure_time: "07:10", agency_logic: "aleste" })];
+    const candidate = directRule({ departure_time: "07:10", agency_logic: "sosandra" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("una regola HOTEL diretta non è in conflitto con una regola ZONA diretta per lo stesso departure_time: override lecito", () => {
+    const existing = [directRule({ departure_time: "07:10", hotel_id: null, zone: "forio" })];
+    const candidate = directRule({ departure_time: "07:10", hotel_id: "hotel-colella", zone: "forio" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+
+  it("modificare una regola diretta non confligge con se stessa (excludeId)", () => {
+    const existing = directRule({ id: "direct-1", departure_time: "07:10" });
+    const candidate = { ...existing, pickup_time: "06:25" };
+    expect(findConflictingRule([existing], candidate, existing.id)).toBeNull();
+  });
+
+  it("regola direct vs regola train con stesso agency_logic/zone/direction: mai in conflitto (transport_type diverso)", () => {
+    const existing = [rule({ transport_type: "train", direction: "from_ischia", zone: "forio", transport_from: "07:00", transport_to: "09:00" })];
+    const candidate = directRule({ departure_time: "07:10", zone: "forio" });
+    expect(findConflictingRule(existing, candidate)).toBeNull();
+  });
+});

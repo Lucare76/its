@@ -9,14 +9,19 @@ export const runtime = "nodejs";
 
 const patchSchema = z.object({
   agency_logic: z.enum(["aleste", "sosandra"]).optional(),
-  transport_type: z.enum(["train", "flight"]).optional(),
+  // 'direct' = SNAV/MEDMAR diretto — ammesso solo su regole già from_ischia
+  // (direction non è modificabile via PATCH, vedi sotto); verificato nel
+  // merge con l'esistente più giù (non esprimibile in un refine puro sul
+  // patch parziale, che non conosce il valore corrente di direction).
+  transport_type: z.enum(["train", "flight", "direct"]).optional(),
   // direction intenzionalmente esclusa: cambiare direzione di una regola esistente
   // (arrivo<->partenza) è un'operazione semanticamente diversa, non un update di campo.
   boat_type: z.enum(["traghetto", "aliscafo"]).optional(),
   hotel_id: z.string().uuid().nullable().optional(),
   zone: z.string().min(1).max(40).nullable().optional(),
-  transport_from: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  transport_to: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  // nullable: passare null converte la regola a 'direct' (nessuna finestra).
+  transport_from: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  transport_to: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   company: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).optional(),
   // departure_time intentionally excluded — read-only in the UI
   embark_port: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).nullable().optional(),
@@ -68,11 +73,32 @@ export async function PATCH(
 
   const merged = { ...(existing as FerryPickupRule), ...parsed.data };
 
-  if (!isTransportWindowValid(merged.transport_from, merged.transport_to)) {
+  if (merged.transport_type === "direct" && merged.direction !== "from_ischia") {
     return NextResponse.json(
-      { error: "L'orario finale deve essere successivo all'orario iniziale." },
+      { error: "transport_type='direct' (SNAV/MEDMAR diretto) è ammesso solo per direction='from_ischia'." },
       { status: 400 }
     );
+  }
+  if (merged.transport_type === "direct") {
+    if (merged.transport_from || merged.transport_to) {
+      return NextResponse.json(
+        { error: "Le regole dirette (transport_type='direct') non hanno transport_from/transport_to." },
+        { status: 400 }
+      );
+    }
+  } else {
+    if (!merged.transport_from || !merged.transport_to) {
+      return NextResponse.json(
+        { error: "transport_from e transport_to sono obbligatori per le regole treno/volo." },
+        { status: 400 }
+      );
+    }
+    if (!isTransportWindowValid(merged.transport_from!, merged.transport_to!)) {
+      return NextResponse.json(
+        { error: "L'orario finale deve essere successivo all'orario iniziale." },
+        { status: 400 }
+      );
+    }
   }
 
   const { data: siblingRules, error: siblingsError } = await auth.admin

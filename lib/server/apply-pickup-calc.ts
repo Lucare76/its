@@ -233,6 +233,42 @@ export function applyPickupCalc(opts: {
     return { pickup_alert: `Pickup hotel non calcolato: zona non impostata per l'hotel ${hotelLabel} — impostare la zona e ricalcolare.`.replace(/  /g, " ") };
   }
   const zona = normalizeZonaIschia(opts.hotel_zone);
+
+  // Livello 1 (stesso pattern del Dominio A sopra): se il chiamante passa
+  // `context`, tenta prima la regola canonica DB (transport_type='direct',
+  // vedi lib/operational-connection-resolver.ts) via resolveOperationalConnection
+  // — la STESSA funzione, nessuna reimplementazione. Oggi ferry_pickup_rules
+  // non ha ancora righe direction='from_ischia' popolate (vedi migration
+  // 0262_ferry_pickup_rules_departure_seed.sql, non ancora applicata), quindi
+  // questo ramo non cambia alcun output reale finché il seed non viene
+  // eseguito — è preparazione per la fonte-unica-DB, non un comportamento
+  // nuovo oggi. getPickupRule() (statico) resta il fallback, MAI rimosso qui.
+  if (opts.context && opts.booking_service_kind) {
+    const connection = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: opts.booking_service_kind,
+      vessel: opts.vessel ?? null,
+      transportTime: opts.time,
+      date: opts.context.date,
+      hotelId: opts.context.hotelId ?? null,
+      zone: zona,
+      zoneRecognized: true, // normalizeZonaIschia() ha sempre un default valido ("ischia"), mai un valore non riconosciuto qui
+      agencyName: opts.billing_party_name ?? null,
+      operationalRules: opts.context.operationalRules,
+      ferrySchedules: opts.context.ferrySchedules,
+    });
+    if (connection.source === "canonical_rule" && connection.pickupTime) {
+      return { pickup_hotel: connection.pickupTime, pickup_alert: connection.warnings.join(" ") || null };
+    }
+    // eslint-disable-next-line no-console -- log deliberato: traccia l'uso del
+    // fallback legacy (departure-pickup-rules.ts) per capire quando il seed
+    // DB è stato applicato e la regola non è (ancora) migrata/configurata.
+    console.warn(
+      `[applyPickupCalc] Dominio B (${carrier}): nessuna regola canonica DB per kind='${opts.booking_service_kind}' ` +
+        `orario='${opts.time}' zona='${zona}' — uso fallback legacy lib/departure-pickup-rules.ts.`
+    );
+  }
+
   const rule = getPickupRule(opts.billing_party_name ?? "", carrier, opts.time, zona);
   if (!rule) {
     return { pickup_alert: `Pickup hotel non calcolato: nessuna regola ${carrier.toUpperCase()} per zona "${zona}" orario ${opts.time} — verificare manualmente.` };

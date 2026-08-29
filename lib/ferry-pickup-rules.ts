@@ -3,7 +3,7 @@ export type FerryPickupRuleDirection = "to_ischia" | "from_ischia";
 export interface FerryPickupRule {
   id: string;
   agency_logic: "aleste" | "sosandra";
-  transport_type: "train" | "flight";
+  transport_type: "train" | "flight" | "direct";
   /**
    * to_ischia = ARRIVO (default legacy, tutte le 60 righe seed 0187 sono così).
    * from_ischia = PARTENZA (nuovo, hotel/zona-based). Vedi findFerryPickupRule
@@ -16,8 +16,9 @@ export interface FerryPickupRule {
   hotel_id: string | null;
   /** Solo from_ischia: null = jolly (zona qualunque, o generale se hotel_id è anche null). */
   zone: string | null;
-  transport_from: string;
-  transport_to: string;
+  /** null solo per transport_type='direct' (nessun mezzo di collegamento da attendere). */
+  transport_from: string | null;
+  transport_to: string | null;
   company: string;
   departure_time: string;
   /** Solo from_ischia: porto di partenza barca da Ischia. */
@@ -151,6 +152,7 @@ export type FerryPickupRuleCandidate = Pick<
   | "boat_type"
   | "transport_from"
   | "transport_to"
+  | "departure_time"
   | "valid_from"
   | "valid_to"
   | "days_of_week"
@@ -211,7 +213,17 @@ export function findConflictingRule(
       if (r.transport_type !== candidate.transport_type) return false;
       if (r.boat_type !== candidate.boat_type) return false;
       if (!scopesCompete(scopeOf(r), candidateScope)) return false;
-      if (!timeRangesOverlap(r.transport_from, r.transport_to, candidate.transport_from, candidate.transport_to)) return false;
+      // Le regole 'direct' (SNAV/MEDMAR diretto) non hanno transport_from/to
+      // (nessun mezzo di collegamento da attendere): il match/conflitto
+      // avviene sull'orario esatto della nave (departure_time), non su una
+      // finestra oraria. r.transport_type === candidate.transport_type è già
+      // garantito dal check sopra, quindi se uno dei due è 'direct' lo sono
+      // entrambi.
+      if (candidate.transport_type === "direct") {
+        if (normalizeTime(r.departure_time) !== normalizeTime(candidate.departure_time)) return false;
+      } else {
+        if (!timeRangesOverlap(r.transport_from!, r.transport_to!, candidate.transport_from!, candidate.transport_to!)) return false;
+      }
       if (!dateRangesOverlap(r.valid_from, r.valid_to, candidate.valid_from ?? null, candidate.valid_to ?? null)) return false;
       if (!daysOfWeekOverlap(r.days_of_week, candidate.days_of_week)) return false;
       return true;
@@ -257,6 +269,10 @@ export function findFerryPickupRule(
     if (r.agency_logic !== agencyLogic) return false;
     if (r.transport_type !== transportType) return false;
     if (r.boat_type !== boatType) return false;
+    // Contratto arrivi-only: to_ischia non include mai regole 'direct'
+    // (introdotte solo per direction='from_ischia'), quindi transport_from/to
+    // sono sempre presenti qui — la guardia serve solo a soddisfare i tipi.
+    if (r.transport_from == null || r.transport_to == null) return false;
     if (time < normalizeTime(r.transport_from)) return false;
     if (time > normalizeTime(r.transport_to)) return false;
     return isRuleActiveOnDate(r, bookingDate);

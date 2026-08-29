@@ -23,9 +23,32 @@ const COMPANY_LABEL: Record<string, string> = {
   alilauro: "ALILAURO",
 };
 
-const PORTS = [
+// Porto su Ischia (arrival_port per direction='to_ischia', embark_port per 'from_ischia').
+const ISCHIA_PORTS = [
   { value: "ischia_porto", label: "Ischia Porto" },
   { value: "casamicciola", label: "Casamicciola" },
+];
+
+// Porto sul continente (arrival_port per direction='from_ischia') — stessi slug di ferry_schedules.
+const MAINLAND_PORTS = [
+  { value: "napoli_beverello", label: "Napoli Beverello" },
+  { value: "pozzuoli", label: "Pozzuoli" },
+];
+
+const PORT_LABEL: Record<string, string> = {
+  ischia_porto: "Ischia Porto",
+  casamicciola: "Casamicciola",
+  napoli_beverello: "Napoli Beverello",
+  pozzuoli: "Pozzuoli",
+};
+
+const ZONES = [
+  { value: "", label: "Generale (tutte le zone)" },
+  { value: "ischia", label: "Ischia" },
+  { value: "lacco", label: "Lacco Ameno" },
+  { value: "casamicciola", label: "Casamicciola" },
+  { value: "barano", label: "Barano" },
+  { value: "forio", label: "Forio" },
 ];
 
 const DAYS_LABEL = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
@@ -36,29 +59,56 @@ const STATUS_BADGE: Record<RuleActivityStatus, { icon: string; label: string; cl
   inactive_today: { icon: "🟠", label: "Non attiva oggi", className: "text-amber-600" },
 };
 
-type Section = {
+// ─── ARRIVI (direction='to_ischia') — invariato ───────────────────────────────
+
+type ArrivalSection = {
   transport_type: "train" | "flight";
   boat_type: "traghetto" | "aliscafo";
   label: string;
 };
 
-const ALESTE_SECTIONS: Section[] = [
+const ALESTE_SECTIONS: ArrivalSection[] = [
   { transport_type: "flight", boat_type: "traghetto", label: "Volo" },
   { transport_type: "train",  boat_type: "traghetto", label: "Treno" },
 ];
 
-const SOSANDRA_SECTIONS: Section[] = [
+const SOSANDRA_SECTIONS: ArrivalSection[] = [
   { transport_type: "flight", boat_type: "aliscafo",  label: "Volo (aliscafo)" },
   { transport_type: "train",  boat_type: "traghetto", label: "Treno (traghetto)" },
   { transport_type: "train",  boat_type: "aliscafo",  label: "Treno (aliscafo)" },
+];
+
+// ─── PARTENZE (direction='from_ischia') — 7 categorie richieste ───────────────
+
+type DepartureSection = {
+  key: string;
+  label: string;
+  transport_type: "train" | "flight" | "direct";
+  boat_type: "traghetto" | "aliscafo";
+  /** Solo per transport_type='direct': filtra anche per company (SNAV vs MEDMAR). */
+  directCompany?: "snav" | "medmar";
+  /** Solo MEDMAR diretto: distingue Napoli da Pozzuoli sullo stesso company. */
+  directMainlandPort?: "napoli_beverello" | "pozzuoli";
+};
+
+const DEPARTURE_SECTIONS: DepartureSection[] = [
+  { key: "snav", label: "SNAV", transport_type: "direct", boat_type: "aliscafo", directCompany: "snav" },
+  { key: "medmar_napoli", label: "MEDMAR Napoli", transport_type: "direct", boat_type: "traghetto", directCompany: "medmar", directMainlandPort: "napoli_beverello" },
+  { key: "medmar_pozzuoli", label: "MEDMAR Pozzuoli", transport_type: "direct", boat_type: "traghetto", directCompany: "medmar", directMainlandPort: "pozzuoli" },
+  { key: "treno_traghetto", label: "Treno + traghetto", transport_type: "train", boat_type: "traghetto" },
+  { key: "treno_aliscafo", label: "Treno + aliscafo", transport_type: "train", boat_type: "aliscafo" },
+  { key: "volo_traghetto", label: "Volo + traghetto", transport_type: "flight", boat_type: "traghetto" },
+  { key: "volo_aliscafo", label: "Volo + aliscafo", transport_type: "flight", boat_type: "aliscafo" },
 ];
 
 // ─── Tipi form ────────────────────────────────────────────────────────────────
 
 type RuleFormData = {
   agency_logic: "aleste" | "sosandra";
-  transport_type: "train" | "flight";
+  direction: "to_ischia" | "from_ischia";
+  transport_type: "train" | "flight" | "direct";
   boat_type: "traghetto" | "aliscafo";
+  /** "" per le regole dirette (nessuna finestra mezzo). */
   transport_from: string;
   transport_to: string;
   company: string;
@@ -69,14 +119,20 @@ type RuleFormData = {
   valid_to: string;
   days_of_week: number[];
   season_notes: string;
+  // Solo direction='from_ischia':
+  hotel_id: string;
+  zone: string;
+  pickup_time: string;
+  embark_port: string;
 };
 
-const emptyForm = (
+const emptyArrivalForm = (
   agency_logic: "aleste" | "sosandra",
   transport_type: "train" | "flight",
   boat_type: "traghetto" | "aliscafo"
 ): RuleFormData => ({
   agency_logic,
+  direction: "to_ischia",
   transport_type,
   boat_type,
   transport_from: "",
@@ -89,6 +145,34 @@ const emptyForm = (
   valid_to: "",
   days_of_week: [],
   season_notes: "",
+  hotel_id: "",
+  zone: "",
+  pickup_time: "",
+  embark_port: "",
+});
+
+const emptyDepartureForm = (
+  agency_logic: "aleste" | "sosandra",
+  section: DepartureSection
+): RuleFormData => ({
+  agency_logic,
+  direction: "from_ischia",
+  transport_type: section.transport_type,
+  boat_type: section.boat_type,
+  transport_from: "",
+  transport_to: "",
+  company: section.directCompany ?? (section.boat_type === "aliscafo" ? "snav" : "medmar"),
+  departure_time: "",
+  arrival_port: section.directMainlandPort ?? "napoli_beverello",
+  arrival_time: "",
+  valid_from: "",
+  valid_to: "",
+  days_of_week: [],
+  season_notes: "",
+  hotel_id: "",
+  zone: "",
+  pickup_time: "",
+  embark_port: "ischia_porto",
 });
 
 // ─── Componente ────────────────────────────────────────────────────────────────
@@ -97,15 +181,20 @@ export default function FerryRulesPage() {
   const [rules, setRules] = useState<FerryPickupRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"arrivi" | "partenze">("arrivi");
   const [activeTab, setActiveTab] = useState<"aleste" | "sosandra">("aleste");
+  const [departureAgency, setDepartureAgency] = useState<"aleste" | "sosandra">("aleste");
   const [token, setToken] = useState<string | null>(null);
 
   // Panel state
   const [panelOpen, setPanelOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<FerryPickupRule | null>(null);
-  const [form, setForm] = useState<RuleFormData>(emptyForm("aleste", "flight", "traghetto"));
+  const [form, setForm] = useState<RuleFormData>(emptyArrivalForm("aleste", "flight", "traghetto"));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [impactCount, setImpactCount] = useState<number | null>(null);
+  const [sentConvocationsCount, setSentConvocationsCount] = useState<number | null>(null);
+  const [confirmingImpact, setConfirmingImpact] = useState(false);
 
   // ─── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -135,10 +224,21 @@ export default function FerryRulesPage() {
 
   // ─── Panel ──────────────────────────────────────────────────────────────────
 
-  function openAdd(section: Section, logic: "aleste" | "sosandra") {
+  function openAddArrival(section: ArrivalSection, logic: "aleste" | "sosandra") {
     setEditingRule(null);
-    setForm(emptyForm(logic, section.transport_type, section.boat_type));
+    setForm(emptyArrivalForm(logic, section.transport_type, section.boat_type));
     setSaveError(null);
+    setImpactCount(null);
+    setSentConvocationsCount(null);
+    setPanelOpen(true);
+  }
+
+  function openAddDeparture(section: DepartureSection, logic: "aleste" | "sosandra") {
+    setEditingRule(null);
+    setForm(emptyDepartureForm(logic, section));
+    setSaveError(null);
+    setImpactCount(null);
+    setSentConvocationsCount(null);
     setPanelOpen(true);
   }
 
@@ -146,10 +246,11 @@ export default function FerryRulesPage() {
     setEditingRule(rule);
     setForm({
       agency_logic: rule.agency_logic,
+      direction: rule.direction ?? "to_ischia",
       transport_type: rule.transport_type,
       boat_type: rule.boat_type,
-      transport_from: rule.transport_from.slice(0, 5),
-      transport_to: rule.transport_to.slice(0, 5),
+      transport_from: rule.transport_from?.slice(0, 5) ?? "",
+      transport_to: rule.transport_to?.slice(0, 5) ?? "",
       company: rule.company,
       departure_time: rule.departure_time.slice(0, 5),
       arrival_port: rule.arrival_port,
@@ -158,48 +259,128 @@ export default function FerryRulesPage() {
       valid_to: rule.valid_to ?? "",
       days_of_week: rule.days_of_week ?? [],
       season_notes: rule.season_notes ?? "",
+      hotel_id: rule.hotel_id ?? "",
+      zone: rule.zone ?? "",
+      pickup_time: rule.pickup_time?.slice(0, 5) ?? "",
+      embark_port: rule.embark_port ?? "",
     });
     setSaveError(null);
+    setImpactCount(null);
+    setSentConvocationsCount(null);
     setPanelOpen(true);
   }
 
-  async function handleSave() {
-    if (!token) return;
-    setSaveError(null);
-
-    if (!isTransportWindowValid(form.transport_from, form.transport_to)) {
-      setSaveError("L'orario finale deve essere successivo all'orario iniziale.");
-      return;
-    }
-
-    const candidate = {
+  function buildCandidate() {
+    const isDirect = form.transport_type === "direct";
+    return {
       agency_logic: form.agency_logic,
+      direction: form.direction,
       transport_type: form.transport_type,
       boat_type: form.boat_type,
-      transport_from: form.transport_from,
-      transport_to: form.transport_to,
+      transport_from: isDirect ? null : form.transport_from,
+      transport_to: isDirect ? null : form.transport_to,
+      departure_time: form.departure_time,
+      hotel_id: form.direction === "from_ischia" ? (form.hotel_id || null) : null,
+      zone: form.direction === "from_ischia" ? (form.zone || null) : null,
       valid_from: form.valid_from || null,
       valid_to: form.valid_to || null,
       days_of_week: form.days_of_week.length > 0 ? form.days_of_week : null,
     };
+  }
+
+  type ImpactResult =
+    | { status: "ok"; futureServices: number; sentConvocations: number }
+    | { status: "error"; message: string };
+
+  // Valuta il DRAFT in modifica (non solo la regola già salvata): passa gli
+  // stessi campi che il PATCH sta per scrivere come query params, cosi'
+  // l'impact preview riflette la modifica proposta — vedi
+  // lib/ferry-pickup-rules-impact.ts (IMPACT_OVERRIDABLE_FIELDS) per la
+  // whitelist accettata dall'endpoint.
+  async function fetchImpact(): Promise<ImpactResult> {
+    if (!token || !editingRule) return { status: "error", message: "Sessione non disponibile." };
+    const isDirect = form.transport_type === "direct";
+    const params = new URLSearchParams({
+      direction: form.direction,
+      transport_type: form.transport_type,
+      boat_type: form.boat_type,
+      company: form.company,
+      departure_time: form.departure_time,
+      transport_from: isDirect ? "" : form.transport_from,
+      transport_to: isDirect ? "" : form.transport_to,
+      zone: form.direction === "from_ischia" ? form.zone : "",
+      hotel_id: form.direction === "from_ischia" ? form.hotel_id : "",
+      agency_logic: form.agency_logic,
+    });
+    try {
+      const res = await fetch(`/api/ferry-pickup-rules/${editingRule.id}/impact?${params.toString()}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        return { status: "error", message: body?.error ?? "Impossibile verificare l'impatto della modifica." };
+      }
+      const body = await res.json() as { futureServices: number; sentConvocations: number };
+      return { status: "ok", futureServices: body.futureServices, sentConvocations: body.sentConvocations };
+    } catch {
+      return { status: "error", message: "Impossibile verificare l'impatto della modifica (rete non disponibile)." };
+    }
+  }
+
+  async function handleSave(force = false) {
+    if (!token) return;
+    setSaveError(null);
+
+    const isDirect = form.transport_type === "direct";
+    if (!isDirect && !isTransportWindowValid(form.transport_from, form.transport_to)) {
+      setSaveError("L'orario finale deve essere successivo all'orario iniziale.");
+      return;
+    }
+    if (form.direction === "from_ischia" && (!form.pickup_time || !form.embark_port)) {
+      setSaveError("Orario pickup e porto imbarco sono obbligatori per le regole di partenza.");
+      return;
+    }
+
+    const candidate = buildCandidate();
     const conflict = findConflictingRule(rules, candidate, editingRule?.id ?? null);
     if (conflict) {
-      const from = conflict.transport_from.slice(0, 5);
-      const to = conflict.transport_to.slice(0, 5);
-      setSaveError(
-        `Questa fascia si sovrappone a una regola già esistente: ${(COMPANY_LABEL[conflict.company] ?? conflict.company)} ${from}–${to}.`
-      );
+      const label = COMPANY_LABEL[conflict.company] ?? conflict.company;
+      const desc = conflict.transport_type === "direct"
+        ? `${label} ${conflict.departure_time.slice(0, 5)}`
+        : `${label} ${conflict.transport_from?.slice(0, 5)}–${conflict.transport_to?.slice(0, 5)}`;
+      setSaveError(`Questa regola confligge con una già esistente: ${desc}.`);
       return;
+    }
+
+    // Impact preview (solo in modifica, solo lettura): se ci sono servizi
+    // futuri o convocazioni già inviate potenzialmente impattate, chiede
+    // conferma esplicita prima di salvare — nessuna azione automatica.
+    // Fail-safe: se il controllo impatto fallisce (rete/500), il salvataggio
+    // viene BLOCCATO con un errore esplicito — mai trattato come "impatto
+    // zero" e salvato silenziosamente (bug reale corretto il 2026-08-30).
+    if (editingRule && !force) {
+      const impact = await fetchImpact();
+      if (impact.status === "error") {
+        setSaveError(`Verifica impatto fallita: ${impact.message} Salvataggio bloccato per sicurezza — riprova.`);
+        return;
+      }
+      if (impact.futureServices > 0 || impact.sentConvocations > 0) {
+        setImpactCount(impact.futureServices);
+        setSentConvocationsCount(impact.sentConvocations);
+        setConfirmingImpact(true);
+        return;
+      }
     }
 
     setSaving(true);
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       agency_logic: form.agency_logic,
+      direction: form.direction,
       transport_type: form.transport_type,
       boat_type: form.boat_type,
-      transport_from: form.transport_from,
-      transport_to: form.transport_to,
+      transport_from: isDirect ? null : form.transport_from,
+      transport_to: isDirect ? null : form.transport_to,
       company: form.company,
       arrival_port: form.arrival_port,
       arrival_time: form.arrival_time || null,
@@ -208,7 +389,14 @@ export default function FerryRulesPage() {
       days_of_week: form.days_of_week.length > 0 ? form.days_of_week : null,
       season_notes: form.season_notes || null,
       ...(editingRule ? {} : { departure_time: form.departure_time }),
+      ...(isDirect && editingRule ? { departure_time: form.departure_time } : {}),
     };
+    if (form.direction === "from_ischia") {
+      payload.hotel_id = form.hotel_id || null;
+      payload.zone = form.zone || null;
+      payload.pickup_time = form.pickup_time;
+      payload.embark_port = form.embark_port;
+    }
 
     const url = editingRule
       ? `/api/ferry-pickup-rules/${editingRule.id}`
@@ -225,12 +413,14 @@ export default function FerryRulesPage() {
     if (!res.ok) {
       setSaveError(body.error ?? "Errore nel salvataggio.");
       setSaving(false);
+      setConfirmingImpact(false);
       return;
     }
 
     await fetchRules(token);
     setPanelOpen(false);
     setSaving(false);
+    setConfirmingImpact(false);
   }
 
   async function handleDelete(id: string) {
@@ -254,10 +444,28 @@ export default function FerryRulesPage() {
 
   // ─── Render helpers ─────────────────────────────────────────────────────────
 
-  function rulesFor(logic: "aleste" | "sosandra", tt: "train" | "flight", bt: "traghetto" | "aliscafo") {
+  function arrivalRulesFor(logic: "aleste" | "sosandra", tt: "train" | "flight", bt: "traghetto" | "aliscafo") {
     return rules
-      .filter((r) => r.agency_logic === logic && r.transport_type === tt && r.boat_type === bt)
-      .sort((a, b) => a.transport_from.localeCompare(b.transport_from));
+      .filter((r) => (r.direction ?? "to_ischia") === "to_ischia" && r.agency_logic === logic && r.transport_type === tt && r.boat_type === bt)
+      .sort((a, b) => (a.transport_from ?? "").localeCompare(b.transport_from ?? ""));
+  }
+
+  function departureRulesFor(logic: "aleste" | "sosandra", section: DepartureSection) {
+    return rules
+      .filter((r) => {
+        if (r.direction !== "from_ischia") return false;
+        if (r.agency_logic !== logic) return false;
+        if (r.transport_type !== section.transport_type) return false;
+        if (r.boat_type !== section.boat_type) return false;
+        if (section.directCompany && r.company.toLowerCase() !== section.directCompany) return false;
+        if (section.directMainlandPort && r.arrival_port !== section.directMainlandPort) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const ta = section.transport_type === "direct" ? a.departure_time : (a.transport_from ?? "");
+        const tb = section.transport_type === "direct" ? b.departure_time : (b.transport_from ?? "");
+        return ta.localeCompare(tb);
+      });
   }
 
   function formatSeasonBadge(rule: FerryPickupRule) {
@@ -273,127 +481,224 @@ export default function FerryRulesPage() {
     return parts.join(" ");
   }
 
+  function zoneLabel(zone: string | null) {
+    if (!zone) return "Generale";
+    return ZONES.find((z) => z.value === zone)?.label ?? zone;
+  }
+
   // ─── UI ─────────────────────────────────────────────────────────────────────
 
   if (loading) return <p className="text-sm text-slate-500 p-6">Caricamento...</p>;
   if (error)   return <p className="text-sm text-rose-600 p-6">{error}</p>;
 
-  const sections = activeTab === "aleste" ? ALESTE_SECTIONS : SOSANDRA_SECTIONS;
   const today = todayIsoDateRome();
+  const isDirectForm = form.transport_type === "direct";
 
   return (
     <>
       <section className="space-y-6 max-w-5xl">
         <div>
-          <h1 className="text-2xl font-semibold">Abbinamento corse nave</h1>
+          <h1 className="text-2xl font-semibold">Regole partenze</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Tabella orari per abbinare automaticamente l&apos;arrivo di treni/voli alla corsa nave giusta.
-            L&apos;orario partenza nave è fisso (non modificabile).
+            Gestisci gli orari di prelevamento e le coincidenze nave/aliscafo.
           </p>
         </div>
 
-        {/* Tab Aleste / Sosandra */}
+        {/* Mode toggle: Arrivi / Partenze */}
         <div className="flex gap-1 border-b border-border">
-          {(["aleste", "sosandra"] as const).map((tab) => (
+          {([
+            { key: "arrivi", label: "Arrivi (treno/volo → nave)" },
+            { key: "partenze", label: "Partenze (pickup hotel → nave)" },
+          ] as const).map((m) => (
             <button
-              key={tab}
+              key={m.key}
               type="button"
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm font-medium capitalize rounded-t-lg transition-colors ${
-                activeTab === tab
+              onClick={() => setMode(m.key)}
+              className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+                mode === m.key
                   ? "bg-surface border border-b-surface border-border text-slate-900 -mb-px"
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              {tab === "aleste" ? "Tutte le agenzie (Aleste)" : "Sosandra"}
+              {m.label}
             </button>
           ))}
         </div>
 
-        {sections.map((section) => {
-          const sectionRules = rulesFor(activeTab, section.transport_type, section.boat_type);
-          return (
-            <div key={`${section.transport_type}-${section.boat_type}`} className="card p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-slate-800">{section.label}</h2>
+        {mode === "arrivi" ? (
+          <>
+            <div className="flex gap-1 border-b border-border">
+              {(["aleste", "sosandra"] as const).map((tab) => (
                 <button
+                  key={tab}
                   type="button"
-                  className="btn-primary px-3 py-1.5 text-sm"
-                  onClick={() => openAdd(section, activeTab)}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-4 py-2 text-sm font-medium capitalize rounded-t-lg transition-colors ${
+                    activeTab === tab
+                      ? "bg-surface border border-b-surface border-border text-slate-900 -mb-px"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
                 >
-                  + Aggiungi
+                  {tab === "aleste" ? "Tutte le agenzie (Aleste)" : "Sosandra"}
                 </button>
-              </div>
-
-              {sectionRules.length === 0 ? (
-                <p className="text-sm text-slate-400 italic">Nessuna regola configurata.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm border-collapse">
-                    <thead>
-                      <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400 border-b border-slate-100">
-                        <th className="pb-2 pr-3">Arrivo mezzo</th>
-                        <th className="pb-2 pr-3">Compagnia</th>
-                        <th className="pb-2 pr-3">Partenza nave</th>
-                        <th className="pb-2 pr-3">Porto</th>
-                        <th className="pb-2 pr-3">Sbarco</th>
-                        <th className="pb-2 pr-3">Validità</th>
-                        <th className="pb-2 pr-3">Stato</th>
-                        <th className="pb-2" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {sectionRules.map((rule) => {
-                        const status = STATUS_BADGE[getRuleActivityStatus(rule, today)];
-                        return (
-                        <tr key={rule.id} className="hover:bg-slate-50/60">
-                          <td className="py-2 pr-3 font-mono text-slate-700">
-                            {rule.transport_from.slice(0, 5)}–{rule.transport_to.slice(0, 5)}
-                          </td>
-                          <td className="py-2 pr-3 font-semibold text-slate-800 uppercase">
-                            {COMPANY_LABEL[rule.company] ?? rule.company}
-                          </td>
-                          <td className="py-2 pr-3 font-mono text-slate-500">
-                            {rule.departure_time.slice(0, 5)}
-                          </td>
-                          <td className="py-2 pr-3 text-slate-600">
-                            {rule.arrival_port === "ischia_porto" ? "Ischia Porto" : "Casamicciola"}
-                          </td>
-                          <td className="py-2 pr-3 font-mono text-slate-500">
-                            {rule.arrival_time?.slice(0, 5) ?? "—"}
-                          </td>
-                          <td className="py-2 pr-3 text-[11px] text-slate-400">
-                            {formatSeasonBadge(rule) || "tutto l'anno"}
-                          </td>
-                          <td className={`py-2 pr-3 text-xs whitespace-nowrap ${status.className}`} title={status.label}>
-                            {status.icon} {status.label}
-                          </td>
-                          <td className="py-2 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              className="text-xs text-blue-600 hover:underline mr-3"
-                              onClick={() => openEdit(rule)}
-                            >
-                              Modifica
-                            </button>
-                            <button
-                              type="button"
-                              className="text-xs text-rose-600 hover:underline"
-                              onClick={() => handleDelete(rule.id)}
-                            >
-                              Elimina
-                            </button>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              ))}
             </div>
-          );
-        })}
+
+            {(activeTab === "aleste" ? ALESTE_SECTIONS : SOSANDRA_SECTIONS).map((section) => {
+              const sectionRules = arrivalRulesFor(activeTab, section.transport_type, section.boat_type);
+              return (
+                <div key={`${section.transport_type}-${section.boat_type}`} className="card p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-base font-semibold text-slate-800">{section.label}</h2>
+                    <button
+                      type="button"
+                      className="btn-primary px-3 py-1.5 text-sm"
+                      onClick={() => openAddArrival(section, activeTab)}
+                    >
+                      + Aggiungi
+                    </button>
+                  </div>
+
+                  {sectionRules.length === 0 ? (
+                    <p className="text-sm text-slate-400 italic">Nessuna regola configurata.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm border-collapse">
+                        <thead>
+                          <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                            <th className="pb-2 pr-3">Arrivo mezzo</th>
+                            <th className="pb-2 pr-3">Compagnia</th>
+                            <th className="pb-2 pr-3">Partenza nave</th>
+                            <th className="pb-2 pr-3">Porto</th>
+                            <th className="pb-2 pr-3">Sbarco</th>
+                            <th className="pb-2 pr-3">Validità</th>
+                            <th className="pb-2 pr-3">Stato</th>
+                            <th className="pb-2" />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {sectionRules.map((rule) => {
+                            const status = STATUS_BADGE[getRuleActivityStatus(rule, today)];
+                            return (
+                            <tr key={rule.id} className="hover:bg-slate-50/60">
+                              <td className="py-2 pr-3 font-mono text-slate-700">
+                                {rule.transport_from?.slice(0, 5) ?? "—"}–{rule.transport_to?.slice(0, 5) ?? "—"}
+                              </td>
+                              <td className="py-2 pr-3 font-semibold text-slate-800 uppercase">
+                                {COMPANY_LABEL[rule.company] ?? rule.company}
+                              </td>
+                              <td className="py-2 pr-3 font-mono text-slate-500">
+                                {rule.departure_time.slice(0, 5)}
+                              </td>
+                              <td className="py-2 pr-3 text-slate-600">
+                                {PORT_LABEL[rule.arrival_port] ?? rule.arrival_port}
+                              </td>
+                              <td className="py-2 pr-3 font-mono text-slate-500">
+                                {rule.arrival_time?.slice(0, 5) ?? "—"}
+                              </td>
+                              <td className="py-2 pr-3 text-[11px] text-slate-400">
+                                {formatSeasonBadge(rule) || "tutto l'anno"}
+                              </td>
+                              <td className={`py-2 pr-3 text-xs whitespace-nowrap ${status.className}`} title={status.label}>
+                                {status.icon} {status.label}
+                              </td>
+                              <td className="py-2 text-right whitespace-nowrap">
+                                <button type="button" className="text-xs text-blue-600 hover:underline mr-3" onClick={() => openEdit(rule)}>Modifica</button>
+                                <button type="button" className="text-xs text-rose-600 hover:underline" onClick={() => handleDelete(rule.id)}>Elimina</button>
+                              </td>
+                            </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        ) : (
+          <>
+            <label className="block space-y-1 max-w-xs">
+              <span className="text-xs text-slate-500">Logica agenzia</span>
+              <select
+                value={departureAgency}
+                onChange={(e) => setDepartureAgency(e.target.value as "aleste" | "sosandra")}
+                className="input w-full"
+              >
+                <option value="aleste">Tutte le agenzie (Aleste)</option>
+                <option value="sosandra">Sosandra</option>
+              </select>
+            </label>
+
+            {DEPARTURE_SECTIONS.map((section) => {
+              const sectionRules = departureRulesFor(departureAgency, section);
+              return (
+                <div key={section.key} className="card p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-base font-semibold text-slate-800">{section.label}</h2>
+                    <button
+                      type="button"
+                      className="btn-primary px-3 py-1.5 text-sm"
+                      onClick={() => openAddDeparture(section, departureAgency)}
+                    >
+                      + Aggiungi
+                    </button>
+                  </div>
+
+                  {sectionRules.length === 0 ? (
+                    <p className="text-sm text-slate-400 italic">Nessuna regola configurata.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm border-collapse">
+                        <thead>
+                          <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                            {section.transport_type !== "direct" && <th className="pb-2 pr-3">Orario riferimento</th>}
+                            <th className="pb-2 pr-3">Zona</th>
+                            <th className="pb-2 pr-3">Pickup</th>
+                            <th className="pb-2 pr-3">Compagnia</th>
+                            <th className="pb-2 pr-3">Orario nave</th>
+                            <th className="pb-2 pr-3">Porto partenza</th>
+                            <th className="pb-2 pr-3">Porto arrivo</th>
+                            <th className="pb-2 pr-3">Validità</th>
+                            <th className="pb-2 pr-3">Stato</th>
+                            <th className="pb-2" />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {sectionRules.map((rule) => {
+                            const status = STATUS_BADGE[getRuleActivityStatus(rule, today)];
+                            return (
+                            <tr key={rule.id} className="hover:bg-slate-50/60">
+                              {section.transport_type !== "direct" && (
+                                <td className="py-2 pr-3 font-mono text-slate-700">
+                                  {rule.transport_from?.slice(0, 5) ?? "—"}–{rule.transport_to?.slice(0, 5) ?? "—"}
+                                </td>
+                              )}
+                              <td className="py-2 pr-3 text-slate-600">{zoneLabel(rule.zone)}</td>
+                              <td className="py-2 pr-3 font-mono text-slate-700">{rule.pickup_time?.slice(0, 5) ?? "—"}</td>
+                              <td className="py-2 pr-3 font-semibold text-slate-800 uppercase">{COMPANY_LABEL[rule.company] ?? rule.company}</td>
+                              <td className="py-2 pr-3 font-mono text-slate-500">{rule.departure_time.slice(0, 5)}</td>
+                              <td className="py-2 pr-3 text-slate-600">{PORT_LABEL[rule.embark_port ?? ""] ?? rule.embark_port ?? "—"}</td>
+                              <td className="py-2 pr-3 text-slate-600">{PORT_LABEL[rule.arrival_port] ?? rule.arrival_port}</td>
+                              <td className="py-2 pr-3 text-[11px] text-slate-400">{formatSeasonBadge(rule) || "tutto l'anno"}</td>
+                              <td className={`py-2 pr-3 text-xs whitespace-nowrap ${status.className}`} title={status.label}>{status.icon} {status.label}</td>
+                              <td className="py-2 text-right whitespace-nowrap">
+                                <button type="button" className="text-xs text-blue-600 hover:underline mr-3" onClick={() => openEdit(rule)}>Modifica</button>
+                                <button type="button" className="text-xs text-rose-600 hover:underline" onClick={() => handleDelete(rule.id)}>Elimina</button>
+                              </td>
+                            </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
       </section>
 
       {/* Side panel add/edit */}
@@ -402,125 +707,107 @@ export default function FerryRulesPage() {
         title={editingRule ? "Modifica regola" : "Nuova regola"}
         subtitle={
           editingRule
-            ? `${editingRule.transport_from.slice(0, 5)}–${editingRule.transport_to.slice(0, 5)} → ${COMPANY_LABEL[editingRule.company] ?? editingRule.company} ${editingRule.departure_time.slice(0, 5)}`
+            ? (editingRule.transport_type === "direct"
+                ? `${COMPANY_LABEL[editingRule.company] ?? editingRule.company} ${editingRule.departure_time.slice(0, 5)}`
+                : `${editingRule.transport_from?.slice(0, 5) ?? "—"}–${editingRule.transport_to?.slice(0, 5) ?? "—"} → ${COMPANY_LABEL[editingRule.company] ?? editingRule.company} ${editingRule.departure_time.slice(0, 5)}`)
             : undefined
         }
-        onClose={() => setPanelOpen(false)}
+        onClose={() => { setPanelOpen(false); setConfirmingImpact(false); }}
         widthClassName="max-w-lg"
       >
         <div className="space-y-5">
-          {/* Finestra orario mezzo */}
-          <fieldset className="space-y-3">
-            <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Orario arrivo {form.transport_type === "train" ? "treno" : "volo"}
-            </legend>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block space-y-1">
-                <span className="text-xs text-slate-500">Da</span>
-                <input
-                  type="time"
-                  value={form.transport_from}
-                  onChange={(e) => setForm((f) => ({ ...f, transport_from: e.target.value }))}
-                  className="input w-full"
-                />
-              </label>
-              <label className="block space-y-1">
-                <span className="text-xs text-slate-500">A</span>
-                <input
-                  type="time"
-                  value={form.transport_to}
-                  onChange={(e) => setForm((f) => ({ ...f, transport_to: e.target.value }))}
-                  className="input w-full"
-                />
-              </label>
-            </div>
-          </fieldset>
+          {!isDirectForm && (
+            <fieldset className="space-y-3">
+              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Orario riferimento {form.transport_type === "train" ? "treno" : "volo"}
+              </legend>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block space-y-1">
+                  <span className="text-xs text-slate-500">Da</span>
+                  <input type="time" value={form.transport_from} onChange={(e) => setForm((f) => ({ ...f, transport_from: e.target.value }))} className="input w-full" />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-xs text-slate-500">A</span>
+                  <input type="time" value={form.transport_to} onChange={(e) => setForm((f) => ({ ...f, transport_to: e.target.value }))} className="input w-full" />
+                </label>
+              </div>
+            </fieldset>
+          )}
 
-          {/* Compagnia + orario barca */}
+          {form.direction === "from_ischia" && (
+            <fieldset className="space-y-3">
+              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">Prelievo hotel</legend>
+              <label className="block space-y-1">
+                <span className="text-xs text-slate-500">Zona</span>
+                <select value={form.zone} onChange={(e) => setForm((f) => ({ ...f, zone: e.target.value }))} className="input w-full">
+                  {ZONES.map((z) => <option key={z.value} value={z.value}>{z.label}</option>)}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs text-slate-500">Orario pickup</span>
+                <input type="time" value={form.pickup_time} onChange={(e) => setForm((f) => ({ ...f, pickup_time: e.target.value }))} className="input w-full font-mono" />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs text-slate-500">ID Hotel (opzionale — vince su zona se valorizzato)</span>
+                <input type="text" value={form.hotel_id} onChange={(e) => setForm((f) => ({ ...f, hotel_id: e.target.value }))} placeholder="uuid hotels.id" className="input w-full font-mono text-xs" />
+              </label>
+            </fieldset>
+          )}
+
           <fieldset className="space-y-3">
-            <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Corsa nave
-            </legend>
+            <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">Corsa nave</legend>
             <label className="block space-y-1">
               <span className="text-xs text-slate-500">Compagnia</span>
-              <select
-                value={form.company}
-                onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
-                className="input w-full"
-              >
-                {COMPANIES.map((c) => (
-                  <option key={c} value={c}>{COMPANY_LABEL[c] ?? c}</option>
-                ))}
+              <select value={form.company} onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))} className="input w-full">
+                {COMPANIES.map((c) => <option key={c} value={c}>{COMPANY_LABEL[c] ?? c}</option>)}
               </select>
             </label>
 
             <label className="block space-y-1">
               <span className="text-xs text-slate-500">
                 Orario partenza nave
-                {editingRule && <span className="ml-1 text-amber-600 font-medium">(non modificabile)</span>}
+                {editingRule && !isDirectForm && <span className="ml-1 text-amber-600 font-medium">(non modificabile)</span>}
               </span>
-              {editingRule ? (
-                <div className="input w-full bg-slate-50 text-slate-400 font-mono cursor-not-allowed select-none">
-                  {form.departure_time}
-                </div>
+              {editingRule && !isDirectForm ? (
+                <div className="input w-full bg-slate-50 text-slate-400 font-mono cursor-not-allowed select-none">{form.departure_time}</div>
               ) : (
-                <input
-                  type="time"
-                  value={form.departure_time}
-                  onChange={(e) => setForm((f) => ({ ...f, departure_time: e.target.value }))}
-                  className="input w-full font-mono"
-                />
+                <input type="time" value={form.departure_time} onChange={(e) => setForm((f) => ({ ...f, departure_time: e.target.value }))} className="input w-full font-mono" />
               )}
             </label>
 
+            {form.direction === "from_ischia" && (
+              <label className="block space-y-1">
+                <span className="text-xs text-slate-500">Porto imbarco (Ischia)</span>
+                <select value={form.embark_port} onChange={(e) => setForm((f) => ({ ...f, embark_port: e.target.value }))} className="input w-full">
+                  {ISCHIA_PORTS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </label>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <label className="block space-y-1">
-                <span className="text-xs text-slate-500">Porto arrivo</span>
-                <select
-                  value={form.arrival_port}
-                  onChange={(e) => setForm((f) => ({ ...f, arrival_port: e.target.value }))}
-                  className="input w-full"
-                >
-                  {PORTS.map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
-                  ))}
+                <span className="text-xs text-slate-500">Porto arrivo{form.direction === "from_ischia" ? " (continente)" : ""}</span>
+                <select value={form.arrival_port} onChange={(e) => setForm((f) => ({ ...f, arrival_port: e.target.value }))} className="input w-full">
+                  {(form.direction === "from_ischia" ? MAINLAND_PORTS : ISCHIA_PORTS).map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
               </label>
               <label className="block space-y-1">
                 <span className="text-xs text-slate-500">Orario sbarco</span>
-                <input
-                  type="time"
-                  value={form.arrival_time}
-                  onChange={(e) => setForm((f) => ({ ...f, arrival_time: e.target.value }))}
-                  className="input w-full font-mono"
-                />
+                <input type="time" value={form.arrival_time} onChange={(e) => setForm((f) => ({ ...f, arrival_time: e.target.value }))} className="input w-full font-mono" />
               </label>
             </div>
           </fieldset>
 
-          {/* Validità stagionale */}
           <fieldset className="space-y-3">
-            <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Validità stagionale (opzionale)
-            </legend>
+            <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">Validità stagionale (opzionale)</legend>
             <div className="grid grid-cols-2 gap-3">
               <label className="block space-y-1">
                 <span className="text-xs text-slate-500">Dal</span>
-                <input
-                  type="date"
-                  value={form.valid_from}
-                  onChange={(e) => setForm((f) => ({ ...f, valid_from: e.target.value }))}
-                  className="input w-full"
-                />
+                <input type="date" value={form.valid_from} onChange={(e) => setForm((f) => ({ ...f, valid_from: e.target.value }))} className="input w-full" />
               </label>
               <label className="block space-y-1">
                 <span className="text-xs text-slate-500">Al</span>
-                <input
-                  type="date"
-                  value={form.valid_to}
-                  onChange={(e) => setForm((f) => ({ ...f, valid_to: e.target.value }))}
-                  className="input w-full"
-                />
+                <input type="date" value={form.valid_to} onChange={(e) => setForm((f) => ({ ...f, valid_to: e.target.value }))} className="input w-full" />
               </label>
             </div>
 
@@ -546,39 +833,42 @@ export default function FerryRulesPage() {
 
             <label className="block space-y-1">
               <span className="text-xs text-slate-500">Note stagione</span>
-              <input
-                type="text"
-                value={form.season_notes}
-                placeholder="es. estate, inverno, ven+dom mag"
-                onChange={(e) => setForm((f) => ({ ...f, season_notes: e.target.value }))}
-                className="input w-full"
-              />
+              <input type="text" value={form.season_notes} placeholder="es. estate, inverno, ven+dom mag" onChange={(e) => setForm((f) => ({ ...f, season_notes: e.target.value }))} className="input w-full" />
             </label>
           </fieldset>
 
           {saveError && (
-            <p className="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-700">
-              {saveError}
-            </p>
+            <p className="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-700">{saveError}</p>
           )}
 
-          <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={handleSave}
-              className="btn-primary flex-1 py-2"
-            >
-              {saving ? "Salvataggio..." : editingRule ? "Salva modifiche" : "Aggiungi regola"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              className="btn-secondary px-4 py-2"
-            >
-              Annulla
-            </button>
-          </div>
+          {confirmingImpact && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800 space-y-2">
+              <p>
+                Stai modificando una regola usata da <strong>{impactCount ?? 0}</strong> partenze future.
+                {sentConvocationsCount ? ` ${sentConvocationsCount} clienti hanno già ricevuto una convocazione.` : ""}
+                {" "}Le convocazioni interessate verranno segnalate come modificate, ma NON saranno reinviate automaticamente.
+              </p>
+              <div className="flex gap-2">
+                <button type="button" disabled={saving} onClick={() => handleSave(true)} className="btn-primary px-3 py-1.5 text-xs">
+                  Conferma modifica
+                </button>
+                <button type="button" onClick={() => setConfirmingImpact(false)} className="btn-secondary px-3 py-1.5 text-xs">
+                  Annulla
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!confirmingImpact && (
+            <div className="flex gap-3 pt-1">
+              <button type="button" disabled={saving} onClick={() => handleSave(false)} className="btn-primary flex-1 py-2">
+                {saving ? "Salvataggio..." : editingRule ? "Salva modifiche" : "Aggiungi regola"}
+              </button>
+              <button type="button" onClick={() => setPanelOpen(false)} className="btn-secondary px-4 py-2">
+                Annulla
+              </button>
+            </div>
+          )}
         </div>
       </SidePanel>
     </>

@@ -6,8 +6,12 @@ import type { FerryPickupRule } from "@/lib/ferry-pickup-rules";
  * findConflictingRule individua una regola realmente in competizione.
  */
 export function conflictErrorResponse(conflict: FerryPickupRule) {
-  const from = conflict.transport_from.slice(0, 5);
-  const to = conflict.transport_to.slice(0, 5);
+  // Le regole dirette (transport_type='direct') non hanno una finestra
+  // transport_from/to (nessun mezzo di collegamento): il conflitto è
+  // sull'orario esatto della nave (departure_time) — vedi findConflictingRule.
+  const isDirect = conflict.transport_type === "direct";
+  const from = conflict.transport_from?.slice(0, 5) ?? null;
+  const to = conflict.transport_to?.slice(0, 5) ?? null;
   const companyLabel = conflict.company.toUpperCase();
   const port = conflict.arrival_port === "ischia_porto" ? "Ischia Porto" : conflict.arrival_port === "casamicciola" ? "Casamicciola" : conflict.arrival_port;
 
@@ -19,8 +23,11 @@ export function conflictErrorResponse(conflict: FerryPickupRule) {
   }
   const period = periodParts.join(" ");
 
-  const message = `Questa fascia si sovrappone a una regola già esistente: ${companyLabel} ${from}–${to}` +
-    ` (${port}${period ? `, ${period}` : ""}).`;
+  const message = isDirect
+    ? `Esiste già una regola diretta per la stessa nave: ${companyLabel} ${conflict.departure_time.slice(0, 5)}` +
+      ` (${port}${period ? `, ${period}` : ""}).`
+    : `Questa fascia si sovrappone a una regola già esistente: ${companyLabel} ${from}–${to}` +
+      ` (${port}${period ? `, ${period}` : ""}).`;
 
   return NextResponse.json(
     {

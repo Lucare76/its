@@ -442,3 +442,264 @@ describe("resolveOperationalConnection — kind non treno/aereo", () => {
     expect(result.company).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regole DIRETTE (SNAV/MEDMAR, nessun treno/volo di collegamento) —
+// transport_type='direct'. Match esatto su departure_time, nessuna finestra
+// transport_from/transport_to, nessun fallback ambiguo su fascia oraria.
+// ---------------------------------------------------------------------------
+function directRule(overrides: Partial<OperationalPickupRule>): OperationalPickupRule {
+  return {
+    agency_logic: "aleste",
+    transport_type: "direct",
+    direction: "from_ischia",
+    boat_type: "aliscafo",
+    hotel_id: null,
+    zone: "forio",
+    transport_from: null,
+    transport_to: null,
+    company: "snav",
+    departure_time: "07:10",
+    embark_port: "casamicciola",
+    arrival_port: "napoli_beverello",
+    arrival_time: "08:05",
+    pickup_time: "06:20",
+    valid_from: null,
+    valid_to: null,
+    days_of_week: null,
+    ...overrides,
+  };
+}
+
+const SNAV_DIRECT_SCHEDULE = [
+  ferryRow({
+    id: "snav-0710",
+    company: "snav",
+    departure_port: "casamicciola",
+    arrival_port: "napoli_beverello",
+    departure_time: "07:10",
+    arrival_time: "08:05",
+    direction: "ischia_to_mainland",
+  }),
+];
+
+describe("resolveOperationalConnection — SNAV diretto", () => {
+  it("formula_snav: match esatto su departure_time, pickup dalla regola", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:10",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [directRule({})],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.company).toBe("snav");
+    expect(result.pickupTime).toBe("06:20");
+    expect(result.embarkPort).toBe("casamicciola");
+    expect(result.arrivalPort).toBe("napoli_beverello");
+    expect(result.confidence).toBe("ALTA");
+  });
+
+  it("transfer_port_hotel con vessel 'SNAV 07:10' riconosce lo stesso carrier diretto", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "transfer_port_hotel",
+      vessel: "SNAV 07:10",
+      transportTime: "07:10",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [directRule({})],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.company).toBe("snav");
+  });
+});
+
+describe("resolveOperationalConnection — MEDMAR Napoli diretto", () => {
+  const medmarNapoli = directRule({
+    company: "medmar",
+    boat_type: "traghetto",
+    departure_time: "06:25",
+    embark_port: "ischia_porto",
+    arrival_port: "napoli_beverello",
+    pickup_time: "05:30",
+  });
+  const schedule = [
+    ferryRow({ id: "medmar-napoli-0625", company: "medmar", departure_port: "ischia_porto", arrival_port: "napoli_beverello", departure_time: "06:25", arrival_time: "07:40", direction: "ischia_to_mainland" }),
+  ];
+
+  it("formula_medmar_napoli: match su departure_time 06:25, porto Napoli", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_medmar_napoli",
+      transportTime: "06:25",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [medmarNapoli],
+      ferrySchedules: schedule,
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.company).toBe("medmar");
+    expect(result.arrivalPort).toBe("napoli_beverello");
+    expect(result.pickupTime).toBe("05:30");
+  });
+});
+
+describe("resolveOperationalConnection — MEDMAR Pozzuoli diretto", () => {
+  const medmarPozzuoli = directRule({
+    company: "medmar",
+    boat_type: "traghetto",
+    departure_time: "06:20",
+    embark_port: "casamicciola",
+    arrival_port: "pozzuoli",
+    pickup_time: "05:30",
+  });
+  const schedule = [
+    ferryRow({ id: "medmar-pozzuoli-0620", company: "medmar", departure_port: "casamicciola", arrival_port: "pozzuoli", departure_time: "06:20", arrival_time: "07:20", direction: "ischia_to_mainland" }),
+  ];
+
+  it("formula_medmar_pozzuoli: match su departure_time 06:20, porto Pozzuoli — distinto da Napoli anche a parità di company", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_medmar_pozzuoli",
+      transportTime: "06:20",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [medmarPozzuoli],
+      ferrySchedules: schedule,
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.arrivalPort).toBe("pozzuoli");
+  });
+
+  it("stessa company ma regola Napoli in lista: il match resta quello giusto quando gli orari nave non coincidono (caso reale)", () => {
+    const napoli = directRule({ company: "medmar", departure_time: "06:25", arrival_port: "napoli_beverello" });
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_medmar_pozzuoli",
+      transportTime: "06:20",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [napoli, medmarPozzuoli],
+      ferrySchedules: schedule,
+    });
+    expect(result.arrivalPort).toBe("pozzuoli");
+  });
+});
+
+describe("resolveOperationalConnection — regole dirette: mismatch e nessun fallback ambiguo", () => {
+  it("mismatch departure_time: nessuna regola nella finestra più vicina, fallback legacy esplicito (mai un match approssimato)", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:15", // 5 minuti dopo l'unica regola configurata (07:10): NON deve matchare
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [directRule({})],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("legacy_fallback");
+  });
+
+  it("mismatch zone: nessuna regola generale, nessun match hotel/zona -> fallback legacy", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:10",
+      date: DATE,
+      zone: "barano", // la regola configurata è solo per 'forio'
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [directRule({})], // solo zone:'forio', nessuna generale
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("legacy_fallback");
+  });
+
+  it("agency_logic: regola sosandra non fa match per un'agenzia aleste, anche a parità di tutto il resto", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:10",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI", // -> agency_logic 'aleste'
+      operationalRules: [directRule({ agency_logic: "sosandra" })],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("legacy_fallback");
+  });
+
+  it("regola generale (zone=null) fa da jolly quando non c'è una regola di zona specifica", () => {
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:10",
+      date: DATE,
+      zone: "barano",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [directRule({ zone: null, pickup_time: "06:15" })],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.pickupTime).toBe("06:15");
+  });
+});
+
+describe("resolveOperationalConnection — regole dirette non interferiscono con treno/volo (regressione)", () => {
+  it("kind treno con regole train+direct in lista: matcha solo la regola train, mai quella direct", () => {
+    const trainRule = rule({ transport_type: "train", transport_from: "07:00", transport_to: "09:00", departure_time: "12:00", pickup_time: "05:00" });
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "transfer_train_hotel",
+      transportTime: "08:00",
+      date: DATE,
+      zone: null,
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [trainRule, directRule({})],
+      ferrySchedules: [ferryRow({ company: "medmar", departure_port: "ischia_porto", arrival_port: "napoli_beverello", departure_time: "12:00", direction: "ischia_to_mainland" })],
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.pickupTime).toBe("05:00");
+    expect(result.company).toBe("medmar");
+  });
+
+  it("kind diretto (formula_snav) con regole train+direct in lista: matcha solo la regola direct", () => {
+    const trainRule = rule({ transport_type: "train", transport_from: "07:00", transport_to: "09:00", departure_time: "12:00", pickup_time: "05:00" });
+    const result = resolveOperationalConnection({
+      direction: "from_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:10",
+      date: DATE,
+      zone: "forio",
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [trainRule, directRule({})],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.company).toBe("snav");
+    expect(result.pickupTime).toBe("06:20");
+  });
+
+  it("direction='to_ischia' non attiva mai il branch diretto anche con kind formula_snav (contratto: direct esiste solo in from_ischia)", () => {
+    const result = resolveOperationalConnection({
+      direction: "to_ischia",
+      bookingServiceKind: "formula_snav",
+      transportTime: "07:10",
+      date: DATE,
+      agencyName: "ALESTE VIAGGI",
+      operationalRules: [directRule({})],
+      ferrySchedules: SNAV_DIRECT_SCHEDULE,
+    });
+    expect(result.source).toBe("legacy_fallback");
+    expect(result.confidence).toBe("NESSUNA");
+  });
+});

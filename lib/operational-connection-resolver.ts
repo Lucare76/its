@@ -34,6 +34,7 @@ import {
   type FerryType,
   type ConnectionConfidence,
 } from "@/lib/travel-connection-resolver";
+import { derivePortCarrier } from "@/lib/departure-pickup-rules";
 
 export type OperationalDirection = "to_ischia" | "from_ischia";
 
@@ -47,7 +48,13 @@ export type OperationalDirection = "to_ischia" | "from_ischia";
 export type OperationalPickupRule = {
   id?: string;
   agency_logic: "aleste" | "sosandra";
-  transport_type: "train" | "flight";
+  /**
+   * 'direct' = SNAV/MEDMAR diretto (nessun treno/volo di collegamento): il
+   * match avviene su departure_time esatto (vedi findCanonicalDirectRule),
+   * non su una finestra transport_from/transport_to (che infatti sono null
+   * per queste righe — vedi migration 0261_ferry_pickup_rules_direct_type.sql).
+   */
+  transport_type: "train" | "flight" | "direct";
   direction: OperationalDirection;
   boat_type: "traghetto" | "aliscafo";
   /**
@@ -58,9 +65,9 @@ export type OperationalPickupRule = {
   hotel_id: string | null;
   /** null = si applica a qualunque zona hotel (jolly). Ignorato se hotel_id e' valorizzato e fa match diretto. */
   zone: string | null;
-  /** Finestra oraria del treno/volo entro cui la regola si applica. */
-  transport_from: string;
-  transport_to: string;
+  /** Finestra oraria del treno/volo entro cui la regola si applica. null per transport_type='direct'. */
+  transport_from: string | null;
+  transport_to: string | null;
   company: string;
   /** Orario di partenza della nave. */
   departure_time: string;
@@ -101,6 +108,13 @@ export type OperationalConnectionInput = {
    */
   zoneRecognized?: boolean;
   agencyName?: string | null;
+  /**
+   * Testo libero del vessel, quando noto — usato SOLO per riconoscere
+   * SNAV/MEDMAR nel caso booking_service_kind='transfer_port_hotel' (porto-
+   * porto puro, compagnia non implicita nel kind). Stesso pattern di
+   * apply-pickup-calc.ts. Ignorato per qualunque altro kind.
+   */
+  vessel?: string | null;
   operationalRules: OperationalPickupRule[];
   ferrySchedules: FerryScheduleRow[];
   /** Override manuale già confermato per questo servizio, se presente. */
@@ -188,6 +202,9 @@ function findCanonicalRule(
     if (r.direction !== args.direction) return false;
     if (r.transport_type !== args.transportType) return false;
     if (!args.allowedBoatTypes.includes(r.boat_type)) return false;
+    // transport_from/to sono null solo per transport_type='direct', escluso
+    // qui da args.transportType: 'train'|'flight'. Guardia solo per i tipi.
+    if (r.transport_from == null || r.transport_to == null) return false;
     if (t < toMinutes(r.transport_from) || t > toMinutes(r.transport_to)) return false;
     return isRuleActiveOnDate(r, args.date);
   };
@@ -209,9 +226,90 @@ function findCanonicalRule(
   const atBestLevel = matches.filter((m) => m.level === bestLevel);
 
   return atBestLevel.sort((a, b) => {
-    const widthA = toMinutes(a.r.transport_to) - toMinutes(a.r.transport_from);
-    const widthB = toMinutes(b.r.transport_to) - toMinutes(b.r.transport_from);
+    // Non-null: baseMatch ha già scartato le righe con transport_from/to null.
+    const widthA = toMinutes(a.r.transport_to!) - toMinutes(a.r.transport_from!);
+    const widthB = toMinutes(b.r.transport_to!) - toMinutes(b.r.transport_from!);
     if (widthA !== widthB) return widthA - widthB; // fascia più stretta vince
+    const af = a.r.valid_from ?? "0000-00-00";
+    const bf = b.r.valid_from ?? "0000-00-00";
+    return bf.localeCompare(af);
+  })[0]!.r;
+}
+
+/**
+ * Mappa kind → compagnia diretta, stessa tabella di FORMULA_CARRIER in
+ * lib/server/apply-pickup-calc.ts (duplicata qui volutamente: questo file è
+ * puro/testabile senza dipendenze server-only, apply-pickup-calc.ts non lo è).
+ */
+const DIRECT_CARRIER_BY_KIND: Record<string, "snav" | "medmar"> = {
+  formula_snav: "snav",
+  formula_medmar_napoli: "medmar",
+  formula_medmar_pozzuoli: "medmar",
+};
+
+/**
+ * Riconosce una prenotazione "diretta" (SNAV/MEDMAR, nessun treno/volo di
+ * collegamento) dal booking_service_kind, o dal testo vessel per
+ * transfer_port_hotel (porto-porto puro, compagnia non implicita nel kind).
+ * Nessun fallback ambiguo: se il kind non è tra quelli noti e il vessel non
+ * nomina esplicitamente SNAV/MEDMAR, ritorna null (fallback legacy a valle).
+ */
+function directCarrierFromKind(kind: string, vessel: string | null | undefined): "snav" | "medmar" | null {
+  if (DIRECT_CARRIER_BY_KIND[kind]) return DIRECT_CARRIER_BY_KIND[kind];
+  if (kind === "transfer_port_hotel") return derivePortCarrier(vessel);
+  return null;
+}
+
+/**
+ * Trova la regola canonica DIRETTA (transport_type='direct': SNAV/MEDMAR
+ * senza treno/volo di collegamento). A differenza di findCanonicalRule, non
+ * esiste una finestra oraria da un mezzo esterno da matchare: il match è
+ * sull'orario ESATTO della nave (departure_time), esattamente come fa oggi
+ * getPickupRule() in lib/departure-pickup-rules.ts confrontando t_from —
+ * nessun fallback su fascia oraria più vicina (nessun match ambiguo).
+ * Stessa gerarchia hotel > zona > generale di findCanonicalRule.
+ */
+function findCanonicalDirectRule(
+  rules: OperationalPickupRule[],
+  args: {
+    agencyLogic: "aleste" | "sosandra";
+    company: "snav" | "medmar";
+    hotelId: string | null;
+    zone: string | null;
+    zoneRecognized: boolean;
+    departureTime: string;
+    date: string;
+  }
+): OperationalPickupRule | null {
+  const requestedTime = args.departureTime.slice(0, 5);
+  const baseMatch = (r: OperationalPickupRule) => {
+    if (r.transport_type !== "direct") return false;
+    if (r.direction !== "from_ischia") return false;
+    if (r.agency_logic !== args.agencyLogic) return false;
+    if (r.company.toLowerCase() !== args.company) return false;
+    if (r.departure_time.slice(0, 5) !== requestedTime) return false;
+    return isRuleActiveOnDate(r, args.date);
+  };
+
+  const specificity = (r: OperationalPickupRule): 1 | 2 | 3 | 0 => {
+    if (r.hotel_id != null) return r.hotel_id === args.hotelId ? 1 : 0;
+    if (r.zone != null) return args.zoneRecognized && r.zone === args.zone ? 2 : 0;
+    return 3;
+  };
+
+  const matches = rules
+    .filter(baseMatch)
+    .map((r) => ({ r, level: specificity(r) }))
+    .filter((m) => m.level !== 0);
+
+  if (matches.length === 0) return null;
+
+  const bestLevel = Math.min(...matches.map((m) => m.level));
+  const atBestLevel = matches.filter((m) => m.level === bestLevel);
+
+  // A parità di livello, vince valid_from più recente (nessun altro tie-break
+  // possibile: non c'è una "fascia oraria" da confrontare per regole dirette).
+  return atBestLevel.sort((a, b) => {
     const af = a.r.valid_from ?? "0000-00-00";
     const bf = b.r.valid_from ?? "0000-00-00";
     return bf.localeCompare(af);
@@ -310,9 +408,43 @@ export function resolveOperationalConnection(input: OperationalConnectionInput):
   const policy = resolveAgencyConnectionPolicy(input.agencyName);
   const agencyLogic: "aleste" | "sosandra" = policy.agencyKey === "sosandra" ? "sosandra" : "aleste";
   const transportType = placeTypeFromKind(input.bookingServiceKind);
+  // Solo in PARTENZA: un booking diretto (SNAV/MEDMAR, nessun treno/volo di
+  // collegamento) non ha alcun transport_type riconosciuto da placeTypeFromKind
+  // (kind tipo formula_snav/transfer_port_hotel non contiene "train"/"flight").
+  const directCarrier =
+    input.direction === "from_ischia" ? directCarrierFromKind(input.bookingServiceKind, input.vessel) : null;
 
   let proposal: OperationalConnectionResult;
-  if (!transportType) {
+  if (directCarrier) {
+    const zoneRecognized = input.zoneRecognized ?? true;
+    const rule = findCanonicalDirectRule(input.operationalRules, {
+      agencyLogic,
+      company: directCarrier,
+      hotelId: input.hotelId ?? null,
+      zone: input.zone ?? null,
+      zoneRecognized,
+      departureTime: input.transportTime,
+      date: input.date,
+    });
+
+    if (rule) {
+      const matchedSchedule = verifyScheduleExists(rule, input.direction, input.ferrySchedules, input.date);
+      proposal = fromCanonicalRule(rule, matchedSchedule);
+    } else {
+      proposal = fromLegacyFallback(input, agencyLogic);
+    }
+    if (!zoneRecognized) {
+      proposal = {
+        ...proposal,
+        warnings: [
+          `⚠ UNKNOWN_HOTEL_ZONE: zona '${input.zone ?? "(vuota)"}' non è tra i valori canonici riconosciuti ` +
+            `(ischia | forio | lacco | casamicciola). Nessun fallback silenzioso su 'ischia': sono state valutate ` +
+            `solo regole hotel-specifiche o generali (senza zona).`,
+          ...proposal.warnings,
+        ],
+      };
+    }
+  } else if (!transportType) {
     proposal = {
       pickupTime: null,
       ferryScheduleId: null,
@@ -324,7 +456,7 @@ export function resolveOperationalConnection(input: OperationalConnectionInput):
       arrivalPort: null,
       source: "legacy_fallback",
       confidence: "NESSUNA",
-      warnings: [`booking_service_kind '${input.bookingServiceKind}' non è treno/aereo: nessun collegamento da calcolare.`],
+      warnings: [`booking_service_kind '${input.bookingServiceKind}' non è treno/aereo/diretto: nessun collegamento da calcolare.`],
     };
   } else {
     // La regola canonica (DB, ferry_pickup_rules) porta gia' il proprio

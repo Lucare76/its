@@ -10,15 +10,19 @@ export const runtime = "nodejs";
 const ruleSchema = z
   .object({
     agency_logic: z.enum(["aleste", "sosandra"]),
-    transport_type: z.enum(["train", "flight"]),
+    // 'direct' = SNAV/MEDMAR diretto (nessun treno/volo di collegamento) —
+    // valido SOLO per direction='from_ischia', vedi refine sotto.
+    transport_type: z.enum(["train", "flight", "direct"]),
     // to_ischia = ARRIVO (comportamento legacy, default per compatibilità con l'UI esistente).
     // from_ischia = PARTENZA: richiede pickup_time, embark_port ammesso, hotel_id/zone opzionali.
     direction: z.enum(["to_ischia", "from_ischia"]).default("to_ischia"),
     boat_type: z.enum(["traghetto", "aliscafo"]).default("traghetto"),
     hotel_id: z.string().uuid().nullable().optional(),
     zone: z.string().min(1).max(40).nullable().optional(),
-    transport_from: z.string().regex(/^\d{2}:\d{2}$/),
-    transport_to: z.string().regex(/^\d{2}:\d{2}$/),
+    // null/assenti SOLO per transport_type='direct' (nessuna finestra di
+    // arrivo mezzo da matchare): vedi refine sotto per la coerenza.
+    transport_from: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+    transport_to: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
     company: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()),
     departure_time: z.string().regex(/^\d{2}:\d{2}$/),
     embark_port: z.string().min(1).max(60).transform((v) => v.trim().toLowerCase()).nullable().optional(),
@@ -30,7 +34,19 @@ const ruleSchema = z
     days_of_week: z.array(z.number().int().min(0).max(6)).nullable().optional(),
     season_notes: z.string().max(200).nullable().optional(),
   })
-  .refine((data) => isTransportWindowValid(data.transport_from, data.transport_to), {
+  .refine((data) => data.transport_type !== "direct" || data.direction === "from_ischia", {
+    message: "transport_type='direct' (SNAV/MEDMAR diretto) è ammesso solo per direction='from_ischia'.",
+    path: ["transport_type"],
+  })
+  .refine((data) => data.transport_type !== "direct" || (!data.transport_from && !data.transport_to), {
+    message: "Le regole dirette (transport_type='direct') non hanno transport_from/transport_to: nessun mezzo di collegamento da attendere.",
+    path: ["transport_from"],
+  })
+  .refine((data) => data.transport_type === "direct" || (!!data.transport_from && !!data.transport_to), {
+    message: "transport_from e transport_to sono obbligatori per le regole treno/volo.",
+    path: ["transport_from"],
+  })
+  .refine((data) => data.transport_type === "direct" || isTransportWindowValid(data.transport_from!, data.transport_to!), {
     message: "L'orario finale deve essere successivo all'orario iniziale.",
     path: ["transport_to"],
   })
@@ -102,6 +118,8 @@ export async function POST(request: NextRequest) {
 
   const conflict = findConflictingRule((siblingRules ?? []) as FerryPickupRule[], {
     ...parsed.data,
+    transport_from: parsed.data.transport_from ?? null,
+    transport_to: parsed.data.transport_to ?? null,
     valid_from: parsed.data.valid_from ?? null,
     valid_to: parsed.data.valid_to ?? null,
     days_of_week: parsed.data.days_of_week ?? null,
