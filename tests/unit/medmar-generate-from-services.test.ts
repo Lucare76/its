@@ -18,7 +18,6 @@ function svc(p: Partial<ServiceForConvocation> & { service_id: string }): Servic
   return {
     customer_name: "Mario Rossi",
     phone: "3334372831",
-    phone_e164: null,
     hotel_name: "Hotel La Villa",
     pax: 2,
     pickup_time: "09:00",
@@ -74,6 +73,15 @@ describe("buildGeneratedConvocationRows — service -> MEDMAR convocation row", 
     expect(r.pickup_time).toBe("07:20");
     expect(r.departure_time).toBe("09:40");
     expect(r.status).toBe("pronto");
+  });
+
+  it("phone_e164 comes exclusively from normalizing services.phone — services.phone_e164 does not exist and is never read", () => {
+    const { rows } = buildGeneratedConvocationRows([svc({ service_id: "s1", phone: "3334372831" })], DATE, fakeNormalize);
+    expect(rows[0].phone_raw).toBe("3334372831");
+    expect(rows[0].phone_e164).toBe("+393334372831");
+    // ServiceForConvocation has no phone_e164 field at all (TS would fail to
+    // compile otherwise) — this assertion documents the invariant at runtime.
+    expect(Object.prototype.hasOwnProperty.call(svc({ service_id: "s1" }), "phone_e164")).toBe(false);
   });
 
   it("14. a service without a phone -> numero_non_valido, readable reason (never dropped)", () => {
@@ -184,7 +192,7 @@ function req(qs: string) {
 }
 
 const svcRow = (over: Record<string, unknown>) => ({
-  id: "s1", customer_name: "Mario", phone: "3334372831", phone_e164: null, pax: 2, hotel_id: "h1",
+  id: "s1", customer_name: "Mario", phone: "3334372831", pax: 2, hotel_id: "h1",
   booking_service_kind: "formula_medmar_napoli", direction: "departure", date: "2026-09-07", departure_date: "2026-09-07",
   departure_time: "11:10", time: "11:10", pickup_hotel: "09:00", pickup_time: null, orario_barca: "11:10",
   vessel: "MEDMAR Napoli", barca_compagnia: "Napoli Beverello", porto_bruno: null, meeting_point: null, status: "confirmed",

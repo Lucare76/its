@@ -33,7 +33,6 @@ export type ServiceForConvocation = {
   service_id: string;
   customer_name: string | null;
   phone: string | null;
-  phone_e164: string | null;
   hotel_name: string | null;
   pax: number | string | null;
   /** operational pickup, already "HH:mm" or null (resolveOperationalTiming). */

@@ -25,13 +25,12 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 export type GeneratedRowWithCoverage = GeneratedConvocationRow & CoverageResult;
 
 const SERVICE_COLUMNS =
-  "id, customer_name, phone, phone_e164, pax, hotel_id, booking_service_kind, direction, date, departure_date, departure_time, time, pickup_hotel, pickup_time, orario_barca, vessel, barca_compagnia, porto_bruno, meeting_point, status";
+  "id, customer_name, phone, pax, hotel_id, booking_service_kind, direction, date, departure_date, departure_time, time, pickup_hotel, pickup_time, orario_barca, vessel, barca_compagnia, porto_bruno, meeting_point, status";
 
 type ServiceRow = {
   id: string;
   customer_name: string | null;
   phone: string | null;
-  phone_e164: string | null;
   pax: number | null;
   hotel_id: string | null;
   booking_service_kind: string | null;
@@ -111,7 +110,6 @@ export async function fetchMedmarServicesForDate(
       service_id: svc.id,
       customer_name: svc.customer_name,
       phone: svc.phone,
-      phone_e164: svc.phone_e164,
       hotel_name: svc.hotel_id ? hotelName.get(svc.hotel_id) ?? null : null,
       pax: svc.pax,
       pickup_time: pickup || null,
