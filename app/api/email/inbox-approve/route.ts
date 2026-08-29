@@ -15,6 +15,8 @@ import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/serv
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
+import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
+import { auditLog } from "@/lib/server/ops-audit";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -151,12 +153,69 @@ export async function POST(request: NextRequest) {
   const tenantId = auth.membership.tenant_id;
   const userId = auth.user?.id ?? null;
 
-  let body: { inbound_email_id?: string; form?: FormState };
+  let body: {
+    inbound_email_id?: string;
+    form?: FormState;
+    /** L'operatore ha visto il pannello duplicati e ha scelto "AGGIUNGI COMUNQUE". */
+    confirm_duplicate?: boolean;
+    /** L'operatore ha scelto "MODIFICA PRENOTAZIONE ESISTENTE": nessun nuovo
+     *  service, la email viene solo collegata al service indicato. */
+    link_to_service_id?: string;
+  };
   try { body = (await request.json()) as typeof body; }
   catch { return NextResponse.json({ ok: false, error: "Body JSON non valido." }, { status: 400 }); }
 
   const { inbound_email_id, form } = body;
+  const confirmDuplicate = body.confirm_duplicate === true;
+  const linkToServiceId = clean(body.link_to_service_id);
   if (!inbound_email_id) return NextResponse.json({ ok: false, error: "inbound_email_id mancante." }, { status: 400 });
+
+  // ── MODIFICA PRENOTAZIONE ESISTENTE ──────────────────────────────────────
+  // L'aggiornamento dei campi del service esistente è già stato fatto dalla UI
+  // via PATCH /api/ops/services/[id] (endpoint esistente, con audit
+  // logServiceChange). Qui chiudiamo il flusso Inbox: nessun INSERT, la email
+  // risulta gestita e collegata al service scelto.
+  if (linkToServiceId) {
+    const { data: target } = await admin
+      .from("services")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("id", linkToServiceId)
+      .maybeSingle();
+    if (!target?.id) {
+      return NextResponse.json({ ok: false, error: "Servizio esistente non trovato." }, { status: 404 });
+    }
+    const { data: emailRow } = await admin
+      .from("inbound_emails")
+      .select("parsed_json")
+      .eq("tenant_id", tenantId)
+      .eq("id", inbound_email_id)
+      .maybeSingle();
+    const parsedJson = (emailRow?.parsed_json ?? {}) as Record<string, unknown>;
+    await admin
+      .from("inbound_emails")
+      .update({
+        parsed_json: {
+          ...parsedJson,
+          review_status: "confirmed",
+          linked_service_id: linkToServiceId,
+          linked_via: "duplicate_modify",
+        },
+      })
+      .eq("tenant_id", tenantId)
+      .eq("id", inbound_email_id);
+    auditLog({
+      event: "inbox_email_linked_existing_service",
+      tenantId,
+      userId,
+      role: auth.membership.role,
+      serviceId: linkToServiceId,
+      inboundEmailId: inbound_email_id,
+      outcome: "linked",
+    });
+    return NextResponse.json({ ok: true, linked: true, service_id: linkToServiceId, inbound_email_id });
+  }
+
   if (!form) return NextResponse.json({ ok: false, error: "Dati form mancanti." }, { status: 400 });
 
   const { data: existingService } = await admin
@@ -206,6 +265,46 @@ export async function POST(request: NextRequest) {
   const textHash = hashString(JSON.stringify(form)).slice(0, 24);
   const compositeKey = slug(`${customerName}|${arrivalDate}|${hotelName ?? "hotel-nd"}`);
   const dedupeKey = hashString([practiceNumber, customerName, arrivalDate, hotelName, textHash].filter(Boolean).join("|")).slice(0, 24);
+
+  // ── Controllo duplicati LIVE sul DB (fonte di verità) ────────────────────
+  // `existingService` sopra copre solo l'idempotenza della STESSA email (bozza
+  // già collegata a questo inbound_email_id). Qui invece cerchiamo la STESSA
+  // prenotazione entrata da un altro canale/altra email, riusando il
+  // deduplicatore condiviso di lib/server/agency-pdf-import.ts. Il flag
+  // `duplicate_alert` del poller IMAP resta solo un'indicazione preliminare.
+  if (!existingService?.id && !confirmDuplicate) {
+    const probe = buildDuplicateProbe({
+      practiceNumber,
+      customerName,
+      phone: clean(form.cliente_cellulare),
+      arrivalDate,
+      hotelName,
+    });
+    const { certain_service_id, matches } = await lookupBookingDuplicates(admin, tenantId, probe);
+    if (matches.length > 0) {
+      const hydrated = await hydrateDuplicateMatches(admin, tenantId, matches);
+      auditLog({
+        event: "inbox_approve_duplicate_detected",
+        level: "warn",
+        tenantId,
+        userId,
+        role: auth.membership.role,
+        inboundEmailId: inbound_email_id,
+        duplicate: true,
+        outcome: "duplicate_prompt",
+        details: { match_count: matches.length, certain_service_id },
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          duplicate: true,
+          certain_service_id: certain_service_id ?? null,
+          matches: hydrated,
+        },
+        { status: 409 }
+      );
+    }
+  }
 
   // ── Risolvi / crea hotel ──────────────────────────────────────────────────
   const hotelId = await resolveOrCreateHotel(auth.admin, tenantId, hotelName);

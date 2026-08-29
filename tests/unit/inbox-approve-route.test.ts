@@ -111,6 +111,14 @@ function makeFakeAdmin(opts: {
   serviceInserts: Array<Record<string, unknown>>;
   hotelsSeed?: Array<{ id: string; name: string; zone?: string | null }>;
   hotelsInserts?: Array<Record<string, unknown>>;
+  /** Riga restituita da findServiceByPattern (match "certo" su [pdf_composite]/[practice]/...). */
+  dupCertainRow?: Record<string, unknown> | null;
+  /** Righe restituite dalle query di lista del deduplicatore
+   *  (findPotentialExistingMatches + hydrateDuplicateMatches). */
+  dupListRows?: Array<Record<string, unknown>>;
+  /** Servizi indirizzabili via link_to_service_id (id → riga). */
+  existingServicesById?: Record<string, Record<string, unknown>>;
+  inboundEmailUpdates?: Array<Record<string, unknown>>;
 }) {
   const genericBuilder = (): Record<string, unknown> => {
     const b: Record<string, unknown> = {};
@@ -124,15 +132,46 @@ function makeFakeAdmin(opts: {
   };
 
   const servicesBuilder = (): Record<string, unknown> => {
+    const state = { usedIlike: false, usedIn: false, eqId: null as string | null };
     const b: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "order", "limit"]) b[m] = () => b;
-    b.maybeSingle = async () => ({ data: null, error: null }); // nessuna bozza pre-esistente: sempre insert
+    for (const m of ["select", "order", "limit"]) b[m] = () => b;
+    b.eq = (field: string, value: string) => { if (field === "id") state.eqId = value; return b; };
+    b.ilike = () => { state.usedIlike = true; return b; };
+    b.in = () => { state.usedIn = true; return b; };
+    b.maybeSingle = async () => {
+      // .ilike → findServiceByPattern (match "certo" del deduplicatore)
+      if (state.usedIlike) return { data: opts.dupCertainRow ?? null, error: null };
+      // .eq("id",...) → lookup service esistente per link_to_service_id
+      if (state.eqId) return { data: opts.existingServicesById?.[state.eqId] ?? null, error: null };
+      // altrimenti → existingService per inbound_email_id (nessuna bozza: insert)
+      return { data: null, error: null };
+    };
+    b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+      // .in(...) → hydrateDuplicateMatches ; .ilike/.eq(...).limit(5) → findPotentialExistingMatches
+      const rows = state.usedIn || state.usedIlike ? (opts.dupListRows ?? []) : [];
+      return Promise.resolve({ data: rows, error: null }).then(resolve, reject);
+    };
+    b.update = () => ({ eq: () => ({ eq: () => Promise.resolve({ error: null }) }) });
     b.insert = (payload: Record<string, unknown>) => {
       opts.serviceInserts.push(payload);
       const id = `svc-${opts.serviceInserts.length}`;
       const result = { data: { id }, error: null };
       return { select: () => ({ single: async () => result }) };
     };
+    return b;
+  };
+
+  const inboundEmailsBuilder = (): Record<string, unknown> => {
+    const b: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) b[m] = () => b;
+    b.maybeSingle = async () => ({ data: { parsed_json: {} }, error: null });
+    b.single = async () => ({ data: { id: "inbound-1", parsed_json: {} }, error: null });
+    b.update = (payload: Record<string, unknown>) => {
+      (opts.inboundEmailUpdates ?? []).push(payload);
+      return { eq: () => ({ eq: () => Promise.resolve({ error: null }) }) };
+    };
+    b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: [], error: null }).then(resolve, reject);
     return b;
   };
 
@@ -178,6 +217,7 @@ function makeFakeAdmin(opts: {
       if (table === "services") return servicesBuilder();
       if (table === "hotels") return hotelsBuilder();
       if (table === "hotel_aliases") return hotelAliasesBuilder();
+      if (table === "inbound_emails") return inboundEmailsBuilder();
       return genericBuilder();
     },
   } as never;
@@ -411,5 +451,187 @@ describe("POST /api/email/inbox-approve — pickup hotel calcolato per transfer_
     const row = serviceInserts[0]!;
     expect(row.pickup_hotel).toBeNull();
     expect(String(row.pickup_alert)).toMatch(/compagnia/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressione MARIOTTI: controllo duplicati LIVE prima dell'INSERT.
+// Dati reali dell'audit: MARIOTTI SERENA, 2 pax, arrivo 2026-09-06, ISOLA VERDE
+// HOTEL & THERMAL SPA, tel 3289126048. Record A (pratica 26/140508, arrivo
+// 12:28) già a sistema; la nuova comunicazione ("MODIFICA ORARI", pratica
+// 26/011405, arrivo 12:38, ritorno 13:18) NON deve creare un secondo service.
+// ─────────────────────────────────────────────────────────────────────────────
+const MARIOTTI_EXISTING_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+function mariottiForm(overrides: Partial<FormState> = {}): FormState {
+  return {
+    cliente_nome: "MARIOTTI SERENA",
+    cliente_cellulare: "3289126048",
+    n_pax: "2",
+    hotel: "ISOLA VERDE HOTEL & THERMAL SPA",
+    data_arrivo: "2026-09-06",
+    orario_arrivo: "12:38",
+    data_partenza: "2026-09-13",
+    orario_partenza: "13:18",
+    tipo_servizio: "transfer_station_hotel",
+    treno_andata: "ITA 8903",
+    treno_ritorno: "ITA 9940",
+    citta_partenza: "FIRENZE",
+    totale_pratica: "112.00",
+    note: "",
+    numero_pratica: "26/011405",
+    agenzia: "Aleste Viaggi",
+    ...overrides,
+  };
+}
+
+/** Riga "Record A" restituita sia dal match certo sia dalle liste soft. */
+function mariottiExistingRow() {
+  return {
+    id: MARIOTTI_EXISTING_ID,
+    status: "new",
+    is_draft: false,
+    customer_name: "MARIOTTI SERENA",
+    phone: "3289126048",
+    date: "2026-09-06",
+    pax: 2,
+    hotel_id: HOTEL_ID,
+    agency_id: null,
+    billing_party_name: "Aleste Viaggi",
+    transport_code: null,
+    outbound_time: "12:28",
+    return_time: "13:20",
+    arrival_time: null,
+    departure_time: null,
+    notes:
+      "[pdf_import] Booking finale creato da PDF | [practice:26/140508] | " +
+      "[pdf_composite:mariotti-serena-2026-09-06-isola-verde-hotel-thermal-spa]",
+    hotels: { name: "Isola Verde Hotel & Thermal Spa" },
+    agencies: null,
+  };
+}
+
+describe("POST /api/email/inbox-approve — controllo duplicati LIVE (regressione MARIOTTI)", () => {
+  it("primo tentativo di approvazione: nessun INSERT, 409 duplicate con il record esistente nei matches", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
+          dupCertainRow: { id: MARIOTTI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: mariottiExistingRow().notes },
+          dupListRows: [mariottiExistingRow()],
+        })
+      )
+    );
+
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: mariottiForm() }));
+    const json = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(json.duplicate).toBe(true);
+    expect(serviceInserts).toHaveLength(0);
+    expect(json.certain_service_id).toBe(MARIOTTI_EXISTING_ID);
+    expect(Array.isArray(json.matches)).toBe(true);
+    expect(json.matches.map((m: { service_id: string }) => m.service_id)).toContain(MARIOTTI_EXISTING_ID);
+    // Il match riporta i dati per il confronto MODIFICA/AGGIUNGI.
+    const m = json.matches.find((x: { service_id: string }) => x.service_id === MARIOTTI_EXISTING_ID);
+    expect(m.customer_name).toBe("MARIOTTI SERENA");
+    expect(m.practice_number).toBe("26/140508");
+  });
+
+  it("AGGIUNGI COMUNQUE (confirm_duplicate:true): crea il secondo service solo con conferma esplicita", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
+          dupCertainRow: { id: MARIOTTI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: mariottiExistingRow().notes },
+          dupListRows: [mariottiExistingRow()],
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: mariottiForm(), confirm_duplicate: true })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(serviceInserts).toHaveLength(1);
+  });
+
+  it("MODIFICA (link_to_service_id): nessun INSERT, la email viene collegata al service esistente", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const inboundEmailUpdates: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          inboundEmailUpdates,
+          existingServicesById: { [MARIOTTI_EXISTING_ID]: { id: MARIOTTI_EXISTING_ID } },
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: mariottiForm(), link_to_service_id: MARIOTTI_EXISTING_ID })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.linked).toBe(true);
+    expect(json.service_id).toBe(MARIOTTI_EXISTING_ID);
+    expect(serviceInserts).toHaveLength(0);
+    expect(inboundEmailUpdates).toHaveLength(1);
+    const pj = inboundEmailUpdates[0]!.parsed_json as Record<string, unknown>;
+    expect(pj.review_status).toBe("confirmed");
+    expect(pj.linked_service_id).toBe(MARIOTTI_EXISTING_ID);
+  });
+
+  it("COMITIVE: stesso telefono + stessa data, persone diverse → 409 come possibile match (NON certo), operatore può aggiungere", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    // Membro comitiva già a sistema: stesso telefono, altra persona.
+    const comitivaRow = {
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      status: "new",
+      is_draft: false,
+      customer_name: "LEVI STEFANIA",
+      phone: "3382157166",
+      date: "2026-07-12",
+      pax: 3,
+      hotel_id: HOTEL_ID,
+      notes: "",
+      hotels: { name: "Hotel X" },
+      agencies: null,
+    };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Hotel X" }],
+          dupCertainRow: null, // nessun match certo (né composite né pratica né hash)
+          dupListRows: [comitivaRow],
+        })
+      )
+    );
+
+    const form = alesteForm({
+      cliente_nome: "LEVI ALLEGRA",
+      cliente_cellulare: "3382157166",
+      data_arrivo: "2026-07-12",
+      n_pax: "2",
+      numero_pratica: "", // nessuna pratica → nessun match "certo" possibile
+    });
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form }));
+    const json = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(json.duplicate).toBe(true);
+    expect(json.certain_service_id).toBeNull(); // NON trattato come duplicato certo
+    expect(serviceInserts).toHaveLength(0); // l'operatore decide (Aggiungi comunque / Modifica)
+    expect(json.matches.length).toBeGreaterThan(0);
   });
 });

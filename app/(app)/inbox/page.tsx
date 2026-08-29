@@ -264,6 +264,69 @@ function hasInboxStructuredData(parsedJson: Record<string, unknown> | null): boo
   return Boolean(claudeExtracted);
 }
 
+// ─── Duplicati: tipi + helper UI ───────────────────────────────────────────
+// Mirror di HydratedDuplicateMatch (lib/server/agency-pdf-import.ts).
+type DupMatch = {
+  service_id: string;
+  match_reason: string;
+  status: string;
+  is_draft: boolean;
+  customer_name: string | null;
+  phone: string | null;
+  date: string | null;
+  pax: number | null;
+  hotel_id: string | null;
+  hotel_name: string | null;
+  agency_name: string | null;
+  billing_party_name: string | null;
+  practice_number: string | null;
+  outbound_time: string | null;
+  return_time: string | null;
+  arrival_time: string | null;
+  departure_time: string | null;
+  transport_code: string | null;
+  notes: string | null;
+};
+
+type IncomingSummary = {
+  customer_name: string;
+  date: string;
+  hotel: string;
+  pax: string;
+  phone: string;
+  agency: string;
+  practice_number: string;
+  arrival_time: string;
+  return_time: string;
+  transport_code: string;
+};
+
+function incomingSummaryFromForm(f: FormState): IncomingSummary {
+  const trains = [f.treno_andata, f.treno_ritorno].map((s) => (s ?? "").trim()).filter(Boolean).join(" / ");
+  return {
+    customer_name: (f.cliente_nome ?? "").trim(),
+    date: (f.data_arrivo ?? "").trim(),
+    hotel: (f.hotel ?? "").trim(),
+    pax: (f.n_pax ?? "").trim(),
+    phone: (f.cliente_cellulare ?? "").trim(),
+    agency: (f.agenzia ?? "").trim(),
+    practice_number: (f.numero_pratica ?? "").trim(),
+    arrival_time: (f.orario_arrivo ?? "").trim(),
+    return_time: (f.orario_partenza ?? "").trim(),
+    transport_code: trains,
+  };
+}
+
+const DUP_REASON_LABEL: Record<string, string> = {
+  practice_number: "stesso numero pratica",
+  phone: "stesso telefono",
+  customer_name: "stesso nome cliente",
+  pdf_hash: "stesso file PDF",
+  pdf_text_hash: "stesso testo PDF",
+  pdf_dedupe: "stessa chiave import",
+  pdf_composite: "stesso cliente + data + hotel",
+};
+
 // ─── Componente ─────────────────────────────────────────────────────────────
 
 export default function InboxPage() {
@@ -312,6 +375,17 @@ export default function InboxPage() {
   const [pdfUploadPreview, setPdfUploadPreview] = useState<Record<string, unknown> | null>(null);
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
+  // Pannello "prenotazione già esistente" (MODIFICA / AGGIUNGI / ANNULLA).
+  // Popolato quando /api/email/inbox-approve o /api/pdf/claude-save-draft
+  // rispondono 409 { duplicate:true, matches:[...] }.
+  const [dupModal, setDupModal] = useState<{
+    source: "approve" | "pdf";
+    matches: DupMatch[];
+    certainId: string | null;
+    incoming: IncomingSummary;
+    form: FormState;
+  } | null>(null);
+  const [dupBusy, setDupBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
@@ -619,9 +693,24 @@ export default function InboxPage() {
           force
         })
       });
-      const body = (await response.json().catch(() => null)) as { ok?: boolean; inbound_email_id?: string; duplicate?: boolean; error?: string } | null;
+      const body = (await response.json().catch(() => null)) as {
+        ok?: boolean; inbound_email_id?: string; duplicate?: boolean; error?: string;
+        matches?: DupMatch[]; certain_service_id?: string | null;
+      } | null;
       if (response.status === 409 && body?.duplicate) {
-        setPdfDuplicateWarning(body.error ?? "PDF già importato.");
+        if (Array.isArray(body.matches) && body.matches.length > 0) {
+          // Stessa prenotazione da un altro canale → pannello MODIFICA/AGGIUNGI.
+          setDupModal({
+            source: "pdf",
+            matches: body.matches,
+            certainId: body.certain_service_id ?? null,
+            incoming: incomingSummaryFromForm(pdfEditForm),
+            form: pdfEditForm,
+          });
+        } else {
+          // Solo pdf_hash: stesso identico file → avviso semplice esistente.
+          setPdfDuplicateWarning(body.error ?? "PDF già importato.");
+        }
         return;
       }
       if (!response.ok || !body?.ok || !body?.inbound_email_id) {
@@ -808,7 +897,7 @@ export default function InboxPage() {
     setMessage("Email eliminata.");
   };
 
-  const approveEmail = async () => {
+  const approveEmail = async (confirmDuplicate = false) => {
     if (!selectedEmail || !tenantId || approvalInFlightRef.current) return;
     approvalInFlightRef.current = true;
     const token = await getToken();
@@ -823,9 +912,26 @@ export default function InboxPage() {
       const res = await fetch("/api/email/inbox-approve", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({ inbound_email_id: selectedEmail.id, form })
+        body: JSON.stringify({
+          inbound_email_id: selectedEmail.id,
+          form,
+          ...(confirmDuplicate ? { confirm_duplicate: true } : {}),
+        })
       });
-      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; service_id?: string; error?: string };
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean; service_id?: string; error?: string;
+        duplicate?: boolean; matches?: DupMatch[]; certain_service_id?: string | null;
+      };
+      if (res.status === 409 && body.duplicate && Array.isArray(body.matches) && body.matches.length > 0) {
+        setDupModal({
+          source: "approve",
+          matches: body.matches,
+          certainId: body.certain_service_id ?? null,
+          incoming: incomingSummaryFromForm(form),
+          form,
+        });
+        return;
+      }
       if (!res.ok || !body.ok) {
         setApproveError(body.error ?? `Errore HTTP ${res.status}`);
       } else {
@@ -838,6 +944,90 @@ export default function InboxPage() {
     } finally {
       approvalInFlightRef.current = false;
       setSubmitting(false);
+    }
+  };
+
+  // ── Azioni pannello duplicati ──────────────────────────────────────────────
+  const dupAddAnyway = async () => {
+    if (!dupModal || dupBusy) return;
+    setDupBusy(true);
+    try {
+      const src = dupModal.source;
+      setDupModal(null);
+      if (src === "approve") {
+        await approveEmail(true);
+      } else {
+        await createDraftFromUploadedPdf(true);
+      }
+    } finally {
+      setDupBusy(false);
+    }
+  };
+
+  const dupModifyExisting = async (matchId: string) => {
+    if (!dupModal || dupBusy) return;
+    setDupBusy(true);
+    setApproveError(null);
+    try {
+      const token = await getToken();
+      if (!token) { setApproveError("Sessione non valida."); return; }
+      const f = dupModal.form;
+      const match = dupModal.matches.find((m) => m.service_id === matchId) ?? null;
+
+      // Solo campi realmente presenti nella nuova comunicazione: mai null/"".
+      const patch: Record<string, unknown> = {};
+      const put = (key: string, value: string | null | undefined) => {
+        const s = (value ?? "").trim();
+        if (s) patch[key] = s;
+      };
+      put("customer_name", f.cliente_nome);
+      put("phone", f.cliente_cellulare);
+      const paxNum = Number(f.n_pax);
+      if (Number.isFinite(paxNum) && paxNum > 0) patch.pax = Math.min(999, Math.trunc(paxNum));
+      put("time", f.orario_arrivo);
+      put("arrival_time", f.orario_arrivo);
+      put("departure_time", f.orario_partenza);
+      put("arrival_date", f.data_arrivo);
+      put("departure_date", f.data_partenza);
+      put("meeting_point", f.citta_partenza);
+      const trains = [f.treno_andata, f.treno_ritorno].map((s) => (s ?? "").trim()).filter(Boolean).join(" / ");
+      if (trains) patch.transport_code = trains;
+      // Numero pratica: vive nel marker [practice:...] dentro notes → swap mirato.
+      const newPractice = (f.numero_pratica ?? "").trim();
+      if (newPractice && match?.notes) {
+        patch.notes = /\[practice:[^\]]+\]/.test(match.notes)
+          ? match.notes.replace(/\[practice:[^\]]+\]/, `[practice:${newPractice}]`)
+          : `${match.notes} | [practice:${newPractice}]`;
+      }
+
+      const patchRes = await fetch(`/api/ops/services/${matchId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(patch),
+      });
+      if (!patchRes.ok) {
+        const pb = (await patchRes.json().catch(() => null)) as { error?: string } | null;
+        setApproveError(pb?.error ?? `Modifica non riuscita (HTTP ${patchRes.status}).`);
+        return;
+      }
+
+      // Flusso email: collega la email al servizio esistente (nessun INSERT).
+      if (dupModal.source === "approve" && selectedEmail) {
+        await fetch("/api/email/inbox-approve", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ inbound_email_id: selectedEmail.id, form: f, link_to_service_id: matchId }),
+        });
+      }
+
+      await loadData(token);
+      if (dupModal.source === "pdf") setPdfUploadOpen(false);
+      setDupModal(null);
+      setMessage("Prenotazione esistente aggiornata con i dati della nuova comunicazione.");
+    } catch (e) {
+      setApproveError(e instanceof Error ? e.message : "Errore di rete.");
+    } finally {
+      setDupBusy(false);
     }
   };
 
@@ -2124,6 +2314,112 @@ export default function InboxPage() {
           </div>
         </div>
       ) : null}
+
+      {/* ── Pannello "prenotazione già esistente": MODIFICA / AGGIUNGI / ANNULLA ── */}
+      {dupModal ? (() => {
+        const single = dupModal.matches.length === 1 ? dupModal.matches[0] : null;
+        const inc = dupModal.incoming;
+        const diffRow = (label: string, oldV: string | null | undefined, newV: string | null | undefined) => {
+          const o = (oldV ?? "").trim();
+          const n = (newV ?? "").trim();
+          if (!o && !n) return null;
+          const changed = n !== "" && o !== n;
+          return (
+            <div key={label} className={`grid grid-cols-[110px_1fr_1fr] gap-2 px-3 py-1.5 text-xs ${changed ? "bg-amber-50" : ""}`}>
+              <span className="font-semibold text-slate-500">{label}</span>
+              <span className="text-slate-500 line-through decoration-slate-300">{o || "—"}</span>
+              <span className={changed ? "font-semibold text-amber-800" : "text-slate-700"}>{n || "—"}</span>
+            </div>
+          );
+        };
+        return (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 p-4" onClick={() => !dupBusy && setDupModal(null)}>
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="text-center text-3xl">{dupModal.certainId ? "⚠️" : "🔎"}</div>
+              <h3 className="mt-1 text-center text-base font-bold text-slate-800">
+                {dupModal.certainId ? "Prenotazione già esistente" : "Possibile duplicato"}
+              </h3>
+              <p className="mt-1 text-center text-xs text-slate-500">
+                {dupModal.certainId
+                  ? "Una prenotazione che sembra la stessa è già a sistema. Scegli come procedere."
+                  : "Una o più prenotazioni potrebbero coincidere. Verifica prima di procedere."}
+              </p>
+
+              <div className="mt-4 space-y-3">
+                {dupModal.matches.map((m) => (
+                  <div key={m.service_id} className="rounded-xl border border-slate-200 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {DUP_REASON_LABEL[m.match_reason] ?? m.match_reason}
+                      </span>
+                      <span className="text-[10px] font-semibold uppercase text-slate-400">
+                        {m.is_draft ? "bozza" : m.status || "—"}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
+                      <span><span className="font-semibold text-slate-500">Cliente:</span> {m.customer_name ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Data:</span> {m.date ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Hotel:</span> {m.hotel_name ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Pax:</span> {m.pax ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Telefono:</span> {m.phone ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Agenzia:</span> {m.agency_name ?? m.billing_party_name ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Pratica:</span> {m.practice_number ?? "—"}</span>
+                      <span><span className="font-semibold text-slate-500">Mezzo:</span> {m.transport_code ?? "—"}</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={dupBusy}
+                      onClick={() => void dupModifyExisting(m.service_id)}
+                      className="mt-2 w-full rounded-lg bg-slate-800 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {dupBusy ? "Aggiorno..." : "Modifica questa prenotazione"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {single ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+                  <div className="grid grid-cols-[110px_1fr_1fr] gap-2 bg-slate-50 px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400">
+                    <span>Campo</span><span>Esistente</span><span>Nuovi dati</span>
+                  </div>
+                  {diffRow("Pratica", single.practice_number, inc.practice_number)}
+                  {diffRow("Arrivo", single.arrival_time ?? single.outbound_time, inc.arrival_time)}
+                  {diffRow("Ritorno", single.return_time ?? single.departure_time, inc.return_time)}
+                  {diffRow("Mezzo", single.transport_code, inc.transport_code)}
+                  {diffRow("Pax", single.pax != null ? String(single.pax) : "", inc.pax)}
+                  {diffRow("Telefono", single.phone, inc.phone)}
+                  {diffRow("Hotel", single.hotel_name, inc.hotel)}
+                  {diffRow("Cliente", single.customer_name, inc.customer_name)}
+                  {diffRow("Data", single.date, inc.date)}
+                </div>
+              ) : null}
+
+              <p className="mt-4 text-center text-[11px] text-slate-400">
+                &ldquo;Modifica&rdquo; aggiorna la prenotazione esistente coi nuovi dati. &ldquo;Aggiungi comunque&rdquo; crea una nuova prenotazione.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  disabled={dupBusy}
+                  onClick={() => setDupModal(null)}
+                  className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="button"
+                  disabled={dupBusy}
+                  onClick={() => void dupAddAnyway()}
+                  className="flex-1 rounded-xl bg-amber-600 py-2.5 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {dupBusy ? "..." : "Aggiungi comunque"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
     </section>
   );
 }

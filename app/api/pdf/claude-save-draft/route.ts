@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -339,7 +340,8 @@ export async function POST(request: NextRequest) {
   const dedupeKey = hashString([practiceNumber, customerName, arrivalDate, hotelName, textHash].filter(Boolean).join("|")).slice(0, 24);
   const externalReference = practiceNumber ?? compositeKey;
 
-  // ── Controllo duplicato PDF ───────────────────────────────────────────────
+  // ── Controllo idempotenza STESSO FILE ────────────────────────────────────
+  // pdf_hash = stesso identico PDF già importato. Resta invariato.
   if (!force) {
     const { data: dupService } = await admin
       .from("services")
@@ -354,6 +356,33 @@ export async function POST(request: NextRequest) {
         existing_service_id: dupService.id,
         error: `Questo PDF è già stato importato (${dupService.customer_name} — ${dupService.date}). Vuoi salvarlo comunque?`
       }, { status: 409 });
+    }
+  }
+
+  // ── Controllo STESSA PRENOTAZIONE (deduplicatore condiviso) ──────────────
+  // Diverso dal pdf_hash: qui intercettiamo la stessa prenotazione arrivata da
+  // un altro canale (pratica / telefono / nome / [pdf_composite]). Riusa
+  // lib/server/agency-pdf-import.ts. `force:true` = "AGGIUNGI COMUNQUE".
+  if (!force) {
+    const probe = buildDuplicateProbe({
+      practiceNumber,
+      customerName,
+      phone: clean(form.cliente_cellulare),
+      arrivalDate,
+      hotelName,
+    });
+    const { certain_service_id, matches } = await lookupBookingDuplicates(admin, tenantId, probe);
+    if (matches.length > 0) {
+      const hydrated = await hydrateDuplicateMatches(admin, tenantId, matches);
+      return NextResponse.json(
+        {
+          ok: false,
+          duplicate: true,
+          certain_service_id: certain_service_id ?? null,
+          matches: hydrated,
+        },
+        { status: 409 }
+      );
     }
   }
 

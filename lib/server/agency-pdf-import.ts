@@ -76,15 +76,87 @@ export type NormalizedPdfImport = {
   parser_logs: string[];
 };
 
-type PossibleExistingMatch = {
+export type PossibleExistingMatchReason =
+  | "practice_number"
+  | "phone"
+  | "customer_name"
+  | "pdf_hash"
+  | "pdf_text_hash"
+  | "pdf_dedupe"
+  | "pdf_composite";
+
+export type PossibleExistingMatch = {
   service_id: string;
   status: string;
   is_draft: boolean;
   customer_name: string | null;
   phone: string | null;
   date: string | null;
-  match_reason: "practice_number" | "phone" | "customer_name";
+  match_reason: PossibleExistingMatchReason;
 };
+
+/**
+ * Sottoinsieme minimo di campi che il deduplicatore usa davvero. Permette di
+ * riusare `findExistingPdfImport` / `findPotentialExistingMatches` anche da
+ * write-path che NON hanno un `NormalizedPdfImport` (Inbox approve, upload PDF
+ * manuale) senza duplicarne la logica. Vedi `buildDuplicateProbe`.
+ */
+export type DuplicateProbe = {
+  practice_number: string | null;
+  customer_full_name: string | null;
+  customer_phone: string | null;
+  pdf_hash: string | null;
+  text_hash: string | null;
+  dedupe_key: string | null;
+  composite_key: string | null;
+};
+
+/** Estrae il probe da un NormalizedPdfImport (flusso PDF agenzia, invariato). */
+export function duplicateProbeFromNormalized(normalized: NormalizedPdfImport): DuplicateProbe {
+  return {
+    practice_number: normalized.dedupe_components.practice_number,
+    customer_full_name: normalized.customer_full_name,
+    customer_phone: normalized.customer_phone,
+    pdf_hash: normalized.pdf_hash,
+    text_hash: normalized.text_hash,
+    dedupe_key: normalized.dedupe_key,
+    composite_key: normalized.dedupe_components.composite_key,
+  };
+}
+
+/**
+ * Costruisce un DuplicateProbe dai campi grezzi di un form/Inbox. La chiave
+ * `composite_key` usa ESATTAMENTE la stessa formula (`slug(nome|data|hotel)`)
+ * di `buildNormalizedImport`, `claude-save-draft` e `inbox-approve`, così il
+ * match sul marker `[pdf_composite:...]` già scritto in `services.notes`
+ * funziona a prescindere dal canale d'ingresso.
+ */
+export function buildDuplicateProbe(input: {
+  practiceNumber?: string | null;
+  customerName?: string | null;
+  phone?: string | null;
+  arrivalDate?: string | null;
+  hotelName?: string | null;
+  pdfHash?: string | null;
+  textHash?: string | null;
+}): DuplicateProbe {
+  const customerName = clean(input.customerName);
+  const arrivalDate = clean(input.arrivalDate);
+  const hotel = clean(input.hotelName);
+  const compositeKey =
+    customerName && arrivalDate
+      ? slug(`${customerName}|${arrivalDate}|${hotel ?? "hotel-nd"}`) || null
+      : null;
+  return {
+    practice_number: clean(input.practiceNumber),
+    customer_full_name: customerName,
+    customer_phone: clean(input.phone) ?? "N/D",
+    pdf_hash: clean(input.pdfHash),
+    text_hash: clean(input.textHash),
+    dedupe_key: null,
+    composite_key: compositeKey,
+  };
+}
 
 function normalizeReviewedServiceType(
   value: Partial<z.infer<typeof pdfImportReviewSchema>>["service_type"]
@@ -638,13 +710,20 @@ async function findServiceByPattern(admin: SupabaseClient, tenantId: string, pat
   return data ?? null;
 }
 
-async function findExistingPdfImport(admin: SupabaseClient, tenantId: string, normalized: NormalizedPdfImport) {
+/**
+ * Match "certo": cerca in `services.notes` i marker deterministici già scritti
+ * da tutti i write-path (`[practice:...]`, `[pdf_hash:...]`, `[pdf_text_hash:...]`,
+ * `[pdf_dedupe:...]`, `[pdf_composite:...]`). Accetta un `DuplicateProbe` così è
+ * riusabile anche fuori dal flusso PDF agenzia; i marker con valore nullo nel
+ * probe vengono semplicemente saltati.
+ */
+export async function findExistingPdfImport(admin: SupabaseClient, tenantId: string, probe: DuplicateProbe) {
   const patterns = [
-    normalized.dedupe_components.practice_number ? `[practice:${normalized.dedupe_components.practice_number}]` : null,
-    `[pdf_hash:${normalized.pdf_hash}]`,
-    `[pdf_text_hash:${normalized.text_hash}]`,
-    `[pdf_dedupe:${normalized.dedupe_key}]`,
-    `[pdf_composite:${normalized.dedupe_components.composite_key}]`
+    probe.practice_number ? `[practice:${probe.practice_number}]` : null,
+    probe.pdf_hash ? `[pdf_hash:${probe.pdf_hash}]` : null,
+    probe.text_hash ? `[pdf_text_hash:${probe.text_hash}]` : null,
+    probe.dedupe_key ? `[pdf_dedupe:${probe.dedupe_key}]` : null,
+    probe.composite_key ? `[pdf_composite:${probe.composite_key}]` : null
   ].filter(Boolean) as string[];
 
   for (const pattern of patterns) {
@@ -656,7 +735,12 @@ async function findExistingPdfImport(admin: SupabaseClient, tenantId: string, no
   return { service: null, pattern: null };
 }
 
-async function findPotentialExistingMatches(admin: SupabaseClient, tenantId: string, normalized: NormalizedPdfImport): Promise<PossibleExistingMatch[]> {
+/**
+ * Match "possibile" (da mostrare all'operatore, non bloccante): pratica,
+ * telefono esatto, nome cliente. NON è una prova di duplicato — serve a
+ * proporre il confronto MODIFICA / AGGIUNGI / ANNULLA.
+ */
+export async function findPotentialExistingMatches(admin: SupabaseClient, tenantId: string, probe: DuplicateProbe): Promise<PossibleExistingMatch[]> {
   const byId = new Map<string, PossibleExistingMatch>();
 
   const addRows = (rows: Array<Record<string, any>> | null | undefined, reason: PossibleExistingMatch["match_reason"]) => {
@@ -675,40 +759,161 @@ async function findPotentialExistingMatches(admin: SupabaseClient, tenantId: str
     }
   };
 
-  if (normalized.dedupe_components.practice_number) {
+  if (probe.practice_number) {
     const { data } = await admin
       .from("services")
       .select("id, status, is_draft, customer_name, phone, date")
       .eq("tenant_id", tenantId)
-      .ilike("notes", `%[practice:${normalized.dedupe_components.practice_number}]%`)
+      .ilike("notes", `%[practice:${probe.practice_number}]%`)
       .order("created_at", { ascending: false })
       .limit(5);
     addRows(data as Array<Record<string, any>> | undefined, "practice_number");
   }
 
-  if (normalized.customer_phone && normalized.customer_phone !== "N/D") {
+  if (probe.customer_phone && probe.customer_phone !== "N/D") {
     const { data } = await admin
       .from("services")
       .select("id, status, is_draft, customer_name, phone, date")
       .eq("tenant_id", tenantId)
-      .eq("phone", normalized.customer_phone)
+      .eq("phone", probe.customer_phone)
       .order("created_at", { ascending: false })
       .limit(5);
     addRows(data as Array<Record<string, any>> | undefined, "phone");
   }
 
-  if (normalized.customer_full_name && normalized.customer_full_name !== "Cliente da verificare") {
+  if (probe.customer_full_name && probe.customer_full_name !== "Cliente da verificare") {
     const { data } = await admin
       .from("services")
       .select("id, status, is_draft, customer_name, phone, date")
       .eq("tenant_id", tenantId)
-      .ilike("customer_name", normalized.customer_full_name)
+      .ilike("customer_name", probe.customer_full_name)
       .order("created_at", { ascending: false })
       .limit(5);
     addRows(data as Array<Record<string, any>> | undefined, "customer_name");
   }
 
   return Array.from(byId.values()).slice(0, 8);
+}
+
+function patternToMatchReason(pattern: string | null): PossibleExistingMatchReason {
+  if (pattern?.startsWith("[practice:")) return "practice_number";
+  if (pattern?.startsWith("[pdf_hash:")) return "pdf_hash";
+  if (pattern?.startsWith("[pdf_text_hash:")) return "pdf_text_hash";
+  if (pattern?.startsWith("[pdf_dedupe:")) return "pdf_dedupe";
+  if (pattern?.startsWith("[pdf_composite:")) return "pdf_composite";
+  return "customer_name";
+}
+
+export type BookingDuplicateLookup = {
+  certain_service_id: string | null;
+  certain_pattern: string | null;
+  matches: PossibleExistingMatch[];
+};
+
+/**
+ * Orchestratore condiviso: unisce il match certo (`findExistingPdfImport`) e i
+ * match possibili (`findPotentialExistingMatches`) in un'unica lista deduplicata
+ * per `service_id`. Usato da `inbox-approve` e `claude-save-draft`.
+ */
+export async function lookupBookingDuplicates(
+  admin: SupabaseClient,
+  tenantId: string,
+  probe: DuplicateProbe
+): Promise<BookingDuplicateLookup> {
+  const hard = await findExistingPdfImport(admin, tenantId, probe);
+  const soft = await findPotentialExistingMatches(admin, tenantId, probe);
+  const byId = new Map<string, PossibleExistingMatch>();
+  for (const m of soft) byId.set(m.service_id, m);
+  if (hard.service?.id && !byId.has(hard.service.id)) {
+    const svc = hard.service as { status?: string | null; is_draft?: boolean | null };
+    byId.set(hard.service.id, {
+      service_id: hard.service.id,
+      status: String(svc.status ?? ""),
+      is_draft: Boolean(svc.is_draft),
+      customer_name: null,
+      phone: null,
+      date: null,
+      match_reason: patternToMatchReason(hard.pattern),
+    });
+  }
+  return {
+    certain_service_id: hard.service?.id ?? null,
+    certain_pattern: hard.pattern ?? null,
+    matches: Array.from(byId.values()).slice(0, 8),
+  };
+}
+
+export type HydratedDuplicateMatch = {
+  service_id: string;
+  match_reason: PossibleExistingMatchReason;
+  status: string;
+  is_draft: boolean;
+  customer_name: string | null;
+  phone: string | null;
+  date: string | null;
+  pax: number | null;
+  hotel_id: string | null;
+  hotel_name: string | null;
+  agency_name: string | null;
+  billing_party_name: string | null;
+  practice_number: string | null;
+  outbound_time: string | null;
+  return_time: string | null;
+  arrival_time: string | null;
+  departure_time: string | null;
+  transport_code: string | null;
+  notes: string | null;
+};
+
+/**
+ * Arricchisce i match con i campi che servono alla UI per il confronto
+ * MODIFICA/AGGIUNGI (cliente, data, hotel, pax, telefono, agenzia, stato,
+ * pratica, orari, transport_code). Sola lettura.
+ */
+export async function hydrateDuplicateMatches(
+  admin: SupabaseClient,
+  tenantId: string,
+  matches: PossibleExistingMatch[]
+): Promise<HydratedDuplicateMatch[]> {
+  if (matches.length === 0) return [];
+  const ids = matches.map((m) => m.service_id);
+  const { data } = await admin
+    .from("services")
+    .select(
+      "id, customer_name, phone, date, pax, hotel_id, agency_id, status, is_draft, notes, outbound_time, return_time, arrival_time, departure_time, transport_code, billing_party_name, hotels(name), agencies(name)"
+    )
+    .eq("tenant_id", tenantId)
+    .in("id", ids);
+  const rows = new Map((Array.isArray(data) ? data : []).map((r: Record<string, any>) => [String(r.id), r]));
+  const reasonById = new Map(matches.map((m) => [m.service_id, m.match_reason]));
+  return matches.map((m) => {
+    const r: Record<string, any> = rows.get(m.service_id) ?? {};
+    const notes = typeof r.notes === "string" ? r.notes : null;
+    const practice = notes ? notes.match(/\[practice:([^\]]+)\]/)?.[1]?.trim() ?? null : null;
+    const hotelName = Array.isArray(r.hotels) ? r.hotels[0]?.name ?? null : r.hotels?.name ?? null;
+    const agencyName = Array.isArray(r.agencies) ? r.agencies[0]?.name ?? null : r.agencies?.name ?? null;
+    return {
+      service_id: m.service_id,
+      match_reason: reasonById.get(m.service_id) ?? m.match_reason,
+      status: String(r.status ?? m.status ?? ""),
+      is_draft: Boolean(r.is_draft ?? m.is_draft),
+      customer_name: (r.customer_name ?? m.customer_name) ?? null,
+      phone: (r.phone ?? m.phone) ?? null,
+      date: (r.date ?? m.date) ?? null,
+      pax: typeof r.pax === "number" ? r.pax : null,
+      hotel_id: r.hotel_id ?? null,
+      hotel_name: hotelName,
+      agency_name: agencyName,
+      billing_party_name: r.billing_party_name ?? null,
+      practice_number: practice,
+      outbound_time: r.outbound_time ?? null,
+      return_time: r.return_time ?? null,
+      arrival_time: r.arrival_time ?? null,
+      departure_time: r.departure_time ?? null,
+      transport_code: r.transport_code ?? null,
+      notes,
+    };
+  });
 }
 
 function buildPricingSourceText(sourceParts: Array<string | null | undefined>, normalized?: NormalizedPdfImport | null) {
@@ -913,10 +1118,11 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
 }) {
   const parsed = await parseAgencyPdfUpload(input);
   const tenantId = auth.membership.tenant_id;
-  const dedupeHit = await findExistingPdfImport(auth.admin, tenantId, parsed.normalized);
+  const dedupeProbe = duplicateProbeFromNormalized(parsed.normalized);
+  const dedupeHit = await findExistingPdfImport(auth.admin, tenantId, dedupeProbe);
   if (dedupeHit.service?.id) {
     if (dedupeHit.service.is_draft && dedupeHit.service.inbound_email_id) {
-      const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, parsed.normalized);
+      const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, dedupeProbe);
       const refreshedParsedJson = buildParsedJson(
         {
           fromEmail: input.senderEmail,
@@ -1005,7 +1211,7 @@ export async function createDraftFromPdfUpload(auth: AuthContext, input: {
   if (!hotelId) {
     throw new Error("Nessun hotel disponibile per il tenant.");
   }
-  const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, parsed.normalized);
+  const possibleExistingMatches = await findPotentialExistingMatches(auth.admin, tenantId, duplicateProbeFromNormalized(parsed.normalized));
   const reviewRecommended = requiresManualPdfReview(parsed.normalized);
   const needsManualReview = shouldAlwaysCreatePdfDraft();
 
@@ -1352,7 +1558,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
     throw new Error("Metadati PDF normalizzati assenti: crea prima il draft.");
   }
 
-  const dedupeHit = await findExistingPdfImport(auth.admin, tenantId, normalized);
+  const dedupeHit = await findExistingPdfImport(auth.admin, tenantId, duplicateProbeFromNormalized(normalized));
   const linkedDraft = await auth.admin
     .from("services")
     .select("id, is_draft, notes, status")
