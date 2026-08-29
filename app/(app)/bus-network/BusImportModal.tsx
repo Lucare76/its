@@ -232,6 +232,26 @@ export function resolveBusImportCity(
 }
 
 
+// Parole chiave usate per riconoscere la riga di intestazione del file import.
+const HEADER_KEYWORDS = [
+  "cognome", "nome", "nominativo", "telefono", "cellulare",
+  "punto di carico", "destinazione", "hotel", "pax", "note",
+  "orario", "città", "citta", "city", "fermata", "agenzia",
+];
+
+/**
+ * True se la prima cella di una riga sembra un'intestazione (ripetuta) e NON
+ * una riga dati. Una riga "HH:MM <città>" (es. "04:00 CITTA' DI CASTELLO") è
+ * chiaramente dati: non va scartata solo perché contiene "citta"/"city"/"nome"
+ * come sottostringa.
+ */
+export function isBusImportHeaderRow(firstCell: string): boolean {
+  const r0 = String(firstCell ?? "").toLowerCase().trim();
+  const looksLikeTimedDataRow = /^\d{1,2}:\d{2}\s+\S/.test(r0);
+  if (looksLikeTimedDataRow) return false;
+  return HEADER_KEYWORDS.some((k) => r0.includes(k));
+}
+
 export function matchAcrossLines(
   city: string,
   stops: BusStop[],
@@ -936,9 +956,7 @@ export default function BusImportModal({
       const raw = utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false }) as unknown[][];
       if (raw.length < 2) { setError("File vuoto o senza dati."); return; }
 
-      const KNOWN = ["cognome", "nome", "nominativo", "telefono", "cellulare",
-        "punto di carico", "destinazione", "hotel", "pax", "note",
-        "orario", "città", "citta", "city", "fermata", "agenzia"];
+      const KNOWN = HEADER_KEYWORDS;
 
       let headerRowIdx = 0;
       // Usa la PRIMA riga (entro le prime 3) che contiene almeno 2 parole chiave —
@@ -981,7 +999,9 @@ export default function BusImportModal({
         const rowData = raw[i] as unknown[];
         if (!Array.isArray(rowData) || rowData.every((c) => !String(c ?? "").trim())) continue;
         const r0 = String(rowData[0] ?? "").toLowerCase().trim();
-        if (KNOWN.some((k) => r0.includes(k))) continue;
+        // Non scartare una riga dati "HH:MM <città>" solo perché contiene un
+        // token tipo "citta"/"city"/"nome" (bug CITTÀ DI CASTELLO).
+        if (isBusImportHeaderRow(r0)) continue;
 
         const str = (idx: number) => (idx >= 0 ? String(rowData[idx] ?? "").trim() : "");
         const hotel = str(hotelCol);
