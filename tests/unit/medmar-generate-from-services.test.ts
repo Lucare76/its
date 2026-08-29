@@ -223,15 +223,16 @@ describe("GET /api/ops/medmar-convocations/generate-from-services", () => {
     const res = await GET(req("?date=2026-09-07"));
     const json = (await res.json()) as {
       ok: boolean; date: string;
-      summary: { found: number; ready: number };
-      rows: Array<{ service_id: string; hotel: string; departure_time: string; pickup_time: string; status: string }>;
+      summary: { found: number; new: number; sent: number; changed: number; invalid: number };
+      rows: Array<{ service_id: string; hotel: string; departure_time: string; pickup_time: string; status: string; coverage_status: string }>;
     };
 
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
     expect(json.date).toBe("2026-09-07");
-    expect(json.summary).toMatchObject({ found: 1, ready: 1 });
-    expect(json.rows[0]).toMatchObject({ service_id: "s1", hotel: "Hotel La Villa", departure_time: "11:10", pickup_time: "09:00", status: "pronto" });
+    // SPRINT MEDMAR STEP 2: no prior successful send for this service_id -> coverage_status "new".
+    expect(json.summary).toMatchObject({ found: 1, new: 1, sent: 0, changed: 0, invalid: 0 });
+    expect(json.rows[0]).toMatchObject({ service_id: "s1", hotel: "Hotel La Villa", departure_time: "11:10", pickup_time: "09:00", status: "pronto", coverage_status: "new" });
   });
 
   it("2/3. queries services filtered to the two MEDMAR kinds only — SNAV never requested", async () => {
@@ -262,13 +263,13 @@ describe("GET /api/ops/medmar-convocations/generate-from-services", () => {
     }
   });
 
-  it("9. never mutates: no insert/update/delete/upsert; only hotels + services read", async () => {
+  it("9. never mutates: no insert/update/delete/upsert (SPRINT MEDMAR STEP 2 adds a read-only medmar_convocation_rows lookup for coverage)", async () => {
     const calls: Call[] = [];
     mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, makeAdmin({ hotels: [{ id: "h1", name: "H" }], services: [svcRow({})] }, calls)));
 
     await GET(req("?date=2026-09-07"));
 
     expect(calls.some((c) => ["insert", "update", "delete", "upsert"].includes(c.method))).toBe(false);
-    expect([...new Set(calls.map((c) => c.table))].sort()).toEqual(["hotels", "services"]);
+    expect([...new Set(calls.map((c) => c.table))].sort()).toEqual(["hotels", "medmar_convocation_rows", "services"]);
   });
 });
