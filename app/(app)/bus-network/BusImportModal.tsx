@@ -119,12 +119,21 @@ const ADDR_PREFIXES = [
   "casello autostradale ", "casello autost.", "casello aut.", "casello ",
   "stazione ferroviaria ", "stazione fs ", "stzione fs ", "stazione ",
   "parcheggio scambiatore ", "parcheggio ", "area di servizio ", "area servizio ", "autogrill ",
-  "via ", "viale ", "piazza ", "corso ", "largo ", "strada ", "contrada ",
+  "via ", "viale ", "piazza ", "piazzale ", "corso ", "largo ", "strada ", "contrada ", "terminal ",
   "p.za ", "p.zza ", "v.le ", "rotonda ", "uscita autostradale ", "uscita ",
 ];
 
 // Token irrilevanti da rimuovere dopo il prefisso
 const NOISE_TOKENS = ["fs ", "ff.ss. ", "fs/", "ff.ss./"];
+
+// Residui troppo generici dopo lo strip di un prefisso: NON sono nomi di città
+// (es. "PARCHEGGIO STADIO" → "STADIO", "CASELLO NORD" → "NORD"). In questi casi
+// extractCity restituisce "" così può intervenire un fallback più affidabile
+// (la città esplicita dal campo ORARIO/CITTÀ).
+const GENERIC_RESIDUE_TOKENS = new Set([
+  "stadio", "casello", "stazione", "terminal", "piazzale", "parcheggio",
+  "centro", "nord", "sud", "est", "ovest", "uscita", "rotonda", "svincolo",
+]);
 
 function normCity(v?: string | null) {
   return String(v ?? "")
@@ -161,7 +170,7 @@ const CITY_ALIASES: Record<string, string> = {
   "valmontone": "valmontone",
 };
 
-function extractCity(raw: string): string {
+export function extractCity(raw: string): string {
   // Controlla alias noti prima di qualsiasi stripping
   const rawNorm = normCity(raw);
   if (CITY_ALIASES[rawNorm]) return CITY_ALIASES[rawNorm];
@@ -172,12 +181,14 @@ function extractCity(raw: string): string {
   // Strip prefissi in loop (es. "CASELLO AUTOSTRADALE NORD" → "NORD", ma noi vogliamo tutta la parte restante)
   const lower = () => city.toLowerCase();
   let stripped = true;
+  let didStripPrefix = false;
   while (stripped) {
     stripped = false;
     for (const prefix of ADDR_PREFIXES) {
       if (lower().startsWith(prefix)) {
         city = city.slice(prefix.length).trim();
         stripped = true;
+        didStripPrefix = true;
         break;
       }
     }
@@ -191,13 +202,37 @@ function extractCity(raw: string): string {
     }
   }
 
+  // Se dopo lo strip di un prefisso resta solo un descrittore generico
+  // ("STADIO", "CASELLO", "NORD"...), non è una città: restituisci "" così
+  // interviene il fallback (città esplicita dal campo ORARIO/CITTÀ).
+  if (didStripPrefix && GENERIC_RESIDUE_TOKENS.has(normCity(city))) {
+    return "";
+  }
+
   // Non troncare alla prima parola — mantieni il nome completo del luogo
   // (es. "PORTA FIORENTINA", "HOTEL DEI MILLE", "STABILIMENTO IVECO")
   return city;
 }
 
+/**
+ * Risolve la città di partenza continentale e il punto di carico da una riga
+ * import bus. La città esplicita nel campo combinato ORARIO/CITTÀ
+ * (`cityFromOrario`) ha SEMPRE priorità sulla deduzione dal punto di carico
+ * (`cityRaw`); il punto di carico viene comunque preservato come nota quando
+ * non coincide con la città risolta.
+ */
+export function resolveBusImportCity(
+  cityRaw: string,
+  cityFromOrario: string
+): { city: string; pickupPoint: string } {
+  const city = (cityFromOrario || "").trim() || extractCity(cityRaw || "");
+  const pickupPoint =
+    cityRaw && normCity(cityRaw) !== normCity(city) ? cityRaw.trim() : "";
+  return { city, pickupPoint };
+}
 
-function matchAcrossLines(
+
+export function matchAcrossLines(
   city: string,
   stops: BusStop[],
   lines: BusLine[],
@@ -966,12 +1001,13 @@ export default function BusImportModal({
         const orarioMatch = rawOrarioRaw.trim().match(/^(\d{1,2}:\d{2})(?::\d{2})?\s*(.*)$/);
         const rawOrario = orarioMatch ? orarioMatch[1] : "";
         const cityFromOrario = orarioMatch?.[2]?.trim() ?? "";
-        // Usa la città dalla colonna destinazione; se vuota o solo indirizzo, prova da colonna orario
-        const cityNorm = extractCity(cityRaw) || cityFromOrario;
+        // La città esplicita nel campo ORARIO/CITTÀ ha priorità sulla deduzione
+        // dal punto di carico; il punto di carico resta come nota fermata.
+        const { city: cityNorm, pickupPoint } = resolveBusImportCity(cityRaw, cityFromOrario);
         // Leggi agenzia da colonna notesCol e da colonna J (con alias mapping)
         const agencyRaw = str(notesCol) || str(agencyJCol);
         const agency = normalizeAgency(agencyRaw);
-        const notes = "";
+        const notes = pickupPoint ? `Punto di carico: ${pickupPoint}` : "";
 
         const { stop, line, status } = matchAcrossLines(cityFromOrario || cityNorm, allStops, allLines, direction);
         // Fallback orario: usa la città canonica matchata (es. "BRESCIA" da "BORGOSATOLLO")
