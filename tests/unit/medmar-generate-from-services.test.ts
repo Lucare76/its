@@ -192,10 +192,12 @@ function req(qs: string) {
 }
 
 const svcRow = (over: Record<string, unknown>) => ({
-  id: "s1", customer_name: "Mario", phone: "3334372831", pax: 2, hotel_id: "h1",
+  id: "s1", tenant_id: TENANT_A, customer_name: "Mario", phone: "3334372831", pax: 2, hotel_id: "h1",
   booking_service_kind: "formula_medmar_napoli", direction: "departure", date: "2026-09-07", departure_date: "2026-09-07",
   departure_time: "11:10", time: "11:10", pickup_hotel: "09:00", pickup_time: null, orario_barca: "11:10",
   vessel: "MEDMAR Napoli", barca_compagnia: "Napoli Beverello", porto_bruno: null, meeting_point: null, status: "confirmed",
+  billing_party_name: "ALESTE VIAGGI",
+  is_draft: false,
   ...over,
 });
 
@@ -279,5 +281,231 @@ describe("GET /api/ops/medmar-convocations/generate-from-services", () => {
 
     expect(calls.some((c) => ["insert", "update", "delete", "upsert"].includes(c.method))).toBe(false);
     expect([...new Set(calls.map((c) => c.table))].sort()).toEqual(["hotels", "medmar_convocation_rows", "services"]);
+  });
+});
+
+// ── fix: round-trip bookings must not produce a duplicate convocation ──
+//
+// A round-trip booking creates two `services` rows: an arrival leg and a
+// departure leg. The arrival leg also carries the booking's overall
+// departure_date, so the primary query (departure_date = date) needs
+// direction='departure' too, or it matches both legs. This mock actually
+// applies the recorded eq/is/in predicates to the fixture rows — unlike
+// `makeAdmin` above — so it can catch a missing filter, not just record
+// that a call happened.
+type Predicate = { method: "eq" | "neq" | "is" | "in"; column: string; value: unknown };
+
+function makeFilteringAdmin(servicesRows: Record<string, unknown>[], hotelsRows: Record<string, unknown>[]) {
+  return {
+    from(table: string) {
+      const predicates: Predicate[] = [];
+      const builder: Record<string, unknown> = {};
+      const chain = (method: Predicate["method"]) => (column: string, value: unknown) => {
+        predicates.push({ method, column, value });
+        return builder;
+      };
+      builder.select = () => builder;
+      builder.eq = chain("eq");
+      builder.neq = chain("neq");
+      builder.is = chain("is");
+      builder.in = chain("in");
+      builder.order = () => builder;
+      builder.limit = () => builder;
+      builder.maybeSingle = () => Promise.resolve({ data: null, error: null });
+      (builder as { then: unknown }).then = (ok: (v: unknown) => unknown) => {
+        let rows: Record<string, unknown>[] = table === "services" ? servicesRows : table === "hotels" ? hotelsRows : [];
+        for (const p of predicates) {
+          rows = rows.filter((r) => {
+            const actual = r[p.column];
+            if (p.method === "eq") return actual === p.value;
+            if (p.method === "neq") return actual !== p.value;
+            if (p.method === "is") return actual === p.value;
+            if (p.method === "in") return Array.isArray(p.value) && (p.value as unknown[]).includes(actual);
+            return true;
+          });
+        }
+        return Promise.resolve({ data: rows, error: null }).then(ok);
+      };
+      return builder;
+    },
+  } as never;
+}
+
+describe("fix: MEDMAR generation excludes the arrival leg of round-trip bookings", () => {
+  const DATE = "2026-08-30";
+  const HOTELS = [{ id: "h1", tenant_id: TENANT_A, name: "Hotel La Villa" }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveOperationalTiming.mockImplementation((s: { pickup_hotel?: string | null; orario_barca?: string | null }) => ({
+      pickupTime: s.pickup_hotel ?? null,
+      ferryTime: s.orario_barca ?? null,
+      ferryCompany: null, ferryPort: null, pickupSource: "pickup_hotel",
+      connectionTime: null, connectionType: "ferry", ruleSource: null, status: "ok", warnings: [],
+    }));
+  });
+
+  it("A/R booking: arrival leg (also carrying departure_date) + departure leg -> exactly 1 convocation, the departure one", async () => {
+    const admin = makeFilteringAdmin(
+      [
+        svcRow({ id: "arr-1", direction: "arrival", departure_date: DATE, date: DATE }),
+        svcRow({ id: "dep-1", direction: "departure", departure_date: DATE, date: DATE }),
+      ],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ service_id: string }> };
+
+    expect(json.rows).toHaveLength(1);
+    expect(json.rows[0].service_id).toBe("dep-1");
+  });
+
+  it("two real distinct departure services for the same customer/phone (e.g. Pietro Vito, pax 3 and pax 1) -> 2 convocations, never merged", async () => {
+    const admin = makeFilteringAdmin(
+      [
+        svcRow({ id: "dep-a", direction: "departure", departure_date: DATE, date: DATE, customer_name: "Pietro Vito", phone: "3331112222", pax: 3 }),
+        svcRow({ id: "dep-b", direction: "departure", departure_date: DATE, date: DATE, customer_name: "Pietro Vito", phone: "3331112222", pax: 1 }),
+      ],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ service_id: string }> };
+
+    expect(json.rows).toHaveLength(2);
+    expect(json.rows.map((r) => r.service_id).sort()).toEqual(["dep-a", "dep-b"]);
+  });
+
+  it("fallback query still includes departure_date=null / date=selected / direction=departure rows", async () => {
+    const admin = makeFilteringAdmin(
+      [svcRow({ id: "dep-fallback", direction: "departure", departure_date: null, date: DATE })],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ service_id: string }> };
+
+    expect(json.rows).toHaveLength(1);
+    expect(json.rows[0].service_id).toBe("dep-fallback");
+  });
+
+  it("an arrival-only row that carries departure_date is excluded entirely (no matching departure leg)", async () => {
+    const admin = makeFilteringAdmin(
+      [svcRow({ id: "arr-only", direction: "arrival", departure_date: DATE, date: DATE })],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ service_id: string }> };
+
+    expect(json.rows).toHaveLength(0);
+  });
+});
+
+// ── fix: MEDMAR pickup falls back to the canonical Domain-B rule ──
+//
+// resolveOperationalTiming's Level 2 only reads pickup_hotel/pickup_time
+// persisted on the service. For Formula MEDMAR direct bookings that field is
+// routinely null (pickup is a hotel/zone lookup, not a free write), so the
+// generator now falls back — read-only — to applyPickupCalc's Domain-B rule
+// (lib/departure-pickup-rules.ts, transport_type "medmar"), the exact same
+// canonical source the write-path already uses. Never invents a time.
+describe("fix: MEDMAR pickup uses the canonical Domain-B rule (applyPickupCalc) as a read-only fallback when nothing is persisted", () => {
+  const DATE = "2026-08-30";
+  // Real canonical row (lib/departure-pickup-rules.ts): medmar, t_from 10:35,
+  // zona forio -> pickup 08:30. Verified against the live DB (Vincenzo
+  // Esposito, Hotel Terme Colella/Forio, nave 10:35).
+  const HOTELS = [{ id: "h1", tenant_id: TENANT_A, name: "Hotel Terme Colella", zone: "Forio" }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveOperationalTiming.mockImplementation((s: { pickup_hotel?: string | null; orario_barca?: string | null }) => ({
+      pickupTime: s.pickup_hotel ?? null,
+      ferryTime: s.orario_barca ?? null,
+      ferryCompany: null, ferryPort: null, pickupSource: "pickup_hotel",
+      connectionTime: null, connectionType: "ferry", ruleSource: null, status: "ok", warnings: [],
+    }));
+  });
+
+  it("1. a persisted pickup_hotel is used as-is — the canonical fallback is never consulted", async () => {
+    const admin = makeFilteringAdmin(
+      [svcRow({ id: "s-persisted", pickup_hotel: "06:00", orario_barca: "10:35", hotel_id: "h1", departure_date: DATE, date: DATE })],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ pickup_time: string; departure_time: string }> };
+
+    // The canonical rule for nave 10:35 / zona forio is 08:30 — if the
+    // persisted value didn't win, this would read "08:30" instead of "06:00".
+    expect(json.rows[0].pickup_time).toBe("06:00");
+    expect(json.rows[0].departure_time).toBe("10:35");
+  });
+
+  it("2. no persisted pickup, but the canonical Domain-B rule matches -> pickup is read from it", async () => {
+    const admin = makeFilteringAdmin(
+      [svcRow({ id: "s-canonical", pickup_hotel: null, pickup_time: null, orario_barca: "10:35", hotel_id: "h1", departure_date: DATE, date: DATE })],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ pickup_time: string; status: string }> };
+
+    expect(json.rows[0].pickup_time).toBe("08:30");
+    expect(json.rows[0].status).toBe("pronto");
+  });
+
+  it("3/6. no persisted pickup and no matching canonical rule (hotel has no zone) -> stays invalid, no time invented", async () => {
+    const admin = makeFilteringAdmin(
+      [svcRow({ id: "s-no-source", pickup_hotel: null, pickup_time: null, orario_barca: "10:35", hotel_id: "h2", departure_date: DATE, date: DATE })],
+      [...HOTELS, { id: "h2", tenant_id: TENANT_A, name: "Hotel Senza Zona", zone: null }],
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ pickup_time: string; status: string; error_message: string | null; coverage_status: string }> };
+
+    expect(json.rows[0].pickup_time).toBe("");
+    expect(json.rows[0].status).toBe("errore");
+    expect(json.rows[0].error_message).toBe("Ora prelevamento mancante");
+    expect(json.rows[0].coverage_status).toBe("invalid");
+  });
+
+  it("7. the vessel/ora nave time is unaffected by the pickup fallback", async () => {
+    const admin = makeFilteringAdmin(
+      [svcRow({ id: "s-canonical-2", pickup_hotel: null, pickup_time: null, orario_barca: "10:35", hotel_id: "h1", departure_date: DATE, date: DATE })],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ departure_time: string }> };
+
+    expect(json.rows[0].departure_time).toBe("10:35");
+  });
+
+  it("Pietro Vito case: two real distinct departures, same hotel/nave, both resolve the same canonical pickup — never merged", async () => {
+    const admin = makeFilteringAdmin(
+      [
+        svcRow({ id: "pv-1", customer_name: "Pietro Vito", pax: 3, pickup_hotel: null, pickup_time: null, orario_barca: "10:35", hotel_id: "h1", departure_date: DATE, date: DATE }),
+        svcRow({ id: "pv-2", customer_name: "Pietro Vito", pax: 1, pickup_hotel: null, pickup_time: null, orario_barca: "10:35", hotel_id: "h1", departure_date: DATE, date: DATE }),
+      ],
+      HOTELS,
+    );
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(TENANT_A, admin));
+
+    const res = await GET(req(`?date=${DATE}`));
+    const json = (await res.json()) as { rows: Array<{ service_id: string; passengers: string; pickup_time: string }> };
+
+    expect(json.rows).toHaveLength(2);
+    expect(json.rows.every((r) => r.pickup_time === "08:30")).toBe(true);
+    expect(json.rows.map((r) => r.passengers).sort()).toEqual(["1", "3"]);
   });
 });

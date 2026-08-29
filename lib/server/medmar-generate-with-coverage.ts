@@ -6,6 +6,7 @@
 import { normalizeE164, type createAdminClient } from "@/lib/server/whatsapp";
 import { resolveOperationalTiming } from "@/lib/operational-timing-resolver";
 import { fmtTime, type PrintService } from "@/lib/piano-giorno-print";
+import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import {
   MEDMAR_DEPARTURE_KINDS,
   buildGeneratedConvocationRows,
@@ -25,7 +26,7 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 export type GeneratedRowWithCoverage = GeneratedConvocationRow & CoverageResult;
 
 const SERVICE_COLUMNS =
-  "id, customer_name, phone, pax, hotel_id, booking_service_kind, direction, date, departure_date, departure_time, time, pickup_hotel, pickup_time, orario_barca, vessel, barca_compagnia, porto_bruno, meeting_point, status";
+  "id, customer_name, phone, pax, hotel_id, booking_service_kind, direction, date, departure_date, departure_time, time, pickup_hotel, pickup_time, orario_barca, vessel, barca_compagnia, porto_bruno, meeting_point, billing_party_name, status";
 
 type ServiceRow = {
   id: string;
@@ -46,6 +47,7 @@ type ServiceRow = {
   barca_compagnia: string | null;
   porto_bruno: string | null;
   meeting_point: string | null;
+  billing_party_name: string | null;
   status: string;
 };
 
@@ -56,18 +58,25 @@ export async function fetchMedmarServicesForDate(
 ): Promise<{ error: string } | { services: ServiceForConvocation[] }> {
   const kinds = [...MEDMAR_DEPARTURE_KINDS];
 
-  const hotelsRes = await admin.from("hotels").select("id, name").eq("tenant_id", tenantId);
+  const hotelsRes = await admin.from("hotels").select("id, name, zone").eq("tenant_id", tenantId);
   if (hotelsRes.error) return { error: hotelsRes.error.message };
   const hotelName = new Map((hotelsRes.data ?? []).map((h) => [h.id as string, h.name as string]));
+  const hotelZone = new Map((hotelsRes.data ?? []).map((h) => [h.id as string, (h as { zone: string | null }).zone]));
 
   // Same departure-day pattern as /api/ops/departure-services: explicit
   // departure_date, plus direction=departure rows that only carry `date`.
+  //
+  // Round-trip bookings create TWO services rows (arrival leg + departure
+  // leg). The arrival leg also carries the booking's overall departure_date,
+  // so without direction='departure' here Q1 matches both legs and produces
+  // a duplicate convocation per round-trip booking.
   const [q1, q2] = await Promise.all([
     admin
       .from("services")
       .select(SERVICE_COLUMNS)
       .eq("tenant_id", tenantId)
       .eq("departure_date", date)
+      .eq("direction", "departure")
       .eq("is_draft", false)
       .neq("status", "cancelled")
       .in("booking_service_kind", kinds)
@@ -104,8 +113,28 @@ export async function fetchMedmarServicesForDate(
     // fields already persisted on the service, the same source used by the
     // Piano del Giorno print. Never invents an orario, never emits 00:00.
     const timing = resolveOperationalTiming(svc as unknown as PrintService);
-    const pickup = timing.pickupTime ?? fmtTime(svc.pickup_hotel) ?? fmtTime(svc.pickup_time) ?? "";
     const vesselTime = timing.ferryTime ?? fmtTime(svc.orario_barca) ?? fmtTime(svc.departure_time) ?? "";
+    let pickup = timing.pickupTime ?? fmtTime(svc.pickup_hotel) ?? fmtTime(svc.pickup_time) ?? "";
+
+    // Nothing persisted on the service (the common case for Formula MEDMAR
+    // direct bookings, whose pickup is a hotel/zone lookup rather than a
+    // free field): fall back to the SAME canonical Domain-B rule the
+    // write-path (applyPickupCalc, lib/departure-pickup-rules.ts) already
+    // uses — read-only simulation, never persisted here, never a new formula.
+    if (!pickup && vesselTime) {
+      const zone = svc.hotel_id ? hotelZone.get(svc.hotel_id) ?? null : null;
+      const canonical = applyPickupCalc({
+        direction: "departure",
+        booking_service_kind: svc.booking_service_kind,
+        time: vesselTime,
+        billing_party_name: svc.billing_party_name,
+        vessel: svc.vessel,
+        hotel_zone: zone,
+        hotel_name: svc.hotel_id ? hotelName.get(svc.hotel_id) ?? null : null,
+      });
+      pickup = canonical.pickup_hotel ?? "";
+    }
+
     return {
       service_id: svc.id,
       customer_name: svc.customer_name,
