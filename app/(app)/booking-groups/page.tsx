@@ -52,7 +52,12 @@ export default function BookingGroupsPage() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // FASE 4 — apertura diretta da link esterno (es. "Apri gruppo" dal Piano del
+  // Giorno): /booking-groups?id=<uuid>. Letto una sola volta come stato
+  // iniziale lazy, non in un effect (evita setState sincrono in effect).
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("id"))
+  );
   const [detail, setDetail] = useState<Detail | null>(null);
   const [showNew, setShowNew] = useState(false);
 

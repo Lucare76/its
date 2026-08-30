@@ -8,6 +8,14 @@ import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments"
 import { isVehicleManuallyBlockedOnDate } from "@/lib/server/vehicle-availability";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { buildContinentDispatchBuckets, loadContinentDispatchServices } from "@/lib/server/continent-dispatch";
+import {
+  buildPianoDisplayUnits,
+  type PianoBookingGroupLike,
+  type PianoBookingGroupStopLike,
+  type PianoBusReservationLike,
+  type PianoBusUnitLike,
+  type PianoGroupAwareService,
+} from "@/lib/piano-booking-group-display";
 
 export const runtime = "nodejs";
 
@@ -67,6 +75,8 @@ const PIANO_OPTIONAL_SERVICE_COLUMNS = [
   "train_arrival_time",
   "train_departure_number",
   "train_departure_time",
+  "booking_group_id",
+  "booking_group_stop_id",
 ];
 
 function missingSchemaColumn(message: string) {
@@ -122,6 +132,18 @@ export async function GET(request: NextRequest) {
 
     const dayServiceIds = (servicesResult.data ?? []).map((s) => s.id);
 
+    // FASE 4 — Piano del Giorno group-aware: id dei gruppi prenotazione
+    // referenziati dai services del giorno, per il batch IN (...) qui sotto
+    // (nessuna query per gruppo: sempre lo stesso numero di round-trip
+    // indipendentemente da quanti booking_group_id compaiono).
+    const bookingGroupIds = Array.from(
+      new Set(
+        (servicesResult.data ?? [])
+          .map((s) => s.booking_group_id as string | null | undefined)
+          .filter((v): v is string => Boolean(v))
+      )
+    );
+
     // Step 1: trip_groups del giorno (serve per filtrare assignments per group_id)
     const tripGroupsResult = await auth.admin
       .from("trip_groups")
@@ -149,6 +171,9 @@ export async function GET(request: NextRequest) {
       commitments,
       driverRegistry,
       continentDispatch,
+      bookingGroupsResult,
+      bookingGroupStopsResult,
+      bookingGroupReservationsResult,
     ] = await Promise.all([
       todayGroupIds.length > 0
         ? auth.admin
@@ -185,6 +210,30 @@ export async function GET(request: NextRequest) {
       loadVehicleCommitmentsForDate(auth.admin, tenantId, date),
       listDriverRegistry(auth.admin, tenantId, { activeOnly: true }),
       loadContinentDispatchServices(auth, date),
+
+      // FASE 4 — batch IN (...) sui gruppi referenziati dai services del giorno.
+      bookingGroupIds.length > 0
+        ? auth.admin
+            .from("booking_groups")
+            .select("id, name, kind, status, expected_pax, service_date, outbound_ferry_company, outbound_departure_port, outbound_ferry_time, outbound_arrival_port, outbound_expected_arrival_time, return_ferry_company, return_departure_port, return_ferry_time, return_arrival_port, return_expected_arrival_time")
+            .eq("tenant_id", tenantId)
+            .in("id", bookingGroupIds)
+        : Promise.resolve({ data: [] as PianoBookingGroupLike[], error: null }),
+      bookingGroupIds.length > 0
+        ? auth.admin
+            .from("booking_group_stops")
+            .select("id, booking_group_id, city, pickup_point, expected_pax, direction, sort_order")
+            .eq("tenant_id", tenantId)
+            .in("booking_group_id", bookingGroupIds)
+        : Promise.resolve({ data: [] as PianoBookingGroupStopLike[], error: null }),
+      bookingGroupIds.length > 0
+        ? auth.admin
+            .from("booking_group_bus_reservations")
+            .select("id, booking_group_id, bus_unit_id, service_date, reserved_pax, exclusive")
+            .eq("tenant_id", tenantId)
+            .eq("service_date", date)
+            .in("booking_group_id", bookingGroupIds)
+        : Promise.resolve({ data: [] as PianoBusReservationLike[], error: null }),
     ]);
 
     const errorSources = [
@@ -192,6 +241,9 @@ export async function GET(request: NextRequest) {
       hotelsResult.error ? `hotels: ${hotelsResult.error.message}` : null,
       membershipsResult.error ? `memberships: ${membershipsResult.error.message}` : null,
       vehiclesResult.error ? `vehicles: ${vehiclesResult.error.message}` : null,
+      bookingGroupsResult.error ? `booking_groups: ${bookingGroupsResult.error.message}` : null,
+      bookingGroupStopsResult.error ? `booking_group_stops: ${bookingGroupStopsResult.error.message}` : null,
+      bookingGroupReservationsResult.error ? `booking_group_bus_reservations: ${bookingGroupReservationsResult.error.message}` : null,
     ].filter(Boolean);
 
     if (errorSources.length > 0) {
@@ -215,6 +267,32 @@ export async function GET(request: NextRequest) {
     });
     const continentDispatchBuckets = buildContinentDispatchBuckets(continentDispatch.services, { date });
 
+    // FASE 4 — bus units riservati per i gruppi del giorno: un solo IN (...)
+    // sui bus_unit_id realmente citati dalle reservation, mai una query per gruppo.
+    const bookingGroupReservations = (bookingGroupReservationsResult.data ?? []) as PianoBusReservationLike[];
+    const busUnitIds = Array.from(new Set(bookingGroupReservations.map((r) => r.bus_unit_id)));
+    let busUnits: PianoBusUnitLike[] = [];
+    if (busUnitIds.length > 0) {
+      const busUnitsResult = await auth.admin
+        .from("tenant_bus_units")
+        .select("id, label, capacity")
+        .eq("tenant_id", tenantId)
+        .in("id", busUnitIds);
+      if (busUnitsResult.error) {
+        console.error("[piano-giorno] tenant_bus_units query error:", busUnitsResult.error.message);
+        return NextResponse.json({ ok: false, error: `tenant_bus_units: ${busUnitsResult.error.message}` }, { status: 500 });
+      }
+      busUnits = (busUnitsResult.data ?? []) as PianoBusUnitLike[];
+    }
+
+    const displayUnits = buildPianoDisplayUnits({
+      services: (servicesResult.data ?? []) as unknown as PianoGroupAwareService[],
+      bookingGroups: (bookingGroupsResult.data ?? []) as PianoBookingGroupLike[],
+      stops: (bookingGroupStopsResult.data ?? []) as PianoBookingGroupStopLike[],
+      reservations: bookingGroupReservations,
+      busUnits,
+    });
+
     return NextResponse.json({
       ok: true,
       date,
@@ -229,6 +307,7 @@ export async function GET(request: NextRequest) {
       vehicle_commitments: commitments.rows,
       ferry_schedules: ferrySchedules,
       continent_dispatch: continentDispatchBuckets,
+      display_units: displayUnits,
     });
   } catch (err) {
     console.error("[piano-giorno] unhandled exception:", err);

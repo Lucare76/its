@@ -540,14 +540,40 @@ describe("FASE 2.5 — preview / operationalize", () => {
 });
 
 describe("FASE 2.5 — Piano del Giorno (M/N: draft escluso, operativo incluso)", () => {
-  it("il dataset Piano del Giorno esclude is_draft=true e non filtra per booking_group_id", () => {
+  it("il dataset Piano del Giorno esclude is_draft=true e non filtra i services per booking_group_id", () => {
     const piano = readFileSync(new URL("../../app/api/ops/piano-giorno/route.ts", import.meta.url), "utf8");
     // draft escluso (service gruppo appena creato)
     expect(piano).toMatch(/\.neq\("is_draft",\s*true\)/);
-    // dopo operationalize (is_draft=false) il service rientra: nessuna esclusione per gruppo
-    expect(piano).not.toMatch(/booking_group_id/);
-    // il Piano non è stato reso group-aware
-    expect(piano).not.toMatch(/booking_groups/);
+    // dopo operationalize (is_draft=false) il service rientra: nessuna restrizione
+    // `.eq("booking_group_id", ...)` sulla query services (FASE 4 aggrega solo in
+    // presentazione, non filtra quali services entrano nel Piano).
+    expect(piano).not.toMatch(/\.eq\("booking_group_id"/);
+  });
+});
+
+describe("FASE 4 — Piano del Giorno group-aware (presentazione, non filtro)", () => {
+  it("legge booking_group_id/booking_group_stop_id e delega l'aggregazione all'helper puro condiviso", () => {
+    const piano = readFileSync(new URL("../../app/api/ops/piano-giorno/route.ts", import.meta.url), "utf8");
+    expect(piano).toMatch(/booking_group_id/);
+    expect(piano).toMatch(/booking_group_stop_id/);
+    // nessuna logica di aggregazione duplicata inline: usa lo stesso helper testato
+    // in tests/unit/piano-booking-group-display.test.ts.
+    expect(piano).toMatch(/buildPianoDisplayUnits/);
+    expect(piano).toMatch(/from "@\/lib\/piano-booking-group-display"/);
+  });
+
+  it("non tocca trip_groups / assignments / tenant_bus_units in scrittura, resta sola lettura", () => {
+    const piano = readFileSync(new URL("../../app/api/ops/piano-giorno/route.ts", import.meta.url), "utf8");
+    expect(piano).not.toMatch(/\.update\(/);
+    expect(piano).not.toMatch(/\.insert\(/);
+    expect(piano).not.toMatch(/\.upsert\(/);
+    expect(piano).not.toMatch(/\.delete\(/);
+  });
+
+  it("batcha i gruppi con IN (...) invece di una query per gruppo (niente N+1)", () => {
+    const piano = readFileSync(new URL("../../app/api/ops/piano-giorno/route.ts", import.meta.url), "utf8");
+    expect(piano).toMatch(/\.in\("id", bookingGroupIds\)/);
+    expect(piano).toMatch(/\.in\("booking_group_id", bookingGroupIds\)/);
   });
 });
 

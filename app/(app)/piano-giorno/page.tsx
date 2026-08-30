@@ -9,6 +9,7 @@ import { WhatsAppButton } from "@/components/whatsapp-button";
 import { getPianoServiceDisplay } from "@/lib/piano-service-display";
 import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
+import type { PianoDisplayUnit, PianoBookingGroupUnit } from "@/lib/piano-booking-group-display";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,7 @@ type Service = {
   origin_place_id?: string | null; destination_place_id?: string | null;
   train_arrival_number?: string | null; train_arrival_time?: string | null;
   train_departure_number?: string | null; train_departure_time?: string | null;
+  booking_group_id?: string | null; booking_group_stop_id?: string | null;
 };
 type TripGroup = {
   id: string; date: string; driver_user_id: string | null; driver_profile_id: string | null;
@@ -100,6 +102,7 @@ type DayData = {
   hotels: Hotel[]; memberships: Member[]; driver_profiles: DriverProfile[];
   vehicles: Vehicle[]; ferry_schedules: FerrySchedule[];
   continent_dispatch?: ContinentDispatchData;
+  display_units?: PianoDisplayUnit<Service>[];
 };
 type PlanIssue = {
   id: string;
@@ -807,8 +810,212 @@ function DriverTimeline({ trips, tripServices }: {
 
 // ─── Pannello POOL (sinistra) ─────────────────────────────────────────────────
 
+/** Riga cliente riusata sia nei bucket vessel/pickup esistenti sia dentro le
+ *  fermate di una group unit (FASE 4 §8: riusa i componenti esistenti). */
+function ServiceCheckRow({ svc, hotel, isSelected, isAssigned, onToggle }: {
+  svc: Service; hotel: Hotel | undefined; isSelected: boolean; isAssigned: boolean; onToggle: (id: string) => void;
+}) {
+  const display = getPianoServiceDisplay(svc, hotel);
+  return (
+    <label
+      className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors ${
+        isSelected ? "bg-blue-50" : isAssigned ? "bg-slate-50" : "hover:bg-slate-50"
+      }`}
+    >
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onChange={() => onToggle(svc.id)}
+        className="rounded accent-blue-600 shrink-0"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
+            {display.serviceLabel}
+          </span>
+          <p className="truncate text-xs font-medium text-slate-800">{customerName(svc)}</p>
+        </div>
+        <p className="text-[10px] text-slate-500 truncate">
+          {display.pickupLabel ?? display.placeLabel}
+          {display.destinationLabel ? ` -> ${display.destinationLabel}` : ""}
+          {svc.phone ? ` · ${svc.phone}` : ""}
+        </p>
+      </div>
+      <div className="flex flex-col items-end shrink-0">
+        <span className="text-[10px] font-semibold text-slate-700">{svc.pax} px</span>
+        {isAssigned && <span className="text-[10px] text-emerald-600">✓ ass.</span>}
+      </div>
+    </label>
+  );
+}
+
+const GROUP_KIND_LABEL: Record<string, string> = {
+  bus_exclusive: "Bus esclusivo",
+  bus_group: "Gruppo bus",
+  multi_service: "Multi-servizio",
+  other: "Gruppo",
+};
+
+function pianoGroupWarningLabel(code: string): string {
+  switch (code) {
+    case "group_pax_incomplete": return "Pax previsti non ancora tutti nei servizi";
+    case "group_pax_overbooked": return "Pax nei servizi superiori ai previsti";
+    case "stop_pax_incomplete": return "Fermata con pax mancanti";
+    case "stop_pax_overbooked": return "Fermata con pax superiori ai previsti";
+    case "bus_reservation_missing": return "Bus esclusivo non ancora riservato";
+    case "reserved_pax_below_expected": return "Pax riservati inferiori ai previsti";
+    case "reserved_pax_above_capacity": return "Pax riservati oltre la capienza del bus";
+    case "unlinked_group_service": return "Servizi senza fermata associata";
+    case "missing_time": return "Orario non ancora definito";
+    default: return code;
+  }
+}
+
+/** Card di una group_unit (booking_group) nel Pool: sintesi + fermate espandibili
+ *  + services espandibili per fermata. Sola lettura: nessuna scrittura da qui
+ *  (FASE 4 §10/§20/§30). */
+function PianoBookingGroupCard({
+  unit, hotels, assignments, selectedIds, onToggle, onSelectGroup, visibleServices,
+}: {
+  unit: PianoBookingGroupUnit<Service>;
+  hotels: Map<string, Hotel>;
+  assignments: Map<string, Assignment>;
+  selectedIds: Set<string>;
+  onToggle: (id: string) => void;
+  onSelectGroup: (ids: string[]) => void;
+  visibleServices: Service[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [openStopKey, setOpenStopKey] = useState<string | null>(null);
+  const visibleIds = new Set(visibleServices.map((s) => s.id));
+  const assignedCount = visibleServices.filter((s) => assignments.has(s.id)).length;
+  const allSelected = visibleServices.length > 0 && visibleServices.every((s) => selectedIds.has(s.id));
+  const partialFilter = visibleServices.length < unit.serviceCount;
+
+  const driverUserIds = new Set(
+    unit.services.map((s) => assignments.get(s.id)?.driver_user_id).filter((v): v is string => Boolean(v))
+  );
+  const vehicleLabels = new Set(
+    unit.services.map((s) => assignments.get(s.id)?.vehicle_label).filter((v): v is string => Boolean(v))
+  );
+
+  return (
+    <div className="rounded-lg border-2 border-blue-200 bg-blue-50/40 overflow-hidden">
+      <button
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-blue-50 transition-colors text-left"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`transition-transform ${open ? "rotate-90" : ""} text-blue-500 text-xs`}>▶</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[9px] font-bold text-white uppercase tracking-wide">
+              {GROUP_KIND_LABEL[unit.kind] ?? unit.kind}
+            </span>
+            <p className="text-xs font-bold text-slate-900 truncate">{unit.name}</p>
+          </div>
+          <p className="text-[10px] text-slate-600">
+            {unit.stopCount} {unit.stopCount === 1 ? "fermata" : "fermate"} · {unit.serviceCount} nominativi
+            {unit.busReservation ? ` · ${unit.busReservation.busLabel ?? "bus riservato"}` : ""}
+          </p>
+          {partialFilter && (
+            <p className="text-[10px] text-amber-600 font-semibold">
+              {visibleServices.length} di {unit.serviceCount} servizi visibili con i filtri correnti
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="text-[10px] font-mono text-slate-700">
+            {unit.servicePax}/{unit.expectedPax} PAX
+          </span>
+          <span className={`text-[10px] ${assignedCount === visibleServices.length ? "text-emerald-600" : "text-amber-600"}`}>
+            {assignedCount}/{visibleServices.length} ass.
+          </span>
+        </div>
+        <div
+          role="button"
+          tabIndex={0}
+          className={`ml-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+            allSelected ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 text-slate-500 hover:border-blue-400"
+          }`}
+          onClick={(e) => { e.stopPropagation(); onSelectGroup(visibleServices.map((s) => s.id)); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); onSelectGroup(visibleServices.map((s) => s.id)); } }}
+          title={allSelected ? "Deseleziona tutto" : "Seleziona tutto il gruppo"}
+        >
+          {allSelected ? "✓ tutto" : "+ tutto"}
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t border-blue-100 bg-white">
+          {unit.warnings.length > 0 && (
+            <div className="px-3 py-1.5 border-b border-amber-100 bg-amber-50 space-y-0.5">
+              {unit.warnings.map((w) => (
+                <p key={w} className="text-[10px] text-amber-700">⚠ {pianoGroupWarningLabel(w)}</p>
+              ))}
+            </div>
+          )}
+          {(driverUserIds.size > 0 || vehicleLabels.size > 0) && (
+            <p className="px-3 py-1 text-[10px] text-slate-500 border-b border-slate-100">
+              {driverUserIds.size === 0 ? "Nessun autista assegnato" : driverUserIds.size === 1 ? "1 autista assegnato" : `${driverUserIds.size} autisti assegnati`}
+              {vehicleLabels.size > 0 ? ` · ${vehicleLabels.size === 1 ? "1 mezzo" : `${vehicleLabels.size} mezzi`}` : ""}
+            </p>
+          )}
+          {unit.stops.map((stop, idx) => {
+            const stopKey = stop.bookingGroupStopId ?? `unlinked-${idx}`;
+            const stopVisible = stop.services.filter((s) => visibleIds.has(s.id));
+            if (stopVisible.length === 0) return null;
+            const stopOpen = openStopKey === stopKey;
+            const stopLabel = stop.bookingGroupStopId
+              ? `${stop.city ?? "—"}${stop.pickupPoint ? ` — ${stop.pickupPoint}` : ""}`
+              : "Fermata non associata";
+            return (
+              <div key={stopKey} className="border-b border-slate-100 last:border-b-0">
+                <button
+                  className="w-full flex items-center gap-2 px-4 py-1.5 hover:bg-slate-50 text-left"
+                  onClick={() => setOpenStopKey(stopOpen ? null : stopKey)}
+                >
+                  <span className={`transition-transform ${stopOpen ? "rotate-90" : ""} text-slate-400 text-[10px]`}>▶</span>
+                  <span className="flex-1 min-w-0 truncate text-[11px] font-semibold text-slate-700">{stopLabel}</span>
+                  <span className={`text-[10px] font-mono ${stop.overbooked || stop.incomplete ? "text-amber-600" : "text-slate-500"}`}>
+                    {stop.bookingGroupStopId ? `${stop.servicePax}/${stop.expectedPax ?? "—"} PAX` : `${stop.servicePax} PAX`}
+                  </span>
+                </button>
+                {stopOpen && (
+                  <div>
+                    {stopVisible.map((svc) => (
+                      <ServiceCheckRow
+                        key={svc.id}
+                        svc={svc}
+                        hotel={hotels.get(svc.hotel_id ?? "")}
+                        isSelected={selectedIds.has(svc.id)}
+                        isAssigned={assignments.has(svc.id)}
+                        onToggle={onToggle}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div className="px-3 py-1.5 border-t border-slate-100">
+            <a
+              href={`/booking-groups?id=${unit.bookingGroupId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] font-semibold text-blue-600 hover:underline"
+            >
+              Apri gruppo →
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type PoolProps = {
   services: Service[];
+  displayUnits: PianoDisplayUnit<Service>[];
   hotels: Map<string, Hotel>;
   assignments: Map<string, Assignment>;
   ferrySchedules: FerrySchedule[];
@@ -817,7 +1024,7 @@ type PoolProps = {
   onSelectGroup: (ids: string[]) => void;
 };
 
-function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds, onToggle, onSelectGroup }: PoolProps) {
+function PoolPanel({ services, displayUnits, hotels, assignments, ferrySchedules, selectedIds, onToggle, onSelectGroup }: PoolProps) {
   const [tab, setTab] = useState<"arrivals" | "departures">("arrivals");
   const [filter, setFilter] = useState<"all" | "unassigned" | "assigned">("unassigned");
   const [search, setSearch] = useState("");
@@ -826,20 +1033,58 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
   const arrivals = useMemo(() => services.filter((s) => s.direction === "arrival"), [services]);
   const departures = useMemo(() => services.filter((s) => s.direction === "departure"), [services]);
 
-  const filterSvc = useCallback((list: Service[]) => {
-    let out = list;
-    if (filter === "unassigned") out = out.filter((s) => !assignments.has(s.id));
-    if (filter === "assigned") out = out.filter((s) => assignments.has(s.id));
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      out = out.filter((s) => customerName(s).toLowerCase().includes(q) || (hotels.get(s.hotel_id ?? "")?.name ?? "").toLowerCase().includes(q));
-    }
-    return out;
-  }, [filter, search, assignments, hotels]);
+  const matchesAssignedFilter = useCallback((s: Service) => {
+    if (filter === "unassigned") return !assignments.has(s.id);
+    if (filter === "assigned") return assignments.has(s.id);
+    return true;
+  }, [filter, assignments]);
 
-  // Raggruppa arrivi per vessel (corsa traghetto)
+  const matchesSearchText = useCallback((s: Service) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return customerName(s).toLowerCase().includes(q) || (hotels.get(s.hotel_id ?? "")?.name ?? "").toLowerCase().includes(q);
+  }, [search, hotels]);
+
+  const filterSvc = useCallback((list: Service[]) => list.filter((s) => matchesAssignedFilter(s) && matchesSearchText(s)), [matchesAssignedFilter, matchesSearchText]);
+
+  // FASE 4 — group unit di questa direzione: escluse dai bucket vessel/pickup
+  // esistenti (§15, nessuna duplicazione) e filtrate a parte (§25/§26).
+  const directionKey = tab === "arrivals" ? "arrival" : "departure";
+  const groupUnitsForTab = useMemo(
+    () => displayUnits.filter((u): u is PianoBookingGroupUnit<Service> => u.type === "booking_group" && u.direction === directionKey),
+    [displayUnits, directionKey]
+  );
+  const groupedServiceIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const u of groupUnitsForTab) for (const s of u.services) set.add(s.id);
+    return set;
+  }, [groupUnitsForTab]);
+
+  const groupTextMatches = useCallback((unit: PianoBookingGroupUnit<Service>) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    if (unit.name.toLowerCase().includes(q)) return true;
+    if ((unit.busReservation?.busLabel ?? "").toLowerCase().includes(q)) return true;
+    return unit.stops.some((st) => (st.city ?? "").toLowerCase().includes(q) || (st.pickupPoint ?? "").toLowerCase().includes(q));
+  }, [search]);
+
+  const visibleGroupUnits = useMemo(() => {
+    return groupUnitsForTab
+      .map((unit) => {
+        const textOk = groupTextMatches(unit);
+        const visible = unit.services.filter((s) => matchesAssignedFilter(s) && (textOk || matchesSearchText(s)));
+        return { unit, visible };
+      })
+      .filter((row) => row.visible.length > 0)
+      .sort((a, b) => (a.unit.earliestTime ?? "").localeCompare(b.unit.earliestTime ?? ""));
+  }, [groupUnitsForTab, groupTextMatches, matchesAssignedFilter, matchesSearchText]);
+
+  const ungroupedArrivals = useMemo(() => arrivals.filter((s) => !groupedServiceIds.has(s.id)), [arrivals, groupedServiceIds]);
+  const ungroupedDepartures = useMemo(() => departures.filter((s) => !groupedServiceIds.has(s.id)), [departures, groupedServiceIds]);
+
+  // Raggruppa arrivi per vessel (corsa traghetto) — solo services senza gruppo (§16: regressione invariata)
   const arrivalGroups = useMemo(() => {
-    const filtered = filterSvc(arrivals);
+    const filtered = filterSvc(ungroupedArrivals);
     const map = new Map<string, Service[]>();
     for (const s of filtered) {
       const key = s.vessel?.trim() || "—";
@@ -847,11 +1092,11 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
     }
     // Ordina per orario arrivo del primo elemento
     return Array.from(map.entries()).sort((a, b) => (a[1][0]?.time ?? "").localeCompare(b[1][0]?.time ?? ""));
-  }, [arrivals, filterSvc]);
+  }, [ungroupedArrivals, filterSvc]);
 
-  // Raggruppa partenze per fascia pickup + zona hotel
+  // Raggruppa partenze per fascia pickup + zona hotel — solo services senza gruppo
   const departureGroups = useMemo(() => {
-    const filtered = filterSvc(departures);
+    const filtered = filterSvc(ungroupedDepartures);
     const map = new Map<string, Service[]>();
     for (const s of filtered) {
       const zone = hotels.get(s.hotel_id ?? "")?.zone ?? "—";
@@ -860,7 +1105,7 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
       map.set(key, [...(map.get(key) ?? []), s]);
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [departures, filterSvc, hotels]);
+  }, [ungroupedDepartures, filterSvc, hotels]);
 
   const groups = tab === "arrivals" ? arrivalGroups : departureGroups;
   const totalUnassigned = (tab === "arrivals" ? arrivals : departures).filter((s) => !assignments.has(s.id)).length;
@@ -910,108 +1155,116 @@ function PoolPanel({ services, hotels, assignments, ferrySchedules, selectedIds,
 
       {/* Gruppi */}
       <div className="flex-1 overflow-y-auto space-y-1 pr-1">
-        {groups.length === 0 && (
+        {groups.length === 0 && visibleGroupUnits.length === 0 && (
           <p className="text-sm text-slate-400 text-center py-8">Nessun servizio</p>
         )}
-        {groups.map(([key, svcs]) => {
-          const isOpen = expandedKey === key;
-          const groupPax = svcs.reduce((n, s) => n + s.pax, 0);
-          const assignedCount = svcs.filter((s) => assignments.has(s.id)).length;
-          const allSelected = svcs.every((s) => selectedIds.has(s.id));
 
-          // Label gruppo
-          let groupLabel = "";
-          let groupSub = "";
-          if (tab === "arrivals") {
-            const ferry = ferrySchedules.find((f) => svcs[0]?.vessel?.toLowerCase().includes(f.company.toLowerCase()));
-            groupLabel = svcs[0]?.vessel || "—";
-            groupSub = `ore ${svcs[0] ? serviceDisplayTime(svcs[0]) : "—"}`;
-            if (ferry) groupSub += ` · ${portLabel(ferry.arrival_port)}`;
-          } else {
-            const [time, zone] = key.split("|");
-            groupLabel = `Pickup ${time}`;
-            groupSub = zone;
-          }
+        {/* FASE 4 — group unit (booking_group) di questa direzione, interfogliate
+           per orario con i bucket vessel/pickup esistenti (§13/§14). */}
+        {(() => {
+          type Row =
+            | { kind: "group"; sortTime: string; row: (typeof visibleGroupUnits)[number] }
+            | { kind: "bucket"; sortTime: string; key: string; svcs: Service[] };
+          const bucketRows: Row[] = groups.map(([key, svcs]) => ({
+            kind: "bucket",
+            sortTime: tab === "arrivals" ? (svcs[0]?.time ?? "") : key,
+            key,
+            svcs,
+          }));
+          const groupRows: Row[] = visibleGroupUnits.map((row) => ({
+            kind: "group",
+            sortTime: row.unit.earliestTime ?? "",
+            row,
+          }));
+          const rows = [...groupRows, ...bucketRows].sort((a, b) => a.sortTime.localeCompare(b.sortTime));
 
-          return (
-            <div key={key} className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-              {/* Header gruppo */}
-              <button
-                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
-                onClick={() => setExpandedKey(isOpen ? null : key)}
-              >
-                <span className={`transition-transform ${isOpen ? "rotate-90" : ""} text-slate-400 text-xs`}>▶</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-slate-800 truncate">{groupLabel}</p>
-                  <p className="text-[10px] text-slate-500">{groupSub}</p>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  <span className="text-[10px] font-mono text-slate-600">{groupPax} PAX</span>
-                  <span className={`text-[10px] ${assignedCount === svcs.length ? "text-emerald-600" : "text-amber-600"}`}>
-                    {assignedCount}/{svcs.length} ass.
-                  </span>
-                </div>
-                {/* Seleziona tutto il gruppo */}
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className={`ml-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
-                    allSelected ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 text-slate-500 hover:border-blue-400"
-                  }`}
-                  onClick={(e) => { e.stopPropagation(); onSelectGroup(svcs.map((s) => s.id)); }}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); onSelectGroup(svcs.map((s) => s.id)); } }}
-                  title={allSelected ? "Deseleziona tutto" : "Seleziona tutto il gruppo"}
+          return rows.map((r) => {
+            if (r.kind === "group") {
+              return (
+                <PianoBookingGroupCard
+                  key={`group-${r.row.unit.bookingGroupId}-${r.row.unit.direction}`}
+                  unit={r.row.unit}
+                  hotels={hotels}
+                  assignments={assignments}
+                  selectedIds={selectedIds}
+                  onToggle={onToggle}
+                  onSelectGroup={onSelectGroup}
+                  visibleServices={r.row.visible}
+                />
+              );
+            }
+
+            const { key, svcs } = r;
+            const isOpen = expandedKey === key;
+            const groupPax = svcs.reduce((n, s) => n + s.pax, 0);
+            const assignedCount = svcs.filter((s) => assignments.has(s.id)).length;
+            const allSelected = svcs.every((s) => selectedIds.has(s.id));
+
+            let groupLabel = "";
+            let groupSub = "";
+            if (tab === "arrivals") {
+              const ferry = ferrySchedules.find((f) => svcs[0]?.vessel?.toLowerCase().includes(f.company.toLowerCase()));
+              groupLabel = svcs[0]?.vessel || "—";
+              groupSub = `ore ${svcs[0] ? serviceDisplayTime(svcs[0]) : "—"}`;
+              if (ferry) groupSub += ` · ${portLabel(ferry.arrival_port)}`;
+            } else {
+              const [time, zone] = key.split("|");
+              groupLabel = `Pickup ${time}`;
+              groupSub = zone;
+            }
+
+            return (
+              <div key={key} className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+                {/* Header gruppo */}
+                <button
+                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
+                  onClick={() => setExpandedKey(isOpen ? null : key)}
                 >
-                  {allSelected ? "✓ tutto" : "+ tutto"}
-                </div>
-              </button>
+                  <span className={`transition-transform ${isOpen ? "rotate-90" : ""} text-slate-400 text-xs`}>▶</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-slate-800 truncate">{groupLabel}</p>
+                    <p className="text-[10px] text-slate-500">{groupSub}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-0.5">
+                    <span className="text-[10px] font-mono text-slate-600">{groupPax} PAX</span>
+                    <span className={`text-[10px] ${assignedCount === svcs.length ? "text-emerald-600" : "text-amber-600"}`}>
+                      {assignedCount}/{svcs.length} ass.
+                    </span>
+                  </div>
+                  {/* Seleziona tutto il gruppo */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className={`ml-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+                      allSelected ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 text-slate-500 hover:border-blue-400"
+                    }`}
+                    onClick={(e) => { e.stopPropagation(); onSelectGroup(svcs.map((s) => s.id)); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); onSelectGroup(svcs.map((s) => s.id)); } }}
+                    title={allSelected ? "Deseleziona tutto" : "Seleziona tutto il gruppo"}
+                  >
+                    {allSelected ? "✓ tutto" : "+ tutto"}
+                  </div>
+                </button>
 
-              {/* Righe clienti */}
-              {isOpen && (
-                <div className="border-t border-slate-100">
-                  {svcs.map((svc) => {
-                    const hotel = hotels.get(svc.hotel_id ?? "");
-                    const display = getPianoServiceDisplay(svc, hotel);
-                    const isSelected = selectedIds.has(svc.id);
-                    const isAssigned = assignments.has(svc.id);
-                    return (
-                      <label
+                {/* Righe clienti */}
+                {isOpen && (
+                  <div className="border-t border-slate-100">
+                    {svcs.map((svc) => (
+                      <ServiceCheckRow
                         key={svc.id}
-                        className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors ${
-                          isSelected ? "bg-blue-50" : isAssigned ? "bg-slate-50" : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => onToggle(svc.id)}
-                          className="rounded accent-blue-600 shrink-0"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
-                              {display.serviceLabel}
-                            </span>
-                            <p className="truncate text-xs font-medium text-slate-800">{customerName(svc)}</p>
-                          </div>
-                          <p className="text-[10px] text-slate-500 truncate">
-                            {display.pickupLabel ?? display.placeLabel}
-                            {display.destinationLabel ? ` -> ${display.destinationLabel}` : ""}
-                            {svc.phone ? ` · ${svc.phone}` : ""}
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end shrink-0">
-                          <span className="text-[10px] font-semibold text-slate-700">{svc.pax} px</span>
-                          {isAssigned && <span className="text-[10px] text-emerald-600">✓ ass.</span>}
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+                        svc={svc}
+                        hotel={hotels.get(svc.hotel_id ?? "")}
+                        isSelected={selectedIds.has(svc.id)}
+                        isAssigned={assignments.has(svc.id)}
+                        onToggle={onToggle}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          });
+        })()}
       </div>
     </div>
   );
@@ -4806,6 +5059,7 @@ export default function PianoGiornoPage() {
               </h2>
               <PoolPanel
                 services={data.services}
+                displayUnits={data.display_units ?? []}
                 hotels={hotelMap}
                 assignments={assignmentMap}
                 ferrySchedules={data.ferry_schedules}
