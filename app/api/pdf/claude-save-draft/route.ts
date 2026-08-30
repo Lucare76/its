@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
 import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
@@ -244,6 +245,27 @@ function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: 
   return { bookingKind: "transfer_train_hotel", transportMode: "train" };
 }
 
+// Valori ammessi dal constraint services_service_type_code_valid (vedi
+// supabase/migrations/0021/0024/0030_*.sql). form.tipo_servizio usa già
+// questi stessi valori per ogni kind tranne "bus_city_hotel", che sul lato
+// service_type_code si chiama "bus_line".
+const VALID_SERVICE_TYPE_CODES = new Set([
+  "transfer_station_hotel",
+  "transfer_airport_hotel",
+  "transfer_port_hotel",
+  "transfer_hotel_port",
+  "excursion",
+  "ferry_transfer",
+  "bus_line",
+]);
+
+function toServiceTypeCode(tipo: string | null | undefined): string | null {
+  const raw = clean(tipo);
+  if (!raw) return null;
+  if (raw === "bus_city_hotel") return "bus_line";
+  return VALID_SERVICE_TYPE_CODES.has(raw) ? raw : null;
+}
+
 async function resolveOrCreateHotel(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
   const rawName = clean(hotelName);
   const name = canonicalizeKnownHotelName(rawName) ?? rawName ?? "Hotel da verificare";
@@ -325,6 +347,14 @@ export async function POST(request: NextRequest) {
   const sourcePricePerPaxCents = sourceTotalCents && passengers > 0 ? Math.round(sourceTotalCents / passengers) : null;
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
+  const isTrainKind = bookingKind === "transfer_train_hotel";
+  const serviceTypeCode = toServiceTypeCode(form.tipo_servizio);
+  // Regola condivisa insert/update: se ci sono entrambi i numeri treno, li
+  // combina "andata / ritorno"; altrimenti il singolo disponibile; altrimenti
+  // null (fallback preesistente per i kind non-bus, mai valorizzato prima).
+  const transportCode = trainArrivalNumber && trainDepartureNumber
+    ? `${trainArrivalNumber} / ${trainDepartureNumber}`
+    : trainArrivalNumber ?? trainDepartureNumber ?? null;
 
   // Per servizi bus: risoluzione bidirezionale della fermata (città o indirizzo pickupNote)
   const resolvedBusStop = bookingKind === "bus_city_hotel" ? resolveBusStop(arrivalPlace) : null;
@@ -391,9 +421,6 @@ export async function POST(request: NextRequest) {
       if (JSON.stringify(current) === JSON.stringify(value)) return;
       patch[col] = value;
     };
-    const transportCode = trainArrivalNumber && trainDepartureNumber
-      ? `${trainArrivalNumber} / ${trainDepartureNumber}`
-      : trainArrivalNumber ?? trainDepartureNumber ?? null;
     setIfChanged("customer_name", customerName);
     setIfChanged("phone", clean(form.cliente_cellulare));
     setIfChanged("pax", passengers);
@@ -407,6 +434,13 @@ export async function POST(request: NextRequest) {
     setIfChanged("departure_date", departureDate);
     setIfChanged("meeting_point", arrivalPlace);
     setIfChanged("transport_code", transportCode);
+    setIfChanged("service_type_code", serviceTypeCode);
+    if (isTrainKind) {
+      setIfChanged("train_arrival_number", trainArrivalNumber);
+      setIfChanged("train_arrival_time", outboundTime);
+      setIfChanged("train_departure_number", trainDepartureNumber);
+      setIfChanged("train_departure_time", returnTime);
+    }
     setIfChanged("source_total_amount_cents", sourceTotalCents);
     setIfChanged("source_price_per_pax_cents", sourcePricePerPaxCents);
 
@@ -600,6 +634,31 @@ export async function POST(request: NextRequest) {
   const hotelId = await resolveOrCreateHotel(auth.admin, tenantId, hotelName);
   if (!hotelId) return NextResponse.json({ ok: false, error: "Hotel non trovato e non creabile." }, { status: 500 });
 
+  // ── Pickup hotel per transfer_port_hotel puri (SNAV/MEDMAR diretti) ──────
+  // Stessa logica canonica di app/api/email/inbox-approve/route.ts — via
+  // applyPickupCalc (lib/server/apply-pickup-calc.ts), MAI una regex locale
+  // parallela. Fuori da questo scenario (es. "HOTEL PICKUP ORE HH:MM" nelle
+  // note di un transfer treno/hotel) non esiste una funzione di dominio che
+  // estragga pickup_hotel/pickup_time/pickup_alert da testo libero: il
+  // valore resta nelle notes, invariato, come oggi.
+  let pickupHotel: string | null = null;
+  let pickupAlert: string | null = null;
+  if (bookingKind === "transfer_port_hotel" && returnTime) {
+    const { data: hotelZoneRow } = await auth.admin.from("hotels").select("zone").eq("id", hotelId).maybeSingle();
+    const zoneRaw = (hotelZoneRow as { zone?: string | null } | null)?.zone ?? null;
+    const pickupFields = applyPickupCalc({
+      direction: "departure",
+      booking_service_kind: bookingKind,
+      time: returnTime,
+      billing_party_name: form.agenzia,
+      vessel: trainDepartureNumber ?? trainArrivalNumber ?? null,
+      hotel_zone: zoneRaw,
+      hotel_name: hotelName ?? null,
+    });
+    pickupHotel = pickupFields.pickup_hotel ?? null;
+    pickupAlert = pickupFields.pickup_alert ?? null;
+  }
+
   // ── Note servizio ─────────────────────────────────────────────────────────
   const notesParts = [
     "[pdf_import] Booking finale creato da PDF",
@@ -641,16 +700,30 @@ export async function POST(request: NextRequest) {
         : bookingKind === "bus_city_hotel"
         ? (canonicalBusCity ?? "Bus da verificare")
         : (arrivalPlace ?? "Transfer da PDF"),
-      meeting_point: bookingKind === "bus_city_hotel" ? (busPickupNote ?? canonicalBusCity) : null,
+      meeting_point: bookingKind === "bus_city_hotel" ? (busPickupNote ?? canonicalBusCity) : arrivalPlace,
       bus_city_origin: bookingKind === "bus_city_hotel" ? (canonicalBusCity ?? null) : null,
-      transport_code: bookingKind === "bus_city_hotel" ? (busFamilyCode ?? null) : null,
+      transport_code: bookingKind === "bus_city_hotel" ? (busFamilyCode ?? null) : transportCode,
       pax: passengers,
       hotel_id: hotelId,
       customer_name: customerName,
       billing_party_name: form.agenzia,
       outbound_time: outboundTime,
       return_time: returnTime,
+      // Campi operativi strutturati letti dalla card/edit prenotazione (stessa
+      // ragione/parita' di app/api/email/inbox-approve/route.ts): senza questi,
+      // arrival_date/arrival_time/departure_time restano NULL anche quando il
+      // parser li ha estratti correttamente, e la card mostra "—".
+      arrival_date: arrivalDate,
+      arrival_time: outboundTime,
       departure_date: departureDate,
+      departure_time: returnTime,
+      service_type_code: serviceTypeCode,
+      train_arrival_number: isTrainKind ? trainArrivalNumber : null,
+      train_arrival_time: isTrainKind ? outboundTime : null,
+      train_departure_number: isTrainKind ? trainDepartureNumber : null,
+      train_departure_time: isTrainKind ? returnTime : null,
+      pickup_hotel: pickupHotel,
+      pickup_alert: pickupAlert,
       source_total_amount_cents: sourceTotalCents,
       source_price_per_pax_cents: sourcePricePerPaxCents,
       source_amount_currency: "EUR",

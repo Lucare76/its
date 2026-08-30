@@ -62,6 +62,60 @@ function ferryCompanyLabel(company: string | null | undefined) {
   return company.toUpperCase();
 }
 
+/**
+ * Numero pratica dell'AGENZIA (marker `[practice:XXX]` in notes, scritto da
+ * ogni write-path di import) ha priorità sul `practice_number` di colonna —
+ * quest'ultimo è un identificativo interno diverso (ITS-YYYY-N, generato
+ * SOLO da next_booking_practice_number() per le pratiche inserite a mano,
+ * vedi supabase/migrations/0243_booking_practice_numbers.sql). Stessa
+ * precedenza già in uso in app/api/invoices/route.ts e
+ * app/api/cron/agency-invoices/route.ts — nessuna logica nuova, solo
+ * applicata anche qui in lettura.
+ */
+function practiceNumberFromNotes(notes: string | null | undefined): string | null {
+  if (typeof notes !== "string") return null;
+  const match = notes.match(/\[practice:([^\]]+)\]/);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Read-model fallback (mai scritto su DB): quando un campo strutturato è
+ * NULL, ricostruisce il valore dai campi legacy equivalenti — mai dalle
+ * notes come fonte primaria di dati operativi (eccetto practice_number, dove
+ * il marker [practice:XXX] è già la fonte canonica esistente altrove, vedi
+ * sopra). `ferryArrivalArrivalTime` è l'orario "indicativo" calcolato da
+ * findArrivalScheduleForService (stessa funzione di /api/ops/search, MAI
+ * duplicata) — usato SOLO come ultimissima risorsa quando non esiste alcun
+ * dato reale (arrival_time/outbound_time/time tutti NULL), mai per
+ * sovrascrivere un valore reale già presente (bug corretto in questa
+ * modifica: prima veniva sempre sovrascritto).
+ */
+function withServiceReadModelFallbacks<T extends Record<string, unknown> | null | undefined>(
+  row: T,
+  ferryArrivalArrivalTime?: string | null
+): T {
+  if (!row) return row;
+  const trainArrivalNumber = (row.train_arrival_number as string | null) ?? null;
+  const trainDepartureNumber = (row.train_departure_number as string | null) ?? null;
+  return {
+    ...row,
+    arrival_time:
+      (row.arrival_time as string | null) ??
+      (row.outbound_time as string | null) ??
+      (row.time as string | null) ??
+      ferryArrivalArrivalTime ??
+      null,
+    departure_time: (row.departure_time as string | null) ?? (row.return_time as string | null) ?? null,
+    meeting_point: (row.meeting_point as string | null) ?? (row.vessel as string | null) ?? null,
+    transport_code:
+      (row.transport_code as string | null) ??
+      (trainArrivalNumber && trainDepartureNumber
+        ? `${trainArrivalNumber} / ${trainDepartureNumber}`
+        : trainArrivalNumber ?? trainDepartureNumber ?? null),
+    practice_number: practiceNumberFromNotes(row.notes as string | null) ?? (row.practice_number as string | null) ?? null,
+  };
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -76,7 +130,7 @@ export async function GET(
     const [serviceRes, hotelsRes, agenciesRes, schedulesRes, changeLogsRes] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id, customer_name, phone, pax, date, time, notes, hotel_id, agency_id, billing_party_name, agency_quoted_price_cents, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by")
+        .select("id, customer_name, phone, pax, date, time, notes, hotel_id, agency_id, billing_party_name, agency_quoted_price_cents, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by, outbound_time, return_time, vessel, train_arrival_number, train_arrival_time, train_departure_number, train_departure_time, status, is_draft, pickup_hotel, pickup_alert, bus_city_origin, practice_number")
         .eq("id", serviceId)
         .eq("tenant_id", tenantId)
         .maybeSingle(),
@@ -111,7 +165,7 @@ export async function GET(
 
     const linkedServiceRes = serviceRes.data.linked_service_id
       ? await auth.admin.from("services")
-        .select("id, direction, date, time, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, booking_service_kind")
+        .select("id, direction, date, time, notes, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, booking_service_kind, outbound_time, return_time, vessel, transport_code, train_arrival_number, train_arrival_time, train_departure_number, train_departure_time, status, is_draft, pickup_hotel, pickup_alert, meeting_point, bus_city_origin, practice_number")
         .eq("id", serviceRes.data.linked_service_id)
         .eq("tenant_id", tenantId)
         .maybeSingle()
@@ -125,12 +179,23 @@ export async function GET(
       arrivalLeg.time,
       arrivalLeg.booking_service_kind
     ) : null;
-    const correctedService = arrivalLeg?.id === serviceRes.data.id && arrivalSchedule
-      ? { ...serviceRes.data, arrival_time: arrivalSchedule.arrivalTime }
-      : serviceRes.data;
-    const correctedLinked = arrivalLeg?.id === linkedServiceRes.data?.id && arrivalSchedule
-      ? { ...linkedServiceRes.data, arrival_time: arrivalSchedule.arrivalTime }
-      : linkedServiceRes.data;
+    // L'orario "indicativo" da orario traghetto (arrivalSchedule) resta SOLO
+    // un fallback di ultima istanza dentro withServiceReadModelFallbacks —
+    // mai una sovrascrittura del dato reale già strutturato/legacy (era il
+    // bug: prima veniva sempre applicato, anche quando arrival_time reale
+    // era già presente — vedi caso MATTIOLI 26/010806, treno ITA 9998 delle
+    // 12:53 "corretto" in 15:40 da un match ferry_schedules coincidente).
+    // L'arrivo indicativo resta comunque disponibile in ferry_meta sotto, e
+    // /api/ops/search continua a esporlo separatamente in
+    // outbound_ferry_arrival_time — nessuna duplicazione di logica.
+    const correctedService = withServiceReadModelFallbacks(
+      serviceRes.data,
+      arrivalLeg?.id === serviceRes.data.id ? arrivalSchedule?.arrivalTime ?? null : null
+    );
+    const correctedLinked = withServiceReadModelFallbacks(
+      linkedServiceRes.data,
+      arrivalLeg?.id === linkedServiceRes.data?.id ? arrivalSchedule?.arrivalTime ?? null : null
+    );
     const departureLeg = serviceRes.data.direction === "departure" ? serviceRes.data
       : linkedServiceRes.data?.direction === "departure" ? linkedServiceRes.data : null;
     const returnFerryDepartureTime = departureLeg?.orario_barca ?? serviceRes.data.orario_barca ?? departureLeg?.departure_time ?? serviceRes.data.departure_time;
