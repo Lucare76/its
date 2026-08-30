@@ -287,6 +287,9 @@ function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
           />
         ) : null}
 
+        {/* Operativizzazione */}
+        <OperationalizeSection groupId={group.id} onMessage={onMessage} onError={onError} onChanged={onChange} />
+
         {/* Traghetto gruppo */}
         <FerrySection group={group} onSave={(patch) => post({ action: "update_group", id: group.id, ...patch })} />
 
@@ -427,6 +430,99 @@ function BusReservationSection({ groupId, reservations, defaultDate, onUpsert }:
         onClick={() => void onUpsert({ bus_unit_id: unitId.trim(), service_date: date, reserved_pax: Number(rp), exclusive })}
         className="btn-secondary mt-2 px-3 py-1.5 text-xs disabled:opacity-50">Salva riserva</button>
       <p className="mt-1 text-[11px] text-slate-400">Non modifica tag/group_name/status del bus. Warning se pax riservati &gt; capacità va gestito lato bus-network.</p>
+    </div>
+  );
+}
+
+const MISSING_LABEL: Record<string, string> = {
+  missing_date: "data mancante", missing_time: "orario mancante (00:00 placeholder)", missing_direction: "direzione mancante",
+  missing_city: "città mancante", missing_pickup_point: "punto di carico mancante", missing_hotel: "hotel mancante",
+  missing_customer_name: "nominativo mancante", missing_booking_group_id: "gruppo non collegato",
+  missing_booking_group_stop_id: "fermata gruppo non collegata", invalid_pax: "pax non valido",
+};
+const WARN_LABEL: Record<string, string> = {
+  bus_reservation_missing: "nessun bus riservato per la data", reserved_pax_below_expected: "pax riservati < previsti",
+  reserved_pax_above_capacity: "pax riservati > capacità bus", ferry_outbound_missing: "traghetto andata: default/da definire",
+  ferry_return_missing: "traghetto ritorno: default/da definire", allocation_pending: "allocazione bus da completare",
+};
+
+type PreviewSvc = { service_id: string; customer_name: string | null; pax: number; ready: boolean; already_operational: boolean; missing_fields: string[]; warnings: string[] };
+type Preview = {
+  ok: boolean; expected_pax: number; planned_pax: number; service_pax: number;
+  services_total: number; services_ready: number; services_blocked: number; services_already_operational: number;
+  warnings: string[]; services: PreviewSvc[];
+};
+
+function OperationalizeSection({ groupId, onMessage, onError, onChanged }: {
+  groupId: string; onMessage: (m: string) => void; onError: (e: string) => void; onChanged: () => Promise<void> | void;
+}) {
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  const runPreview = async () => {
+    setBusy(true);
+    const { ok, json } = await api("/api/ops/booking-groups", { method: "POST", body: JSON.stringify({ action: "preview_operationalize_group", booking_group_id: groupId }) });
+    setBusy(false);
+    if (ok && json.ok) { setPreview(json as Preview); setChecked(new Set((json.services as PreviewSvc[]).filter((s) => s.ready).map((s) => s.service_id))); }
+    else onError(json.error ?? "Preview non riuscita");
+  };
+
+  const confirm = async () => {
+    if (checked.size === 0) return;
+    setBusy(true);
+    const { ok, status, json } = await api("/api/ops/booking-groups", { method: "POST", body: JSON.stringify({ action: "operationalize_group", booking_group_id: groupId, service_ids: [...checked] }) });
+    setBusy(false);
+    if (ok || status === 207) {
+      onMessage(`Operativi: ${json.operationalized?.length ?? 0}${json.blocked?.length ? ` · Bloccati: ${json.blocked.length}` : ""}`);
+      setPreview(null); setChecked(new Set()); await onChanged();
+    } else onError(json.error ?? `Nessun servizio operativizzabile (HTTP ${status}).`);
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-slate-800">Operativizzazione</div>
+        <button type="button" disabled={busy} onClick={() => void runPreview()} className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50">Verifica servizi</button>
+      </div>
+      {!preview ? (
+        <p className="mt-1 text-[11px] text-slate-400">Verifica cosa manca prima di rendere operativi i servizi. Nessuna scrittura in preview.</p>
+      ) : (
+        <div className="mt-2 space-y-2 text-xs">
+          <div className="flex flex-wrap gap-3">
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700">Pronti: {preview.services_ready}</span>
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">Da completare: {preview.services_blocked}</span>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-600">Già operativi: {preview.services_already_operational}</span>
+          </div>
+          {preview.warnings.length > 0 ? (
+            <p className="text-amber-700">Gruppo: {preview.warnings.map((w) => WARN_LABEL[w] ?? w).join(" · ")}</p>
+          ) : null}
+          <ul className="space-y-1">
+            {preview.services.map((s) => {
+              const badge = s.already_operational ? "Operativo" : s.ready ? "Pronto" : "Bloccato";
+              const badgeCls = s.already_operational ? "bg-slate-200 text-slate-700" : s.ready ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700";
+              return (
+                <li key={s.service_id} className="flex items-start gap-2 rounded border border-slate-200 p-1.5">
+                  {s.ready ? (
+                    <input type="checkbox" className="mt-0.5" checked={checked.has(s.service_id)}
+                      onChange={(e) => setChecked((p) => { const n = new Set(p); if (e.target.checked) n.add(s.service_id); else n.delete(s.service_id); return n; })} />
+                  ) : <span className="w-3" />}
+                  <div className="flex-1">
+                    <span className="font-semibold text-slate-700">{s.customer_name ?? "—"}</span> — {s.pax} pax
+                    <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeCls}`}>{badge}</span>
+                    {s.missing_fields.length > 0 ? <div className="text-rose-600">manca: {s.missing_fields.map((m) => MISSING_LABEL[m] ?? m).join(", ")}</div> : null}
+                    {s.warnings.length > 0 ? <div className="text-amber-600">{s.warnings.map((w) => WARN_LABEL[w] ?? w).join(", ")}</div> : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <button type="button" disabled={busy || checked.size === 0} onClick={() => void confirm()}
+            className="rounded-xl bg-slate-800 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+            Rendi operativi i selezionati ({checked.size})
+          </button>
+        </div>
+      )}
     </div>
   );
 }

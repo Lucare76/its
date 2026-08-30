@@ -3,9 +3,78 @@ import {
   summarizeBookingGroupPax,
   computeBookingGroupStatusSummary,
   summarizeStopPax,
+  evaluateBookingGroupServiceReadiness,
   BOOKING_GROUP_KINDS,
   BOOKING_GROUP_STATUSES,
 } from "@/lib/booking-groups";
+
+const BUS_GROUP = { kind: "bus_exclusive" };
+const STOP_RESOLVED = { pickup_point: "Villa d'Este", stop_id: "stop-1" };
+const STOP_UNRESOLVED = { pickup_point: "Villa d'Este", stop_id: null };
+function baseSvc(over: Record<string, unknown> = {}) {
+  return {
+    booking_group_id: "g1", booking_group_stop_id: "s1", date: "2026-09-12", time: "07:30",
+    direction: "arrival", pax: 4, customer_name: "Rossi", bus_city_origin: "Tivoli",
+    meeting_point: "Villa d'Este", hotel_id: null, booking_service_kind: "bus_city_hotel",
+    is_draft: true, status: "needs_review", ...over,
+  };
+}
+
+describe("evaluateBookingGroupServiceReadiness — FASE 2.5", () => {
+  it("A: service bus completo (fermata risolta) → ready", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc(), BUS_GROUP, STOP_RESOLVED);
+    expect(r.ready).toBe(true);
+    expect(r.missingFields).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("A': fermata NON risolta (stop_id null) → ready ma warning allocation_pending", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc(), BUS_GROUP, STOP_UNRESOLVED);
+    expect(r.ready).toBe(true);
+    expect(r.warnings).toContain("allocation_pending");
+  });
+
+  it("B: time '00:00' placeholder → NOT ready, missing_time", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc({ time: "00:00" }), BUS_GROUP, STOP_RESOLVED);
+    expect(r.ready).toBe(false);
+    expect(r.missingFields).toContain("missing_time");
+  });
+
+  it("C: customer_name mancante → NOT ready", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc({ customer_name: "" }), BUS_GROUP, STOP_RESOLVED);
+    expect(r.ready).toBe(false);
+    expect(r.missingFields).toContain("missing_customer_name");
+  });
+
+  it("D: pax 0 → NOT ready, invalid_pax", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc({ pax: 0 }), BUS_GROUP, STOP_RESOLVED);
+    expect(r.ready).toBe(false);
+    expect(r.missingFields).toContain("invalid_pax");
+  });
+
+  it("E: service già operativo (is_draft false) → alreadyOperational, ready=false", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc({ is_draft: false, status: "new" }), BUS_GROUP, STOP_RESOLVED);
+    expect(r.alreadyOperational).toBe(true);
+    expect(r.ready).toBe(false);
+  });
+
+  it("bus kind: hotel mancante NON blocca (services.hotel_id nullable per bus)", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc({ hotel_id: null }), BUS_GROUP, STOP_RESOLVED);
+    expect(r.missingFields).not.toContain("missing_hotel");
+  });
+
+  it("kind multi_service: hotel mancante blocca", () => {
+    const r = evaluateBookingGroupServiceReadiness(baseSvc({ hotel_id: null }), { kind: "multi_service" }, STOP_RESOLVED);
+    expect(r.missingFields).toContain("missing_hotel");
+  });
+
+  it("pickup_point richiesto solo se la fermata pianificata lo definisce", () => {
+    const noMeet = evaluateBookingGroupServiceReadiness(baseSvc({ meeting_point: "" }), BUS_GROUP, STOP_RESOLVED);
+    expect(noMeet.missingFields).toContain("missing_pickup_point");
+    const stopNoPickup = evaluateBookingGroupServiceReadiness(baseSvc({ meeting_point: "" }), BUS_GROUP, { pickup_point: null, stop_id: "s1" });
+    expect(stopNoPickup.missingFields).not.toContain("missing_pickup_point");
+  });
+});
 
 /**
  * FASE 1 — domain helpers gruppi prenotazione.

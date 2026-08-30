@@ -187,6 +187,105 @@ export function computeBookingGroupStatusSummary(input: {
   return { status: input.status, hasStops, hasServices, hasBusReservation, pax, suggestedStatus };
 }
 
+// ─── FASE 2.5 — operativizzazione: codici stabili + readiness helper ────────
+
+export type BookingGroupMissingField =
+  | "missing_date"
+  | "missing_time"
+  | "missing_direction"
+  | "missing_city"
+  | "missing_pickup_point"
+  | "missing_hotel"
+  | "missing_customer_name"
+  | "missing_booking_group_id"
+  | "missing_booking_group_stop_id"
+  | "invalid_pax";
+
+export type BookingGroupWarningCode =
+  | "bus_reservation_missing"
+  | "reserved_pax_below_expected"
+  | "reserved_pax_above_capacity"
+  | "ferry_outbound_missing"
+  | "ferry_return_missing"
+  | "allocation_pending";
+
+/** Orario placeholder usato alla creazione dei service di gruppo (non operativo). */
+export const BOOKING_GROUP_PLACEHOLDER_TIME = "00:00";
+
+export interface BookingGroupServiceReadiness {
+  ready: boolean;
+  missingFields: BookingGroupMissingField[];
+  warnings: BookingGroupWarningCode[];
+  alreadyOperational: boolean;
+}
+
+type ReadinessService = {
+  booking_group_id?: string | null;
+  booking_group_stop_id?: string | null;
+  date?: string | null;
+  time?: string | null;
+  direction?: string | null;
+  pax?: number | null;
+  customer_name?: string | null;
+  bus_city_origin?: string | null;
+  meeting_point?: string | null;
+  hotel_id?: string | null;
+  booking_service_kind?: string | null;
+  is_draft?: boolean | null;
+  status?: string | null;
+};
+type ReadinessGroup = { kind?: string | null };
+type ReadinessStop = { pickup_point?: string | null; stop_id?: string | null };
+
+function nonEmpty(v: unknown): boolean {
+  return typeof v === "string" ? v.trim().length > 0 : v != null;
+}
+
+/**
+ * Valuta se un service di gruppo può diventare operativo. PURO, nessuna
+ * scrittura, nessun dato inventato. Blocchi = missingFields; segnalazioni
+ * non bloccanti = warnings.
+ *
+ * Regole coerenti col dominio bus esistente:
+ *  - `time === "00:00"` è placeholder → NON operativo (nessun resolver canonico
+ *    deriva l'orario dal solo booking_group_stop).
+ *  - per kind bus l'hotel NON è richiesto (services.hotel_id è nullable per
+ *    bus_city_hotel, migration 0060); per altri kind sì.
+ *  - `stop_id` non risolto → il service può comunque entrare nel Piano del
+ *    Giorno → warning `allocation_pending`, NON un blocco.
+ */
+export function evaluateBookingGroupServiceReadiness(
+  service: ReadinessService,
+  group: ReadinessGroup,
+  stop: ReadinessStop | null,
+): BookingGroupServiceReadiness {
+  const alreadyOperational = service.is_draft === false;
+  const missing: BookingGroupMissingField[] = [];
+  const warnings: BookingGroupWarningCode[] = [];
+
+  const isBusKind = group.kind === "bus_exclusive" || group.kind === "bus_group";
+
+  if (!nonEmpty(service.booking_group_id)) missing.push("missing_booking_group_id");
+  if (!nonEmpty(service.booking_group_stop_id)) missing.push("missing_booking_group_stop_id");
+  if (!nonEmpty(service.customer_name)) missing.push("missing_customer_name");
+  if (!(Number(service.pax) > 0)) missing.push("invalid_pax");
+  if (!nonEmpty(service.date)) missing.push("missing_date");
+  if (!nonEmpty(service.direction)) missing.push("missing_direction");
+
+  const time = (service.time ?? "").trim();
+  if (!time || time.startsWith(BOOKING_GROUP_PLACEHOLDER_TIME)) missing.push("missing_time");
+
+  if (isBusKind) {
+    if (!nonEmpty(service.bus_city_origin)) missing.push("missing_city");
+    if (stop && nonEmpty(stop.pickup_point) && !nonEmpty(service.meeting_point)) missing.push("missing_pickup_point");
+    if (!stop || !nonEmpty(stop.stop_id)) warnings.push("allocation_pending");
+  } else {
+    if (!nonEmpty(service.hotel_id)) missing.push("missing_hotel");
+  }
+
+  return { ready: missing.length === 0 && !alreadyOperational, missingFields: missing, warnings, alreadyOperational };
+}
+
 export interface BookingGroupStopPaxSummary {
   stopId: string;
   expectedPax: number;

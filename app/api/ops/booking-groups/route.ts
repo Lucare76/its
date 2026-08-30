@@ -19,15 +19,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
+import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 import {
   BOOKING_GROUP_KINDS,
   BOOKING_GROUP_STATUSES,
   BOOKING_GROUP_MAX_PAX,
   computeBookingGroupStatusSummary,
   summarizeStopPax,
+  evaluateBookingGroupServiceReadiness,
   type BookingGroup,
   type BookingGroupBusReservation,
   type BookingGroupStop,
+  type BookingGroupWarningCode,
 } from "@/lib/booking-groups";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -148,6 +151,17 @@ const unlinkGroupServiceSchema = z.object({
   service_id: z.string().uuid(),
 });
 
+const previewOperationalizeSchema = z.object({
+  action: z.literal("preview_operationalize_group"),
+  booking_group_id: z.string().uuid(),
+});
+
+const operationalizeSchema = z.object({
+  action: z.literal("operationalize_group"),
+  booking_group_id: z.string().uuid(),
+  service_ids: z.array(z.string().uuid()).min(1).max(500).optional(),
+});
+
 const bodySchema = z.discriminatedUnion("action", [
   createGroupSchema,
   updateGroupSchema,
@@ -159,7 +173,74 @@ const bodySchema = z.discriminatedUnion("action", [
   createGroupServiceSchema,
   createGroupServicesBatchSchema,
   unlinkGroupServiceSchema,
+  previewOperationalizeSchema,
+  operationalizeSchema,
 ]);
+
+// ─── FASE 2.5 — operativizzazione ─────────────────────────────────────────
+
+type OpSvcRow = {
+  id: string; is_draft: boolean | null; status: string | null; pax: number | null;
+  customer_name: string | null; date: string | null; time: string | null; direction: string | null;
+  bus_city_origin: string | null; meeting_point: string | null; hotel_id: string | null;
+  booking_service_kind: string | null; booking_group_id: string | null; booking_group_stop_id: string | null;
+};
+
+async function buildOperationalizeView(admin: SupabaseClient, tenantId: string, groupId: string) {
+  const { data: group } = await admin
+    .from("booking_groups").select("*").eq("tenant_id", tenantId).eq("id", groupId).maybeSingle();
+  if (!group) return null;
+  const g = group as BookingGroup;
+
+  const [{ data: stops }, { data: services }, { data: reservations }] = await Promise.all([
+    admin.from("booking_group_stops").select("id, city, pickup_point, stop_id, expected_pax").eq("tenant_id", tenantId).eq("booking_group_id", groupId),
+    admin.from("services").select("id, is_draft, status, pax, customer_name, date, time, direction, bus_city_origin, meeting_point, hotel_id, booking_service_kind, booking_group_id, booking_group_stop_id").eq("tenant_id", tenantId).eq("booking_group_id", groupId),
+    admin.from("booking_group_bus_reservations").select("*").eq("tenant_id", tenantId).eq("booking_group_id", groupId),
+  ]);
+
+  const stopRows = (stops ?? []) as Array<{ id: string; city: string; pickup_point: string | null; stop_id: string | null; expected_pax: number }>;
+  const svcRows = (services ?? []) as OpSvcRow[];
+  const resRows = (reservations ?? []) as BookingGroupBusReservation[];
+  const stopById = new Map(stopRows.map((s) => [s.id, s]));
+
+  const groupWarnings: BookingGroupWarningCode[] = [];
+  if (!g.outbound_ferry_time && !g.outbound_ferry_company) groupWarnings.push("ferry_outbound_missing");
+  if (!g.return_ferry_time && !g.return_ferry_company) groupWarnings.push("ferry_return_missing");
+
+  let reservation: (BookingGroupBusReservation & { bus_capacity: number | null }) | null = null;
+  if (g.kind === "bus_exclusive") {
+    const forDate = resRows.find((r) => !g.service_date || r.service_date === g.service_date) ?? null;
+    if (!forDate) {
+      groupWarnings.push("bus_reservation_missing");
+    } else {
+      const { data: unit } = await admin.from("tenant_bus_units").select("capacity").eq("tenant_id", tenantId).eq("id", forDate.bus_unit_id).maybeSingle();
+      const cap = (unit as { capacity: number | null } | null)?.capacity ?? null;
+      reservation = { ...forDate, bus_capacity: cap };
+      if (forDate.reserved_pax < g.expected_pax) groupWarnings.push("reserved_pax_below_expected");
+      if (cap != null && forDate.reserved_pax > cap) groupWarnings.push("reserved_pax_above_capacity");
+    }
+  }
+
+  const perService = svcRows.map((s) => {
+    const stop = s.booking_group_stop_id ? stopById.get(s.booking_group_stop_id) ?? null : null;
+    const r = evaluateBookingGroupServiceReadiness(s, { kind: g.kind }, stop);
+    return {
+      service_id: s.id,
+      customer_name: s.customer_name,
+      pax: Number(s.pax ?? 0),
+      ready: r.ready,
+      already_operational: r.alreadyOperational,
+      missing_fields: r.missingFields,
+      warnings: r.warnings,
+    };
+  });
+
+  const ready = perService.filter((p) => p.ready);
+  const blocked = perService.filter((p) => !p.ready && !p.already_operational);
+  const already = perService.filter((p) => p.already_operational);
+
+  return { group: g, stops: stopRows, svcRows, reservation, groupWarnings, perService, ready, blocked, already };
+}
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -544,6 +625,101 @@ export async function POST(request: NextRequest) {
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     auditLog({ event: "booking_group_service_unlinked", tenantId, userId, role: auth.membership.role, serviceId: body.service_id, outcome: "unlinked" });
     return NextResponse.json({ ok: true, unlinked: body.service_id });
+  }
+
+  // ── preview_operationalize_group (READ, nessuna scrittura) ────────────
+  if (body.action === "preview_operationalize_group") {
+    const view = await buildOperationalizeView(admin, tenantId, body.booking_group_id);
+    if (!view) return NextResponse.json({ ok: false, error: "Gruppo non trovato." }, { status: 404 });
+    const plannedPax = view.stops.reduce((n, s) => n + Number(s.expected_pax ?? 0), 0);
+    const servicePax = view.svcRows.reduce((n, s) => n + Number(s.pax ?? 0), 0);
+    return NextResponse.json({
+      ok: true,
+      group: view.group,
+      expected_pax: view.group.expected_pax,
+      planned_pax: plannedPax,
+      service_pax: servicePax,
+      services_total: view.perService.length,
+      services_ready: view.ready.length,
+      services_blocked: view.blocked.length,
+      services_already_operational: view.already.length,
+      warnings: view.groupWarnings,
+      bus_reservation: view.reservation,
+      ferry: {
+        outbound: { company: view.group.outbound_ferry_company, departure_port: view.group.outbound_departure_port, ferry_time: view.group.outbound_ferry_time, arrival_port: view.group.outbound_arrival_port, expected_arrival_time: view.group.outbound_expected_arrival_time },
+        return: { company: view.group.return_ferry_company, departure_port: view.group.return_departure_port, ferry_time: view.group.return_ferry_time, arrival_port: view.group.return_arrival_port, expected_arrival_time: view.group.return_expected_arrival_time },
+      },
+      services: view.perService,
+    });
+  }
+
+  // ── operationalize_group (WRITE) ─────────────────────────────────────
+  if (body.action === "operationalize_group") {
+    const view = await buildOperationalizeView(admin, tenantId, body.booking_group_id);
+    if (!view) return NextResponse.json({ ok: false, error: "Gruppo non trovato." }, { status: 404 });
+
+    const selected = body.service_ids
+      ? new Set(body.service_ids)
+      : new Set(view.ready.map((p) => p.service_id));
+
+    const operationalized: Array<{ service_id: string; warnings: BookingGroupWarningCode[] }> = [];
+    const blocked: Array<{ service_id: string; missing_fields: string[]; warnings: string[] }> = [];
+    const already_operational: string[] = [];
+
+    for (const p of view.perService) {
+      if (!selected.has(p.service_id)) continue;
+      if (p.already_operational) { already_operational.push(p.service_id); continue; }
+      if (!p.ready) { blocked.push({ service_id: p.service_id, missing_fields: p.missing_fields, warnings: p.warnings }); continue; }
+
+      const { error } = await admin
+        .from("services")
+        .update({ is_draft: false, status: "new" })
+        .eq("tenant_id", tenantId)
+        .eq("id", p.service_id)
+        .eq("is_draft", true);
+      if (error) { blocked.push({ service_id: p.service_id, missing_fields: [], warnings: [`update_failed: ${error.message}`] }); continue; }
+
+      await admin.from("status_events").insert({ tenant_id: tenantId, service_id: p.service_id, status: "new", by_user_id: userId });
+
+      const warnings: BookingGroupWarningCode[] = [...p.warnings];
+      const svc = view.svcRows.find((s) => s.id === p.service_id);
+      if (svc?.booking_service_kind === "bus_city_hotel" && !warnings.includes("allocation_pending")) {
+        try {
+          const alloc = await autoAllocateBusService({ admin, tenantId, serviceId: p.service_id, userId: userId ?? "" });
+          if (!alloc || (typeof alloc === "object" && "allocated" in alloc && !alloc.allocated)) warnings.push("allocation_pending");
+        } catch {
+          warnings.push("allocation_pending");
+        }
+      }
+      operationalized.push({ service_id: p.service_id, warnings });
+      auditLog({ event: "booking_group_service_operationalized", tenantId, userId, role: auth.membership.role, serviceId: p.service_id, outcome: "operationalized", details: { booking_group_id: body.booking_group_id, warnings } });
+    }
+
+    // Default (nessun service_ids): i service non-ready del gruppo sono comunque
+    // "blocked" nella risposta, così la chiamata risulta parziale (207).
+    if (!body.service_ids) {
+      for (const p of view.blocked) blocked.push({ service_id: p.service_id, missing_fields: p.missing_fields, warnings: p.warnings });
+    }
+
+    // Stato gruppo: promuovi a operational SOLO se tutti i service del gruppo lo sono.
+    const allDraftServices = view.perService.filter((p) => !p.already_operational);
+    const nowAllOperational = allDraftServices.length > 0 && allDraftServices.every((p) => operationalized.some((o) => o.service_id === p.service_id));
+    if (nowAllOperational && view.group.status !== "operational" && view.group.status !== "cancelled") {
+      await admin.from("booking_groups").update({ status: "operational", updated_at: new Date().toISOString() }).eq("tenant_id", tenantId).eq("id", body.booking_group_id);
+    }
+
+    const status = blocked.length === 0
+      ? (operationalized.length === 0 && already_operational.length > 0 ? 200 : operationalized.length > 0 ? 200 : 422)
+      : (operationalized.length > 0 ? 207 : 422);
+
+    auditLog({
+      event: blocked.length === 0 ? "booking_group_operationalized" : "booking_group_operationalization_partial",
+      tenantId, userId, role: auth.membership.role,
+      outcome: status === 207 ? "partial" : status === 422 ? "blocked" : "operationalized",
+      details: { booking_group_id: body.booking_group_id, operationalized: operationalized.length, blocked: blocked.length, already_operational: already_operational.length },
+    });
+
+    return NextResponse.json({ ok: status !== 422, operationalized, blocked, already_operational, group_status: nowAllOperational ? "operational" : view.group.status }, { status });
   }
 
   return NextResponse.json({ ok: false, error: "Azione non riconosciuta." }, { status: 400 });

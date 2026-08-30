@@ -9,8 +9,9 @@ import { NextRequest } from "next/server";
  * che non tocca bus_line_ferry_config, integrità tenant.
  */
 
-const mocks = vi.hoisted(() => ({ authorizePricingRequest: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authorizePricingRequest: vi.fn(), autoAllocateBusService: vi.fn() }));
 vi.mock("@/lib/server/pricing-auth", () => ({ authorizePricingRequest: mocks.authorizePricingRequest }));
+vi.mock("@/lib/server/bus-auto-allocation", () => ({ autoAllocateBusService: mocks.autoAllocateBusService }));
 
 import { GET, POST } from "@/app/api/ops/booking-groups/route";
 
@@ -97,7 +98,7 @@ function get(qs = "") {
   return new NextRequest(`http://localhost/api/ops/booking-groups${qs}`, { method: "GET" });
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); mocks.autoAllocateBusService.mockResolvedValue({ allocated: false }); });
 
 describe("POST create_group — gruppo incompleto (scenario Parrocchia Natività)", () => {
   it("A/B/C: crea 50 pax bus_exclusive to_complete senza fermate/nominativi/nave/hotel", async () => {
@@ -423,6 +424,130 @@ describe("GET detail — stop_summaries per fermata (FASE 2)", () => {
     const gui = json.stop_summaries.find((s: { stopId: string }) => s.stopId === "gui");
     expect(tiv).toMatchObject({ expectedPax: 20, servicePax: 16, remainingServicePax: 4, overbooked: false });
     expect(gui).toMatchObject({ expectedPax: 20, servicePax: 0, remainingServicePax: 20 });
+  });
+});
+
+describe("FASE 2.5 — preview / operationalize", () => {
+  const GROUP = { id: GROUP_ID, tenant_id: TENANT, kind: "bus_exclusive", service_date: "2026-09-12", expected_pax: 50, status: "passengers_defined", outbound_ferry_company: null, outbound_ferry_time: null, return_ferry_company: null, return_ferry_time: null };
+  const STOP = { id: STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Tivoli", pickup_point: "Villa d'Este", stop_id: STOP_ID, expected_pax: 20 };
+  const svc = (id: string, over: Record<string, unknown> = {}) => ({
+    id, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID,
+    is_draft: true, status: "needs_review", pax: 4, customer_name: "Rossi", date: "2026-09-12",
+    time: "07:30", direction: "arrival", bus_city_origin: "Tivoli", meeting_point: "Villa d'Este",
+    hotel_id: null, booking_service_kind: "bus_city_hotel", ...over,
+  });
+
+  it("preview: 1 ready + 1 blocked (time 00:00), nessuna scrittura", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP], booking_group_stops: [STOP],
+      services: [svc("svc-ok"), svc("svc-ko", { id: "svc-ko", customer_name: "Verdi", time: "00:00" })],
+      booking_group_bus_reservations: [],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "preview_operationalize_group", booking_group_id: GROUP_ID }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.services_ready).toBe(1);
+    expect(json.services_blocked).toBe(1);
+    const ko = json.services.find((s: { service_id: string }) => s.service_id === "svc-ko");
+    expect(ko.missing_fields).toContain("missing_time");
+    // O: nessuna reservation → warning
+    expect(json.warnings).toContain("bus_reservation_missing");
+    expect(writes.inserts).toHaveLength(0);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("F: operationalize partial → 207, solo il ready diventa is_draft=false status=new + status_event", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP], booking_group_stops: [STOP],
+      services: [svc("svc-ok"), svc("svc-ko", { id: "svc-ko", customer_name: "Verdi", time: "00:00" })],
+      booking_group_bus_reservations: [],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "operationalize_group", booking_group_id: GROUP_ID }));
+    const json = await res.json();
+    expect(res.status).toBe(207);
+    expect(json.operationalized).toHaveLength(1);
+    expect(json.operationalized[0].service_id).toBe("svc-ok");
+    expect(json.blocked).toHaveLength(1);
+    const upd = writes.updates.filter((w) => w.table === "services");
+    expect(upd).toHaveLength(1);
+    expect(upd[0]!.payload).toEqual({ is_draft: false, status: "new" }); // K + L; H/I non toccati
+    expect(upd[0]!.filters).toMatchObject({ id: "svc-ok" });
+    // J: status_event
+    expect(writes.inserts.filter((w) => w.table === "status_events")).toHaveLength(1);
+    // gruppo NON promosso operational (resta 1 blocked)
+    expect(writes.updates.filter((w) => w.table === "booking_groups")).toHaveLength(0);
+  });
+
+  it("G: nessuno ready → 422, nessuna scrittura", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP], booking_group_stops: [STOP],
+      services: [svc("a", { time: "00:00" }), svc("b", { id: "b", time: "00:00" })],
+      booking_group_bus_reservations: [],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "operationalize_group", booking_group_id: GROUP_ID }));
+    expect(res.status).toBe(422);
+    expect(writes.updates.filter((w) => w.table === "services")).toHaveLength(0);
+  });
+
+  it("E: service già is_draft=false → already_operational, nessun update / status_event", async () => {
+    const SVC_OP = "aaaaaaaa-0000-4000-8000-00000000000a";
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP], booking_group_stops: [STOP],
+      services: [svc(SVC_OP, { is_draft: false, status: "new" })],
+      booking_group_bus_reservations: [],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "operationalize_group", booking_group_id: GROUP_ID, service_ids: [SVC_OP] }));
+    const json = await res.json();
+    expect(json.already_operational).toContain(SVC_OP);
+    expect(writes.updates.filter((w) => w.table === "services")).toHaveLength(0);
+    expect(writes.inserts.filter((w) => w.table === "status_events")).toHaveLength(0);
+  });
+
+  it("tutti ready + operationalize → gruppo promosso a operational", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP], booking_group_stops: [STOP],
+      services: [svc("x"), svc("y", { id: "y", customer_name: "Verdi" })],
+      booking_group_bus_reservations: [],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "operationalize_group", booking_group_id: GROUP_ID }));
+    expect(res.status).toBe(200);
+    expect(writes.updates.filter((w) => w.table === "services")).toHaveLength(2);
+    const gUpd = writes.updates.filter((w) => w.table === "booking_groups");
+    expect(gUpd).toHaveLength(1);
+    expect(gUpd[0]!.payload).toMatchObject({ status: "operational" });
+  });
+
+  it("P/Q: reserved_pax < expected e reserved_pax > capacity → warnings di gruppo", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [GROUP], booking_group_stops: [STOP],
+      services: [svc("x")],
+      booking_group_bus_reservations: [{ id: "r1", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_UNIT_ID, service_date: "2026-09-12", reserved_pax: 45, exclusive: true }],
+      tenant_bus_units: [{ id: BUS_UNIT_ID, tenant_id: TENANT, capacity: 40 }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "preview_operationalize_group", booking_group_id: GROUP_ID }));
+    const json = await res.json();
+    expect(json.warnings).toContain("reserved_pax_below_expected"); // 45 < 50
+    expect(json.warnings).toContain("reserved_pax_above_capacity"); // 45 > 40
+    expect(json.warnings).not.toContain("bus_reservation_missing");
+    expect(json.bus_reservation.bus_capacity).toBe(40);
+  });
+});
+
+describe("FASE 2.5 — Piano del Giorno (M/N: draft escluso, operativo incluso)", () => {
+  it("il dataset Piano del Giorno esclude is_draft=true e non filtra per booking_group_id", () => {
+    const piano = readFileSync(new URL("../../app/api/ops/piano-giorno/route.ts", import.meta.url), "utf8");
+    // draft escluso (service gruppo appena creato)
+    expect(piano).toMatch(/\.neq\("is_draft",\s*true\)/);
+    // dopo operationalize (is_draft=false) il service rientra: nessuna esclusione per gruppo
+    expect(piano).not.toMatch(/booking_group_id/);
+    // il Piano non è stato reso group-aware
+    expect(piano).not.toMatch(/booking_groups/);
   });
 });
 
