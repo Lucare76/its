@@ -62,7 +62,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     await import("@/lib/mcp/tools/index");
   });
 
-  it("registra esattamente i 18 tool attesi dopo l'Assegnazione Intelligente (14 READ + 4 WRITE)", () => {
+  it("registra esattamente i 32 tool attesi (18 pre-FASE 3 + 14 gruppi prenotazione)", () => {
     const names = listTools()
       .map((tool) => tool.name)
       .sort();
@@ -88,6 +88,21 @@ describe("mcp production tool registry (its.* reali)", () => {
         "its.explain_assignment",
         "its.recalculate_assignment_plan",
         "its.lock_assignment",
+        // FASE 3 — Mario / MCP per i gruppi prenotazione (3 READ + 5 PREVIEW + 6 WRITE).
+        "its.find_booking_group",
+        "its.get_booking_group_detail",
+        "its.preview_booking_group_operationalization",
+        "its.preview_create_booking_group",
+        "its.preview_add_booking_group_stop",
+        "its.preview_add_booking_group_passengers",
+        "its.preview_reserve_booking_group_bus",
+        "its.preview_update_booking_group_ferry",
+        "its.create_booking_group",
+        "its.add_booking_group_stop",
+        "its.add_booking_group_passengers",
+        "its.reserve_booking_group_bus",
+        "its.update_booking_group_ferry",
+        "its.operationalize_booking_group",
       ].sort()
     );
   });
@@ -105,7 +120,7 @@ describe("mcp production tool registry (its.* reali)", () => {
     }
   });
 
-  it("esattamente quattro tool WRITE, nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
+  it("dieci tool WRITE (4 pre-FASE 3 + 6 gruppi prenotazione), nessun DESTRUCTIVE/EXTERNAL_ACTION", () => {
     const nonReadTools = listTools()
       .filter((tool) => tool.category !== "READ")
       .map((tool) => ({ name: tool.name, category: tool.category }))
@@ -116,6 +131,12 @@ describe("mcp production tool registry (its.* reali)", () => {
         { name: "its.update_service_status", category: "WRITE" },
         { name: "its.recalculate_assignment_plan", category: "WRITE" },
         { name: "its.lock_assignment", category: "WRITE" },
+        { name: "its.create_booking_group", category: "WRITE" },
+        { name: "its.add_booking_group_stop", category: "WRITE" },
+        { name: "its.add_booking_group_passengers", category: "WRITE" },
+        { name: "its.reserve_booking_group_bus", category: "WRITE" },
+        { name: "its.update_booking_group_ferry", category: "WRITE" },
+        { name: "its.operationalize_booking_group", category: "WRITE" },
       ].sort((a, b) => a.name.localeCompare(b.name))
     );
   });

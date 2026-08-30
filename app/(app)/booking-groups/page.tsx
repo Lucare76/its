@@ -70,7 +70,11 @@ export default function BookingGroupsPage() {
     else setErr(json.error ?? "Errore caricamento dettaglio");
   }, []);
 
+  // Il setState avviene dentro loadList/loadDetail dopo un await (fetch), non
+  // in modo sincrono nel corpo dell'effect: nessun rischio di cascading render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void loadList(); }, [loadList]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedId) void loadDetail(selectedId); }, [selectedId, loadDetail]);
 
   const closeDetail = useCallback(() => { setSelectedId(null); setDetail(null); }, []);

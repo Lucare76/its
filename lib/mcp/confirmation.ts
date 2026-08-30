@@ -238,3 +238,119 @@ export function verifyUpdateServiceStatusConfirmationToken(token: string): Verif
     return { ok: false, reason: "invalid" };
   }
 }
+
+/**
+ * FASE 3 (Mario / MCP gruppi prenotazione): its.preview_* -> its.* per il
+ * dominio booking_groups. STESSA identica infrastruttura di sopra — nessun
+ * secondo sistema: stesso AGENCY_ACTION_SECRET (fail-closed se assente),
+ * stesso TTL, stesso registro single-use condiviso (`claimConfirmationToken`),
+ * stesso schema token opaco HMAC-SHA256.
+ *
+ * Un SOLO purpose (`mcp_booking_group`) con un campo `op` discriminante, così
+ * un token emesso per `create_booking_group` non può eseguire
+ * `operationalize_booking_group` e viceversa. `groupId` lega il token al
+ * gruppo specifico (null solo per `create_booking_group`, che il gruppo non
+ * esiste ancora). `args` è lo snapshot degli argomenti approvati in preview:
+ * il tool di esecuzione lo ri-valida SEMPRE contro lo stato live (via
+ * `lib/server/booking-groups-service.ts`, la stessa logica della route HTTP)
+ * prima di scrivere — il token non è mai un'autorizzazione cieca.
+ */
+export type BookingGroupConfirmationOp =
+  | "create_booking_group"
+  | "add_booking_group_stop"
+  | "add_booking_group_passengers"
+  | "reserve_booking_group_bus"
+  | "update_booking_group_ferry"
+  | "operationalize_booking_group";
+
+export type BookingGroupConfirmationPayload = {
+  purpose: "mcp_booking_group";
+  op: BookingGroupConfirmationOp;
+  jti: string;
+  userId: string;
+  tenantId: string;
+  /** null SOLO per op === "create_booking_group". */
+  groupId: string | null;
+  /** Snapshot argomenti approvati in preview. */
+  args: Record<string, unknown>;
+  iat: number;
+  exp: number;
+};
+
+const BOOKING_GROUP_OPS: readonly BookingGroupConfirmationOp[] = [
+  "create_booking_group",
+  "add_booking_group_stop",
+  "add_booking_group_passengers",
+  "reserve_booking_group_bus",
+  "update_booking_group_ferry",
+  "operationalize_booking_group",
+];
+
+export function generateBookingGroupConfirmationToken(payload: {
+  op: BookingGroupConfirmationOp;
+  userId: string;
+  tenantId: string;
+  groupId: string | null;
+  args: Record<string, unknown>;
+}): { token: string; expiresAt: string } {
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + CONFIRMATION_TTL_SECONDS;
+  const full: BookingGroupConfirmationPayload = {
+    purpose: "mcp_booking_group",
+    op: payload.op,
+    jti: base64url(randomBytes(18)),
+    userId: payload.userId,
+    tenantId: payload.tenantId,
+    groupId: payload.groupId,
+    args: payload.args,
+    iat,
+    exp,
+  };
+  const encodedPayload = base64url(JSON.stringify(full));
+  const sig = base64url(createHmac("sha256", getSecret()).update(encodedPayload).digest());
+  return { token: `${encodedPayload}.${sig}`, expiresAt: new Date(exp * 1000).toISOString() };
+}
+
+export type VerifyBookingGroupConfirmationResult =
+  | { ok: true; payload: BookingGroupConfirmationPayload }
+  | { ok: false; reason: "invalid" | "expired" };
+
+export function verifyBookingGroupConfirmationToken(
+  token: string,
+  expectedOp?: BookingGroupConfirmationOp,
+): VerifyBookingGroupConfirmationResult {
+  try {
+    const dot = token.lastIndexOf(".");
+    if (dot < 0) return { ok: false, reason: "invalid" };
+    const encodedPayload = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const expectedSig = base64url(createHmac("sha256", getSecret()).update(encodedPayload).digest());
+
+    const a = Buffer.from(fromBase64url(sig), "base64");
+    const b = Buffer.from(fromBase64url(expectedSig), "base64");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "invalid" };
+
+    const payload = JSON.parse(Buffer.from(fromBase64url(encodedPayload), "base64").toString()) as BookingGroupConfirmationPayload;
+    if (payload.purpose !== "mcp_booking_group") return { ok: false, reason: "invalid" };
+    if (
+      typeof payload.jti !== "string" ||
+      typeof payload.userId !== "string" ||
+      typeof payload.tenantId !== "string" ||
+      typeof payload.op !== "string" ||
+      !BOOKING_GROUP_OPS.includes(payload.op) ||
+      typeof payload.args !== "object" ||
+      payload.args === null ||
+      Array.isArray(payload.args)
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
+    if (payload.op !== "create_booking_group" && typeof payload.groupId !== "string") {
+      return { ok: false, reason: "invalid" };
+    }
+    if (expectedOp && payload.op !== expectedOp) return { ok: false, reason: "invalid" };
+    if (payload.exp <= Math.floor(Date.now() / 1000)) return { ok: false, reason: "expired" };
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+}

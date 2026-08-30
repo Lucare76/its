@@ -16,3 +16,7 @@ import "@/lib/mcp/tools/get-assignment-exceptions";
 import "@/lib/mcp/tools/explain-assignment";
 import "@/lib/mcp/tools/recalculate-assignment-plan";
 import "@/lib/mcp/tools/lock-assignment";
+// FASE 3 — Mario / MCP per i gruppi prenotazione (read + preview + write).
+import "@/lib/mcp/tools/booking-groups/read";
+import "@/lib/mcp/tools/booking-groups/preview";
+import "@/lib/mcp/tools/booking-groups/write";

@@ -14,6 +14,11 @@ export type MarioIntentResult =
   | { intent: "driver_availability"; params: { date?: string; timeWindow?: TimeWindow } }
   | { intent: "assignment_plan"; params: { date?: string } }
   | { intent: "assignment_exceptions"; params: { date?: string } }
+  // FASE 3 — gruppi prenotazione (READ + rimando al flusso di conferma per le WRITE).
+  | { intent: "booking_group_find"; params: { query?: string; date?: string } }
+  | { intent: "booking_group_detail"; params: { query?: string; date?: string } }
+  | { intent: "booking_group_inspect"; params: { query?: string; date?: string } }
+  | { intent: "booking_group_write"; params: { query?: string; date?: string } }
   | { intent: "write_unsupported"; params: Record<string, never> }
   | { intent: "unsupported"; params: Record<string, never> };
 
@@ -30,8 +35,47 @@ function normalize(text: string): string {
   return text.trim().toLowerCase();
 }
 
+// FASE 3 — contesto "gruppo prenotazione": solo se presente attiviamo gli
+// intent gruppo (evita che un generico "crea"/"aggiungi" senza contesto gruppo
+// finisca qui invece che in write_unsupported).
+const BOOKING_GROUP_CTX_RE = /\bgrupp[oi]\b|prenotazion/;
+const BOOKING_GROUP_WRITE_RE =
+  /\b(crea(re|mi)?|aggiung(i|ere)|aggiorna(re)?|riserv(a|are)|prenot(a|are)|impost(a|are)|operativizz\w*|rendi(lo)? operativ\w*|collega(re)?|metti)\b/;
+const BOOKING_GROUP_INSPECT_RE =
+  /\b(pront[oi]|cosa manca|che cosa manca|manca(no)? qualcosa|operativizzabil\w*|verifica (i )?servizi|avanzament\w*|completezza|è completo|quanti pax mancano)\b/;
+const BOOKING_GROUP_DETAIL_RE =
+  /\b(dettagli\w*|com'?è messo|situazione del gruppo|quadro pax|pax del gruppo|riepilog\w*|fermate del gruppo|passeggeri del gruppo)\b/;
+
+/** Estrae un nome/frase di ricerca gruppo dal testo, best-effort. Ritorna
+ *  undefined se non c'è nulla di utile: l'orchestratore chiederà chiarimenti,
+ *  NON inventa (§23). */
+export function extractBookingGroupQuery(text: string): string | undefined {
+  // "... gruppo <nome> ..." / "... prenotazione <nome> ..." fino a fine stringa
+  // o a un separatore. Rimuove eventuali code di verbi/parole funzione.
+  const m = /(?:grupp[oi]|prenotazione)\s+(?:prenotazione\s+)?(?:di\s+|della\s+|del\s+|per\s+)?["']?([\p{L}0-9][\p{L}0-9 .'&-]{1,80}?)["']?(?:\s*[?.,;!]|$)/u.exec(text);
+  if (!m) return undefined;
+  let q = m[1].trim();
+  q = q.replace(/\b(oggi|domani|adesso|ora|pronto|pronti|operativ\w*|completo|per favore|grazie)\b.*$/u, "").trim();
+  q = q.replace(/\s{2,}/g, " ");
+  return q.length >= 2 ? q : undefined;
+}
+
 export function detectMarioIntent(rawText: string, now: Date = new Date()): MarioIntentResult {
   const text = normalize(rawText);
+
+  // FASE 3 — gruppi prenotazione: valutati PRIMA del gate WRITE_VERB_RE
+  // generico, ma solo entro un contesto "gruppo/prenotazione" esplicito.
+  if (BOOKING_GROUP_CTX_RE.test(text)) {
+    const date = parseRelativeOrIsoDate(text, now);
+    const query = extractBookingGroupQuery(text);
+    const base = { ...(query ? { query } : {}), ...(date ? { date } : {}) };
+    if (BOOKING_GROUP_INSPECT_RE.test(text)) return { intent: "booking_group_inspect", params: base };
+    if (BOOKING_GROUP_WRITE_RE.test(text)) return { intent: "booking_group_write", params: base };
+    if (BOOKING_GROUP_DETAIL_RE.test(text)) return { intent: "booking_group_detail", params: base };
+    if (/\b(trova|cerca|cerc\w*|quale|quali|elenco|lista|mostrami|fammi vedere)\b/.test(text) || query) {
+      return { intent: "booking_group_find", params: base };
+    }
+  }
 
   if (WRITE_VERB_RE.test(text)) {
     return { intent: "write_unsupported", params: {} };

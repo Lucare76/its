@@ -108,6 +108,53 @@ describe("parseRelativeOrIsoDate (spec TEST MINIMI — Date/time)", () => {
   });
 });
 
+describe("FASE 3 — intent gruppi prenotazione (§22)", () => {
+  it("'crea un gruppo prenotazione Parrocchia Natività da 50 persone' -> booking_group_write", () => {
+    const r = detectMarioIntent("crea un gruppo prenotazione Parrocchia Natività da 50 persone", NOW);
+    expect(r.intent).toBe("booking_group_write");
+  });
+
+  it("'aggiungi la fermata di Tivoli al gruppo Parrocchia Natività' -> booking_group_write", () => {
+    expect(detectMarioIntent("aggiungi la fermata di Tivoli al gruppo Parrocchia Natività", NOW).intent).toBe("booking_group_write");
+  });
+
+  it("'riserva il bus per il gruppo Parrocchia Natività' -> booking_group_write", () => {
+    expect(detectMarioIntent("riserva il bus per il gruppo Parrocchia Natività", NOW).intent).toBe("booking_group_write");
+  });
+
+  it("'rendi operativo il gruppo Parrocchia Natività' -> booking_group_write", () => {
+    expect(detectMarioIntent("rendi operativo il gruppo Parrocchia Natività", NOW).intent).toBe("booking_group_write");
+  });
+
+  it("'il gruppo Parrocchia Natività è pronto?' -> booking_group_inspect", () => {
+    const r = detectMarioIntent("il gruppo Parrocchia Natività è pronto?", NOW);
+    expect(r.intent).toBe("booking_group_inspect");
+    expect(r.params).toMatchObject({ query: expect.stringMatching(/parrocchia/i) });
+  });
+
+  it("'cosa manca al gruppo Parrocchia Natività per essere operativo' -> booking_group_inspect", () => {
+    expect(detectMarioIntent("cosa manca al gruppo Parrocchia Natività per essere operativo", NOW).intent).toBe("booking_group_inspect");
+  });
+
+  it("'trova il gruppo prenotazione Parrocchia Natività' -> booking_group_find con query", () => {
+    const r = detectMarioIntent("trova il gruppo prenotazione Parrocchia Natività", NOW);
+    expect(r.intent).toBe("booking_group_find");
+    expect(r.params).toMatchObject({ query: expect.stringMatching(/parrocchia/i) });
+  });
+
+  it("'dettaglio del gruppo Parrocchia Natività' -> booking_group_detail", () => {
+    expect(detectMarioIntent("dettaglio del gruppo Parrocchia Natività", NOW).intent).toBe("booking_group_detail");
+  });
+
+  it("senza contesto 'gruppo/prenotazione' un verbo di modifica resta write_unsupported", () => {
+    expect(detectMarioIntent("assegna Mario Rossi al servizio X", NOW).intent).toBe("write_unsupported");
+  });
+
+  it("una domanda non-gruppo non è dirottata sugli intent gruppo", () => {
+    expect(detectMarioIntent("come siamo messi oggi", NOW).intent).toBe("operational_brief");
+  });
+});
+
 describe("parseTimeWindow (spec TEST MINIMI — Date/time)", () => {
   it("9. 'pomeriggio' -> 12:00-18:00", () => {
     expect(parseTimeWindow("disponibile questo pomeriggio")).toEqual({ fromMinutes: 720, toMinutes: 1080, label: "pomeriggio (12:00–18:00)" });

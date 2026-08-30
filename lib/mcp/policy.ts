@@ -27,6 +27,15 @@ export const ENABLED_WRITE_TOOLS: readonly string[] = [
   "its.update_service_status",
   "its.recalculate_assignment_plan",
   "its.lock_assignment",
+  // FASE 3 — gruppi prenotazione: ognuno con flusso preview -> confirmation
+  // token -> execute (lib/mcp/tools/booking-groups/*), riuso di
+  // lib/mcp/confirmation.ts e lib/server/booking-groups-service.ts.
+  "its.create_booking_group",
+  "its.add_booking_group_stop",
+  "its.add_booking_group_passengers",
+  "its.reserve_booking_group_bus",
+  "its.update_booking_group_ferry",
+  "its.operationalize_booking_group",
 ];
 
 /**

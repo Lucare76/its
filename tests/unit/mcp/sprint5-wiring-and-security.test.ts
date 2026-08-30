@@ -55,12 +55,24 @@ describe("Sprint 5 — wiring e sicurezza (spec TEST MINIMI: Existing tools + Se
     }
   });
 
-  it("19. write tools: its.assign_driver e its.update_service_status restano nell'allowlist (Assegnazione Intelligente ha aggiunto its.recalculate_assignment_plan e its.lock_assignment, non li ha sostituiti)", () => {
-    expect(ENABLED_WRITE_TOOLS).toEqual([
+  it("19. write tools: gli allowlist pre-esistenti restano invariati e in testa; FASE 3 (gruppi prenotazione) aggiunge 6 tool WRITE, non li sostituisce", () => {
+    expect(ENABLED_WRITE_TOOLS.slice(0, 4)).toEqual([
       "its.assign_driver",
       "its.update_service_status",
       "its.recalculate_assignment_plan",
       "its.lock_assignment",
+    ]);
+    expect([...ENABLED_WRITE_TOOLS]).toEqual([
+      "its.assign_driver",
+      "its.update_service_status",
+      "its.recalculate_assignment_plan",
+      "its.lock_assignment",
+      "its.create_booking_group",
+      "its.add_booking_group_stop",
+      "its.add_booking_group_passengers",
+      "its.reserve_booking_group_bus",
+      "its.update_booking_group_ferry",
+      "its.operationalize_booking_group",
     ]);
   });
 

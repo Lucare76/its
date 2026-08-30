@@ -103,4 +103,70 @@ describe("runMarioAssistant", () => {
     const callInput = mockRunTool.mock.calls[0]?.[2] as { date?: string };
     expect(callInput.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
+
+  // ─── FASE 3 — gruppi prenotazione ──────────────────────────────────────
+  function routeByToolName(map: Record<string, unknown>) {
+    mockGetTool.mockImplementation((name: string) => ({ name }));
+    mockRunTool.mockImplementation((_ctx: unknown, t: { name: string }) => {
+      const out = map[t.name];
+      if (out === undefined) return Promise.resolve(errorResult("MCP_NOT_FOUND", "n/a"));
+      return Promise.resolve(successResult(out));
+    });
+  }
+
+  it("booking_group_find univoco: risposta con nome e pax, nessun tool arbitrario", async () => {
+    const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
+    routeByToolName({
+      "its.find_booking_group": { strategy: "exact", ambiguous: false, count: 1, matches: [{ id: "g1", name: "Parrocchia Natività", expected_pax: 50, kind: "bus_exclusive", status: "to_complete", service_date: "2026-09-12", service_date_label: "12/09/2026" }] },
+    });
+    const r = await runMarioAssistant(makeContext(), "trova il gruppo prenotazione Parrocchia Natività", new Date());
+    expect(r.intent).toBe("booking_group_find");
+    expect(r.answer).toMatch(/Parrocchia Natività/);
+    expect(r.answer).toMatch(/50 pax/);
+    expect(mockGetTool).toHaveBeenCalledWith("its.find_booking_group");
+  });
+
+  it("booking_group_find ambiguo: Mario NON sceglie, chiede quale", async () => {
+    const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
+    routeByToolName({
+      "its.find_booking_group": { strategy: "exact", ambiguous: true, count: 2, matches: [
+        { id: "gA", name: "Parrocchia Natività", expected_pax: 50, status: "to_complete", service_date_label: "12/09/2026" },
+        { id: "gB", name: "Parrocchia Natività", expected_pax: 40, status: "draft", service_date_label: "05/10/2026" },
+      ] },
+    });
+    const r = await runMarioAssistant(makeContext(), "trova il gruppo prenotazione Parrocchia Natività", new Date());
+    expect(r.answer).toMatch(/Quale intendi/i);
+    expect(r.answer).toMatch(/12\/09\/2026/);
+    expect(r.answer).toMatch(/05\/10\/2026/);
+  });
+
+  it("booking_group_write: indirizza al flusso anteprima→conferma senza esporre token", async () => {
+    const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
+    routeByToolName({});
+    const r = await runMarioAssistant(makeContext(), "crea un gruppo prenotazione Gita Scuola da 30 persone", new Date());
+    expect(r.intent).toBe("booking_group_write");
+    expect(r.answer).toMatch(/anteprima e una conferma/i);
+    expect(r.answer.toLowerCase()).not.toMatch(/token|hmac/);
+    expect(r.actions).toEqual([{ label: "Apri Gruppi prenotazione", href: "/booking-groups" }]);
+  });
+
+  it("booking_group_inspect: usa find + preview_operationalization; il token resta fuori dal testo", async () => {
+    const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
+    routeByToolName({
+      "its.find_booking_group": { strategy: "exact", ambiguous: false, count: 1, matches: [{ id: "g1", name: "Parrocchia Natività", expected_pax: 50, status: "passengers_defined", service_date_label: "12/09/2026" }] },
+      "its.preview_booking_group_operationalization": {
+        services_ready: 3, services_blocked: 1, services_already_operational: 0,
+        warnings: ["bus_reservation_missing"],
+        services: [{ ready: false, already_operational: false, missing_fields: ["missing_time"] }],
+        confirmationToken: "SEGRETISSIMO.abc", expiresAt: "2026-09-12T00:00:00Z",
+      },
+    });
+    const r = await runMarioAssistant(makeContext(), "il gruppo Parrocchia Natività è pronto per essere operativo?", new Date());
+    expect(r.intent).toBe("booking_group_inspect");
+    expect(r.answer).toMatch(/3 servizi pronti/);
+    expect(r.answer).toMatch(/1 bloccati/);
+    expect(r.answer).toMatch(/missing_time/);
+    expect(r.answer).not.toMatch(/SEGRETISSIMO/);
+    expect((r.data as { confirmationToken?: string }).confirmationToken).toBe("SEGRETISSIMO.abc");
+  });
 });
