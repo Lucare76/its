@@ -98,6 +98,20 @@ function isMedmar(form: FormState): boolean {
   return !carrier.includes("SNAV");
 }
 
+// Confronto duplicati: data ISO -> dd/mm/yyyy, orario (con o senza secondi) -> HH:MM.
+// Solo per la resa della modale — nessun cambio ai dati che arrivano dalle API.
+function fmtDateIt(iso: string | null | undefined): string {
+  const s = (iso ?? "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+}
+
+function fmtTimeShort(v: string | null | undefined): string {
+  const s = (v ?? "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  return m ? `${m[1].padStart(2, "0")}:${m[2]}` : s;
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); return true; }
   catch { return false; }
@@ -336,6 +350,67 @@ function incomingSummaryFromForm(f: FormState): IncomingSummary {
     return_time: (f.orario_partenza ?? "").trim(),
     transport_code: trains,
   };
+}
+
+export type SideBySideRow = { label: string; existing: string; incoming: string; changed: boolean };
+
+/**
+ * Righe del confronto SIDE-BY-SIDE nella modale duplicati (esistente | nuova).
+ * Pure/locale a questa pagina — NON sostituisce computeDuplicateDiff (lib/duplicate-compare.ts),
+ * che resta l'unica fonte per "identical"/etichetta azione di scarto (invariato).
+ * `existingService` = GET /api/ops/services/[id] .service (endpoint invariato,
+ * vedi loadDupDetail); `incomingForm` = FormState della nuova comunicazione.
+ */
+function buildDuplicateSideBySideRows(
+  existingService: Record<string, unknown> | null,
+  existingHotelName: string | null,
+  existingAgencyName: string | null,
+  incomingForm: FormState,
+  ferryLine: string | null
+): SideBySideRow[] {
+  const s = existingService ?? {};
+  const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).trim());
+  const existingNotes = str(s.notes);
+  const existingPractice = existingNotes.match(/\[practice:([^\]]+)\]/)?.[1]?.trim() ?? str(s.practice_number);
+  const existingTrainArrival = str(s.train_arrival_number);
+  const existingTrainDeparture = str(s.train_departure_number);
+  const existingTransportCode = str(s.transport_code) || [existingTrainArrival, existingTrainDeparture].filter(Boolean).join(" / ");
+
+  const rows: Array<[string, string, string]> = [
+    ["Cliente", str(s.customer_name), (incomingForm.cliente_nome ?? "").trim()],
+    ["Numero pratica", existingPractice, (incomingForm.numero_pratica ?? "").trim()],
+    ["Hotel", existingHotelName ?? "", (incomingForm.hotel ?? "").trim()],
+    ["Pax", str(s.pax), (incomingForm.n_pax ?? "").trim()],
+    ["Telefono", str(s.phone), (incomingForm.cliente_cellulare ?? "").trim()],
+    ["Agenzia", existingAgencyName ?? "", (incomingForm.agenzia ?? "").trim()],
+    ["Tipo servizio", TIPO_LABELS[str(s.service_type_code) || str(s.booking_service_kind)] ?? (str(s.service_type_code) || str(s.booking_service_kind)), TIPO_LABELS[incomingForm.tipo_servizio] ?? incomingForm.tipo_servizio],
+    ["Data arrivo", fmtDateIt(str(s.arrival_date) || str(s.date)), fmtDateIt(incomingForm.data_arrivo)],
+    ["Orario arrivo", fmtTimeShort(str(s.arrival_time) || str(s.outbound_time) || str(s.time)), fmtTimeShort(incomingForm.orario_arrivo)],
+    ["Mezzo / codice trasporto", existingTransportCode, [incomingForm.treno_andata, incomingForm.treno_ritorno].map((v) => (v ?? "").trim()).filter(Boolean).join(" / ")],
+    ["Treno andata", existingTrainArrival, (incomingForm.treno_andata ?? "").trim()],
+    ["Orario treno andata", fmtTimeShort(str(s.train_arrival_time) || str(s.arrival_time) || str(s.outbound_time)), fmtTimeShort(incomingForm.orario_arrivo)],
+    ["Data partenza", fmtDateIt(str(s.departure_date)), fmtDateIt(incomingForm.data_partenza)],
+    ["Orario partenza", fmtTimeShort(str(s.departure_time) || str(s.return_time)), fmtTimeShort(incomingForm.orario_partenza)],
+    ["Treno ritorno", existingTrainDeparture, (incomingForm.treno_ritorno ?? "").trim()],
+    ["Orario treno ritorno", fmtTimeShort(str(s.train_departure_time) || str(s.departure_time) || str(s.return_time)), fmtTimeShort(incomingForm.orario_partenza)],
+    ["Punto di carico", str(s.meeting_point) || str(s.vessel), (incomingForm.citta_partenza ?? "").trim()],
+    ["Pickup hotel", str(s.pickup_hotel), (incomingForm.pickup_hotel ?? "").trim()],
+    ["Traghetto", ferryLine ?? "", ""],
+  ];
+
+  const normTime = (v: string) => {
+    const m = v.match(/^(\d{1,2}):(\d{2})/);
+    return m ? `${m[1].padStart(2, "0")}:${m[2]}` : v;
+  };
+  const timeLabels = new Set(["Orario arrivo", "Orario treno andata", "Orario partenza", "Orario treno ritorno"]);
+
+  return rows
+    .filter(([, existing, incoming]) => existing || incoming)
+    .map(([label, existing, incoming]) => {
+      const same = timeLabels.has(label) ? normTime(existing) === normTime(incoming) : existing === incoming;
+      const changed = incoming !== "" && !same;
+      return { label, existing, incoming, changed };
+    });
 }
 
 const DUP_REASON_LABEL: Record<string, string> = {
@@ -737,6 +812,10 @@ export default function InboxPage() {
             incoming: incomingSummaryFromForm(pdfEditForm),
             form: pdfEditForm,
           });
+          // Precarica i dati per il confronto side-by-side (stesso GET usato
+          // dall'accordion "dettagli completi", solo eseguito prima).
+          const pdfTargetId = body.certain_service_id ?? (body.matches.length === 1 ? body.matches[0]!.service_id : null);
+          if (pdfTargetId) void loadDupDetail(pdfTargetId);
         } else {
           // Solo pdf_hash: stesso identico file → avviso semplice esistente.
           setPdfDuplicateWarning(body.error ?? "PDF già importato.");
@@ -960,6 +1039,10 @@ export default function InboxPage() {
           incoming: incomingSummaryFromForm(form),
           form,
         });
+        // Precarica i dati per il confronto side-by-side (stesso GET usato
+        // dall'accordion "dettagli completi", solo eseguito prima).
+        const approveTargetId = body.certain_service_id ?? (body.matches.length === 1 ? body.matches[0]!.service_id : null);
+        if (approveTargetId) void loadDupDetail(approveTargetId);
         return;
       }
       if (!res.ok || !body.ok) {
@@ -1101,17 +1184,14 @@ export default function InboxPage() {
 
   // Apre/chiude l'accordion di dettaglio pratica esistente. Il fetch parte solo
   // alla prima apertura ed è di sola lettura (GET /api/ops/services/[id]).
-  const toggleDupDetail = async (serviceId: string) => {
+  // Fetch di GET /api/ops/services/[id] (endpoint invariato, sola lettura) per
+  // popolare il confronto side-by-side della modale duplicati. `open` riguarda
+  // SOLO l'accordion "dettagli completi" sotto — i dati servono anche a
+  // confronto chiuso, quindi qui non viene mai forzato a true.
+  const loadDupDetail = async (serviceId: string) => {
     const entry = dupDetail[serviceId];
-    if (entry?.open) {
-      setDupDetail((prev) => ({ ...prev, [serviceId]: { ...prev[serviceId], open: false } }));
-      return;
-    }
-    if (entry?.data) {
-      setDupDetail((prev) => ({ ...prev, [serviceId]: { ...prev[serviceId], open: true } }));
-      return;
-    }
-    setDupDetail((prev) => ({ ...prev, [serviceId]: { open: true, loading: true, error: null, data: null } }));
+    if (entry?.data || entry?.loading) return;
+    setDupDetail((prev) => ({ ...prev, [serviceId]: { open: prev[serviceId]?.open ?? false, loading: true, error: null, data: null } }));
     try {
       const token = await getToken();
       if (!token) throw new Error("Sessione non valida.");
@@ -1122,13 +1202,26 @@ export default function InboxPage() {
       if (!res.ok || !body || body.error) {
         throw new Error(body?.error ?? `Caricamento non riuscito (HTTP ${res.status}).`);
       }
-      setDupDetail((prev) => ({ ...prev, [serviceId]: { open: true, loading: false, error: null, data: body } }));
+      setDupDetail((prev) => ({ ...prev, [serviceId]: { open: prev[serviceId]?.open ?? false, loading: false, error: null, data: body } }));
     } catch (e) {
       setDupDetail((prev) => ({
         ...prev,
-        [serviceId]: { open: true, loading: false, error: e instanceof Error ? e.message : "Errore di rete.", data: null },
+        [serviceId]: { open: prev[serviceId]?.open ?? false, loading: false, error: e instanceof Error ? e.message : "Errore di rete.", data: null },
       }));
     }
+  };
+
+  // Apri/chiudi SOLO l'accordion "dettagli completi pratica esistente". I dati
+  // sono già caricati da loadDupDetail (chiamato all'apertura della modale);
+  // se per qualche motivo mancano ancora, li richiede qui come fallback.
+  const toggleAdvancedDetail = (serviceId: string) => {
+    const entry = dupDetail[serviceId];
+    if (entry?.open) {
+      setDupDetail((prev) => ({ ...prev, [serviceId]: { ...prev[serviceId], open: false } }));
+      return;
+    }
+    setDupDetail((prev) => ({ ...prev, [serviceId]: { ...(prev[serviceId] ?? { loading: false, error: null, data: null }), open: true } }));
+    if (!entry?.data) void loadDupDetail(serviceId);
   };
 
   const openCancelDialog = (service: GlobalBookingSearchResult) => {
@@ -2427,58 +2520,80 @@ export default function InboxPage() {
           const s = v === null || v === undefined ? "" : String(v).trim();
           return s.length > 0 ? s : "—";
         };
-        const renderExistingDetail = (serviceId: string, statusLabel: string) => {
+
+        // Dati per il confronto SIDE-BY-SIDE (solo quando c'è un target unico:
+        // caso reale/comune). `loadDupDetail` è già stato chiamato all'apertura
+        // della modale (vedi setDupModal), quindi qui i dati sono già pronti o
+        // in caricamento — nessuna nuova fetch triggerata dal render.
+        const detailEntry = single ? dupDetail[single.service_id] : undefined;
+        const detailData = detailEntry?.data ?? null;
+        // Fallback dal match iniziale (già disponibile dalla risposta 409, senza
+        // attendere il GET) fuso coi dati completi una volta arrivati.
+        const matchAsService: Record<string, unknown> = single ? {
+          customer_name: single.customer_name,
+          phone: single.phone,
+          date: single.date,
+          pax: single.pax,
+          transport_code: single.transport_code,
+          outbound_time: single.outbound_time,
+          return_time: single.return_time,
+          arrival_time: single.arrival_time,
+          departure_time: single.departure_time,
+          notes: single.notes,
+          status: single.status,
+          is_draft: single.is_draft,
+        } : {};
+        const existingServiceForCompare = { ...matchAsService, ...((detailData?.service ?? {}) as Record<string, unknown>) };
+        const existingHotelName = single
+          ? (detailData?.hotels ?? []).find((h) => h.id === existingServiceForCompare.hotel_id)?.name ?? single.hotel_name ?? null
+          : null;
+        const existingAgencyName = single
+          ? (detailData?.agencies ?? []).find((a) => a.id === existingServiceForCompare.agency_id)?.name
+            ?? single.agency_name ?? single.billing_party_name ?? null
+          : null;
+        const ferryLegLabel = (leg?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null) =>
+          leg && (leg.company || leg.departure_port || leg.arrival_port)
+            ? `${leg.company ?? "—"} · ${leg.departure_port ?? "?"} → ${leg.arrival_port ?? "?"}`
+            : null;
+        const ferryLineStr = detailData?.ferry_meta
+          ? [ferryLegLabel(detailData.ferry_meta.outbound), ferryLegLabel(detailData.ferry_meta.return)].filter(Boolean).join("  |  ") || null
+          : null;
+        const sideBySideRows = single
+          ? buildDuplicateSideBySideRows(existingServiceForCompare, existingHotelName, existingAgencyName, dupModal.form, ferryLineStr)
+          : [];
+
+        // Accordion "Visualizza dettagli completi pratica esistente": SOLO i
+        // metadati che non compaiono già nel confronto principale sopra.
+        const renderAdvancedDetail = (serviceId: string) => {
           const entry = dupDetail[serviceId];
           if (!entry?.open) return null;
-          if (entry.loading) return <p className="mt-2 px-3 py-2 text-xs text-slate-500">Carico la pratica…</p>;
+          if (entry.loading) return <p className="mt-2 px-3 py-2 text-xs text-slate-500">Carico i dettagli…</p>;
           if (entry.error) return <p className="mt-2 px-3 py-2 text-xs text-rose-600">{entry.error}</p>;
           const d = entry.data;
           if (!d) return null;
           const s = (d.service ?? {}) as Record<string, unknown>;
           const linked = (d.linked_service ?? null) as Record<string, unknown> | null;
-          const hotelName = (d.hotels ?? []).find((h) => h.id === s.hotel_id)?.name ?? null;
-          const agencyName = (d.agencies ?? []).find((a) => a.id === s.agency_id)?.name ?? (s.billing_party_name as string | null) ?? null;
           const notesStr = typeof s.notes === "string" ? s.notes : "";
-          const practice = notesStr.match(/\[practice:([^\]]+)\]/)?.[1]?.trim() ?? null;
           const fm = d.ferry_meta ?? null;
-          const ferryLine = (leg?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null) =>
-            leg && (leg.company || leg.departure_port || leg.arrival_port)
-              ? `${leg.company ?? "—"} · ${leg.departure_port ?? "?"} → ${leg.arrival_port ?? "?"}`
-              : null;
           return (
             <div className="mt-2 space-y-2 rounded-lg bg-slate-50 p-3 text-[11px] text-slate-600">
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                <span><span className="font-semibold text-slate-500">Cliente:</span> {val(s.customer_name)}</span>
-                <span><span className="font-semibold text-slate-500">Pratica:</span> {val(practice)}</span>
-                <span><span className="font-semibold text-slate-500">Data:</span> {val(s.date)}</span>
-                <span><span className="font-semibold text-slate-500">Stato pratica:</span> {statusLabel}</span>
-                <span><span className="font-semibold text-slate-500">Hotel:</span> {val(hotelName)}</span>
-                <span><span className="font-semibold text-slate-500">Pax:</span> {val(s.pax)}</span>
-                <span><span className="font-semibold text-slate-500">Telefono:</span> {val(s.phone)}</span>
-                <span><span className="font-semibold text-slate-500">Agenzia:</span> {val(agencyName)}</span>
-                <span><span className="font-semibold text-slate-500">Mezzo:</span> {val(s.transport_code)}</span>
-                <span><span className="font-semibold text-slate-500">Tipo:</span> {val(s.booking_service_kind)}</span>
-              </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-200 pt-2">
-                <span><span className="font-semibold text-slate-500">Arrivo:</span> {val(s.arrival_date)} {val(s.arrival_time)}</span>
-                <span><span className="font-semibold text-slate-500">Partenza:</span> {val(s.departure_date)} {val(s.departure_time)}</span>
-                <span><span className="font-semibold text-slate-500">Pickup hotel:</span> {val(s.pickup_time)}</span>
-                <span><span className="font-semibold text-slate-500">Orario barca:</span> {val(s.orario_barca)}</span>
-                <span><span className="font-semibold text-slate-500">Punto di carico:</span> {val(s.meeting_point)}</span>
+                <span><span className="font-semibold text-slate-500">Stato pratica:</span> {val(s.status)}{s.is_draft ? " (bozza)" : ""}</span>
                 <span><span className="font-semibold text-slate-500">Direzione:</span> {val(s.direction)}</span>
+                <span><span className="font-semibold text-slate-500">Orario barca:</span> {val(s.orario_barca)}</span>
               </div>
               {linked ? (
                 <p className="border-t border-slate-200 pt-2">
-                  <span className="font-semibold text-slate-500">Gamba collegata ({val(linked.direction)}):</span>{" "}
+                  <span className="font-semibold text-slate-500">Gamba collegata (A/R, {val(linked.direction)}):</span>{" "}
                   {val(linked.arrival_date ?? linked.date)} {val(linked.arrival_time ?? linked.time)} → {val(linked.departure_date)} {val(linked.departure_time)}
                 </p>
               ) : (
                 <p className="border-t border-slate-200 pt-2 text-slate-400">Nessuna gamba A/R collegata.</p>
               )}
-              {ferryLine(fm?.outbound) || ferryLine(fm?.return) ? (
+              {ferryLegLabel(fm?.outbound) || ferryLegLabel(fm?.return) ? (
                 <div className="border-t border-slate-200 pt-2">
-                  {ferryLine(fm?.outbound) ? <p><span className="font-semibold text-slate-500">Traghetto andata:</span> {ferryLine(fm?.outbound)}</p> : null}
-                  {ferryLine(fm?.return) ? <p><span className="font-semibold text-slate-500">Traghetto ritorno:</span> {ferryLine(fm?.return)}</p> : null}
+                  {ferryLegLabel(fm?.outbound) ? <p><span className="font-semibold text-slate-500">Traghetto andata:</span> {ferryLegLabel(fm?.outbound)}</p> : null}
+                  {ferryLegLabel(fm?.return) ? <p><span className="font-semibold text-slate-500">Traghetto ritorno:</span> {ferryLegLabel(fm?.return)}</p> : null}
                 </div>
               ) : null}
               {typeof s.internal_notes === "string" && s.internal_notes.trim() ? (
@@ -2507,9 +2622,31 @@ export default function InboxPage() {
           );
         };
 
+        const sideBySideColumn = (title: string, pick: "existing" | "incoming") => (
+          <div className="rounded-xl border border-slate-200 p-3">
+            <h4 className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</h4>
+            <dl className="mt-2 space-y-1">
+              {sideBySideRows.map((row) => (
+                <div
+                  key={row.label}
+                  className={`flex items-baseline justify-between gap-2 rounded px-1.5 py-1 text-xs ${row.changed ? "bg-amber-100" : ""}`}
+                >
+                  <dt className="shrink-0 text-slate-500">{row.label}</dt>
+                  <dd className={`text-right ${row.changed ? "font-bold text-amber-900" : "font-medium text-slate-700"}`}>
+                    {row[pick] || "—"}
+                  </dd>
+                </div>
+              ))}
+              {sideBySideRows.length === 0 && !detailData ? (
+                <p className="px-1.5 py-1 text-xs text-slate-400">Carico i dati…</p>
+              ) : null}
+            </dl>
+          </div>
+        );
+
         return (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 p-4" onClick={() => !dupBusy && setDupModal(null)}>
-            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
               <div className="text-center text-3xl">{identical ? "🟰" : dupModal.certainId ? "⚠️" : "🔎"}</div>
               <h3 className="mt-1 text-center text-base font-bold text-slate-800">
                 {identical
@@ -2526,67 +2663,78 @@ export default function InboxPage() {
                     : "Una o più prenotazioni potrebbero coincidere. Verifica prima di procedere."}
               </p>
 
-              <div className="mt-4 space-y-3">
-                {dupModal.matches.map((m) => {
-                  const statusLabel = m.is_draft ? "bozza" : m.status || "—";
-                  const detailOpen = dupDetail[m.service_id]?.open ?? false;
-                  return (
-                    <div key={m.service_id} className="rounded-xl border border-slate-200 p-3">
-                      <div className="flex items-center justify-between">
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                          {DUP_REASON_LABEL[m.match_reason] ?? m.match_reason}
-                        </span>
-                        <span className="text-[10px] font-semibold uppercase text-slate-400">{statusLabel}</span>
-                      </div>
-                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
-                        <span><span className="font-semibold text-slate-500">Cliente:</span> {m.customer_name ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Data:</span> {m.date ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Hotel:</span> {m.hotel_name ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Pax:</span> {m.pax ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Telefono:</span> {m.phone ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Agenzia:</span> {m.agency_name ?? m.billing_party_name ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Pratica:</span> {m.practice_number ?? "—"}</span>
-                        <span><span className="font-semibold text-slate-500">Mezzo:</span> {m.transport_code ?? "—"}</span>
-                      </div>
+              {single ? (
+                <div className="mt-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                      {DUP_REASON_LABEL[single.match_reason] ?? single.match_reason}
+                    </span>
+                    <span className="text-[10px] font-semibold uppercase text-slate-400">{single.is_draft ? "bozza" : single.status || "—"}</span>
+                  </div>
 
-                      <button
-                        type="button"
-                        onClick={() => void toggleDupDetail(m.service_id)}
-                        className="mt-2 w-full rounded-lg border border-slate-200 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
-                      >
-                        {detailOpen ? "▲ Nascondi pratica già caricata" : "▼ Visualizza pratica già caricata"}
-                      </button>
-                      {renderExistingDetail(m.service_id, statusLabel)}
+                  {/* Confronto side-by-side: 2 colonne desktop/tablet largo, impilate su mobile. */}
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {sideBySideColumn("Prenotazione esistente", "existing")}
+                    {sideBySideColumn("Nuova prenotazione", "incoming")}
+                  </div>
 
-                      {!identical ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleAdvancedDetail(single.service_id)}
+                    className="mt-3 w-full rounded-lg border border-slate-200 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    {dupDetail[single.service_id]?.open ? "▲ Nascondi dettagli completi pratica esistente" : "▼ Visualizza dettagli completi pratica esistente"}
+                  </button>
+                  {renderAdvancedDetail(single.service_id)}
+                </div>
+              ) : (
+                // Più match ambigui: nessun confronto unico possibile, l'operatore
+                // sceglie quale pratica considerare prima di procedere.
+                <div className="mt-4 space-y-3">
+                  {dupModal.matches.map((m) => {
+                    const statusLabel = m.is_draft ? "bozza" : m.status || "—";
+                    const detailOpen = dupDetail[m.service_id]?.open ?? false;
+                    return (
+                      <div key={m.service_id} className="rounded-xl border border-slate-200 p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                            {DUP_REASON_LABEL[m.match_reason] ?? m.match_reason}
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase text-slate-400">{statusLabel}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
+                          <span><span className="font-semibold text-slate-500">Cliente:</span> {m.customer_name ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Data:</span> {m.date ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Hotel:</span> {m.hotel_name ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Pax:</span> {m.pax ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Telefono:</span> {m.phone ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Agenzia:</span> {m.agency_name ?? m.billing_party_name ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Pratica:</span> {m.practice_number ?? "—"}</span>
+                          <span><span className="font-semibold text-slate-500">Mezzo:</span> {m.transport_code ?? "—"}</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleAdvancedDetail(m.service_id)}
+                          className="mt-2 w-full rounded-lg border border-slate-200 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          {detailOpen ? "▲ Nascondi dettagli completi pratica esistente" : "▼ Visualizza dettagli completi pratica esistente"}
+                        </button>
+                        {renderAdvancedDetail(m.service_id)}
+
                         <button
                           type="button"
                           disabled={dupBusy}
                           onClick={() => void dupModifyExisting(m.service_id)}
                           className="mt-2 w-full rounded-lg bg-slate-800 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50"
                         >
-                          {dupBusy ? "Aggiorno…" : "Aggiorna prenotazione esistente"}
+                          {dupBusy ? "Aggiorno…" : "Aggiorna questa prenotazione"}
                         </button>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {single && diff ? (
-                <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                  <div className="grid grid-cols-[110px_1fr_1fr] gap-2 bg-slate-50 px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400">
-                    <span>Campo</span><span>Esistente</span><span>Nuovi dati</span>
-                  </div>
-                  {diff.rows.map((row) => (
-                    <div key={row.label} className={`grid grid-cols-[110px_1fr_1fr] gap-2 px-3 py-1.5 text-xs ${row.changed ? "bg-amber-50" : ""}`}>
-                      <span className="font-semibold text-slate-500">{row.label}</span>
-                      <span className={row.changed ? "text-slate-500 line-through decoration-slate-300" : "text-slate-700"}>{row.existing || "—"}</span>
-                      <span className={row.changed ? "font-semibold text-amber-800" : "text-slate-700"}>{row.incoming || "—"}</span>
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
-              ) : null}
+              )}
 
               <p className="mt-4 text-center text-[11px] text-slate-400">
                 {identical
@@ -2606,6 +2754,16 @@ export default function InboxPage() {
                 >
                   {dupBusy ? "…" : discardLabel}
                 </button>
+                {single && !identical ? (
+                  <button
+                    type="button"
+                    disabled={dupBusy}
+                    onClick={() => void dupModifyExisting(single.service_id)}
+                    className="flex-1 rounded-xl bg-slate-800 py-2.5 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {dupBusy ? "Aggiorno…" : "Aggiorna prenotazione esistente"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   disabled={dupBusy}
