@@ -12,7 +12,7 @@ import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 import { bookingListTransportTimes } from "@/lib/booking-list-display";
 import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
-import { computeDuplicateDiff } from "@/lib/duplicate-compare";
+import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -403,11 +403,21 @@ function buildDuplicateSideBySideRows(
     return m ? `${m[1].padStart(2, "0")}:${m[2]}` : v;
   };
   const timeLabels = new Set(["Orario arrivo", "Orario treno andata", "Orario partenza", "Orario treno ritorno"]);
+  // Campi testuali "display": case-insensitive + spazi normalizzati, stessa
+  // funzione condivisa di lib/duplicate-compare.ts (nessuna normalizzazione
+  // duplicata qui). Esclusi deliberatamente: numero pratica, telefono, treno
+  // andata/ritorno, mezzo/transport_code, date, orari, pax — formato
+  // semanticamente rilevante (vedi docstring di sameDisplayText).
+  const textLabels = new Set(["Cliente", "Agenzia", "Hotel", "Punto di carico", "Tipo servizio"]);
 
   return rows
     .filter(([, existing, incoming]) => existing || incoming)
     .map(([label, existing, incoming]) => {
-      const same = timeLabels.has(label) ? normTime(existing) === normTime(incoming) : existing === incoming;
+      const same = timeLabels.has(label)
+        ? normTime(existing) === normTime(incoming)
+        : textLabels.has(label)
+          ? sameDisplayText(existing, incoming)
+          : existing === incoming;
       const changed = incoming !== "" && !same;
       return { label, existing, incoming, changed };
     });

@@ -66,6 +66,26 @@ function norm(value: string | number | null | undefined): string {
   return String(value).replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Confronto "display" per campi TESTUALI (nome cliente, hotel, agenzia,
+ * punto di carico, ecc.): case-insensitive + spazi multipli collassati.
+ * Esportata perché riusata anche da app/(app)/inbox/page.tsx per i campi del
+ * confronto side-by-side non coperti da computeDuplicateDiff (es. Agenzia,
+ * Punto di carico) — nessuna normalizzazione duplicata in due posti.
+ *
+ * NON va applicata a campi dove il formato è semanticamente rilevante:
+ * numero pratica, telefono, codici treno/volo, transport_code, date, orari,
+ * pax. Nessun fuzzy/alias matching qui: "PARCO HOTEL TERME VILLA TERESA" e
+ * "VILLA TERESA" restano diversi, solo casing/spazi vengono ignorati.
+ */
+export function normalizeDisplayText(value: string | number | null | undefined): string {
+  return norm(value).toLowerCase();
+}
+
+export function sameDisplayText(a: string | number | null | undefined, b: string | number | null | undefined): boolean {
+  return normalizeDisplayText(a) === normalizeDisplayText(b);
+}
+
 /** Confronto "morbido" degli orari: 12:5 == 12:05 == 12.05, spazi ignorati. */
 function sameTime(a: string, b: string): boolean {
   const normTime = (v: string) => {
@@ -75,8 +95,14 @@ function sameTime(a: string, b: string): boolean {
   return normTime(a) === normTime(b);
 }
 
+// Campi testuali "display" del confronto CAMPO|ESISTENTE|NUOVI DATI dove il
+// casing non è significativo per l'operatore. Pratica/Mezzo restano fuori
+// deliberatamente (formato semanticamente rilevante, vedi docstring sopra).
+const TEXT_LABELS = new Set(["Hotel", "Cliente"]);
+
 function rowsEqual(label: string, existing: string, incoming: string): boolean {
   if (existing === incoming) return true;
+  if (TEXT_LABELS.has(label) && sameDisplayText(existing, incoming)) return true;
   const timeLike = label === "Arrivo" || label === "Ritorno";
   if (timeLike && sameTime(existing, incoming)) return true;
   return false;

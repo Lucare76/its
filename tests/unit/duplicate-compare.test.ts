@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDuplicateDiff, type DuplicateIncomingSummary } from "@/lib/duplicate-compare";
+import { computeDuplicateDiff, sameDisplayText, type DuplicateIncomingSummary } from "@/lib/duplicate-compare";
 
 /**
  * Confronto CAMPO | ESISTENTE | NUOVI DATI del pannello duplicati Inbox.
@@ -95,5 +95,59 @@ describe("computeDuplicateDiff", () => {
     const arrivo = diff.rows.find((r) => r.label === "Arrivo");
     expect(arrivo?.existing).toBe("12:53");
     expect(arrivo?.changed).toBe(true);
+  });
+
+  it("4. Cliente: 'MATTIOLI ALESSANDRA' vs 'Mattioli Alessandra' -> NON changed (solo casing)", () => {
+    const existing = { customer_name: "MATTIOLI ALESSANDRA", pax: 1, date: "2026-09-01" };
+    const diff = computeDuplicateDiff(existing, incoming({ customer_name: "Mattioli Alessandra", pax: "1", date: "2026-09-01" }));
+    expect(diff.rows.find((r) => r.label === "Cliente")?.changed).toBe(false);
+  });
+
+  it("3. Hotel: 'PARCO HOTEL TERME VILLA TERESA' vs 'VILLA TERESA' -> RESTANO changed (nessun fuzzy/substring match)", () => {
+    const existing = { hotel_name: "PARCO HOTEL TERME VILLA TERESA", pax: 1, date: "2026-09-01" };
+    const diff = computeDuplicateDiff(existing, incoming({ hotel: "VILLA TERESA", pax: "1", date: "2026-09-01" }));
+    expect(diff.rows.find((r) => r.label === "Hotel")?.changed).toBe(true);
+  });
+
+  it("5. Mezzo (transport_code): 'ITA 9998' vs 'ITA 8903' -> changed (confronto esatto, non testuale)", () => {
+    const existing = { transport_code: "ITA 9998", pax: 1, date: "2026-09-01" };
+    const diff = computeDuplicateDiff(existing, incoming({ transport_code: "ITA 8903", pax: "1", date: "2026-09-01" }));
+    expect(diff.rows.find((r) => r.label === "Mezzo")?.changed).toBe(true);
+  });
+
+  it("6. Pratica: confronto esatto invariato, il casing conta (non è un campo testuale display)", () => {
+    const existing = { practice_number: "ITS-2026-5", pax: 1, date: "2026-09-01" };
+    const sameCase = computeDuplicateDiff(existing, incoming({ practice_number: "ITS-2026-5", pax: "1", date: "2026-09-01" }));
+    expect(sameCase.rows.find((r) => r.label === "Pratica")?.changed).toBe(false);
+    const differentCase = computeDuplicateDiff(existing, incoming({ practice_number: "its-2026-5", pax: "1", date: "2026-09-01" }));
+    expect(differentCase.rows.find((r) => r.label === "Pratica")?.changed).toBe(true);
+  });
+});
+
+describe("sameDisplayText — normalizzazione testo display (case-insensitive + spazi), SOLO per campi testuali", () => {
+  it("1. 'ALESTE VIAGGI' vs 'Aleste Viaggi' -> uguali", () => {
+    expect(sameDisplayText("ALESTE VIAGGI", "Aleste Viaggi")).toBe(true);
+  });
+
+  it("2. '  Aleste   Viaggi ' vs 'ALESTE VIAGGI' -> uguali (spazi multipli/iniziali/finali collassati)", () => {
+    expect(sameDisplayText("  Aleste   Viaggi ", "ALESTE VIAGGI")).toBe(true);
+  });
+
+  it("3. 'PARCO HOTEL TERME VILLA TERESA' vs 'VILLA TERESA' -> differenti (nessun fuzzy/substring match)", () => {
+    expect(sameDisplayText("PARCO HOTEL TERME VILLA TERESA", "VILLA TERESA")).toBe(false);
+  });
+
+  it("4. 'MATTIOLI ALESSANDRA' vs 'Mattioli Alessandra' -> uguali", () => {
+    expect(sameDisplayText("MATTIOLI ALESSANDRA", "Mattioli Alessandra")).toBe(true);
+  });
+
+  it("5. 'ITA 9998' vs 'ITA 8903' -> differenti", () => {
+    expect(sameDisplayText("ITA 9998", "ITA 8903")).toBe(false);
+  });
+
+  it("valori null/undefined/vuoti si comportano come stringa vuota, senza lanciare", () => {
+    expect(sameDisplayText(null, undefined)).toBe(true);
+    expect(sameDisplayText("", "  ")).toBe(true);
+    expect(sameDisplayText("Aleste Viaggi", null)).toBe(false);
   });
 });
