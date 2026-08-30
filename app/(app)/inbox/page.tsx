@@ -12,6 +12,7 @@ import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 import { bookingListTransportTimes } from "@/lib/booking-list-display";
 import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
+import { computeDuplicateDiff } from "@/lib/duplicate-compare";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -301,6 +302,26 @@ type IncomingSummary = {
   transport_code: string;
 };
 
+// Shape (parziale) di GET /api/ops/services/[id] — solo i campi mostrati
+// nell'accordion "Visualizza pratica già caricata". Endpoint invariato.
+type DupExistingDetail = {
+  service?: Record<string, unknown> | null;
+  linked_service?: Record<string, unknown> | null;
+  ferry_meta?: {
+    outbound?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null;
+    return?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null;
+  } | null;
+  hotels?: Array<{ id: string; name: string }>;
+  agencies?: Array<{ id: string; name: string }>;
+  change_logs?: Array<{
+    id: string;
+    action: string;
+    changed_fields: string[] | null;
+    operator_name: string | null;
+    created_at: string;
+  }>;
+};
+
 function incomingSummaryFromForm(f: FormState): IncomingSummary {
   const trains = [f.treno_andata, f.treno_ritorno].map((s) => (s ?? "").trim()).filter(Boolean).join(" / ");
   return {
@@ -375,9 +396,9 @@ export default function InboxPage() {
   const [pdfUploadPreview, setPdfUploadPreview] = useState<Record<string, unknown> | null>(null);
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
-  // Pannello "prenotazione già esistente" (MODIFICA / AGGIUNGI / ANNULLA).
-  // Popolato quando /api/email/inbox-approve o /api/pdf/claude-save-draft
-  // rispondono 409 { duplicate:true, matches:[...] }.
+  // Pannello "prenotazione già esistente" (SCARTA NUOVA / AGGIORNA ESISTENTE /
+  // AGGIUNGI COME NUOVA). Popolato quando /api/email/inbox-approve o
+  // /api/pdf/claude-save-draft rispondono 409 { duplicate:true, matches:[...] }.
   const [dupModal, setDupModal] = useState<{
     source: "approve" | "pdf";
     matches: DupMatch[];
@@ -386,6 +407,15 @@ export default function InboxPage() {
     form: FormState;
   } | null>(null);
   const [dupBusy, setDupBusy] = useState(false);
+  // Accordion "Visualizza pratica già caricata": fetch on-demand di
+  // GET /api/ops/services/[id] (endpoint esistente, sola lettura). Nessuna
+  // mutazione al caricamento. Chiave = service_id del match.
+  const [dupDetail, setDupDetail] = useState<Record<string, {
+    open: boolean;
+    loading: boolean;
+    error: string | null;
+    data: DupExistingDetail | null;
+  }>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
@@ -964,6 +994,12 @@ export default function InboxPage() {
     }
   };
 
+  // AGGIORNA PRENOTAZIONE ESISTENTE — la decisione su QUALI campi aggiornare è
+  // interamente server-side (app/api/email/inbox-approve · app/api/pdf/claude-save-draft):
+  // il client invia solo l'id scelto + il form, il server ri-valida che l'id
+  // sia davvero fra i duplicati rilevati e applica un update non distruttivo
+  // (stesso ID, relazioni/stato/assegnazioni intatti, storico su
+  // service_change_logs).
   const dupModifyExisting = async (matchId: string) => {
     if (!dupModal || dupBusy) return;
     setDupBusy(true);
@@ -972,62 +1008,126 @@ export default function InboxPage() {
       const token = await getToken();
       if (!token) { setApproveError("Sessione non valida."); return; }
       const f = dupModal.form;
-      const match = dupModal.matches.find((m) => m.service_id === matchId) ?? null;
 
-      // Solo campi realmente presenti nella nuova comunicazione: mai null/"".
-      const patch: Record<string, unknown> = {};
-      const put = (key: string, value: string | null | undefined) => {
-        const s = (value ?? "").trim();
-        if (s) patch[key] = s;
-      };
-      put("customer_name", f.cliente_nome);
-      put("phone", f.cliente_cellulare);
-      const paxNum = Number(f.n_pax);
-      if (Number.isFinite(paxNum) && paxNum > 0) patch.pax = Math.min(999, Math.trunc(paxNum));
-      put("time", f.orario_arrivo);
-      put("arrival_time", f.orario_arrivo);
-      put("departure_time", f.orario_partenza);
-      put("arrival_date", f.data_arrivo);
-      put("departure_date", f.data_partenza);
-      put("meeting_point", f.citta_partenza);
-      const trains = [f.treno_andata, f.treno_ritorno].map((s) => (s ?? "").trim()).filter(Boolean).join(" / ");
-      if (trains) patch.transport_code = trains;
-      // Numero pratica: vive nel marker [practice:...] dentro notes → swap mirato.
-      const newPractice = (f.numero_pratica ?? "").trim();
-      if (newPractice && match?.notes) {
-        patch.notes = /\[practice:[^\]]+\]/.test(match.notes)
-          ? match.notes.replace(/\[practice:[^\]]+\]/, `[practice:${newPractice}]`)
-          : `${match.notes} | [practice:${newPractice}]`;
-      }
-
-      const patchRes = await fetch(`/api/ops/services/${matchId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify(patch),
-      });
-      if (!patchRes.ok) {
-        const pb = (await patchRes.json().catch(() => null)) as { error?: string } | null;
-        setApproveError(pb?.error ?? `Modifica non riuscita (HTTP ${patchRes.status}).`);
-        return;
-      }
-
-      // Flusso email: collega la email al servizio esistente (nessun INSERT).
-      if (dupModal.source === "approve" && selectedEmail) {
-        await fetch("/api/email/inbox-approve", {
+      let res: Response;
+      if (dupModal.source === "approve") {
+        if (!selectedEmail) { setApproveError("Nessuna email selezionata."); return; }
+        res = await fetch("/api/email/inbox-approve", {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-          body: JSON.stringify({ inbound_email_id: selectedEmail.id, form: f, link_to_service_id: matchId }),
+          body: JSON.stringify({
+            inbound_email_id: selectedEmail.id,
+            form: f,
+            action: "update_existing",
+            existing_service_id: matchId,
+          }),
         });
+      } else {
+        const detectedAgency = String(
+          (pdfUploadPreview?.claude_extracted as Record<string, unknown> | undefined)?.agency ?? "manual_upload"
+        );
+        res = await fetch("/api/pdf/claude-save-draft", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            form: f,
+            agency: detectedAgency,
+            action: "update_existing",
+            existing_service_id: matchId,
+          }),
+        });
+      }
+
+      const body = (await res.json().catch(() => null)) as
+        | { ok?: boolean; updated?: boolean; changed_fields?: string[]; error?: string }
+        | null;
+      if (!res.ok || !body?.ok) {
+        setApproveError(body?.error ?? `Aggiornamento non riuscito (HTTP ${res.status}).`);
+        return;
       }
 
       await loadData(token);
       if (dupModal.source === "pdf") setPdfUploadOpen(false);
       setDupModal(null);
-      setMessage("Prenotazione esistente aggiornata con i dati della nuova comunicazione.");
+      const n = body.changed_fields?.length ?? 0;
+      setMessage(
+        n > 0
+          ? `Prenotazione esistente aggiornata (${n} camp${n === 1 ? "o" : "i"} modificat${n === 1 ? "o" : "i"}).`
+          : "Prenotazione esistente confermata: nessun campo da aggiornare."
+      );
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : "Errore di rete.");
     } finally {
       setDupBusy(false);
+    }
+  };
+
+  // SCARTA NUOVA — nessuna scrittura sui services. Per il flusso email la
+  // decisione viene tracciata server-side (audit + inbound_email gestita);
+  // per il flusso "carica PDF" non esiste ancora alcun record, quindi si
+  // chiude soltanto il pannello.
+  const dupDiscard = async () => {
+    if (!dupModal || dupBusy) return;
+    setDupBusy(true);
+    setApproveError(null);
+    try {
+      if (dupModal.source === "approve" && selectedEmail) {
+        const token = await getToken();
+        if (!token) { setApproveError("Sessione non valida."); return; }
+        const res = await fetch("/api/email/inbox-approve", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            inbound_email_id: selectedEmail.id,
+            action: "discard_duplicate",
+            existing_service_id: dupModal.certainId ?? dupModal.matches[0]?.service_id ?? null,
+          }),
+        });
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!res.ok || !body?.ok) {
+          setApproveError(body?.error ?? `Operazione non riuscita (HTTP ${res.status}).`);
+          return;
+        }
+        await loadData(token);
+      }
+      setDupModal(null);
+      setMessage("Nuova comunicazione scartata come duplicato. Nessuna prenotazione creata o modificata.");
+    } catch (e) {
+      setApproveError(e instanceof Error ? e.message : "Errore di rete.");
+    } finally {
+      setDupBusy(false);
+    }
+  };
+
+  // Apre/chiude l'accordion di dettaglio pratica esistente. Il fetch parte solo
+  // alla prima apertura ed è di sola lettura (GET /api/ops/services/[id]).
+  const toggleDupDetail = async (serviceId: string) => {
+    const entry = dupDetail[serviceId];
+    if (entry?.open) {
+      setDupDetail((prev) => ({ ...prev, [serviceId]: { ...prev[serviceId], open: false } }));
+      return;
+    }
+    if (entry?.data) {
+      setDupDetail((prev) => ({ ...prev, [serviceId]: { ...prev[serviceId], open: true } }));
+      return;
+    }
+    setDupDetail((prev) => ({ ...prev, [serviceId]: { open: true, loading: true, error: null, data: null } }));
+    try {
+      const token = await getToken();
+      if (!token) throw new Error("Sessione non valida.");
+      const res = await fetch(`/api/ops/services/${serviceId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json().catch(() => null)) as (DupExistingDetail & { error?: string }) | null;
+      if (!res.ok || !body || body.error) {
+        throw new Error(body?.error ?? `Caricamento non riuscito (HTTP ${res.status}).`);
+      }
+      setDupDetail((prev) => ({ ...prev, [serviceId]: { open: true, loading: false, error: null, data: body } }));
+    } catch (e) {
+      setDupDetail((prev) => ({
+        ...prev,
+        [serviceId]: { open: true, loading: false, error: e instanceof Error ? e.message : "Errore di rete.", data: null },
+      }));
     }
   };
 
@@ -2315,105 +2415,206 @@ export default function InboxPage() {
         </div>
       ) : null}
 
-      {/* ── Pannello "prenotazione già esistente": MODIFICA / AGGIUNGI / ANNULLA ── */}
+      {/* ── Pannello "prenotazione già esistente": SCARTA / AGGIORNA / AGGIUNGI ── */}
       {dupModal ? (() => {
         const single = dupModal.matches.length === 1 ? dupModal.matches[0] : null;
         const inc = dupModal.incoming;
-        const diffRow = (label: string, oldV: string | null | undefined, newV: string | null | undefined) => {
-          const o = (oldV ?? "").trim();
-          const n = (newV ?? "").trim();
-          if (!o && !n) return null;
-          const changed = n !== "" && o !== n;
+        const diff = single ? computeDuplicateDiff(single, inc) : null;
+        const identical = diff?.identical ?? false;
+        const discardLabel = dupModal.certainId || identical ? "Scarta duplicato" : "Scarta nuova";
+
+        const val = (v: unknown) => {
+          const s = v === null || v === undefined ? "" : String(v).trim();
+          return s.length > 0 ? s : "—";
+        };
+        const renderExistingDetail = (serviceId: string, statusLabel: string) => {
+          const entry = dupDetail[serviceId];
+          if (!entry?.open) return null;
+          if (entry.loading) return <p className="mt-2 px-3 py-2 text-xs text-slate-500">Carico la pratica…</p>;
+          if (entry.error) return <p className="mt-2 px-3 py-2 text-xs text-rose-600">{entry.error}</p>;
+          const d = entry.data;
+          if (!d) return null;
+          const s = (d.service ?? {}) as Record<string, unknown>;
+          const linked = (d.linked_service ?? null) as Record<string, unknown> | null;
+          const hotelName = (d.hotels ?? []).find((h) => h.id === s.hotel_id)?.name ?? null;
+          const agencyName = (d.agencies ?? []).find((a) => a.id === s.agency_id)?.name ?? (s.billing_party_name as string | null) ?? null;
+          const notesStr = typeof s.notes === "string" ? s.notes : "";
+          const practice = notesStr.match(/\[practice:([^\]]+)\]/)?.[1]?.trim() ?? null;
+          const fm = d.ferry_meta ?? null;
+          const ferryLine = (leg?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null) =>
+            leg && (leg.company || leg.departure_port || leg.arrival_port)
+              ? `${leg.company ?? "—"} · ${leg.departure_port ?? "?"} → ${leg.arrival_port ?? "?"}`
+              : null;
           return (
-            <div key={label} className={`grid grid-cols-[110px_1fr_1fr] gap-2 px-3 py-1.5 text-xs ${changed ? "bg-amber-50" : ""}`}>
-              <span className="font-semibold text-slate-500">{label}</span>
-              <span className="text-slate-500 line-through decoration-slate-300">{o || "—"}</span>
-              <span className={changed ? "font-semibold text-amber-800" : "text-slate-700"}>{n || "—"}</span>
+            <div className="mt-2 space-y-2 rounded-lg bg-slate-50 p-3 text-[11px] text-slate-600">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <span><span className="font-semibold text-slate-500">Cliente:</span> {val(s.customer_name)}</span>
+                <span><span className="font-semibold text-slate-500">Pratica:</span> {val(practice)}</span>
+                <span><span className="font-semibold text-slate-500">Data:</span> {val(s.date)}</span>
+                <span><span className="font-semibold text-slate-500">Stato pratica:</span> {statusLabel}</span>
+                <span><span className="font-semibold text-slate-500">Hotel:</span> {val(hotelName)}</span>
+                <span><span className="font-semibold text-slate-500">Pax:</span> {val(s.pax)}</span>
+                <span><span className="font-semibold text-slate-500">Telefono:</span> {val(s.phone)}</span>
+                <span><span className="font-semibold text-slate-500">Agenzia:</span> {val(agencyName)}</span>
+                <span><span className="font-semibold text-slate-500">Mezzo:</span> {val(s.transport_code)}</span>
+                <span><span className="font-semibold text-slate-500">Tipo:</span> {val(s.booking_service_kind)}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-200 pt-2">
+                <span><span className="font-semibold text-slate-500">Arrivo:</span> {val(s.arrival_date)} {val(s.arrival_time)}</span>
+                <span><span className="font-semibold text-slate-500">Partenza:</span> {val(s.departure_date)} {val(s.departure_time)}</span>
+                <span><span className="font-semibold text-slate-500">Pickup hotel:</span> {val(s.pickup_time)}</span>
+                <span><span className="font-semibold text-slate-500">Orario barca:</span> {val(s.orario_barca)}</span>
+                <span><span className="font-semibold text-slate-500">Punto di carico:</span> {val(s.meeting_point)}</span>
+                <span><span className="font-semibold text-slate-500">Direzione:</span> {val(s.direction)}</span>
+              </div>
+              {linked ? (
+                <p className="border-t border-slate-200 pt-2">
+                  <span className="font-semibold text-slate-500">Gamba collegata ({val(linked.direction)}):</span>{" "}
+                  {val(linked.arrival_date ?? linked.date)} {val(linked.arrival_time ?? linked.time)} → {val(linked.departure_date)} {val(linked.departure_time)}
+                </p>
+              ) : (
+                <p className="border-t border-slate-200 pt-2 text-slate-400">Nessuna gamba A/R collegata.</p>
+              )}
+              {ferryLine(fm?.outbound) || ferryLine(fm?.return) ? (
+                <div className="border-t border-slate-200 pt-2">
+                  {ferryLine(fm?.outbound) ? <p><span className="font-semibold text-slate-500">Traghetto andata:</span> {ferryLine(fm?.outbound)}</p> : null}
+                  {ferryLine(fm?.return) ? <p><span className="font-semibold text-slate-500">Traghetto ritorno:</span> {ferryLine(fm?.return)}</p> : null}
+                </div>
+              ) : null}
+              {typeof s.internal_notes === "string" && s.internal_notes.trim() ? (
+                <p className="border-t border-slate-200 pt-2"><span className="font-semibold text-slate-500">Note operative:</span> {s.internal_notes}</p>
+              ) : null}
+              {notesStr ? (
+                <p className="border-t border-slate-200 pt-2 break-words"><span className="font-semibold text-slate-500">Note:</span> {notesStr}</p>
+              ) : null}
+              <div className="border-t border-slate-200 pt-2">
+                <span className="font-semibold text-slate-500">Storico modifiche:</span>
+                {(d.change_logs ?? []).length === 0 ? (
+                  <span className="text-slate-400"> nessuna</span>
+                ) : (
+                  <ul className="mt-1 space-y-0.5">
+                    {(d.change_logs ?? []).slice(0, 8).map((log) => (
+                      <li key={log.id}>
+                        {new Date(log.created_at).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })} —{" "}
+                        {log.action} {log.changed_fields?.length ? `(${log.changed_fields.join(", ")})` : ""}{" "}
+                        {log.operator_name ? `· ${log.operator_name}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           );
         };
+
         return (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 p-4" onClick={() => !dupBusy && setDupModal(null)}>
             <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-              <div className="text-center text-3xl">{dupModal.certainId ? "⚠️" : "🔎"}</div>
+              <div className="text-center text-3xl">{identical ? "🟰" : dupModal.certainId ? "⚠️" : "🔎"}</div>
               <h3 className="mt-1 text-center text-base font-bold text-slate-800">
-                {dupModal.certainId ? "Prenotazione già esistente" : "Possibile duplicato"}
+                {identical
+                  ? "Prenotazione già presente"
+                  : dupModal.certainId
+                    ? "Prenotazione già esistente"
+                    : "Possibile duplicato"}
               </h3>
               <p className="mt-1 text-center text-xs text-slate-500">
-                {dupModal.certainId
-                  ? "Una prenotazione che sembra la stessa è già a sistema. Scegli come procedere."
-                  : "Una o più prenotazioni potrebbero coincidere. Verifica prima di procedere."}
+                {identical
+                  ? "La prenotazione importata coincide con quella già presente. Non serve creare né modificare nulla."
+                  : dupModal.certainId
+                    ? "Trovata una prenotazione esistente con dati differenti. Verifica le modifiche evidenziate."
+                    : "Una o più prenotazioni potrebbero coincidere. Verifica prima di procedere."}
               </p>
 
               <div className="mt-4 space-y-3">
-                {dupModal.matches.map((m) => (
-                  <div key={m.service_id} className="rounded-xl border border-slate-200 p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                        {DUP_REASON_LABEL[m.match_reason] ?? m.match_reason}
-                      </span>
-                      <span className="text-[10px] font-semibold uppercase text-slate-400">
-                        {m.is_draft ? "bozza" : m.status || "—"}
-                      </span>
+                {dupModal.matches.map((m) => {
+                  const statusLabel = m.is_draft ? "bozza" : m.status || "—";
+                  const detailOpen = dupDetail[m.service_id]?.open ?? false;
+                  return (
+                    <div key={m.service_id} className="rounded-xl border border-slate-200 p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                          {DUP_REASON_LABEL[m.match_reason] ?? m.match_reason}
+                        </span>
+                        <span className="text-[10px] font-semibold uppercase text-slate-400">{statusLabel}</span>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
+                        <span><span className="font-semibold text-slate-500">Cliente:</span> {m.customer_name ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Data:</span> {m.date ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Hotel:</span> {m.hotel_name ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Pax:</span> {m.pax ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Telefono:</span> {m.phone ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Agenzia:</span> {m.agency_name ?? m.billing_party_name ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Pratica:</span> {m.practice_number ?? "—"}</span>
+                        <span><span className="font-semibold text-slate-500">Mezzo:</span> {m.transport_code ?? "—"}</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => void toggleDupDetail(m.service_id)}
+                        className="mt-2 w-full rounded-lg border border-slate-200 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                      >
+                        {detailOpen ? "▲ Nascondi pratica già caricata" : "▼ Visualizza pratica già caricata"}
+                      </button>
+                      {renderExistingDetail(m.service_id, statusLabel)}
+
+                      {!identical ? (
+                        <button
+                          type="button"
+                          disabled={dupBusy}
+                          onClick={() => void dupModifyExisting(m.service_id)}
+                          className="mt-2 w-full rounded-lg bg-slate-800 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                        >
+                          {dupBusy ? "Aggiorno…" : "Aggiorna prenotazione esistente"}
+                        </button>
+                      ) : null}
                     </div>
-                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
-                      <span><span className="font-semibold text-slate-500">Cliente:</span> {m.customer_name ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Data:</span> {m.date ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Hotel:</span> {m.hotel_name ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Pax:</span> {m.pax ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Telefono:</span> {m.phone ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Agenzia:</span> {m.agency_name ?? m.billing_party_name ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Pratica:</span> {m.practice_number ?? "—"}</span>
-                      <span><span className="font-semibold text-slate-500">Mezzo:</span> {m.transport_code ?? "—"}</span>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={dupBusy}
-                      onClick={() => void dupModifyExisting(m.service_id)}
-                      className="mt-2 w-full rounded-lg bg-slate-800 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50"
-                    >
-                      {dupBusy ? "Aggiorno..." : "Modifica questa prenotazione"}
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
-              {single ? (
+              {single && diff ? (
                 <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
                   <div className="grid grid-cols-[110px_1fr_1fr] gap-2 bg-slate-50 px-3 py-1.5 text-[10px] font-bold uppercase text-slate-400">
                     <span>Campo</span><span>Esistente</span><span>Nuovi dati</span>
                   </div>
-                  {diffRow("Pratica", single.practice_number, inc.practice_number)}
-                  {diffRow("Arrivo", single.arrival_time ?? single.outbound_time, inc.arrival_time)}
-                  {diffRow("Ritorno", single.return_time ?? single.departure_time, inc.return_time)}
-                  {diffRow("Mezzo", single.transport_code, inc.transport_code)}
-                  {diffRow("Pax", single.pax != null ? String(single.pax) : "", inc.pax)}
-                  {diffRow("Telefono", single.phone, inc.phone)}
-                  {diffRow("Hotel", single.hotel_name, inc.hotel)}
-                  {diffRow("Cliente", single.customer_name, inc.customer_name)}
-                  {diffRow("Data", single.date, inc.date)}
+                  {diff.rows.map((row) => (
+                    <div key={row.label} className={`grid grid-cols-[110px_1fr_1fr] gap-2 px-3 py-1.5 text-xs ${row.changed ? "bg-amber-50" : ""}`}>
+                      <span className="font-semibold text-slate-500">{row.label}</span>
+                      <span className={row.changed ? "text-slate-500 line-through decoration-slate-300" : "text-slate-700"}>{row.existing || "—"}</span>
+                      <span className={row.changed ? "font-semibold text-amber-800" : "text-slate-700"}>{row.incoming || "—"}</span>
+                    </div>
+                  ))}
                 </div>
               ) : null}
 
               <p className="mt-4 text-center text-[11px] text-slate-400">
-                &ldquo;Modifica&rdquo; aggiorna la prenotazione esistente coi nuovi dati. &ldquo;Aggiungi comunque&rdquo; crea una nuova prenotazione.
+                {identical
+                  ? "Azione consigliata: scarta il duplicato."
+                  : "“Aggiorna” modifica la prenotazione esistente (stesso ID, storico e assegnazioni intatti). “Aggiungi come nuova” crea una prenotazione distinta."}
               </p>
-              <div className="mt-2 flex gap-2">
+              <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
                   disabled={dupBusy}
-                  onClick={() => setDupModal(null)}
-                  className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  onClick={() => void dupDiscard()}
+                  className={`flex-1 rounded-xl py-2.5 text-sm font-bold disabled:opacity-50 ${
+                    identical
+                      ? "bg-slate-800 text-white hover:bg-slate-700"
+                      : "border border-slate-200 font-semibold text-slate-600 hover:bg-slate-50"
+                  }`}
                 >
-                  Annulla
+                  {dupBusy ? "…" : discardLabel}
                 </button>
                 <button
                   type="button"
                   disabled={dupBusy}
                   onClick={() => void dupAddAnyway()}
-                  className="flex-1 rounded-xl bg-amber-600 py-2.5 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                  className={`flex-1 rounded-xl py-2.5 text-sm font-bold text-white disabled:opacity-50 ${
+                    identical ? "bg-slate-300 hover:bg-slate-400" : "bg-amber-600 hover:bg-amber-700"
+                  }`}
                 >
-                  {dupBusy ? "..." : "Aggiungi comunque"}
+                  {dupBusy ? "…" : "Aggiungi come nuova"}
                 </button>
               </div>
             </div>

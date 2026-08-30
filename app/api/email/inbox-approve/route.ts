@@ -17,6 +17,7 @@ import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
 import { auditLog } from "@/lib/server/ops-audit";
+import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -156,19 +157,73 @@ export async function POST(request: NextRequest) {
   let body: {
     inbound_email_id?: string;
     form?: FormState;
-    /** L'operatore ha visto il pannello duplicati e ha scelto "AGGIUNGI COMUNQUE". */
+    /**
+     * Decisione esplicita dell'operatore nel pannello "prenotazione già
+     * esistente" (app/(app)/inbox/page.tsx):
+     *  - "discard_duplicate" → scarta la nuova comunicazione, nessuna scrittura
+     *    sui services, l'import resta tracciato come scartato;
+     *  - "update_existing" → aggiorna il record esistente indicato in
+     *    `existing_service_id` con i soli campi realmente cambiati (mai
+     *    distruttivo: stesso ID, stesse relazioni, stato/assegnazioni intatti);
+     *  - "create_new" → crea comunque una nuova prenotazione.
+     * La scelta NON è mai automatica: il server la esegue solo se ricevuta.
+     */
+    action?: "discard_duplicate" | "update_existing" | "create_new";
+    /** Service esistente scelto per "update_existing" (ri-validato server-side). */
+    existing_service_id?: string;
+    /** Alias retro-compatibile di action:"create_new". */
     confirm_duplicate?: boolean;
-    /** L'operatore ha scelto "MODIFICA PRENOTAZIONE ESISTENTE": nessun nuovo
-     *  service, la email viene solo collegata al service indicato. */
+    /** Alias legacy: collega la email al service senza INSERT (nessun update campi). */
     link_to_service_id?: string;
   };
   try { body = (await request.json()) as typeof body; }
   catch { return NextResponse.json({ ok: false, error: "Body JSON non valido." }, { status: 400 }); }
 
   const { inbound_email_id, form } = body;
-  const confirmDuplicate = body.confirm_duplicate === true;
+  const action = body.action ?? null;
+  const confirmDuplicate = body.confirm_duplicate === true || action === "create_new";
   const linkToServiceId = clean(body.link_to_service_id);
+  const updateExistingId = action === "update_existing" ? clean(body.existing_service_id) : null;
   if (!inbound_email_id) return NextResponse.json({ ok: false, error: "inbound_email_id mancante." }, { status: 400 });
+
+  // ── SCARTA DUPLICATO ─────────────────────────────────────────────────────
+  // Nessuna scrittura sui services (né INSERT né UPDATE): l'operatore ha
+  // deciso che la nuova comunicazione è un doppione. Si marca solo l'inbound
+  // email come gestita e si lascia traccia nell'audit esistente.
+  if (action === "discard_duplicate") {
+    const { data: emailRow } = await admin
+      .from("inbound_emails")
+      .select("parsed_json")
+      .eq("tenant_id", tenantId)
+      .eq("id", inbound_email_id)
+      .maybeSingle();
+    const parsedJson = (emailRow?.parsed_json ?? {}) as Record<string, unknown>;
+    await admin
+      .from("inbound_emails")
+      .update({
+        parsed_json: {
+          ...parsedJson,
+          review_status: "confirmed",
+          duplicate_resolution: "discarded",
+          duplicate_resolved_by: userId,
+          duplicate_resolved_at: new Date().toISOString(),
+        },
+      })
+      .eq("tenant_id", tenantId)
+      .eq("id", inbound_email_id);
+    auditLog({
+      event: "inbox_duplicate_resolution",
+      tenantId,
+      userId,
+      role: auth.membership.role,
+      inboundEmailId: inbound_email_id,
+      serviceId: clean(body.existing_service_id) ?? null,
+      duplicate: true,
+      outcome: "discard_duplicate",
+      details: { existing_service_id: clean(body.existing_service_id) ?? null },
+    });
+    return NextResponse.json({ ok: true, discarded: true, inbound_email_id });
+  }
 
   // ── MODIFICA PRENOTAZIONE ESISTENTE ──────────────────────────────────────
   // L'aggiornamento dei campi del service esistente è già stato fatto dalla UI
@@ -265,6 +320,162 @@ export async function POST(request: NextRequest) {
   const textHash = hashString(JSON.stringify(form)).slice(0, 24);
   const compositeKey = slug(`${customerName}|${arrivalDate}|${hotelName ?? "hotel-nd"}`);
   const dedupeKey = hashString([practiceNumber, customerName, arrivalDate, hotelName, textHash].filter(Boolean).join("|")).slice(0, 24);
+
+  // ── AGGIORNA PRENOTAZIONE ESISTENTE ─────────────────────────────────────
+  // Decisione esplicita "update_existing". Il server NON si fida dell'ID
+  // arrivato dal client: ricostruisce il probe dai campi del form, riesegue
+  // il deduplicatore condiviso e accetta l'update SOLO se `existing_service_id`
+  // è davvero fra i match proposti per questo import (match certo o possibile).
+  // Poi aggiorna il record IN-PLACE — stesso ID, stesse relazioni, stesso
+  // audit/storico — con i soli campi realmente presenti nella nuova
+  // comunicazione E diversi da quelli a sistema. Mai toccati: status,
+  // is_draft, assegnazioni, pickup manuale, created_by_user_id, linked_service_id.
+  if (updateExistingId) {
+    const probe = buildDuplicateProbe({
+      practiceNumber,
+      customerName,
+      phone: clean(form.cliente_cellulare),
+      arrivalDate,
+      hotelName,
+    });
+    const { certain_service_id, matches } = await lookupBookingDuplicates(admin, tenantId, probe);
+    const allowed = new Set<string>(
+      [certain_service_id, ...matches.map((m) => m.service_id)].filter((x): x is string => Boolean(x))
+    );
+    if (!allowed.has(updateExistingId)) {
+      auditLog({
+        event: "inbox_duplicate_resolution",
+        level: "warn",
+        tenantId,
+        userId,
+        role: auth.membership.role,
+        inboundEmailId: inbound_email_id,
+        serviceId: updateExistingId,
+        duplicate: true,
+        outcome: "update_existing_rejected",
+        details: { reason: "service_not_in_matches", allowed: [...allowed] },
+      });
+      return NextResponse.json(
+        { ok: false, error: "La prenotazione da aggiornare non corrisponde a nessuno dei duplicati rilevati per questo import." },
+        { status: 422 }
+      );
+    }
+
+    const before = await readServiceSnapshot(auth, tenantId, updateExistingId);
+    if (!before) {
+      return NextResponse.json({ ok: false, error: "Prenotazione esistente non trovata." }, { status: 404 });
+    }
+
+    // Solo campi con un valore reale nella nuova comunicazione. Il confronto
+    // con il valore a sistema evita sia righe fantasma nell'audit sia — punto
+    // chiave del requisito — la sovrascrittura di una correzione manuale
+    // dell'operatore quando il nuovo import NON porta quel campo.
+    const patch: Record<string, unknown> = {};
+    const setIfChanged = (col: string, value: string | number | null | undefined) => {
+      if (value === null || value === undefined || value === "") return;
+      const current = (before as Record<string, unknown>)[col] ?? null;
+      if (JSON.stringify(current) === JSON.stringify(value)) return;
+      patch[col] = value;
+    };
+    setIfChanged("customer_name", customerName);
+    setIfChanged("phone", clean(form.cliente_cellulare));
+    setIfChanged("pax", passengers);
+    setIfChanged("time", outboundTime);
+    setIfChanged("outbound_time", outboundTime);
+    setIfChanged("arrival_time", outboundTime);
+    setIfChanged("return_time", returnTime);
+    setIfChanged("departure_time", returnTime);
+    setIfChanged("arrival_date", arrivalDate);
+    if (before.direction === "arrival") setIfChanged("date", arrivalDate);
+    setIfChanged("departure_date", departureDate);
+    setIfChanged("meeting_point", arrivalPlace);
+    setIfChanged("transport_code", transportCode);
+    setIfChanged("source_total_amount_cents", sourceTotalCents);
+    setIfChanged("source_price_per_pax_cents", sourcePricePerPaxCents);
+
+    // Hotel: la nuova comunicazione può correggere la struttura (es.
+    // "PARCO HOTEL TERME VILLA TERESA" → "VILLA TERESA"). Stesso helper del
+    // flusso di creazione; si aggiorna solo hotel_id, mai altro.
+    if (hotelName) {
+      const newHotelId = await resolveOrCreateHotel(auth.admin, tenantId, hotelName);
+      if (newHotelId && newHotelId !== before.hotel_id) patch.hotel_id = newHotelId;
+    }
+
+    // Numero pratica: vive nel marker [practice:...] dentro notes → swap mirato,
+    // il resto delle note operative resta intatto.
+    const currentNotes = typeof before.notes === "string" ? before.notes : "";
+    if (practiceNumber) {
+      const nextNotes = /\[practice:[^\]]+\]/.test(currentNotes)
+        ? currentNotes.replace(/\[practice:[^\]]+\]/, `[practice:${practiceNumber}]`)
+        : `${currentNotes}${currentNotes ? " | " : ""}[practice:${practiceNumber}]`;
+      if (nextNotes !== currentNotes) patch.notes = nextNotes;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const { error: updErr } = await admin
+        .from("services")
+        .update(patch)
+        .eq("tenant_id", tenantId)
+        .eq("id", updateExistingId);
+      if (updErr) {
+        return NextResponse.json({ ok: false, error: updErr.message }, { status: 500 });
+      }
+    }
+
+    const after = await readServiceSnapshot(auth, tenantId, updateExistingId);
+    await logServiceChange({
+      auth,
+      tenantId,
+      serviceId: updateExistingId,
+      rootServiceId: updateExistingId,
+      before,
+      after,
+      fields: Object.keys(patch),
+    });
+
+    const { data: emailRow } = await admin
+      .from("inbound_emails")
+      .select("parsed_json")
+      .eq("tenant_id", tenantId)
+      .eq("id", inbound_email_id)
+      .maybeSingle();
+    const parsedJson = (emailRow?.parsed_json ?? {}) as Record<string, unknown>;
+    await admin
+      .from("inbound_emails")
+      .update({
+        parsed_json: {
+          ...parsedJson,
+          review_status: "confirmed",
+          linked_service_id: updateExistingId,
+          linked_via: "duplicate_update",
+          duplicate_resolution: "updated_existing",
+          duplicate_resolved_by: userId,
+          duplicate_resolved_at: new Date().toISOString(),
+        },
+      })
+      .eq("tenant_id", tenantId)
+      .eq("id", inbound_email_id);
+
+    auditLog({
+      event: "inbox_duplicate_resolution",
+      tenantId,
+      userId,
+      role: auth.membership.role,
+      inboundEmailId: inbound_email_id,
+      serviceId: updateExistingId,
+      duplicate: true,
+      outcome: "update_existing",
+      details: { existing_service_id: updateExistingId, changed_fields: Object.keys(patch) },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      updated: true,
+      service_id: updateExistingId,
+      changed_fields: Object.keys(patch),
+      inbound_email_id,
+    });
+  }
 
   // ── Controllo duplicati LIVE sul DB (fonte di verità) ────────────────────
   // `existingService` sopra copre solo l'idempotenza della STESSA email (bozza
@@ -458,6 +669,22 @@ export async function POST(request: NextRequest) {
     })
     .eq("id", inbound_email_id)
     .eq("tenant_id", tenantId);
+
+  // Traccia la decisione "aggiungi comunque" quando l'operatore ha creato un
+  // nuovo record pur avendo visto il pannello duplicati.
+  if (confirmDuplicate && !existingService?.id) {
+    auditLog({
+      event: "inbox_duplicate_resolution",
+      tenantId,
+      userId,
+      role: auth.membership.role,
+      inboundEmailId: inbound_email_id,
+      serviceId: service.id,
+      duplicate: true,
+      outcome: "create_new",
+      details: { existing_service_id: clean(body.existing_service_id) ?? null },
+    });
+  }
 
   return NextResponse.json({ ok: true, service_id: service.id, inbound_email_id });
 }

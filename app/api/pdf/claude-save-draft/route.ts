@@ -15,6 +15,8 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
+import { auditLog } from "@/lib/server/ops-audit";
+import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -284,11 +286,23 @@ export async function POST(request: NextRequest) {
   const tenantId = auth.membership.tenant_id;
   const userId = auth.user?.id ?? null;
 
-  let body: { form?: FormState; pdf_base64?: string; filename?: string; agency?: string };
+  let body: {
+    form?: FormState;
+    pdf_base64?: string;
+    filename?: string;
+    agency?: string;
+    force?: boolean;
+    /** Decisione esplicita dal pannello duplicati (vedi inbox-approve). */
+    action?: "update_existing" | "create_new";
+    /** Service esistente scelto per "update_existing" (ri-validato server-side). */
+    existing_service_id?: string;
+  };
   try { body = (await request.json()) as typeof body; }
   catch { return NextResponse.json({ ok: false, error: "Body JSON non valido." }, { status: 400 }); }
 
-  const { form, pdf_base64, filename = "upload.pdf", agency = "unknown", force = false } = body as typeof body & { force?: boolean };
+  const { form, pdf_base64, filename = "upload.pdf", agency = "unknown" } = body;
+  const force = body.force === true || body.action === "create_new";
+  const updateExistingId = body.action === "update_existing" ? clean(body.existing_service_id) : null;
   if (!form) return NextResponse.json({ ok: false, error: "Dati form mancanti." }, { status: 400 });
 
   // ── Validazione campi obbligatori ─────────────────────────────────────────
@@ -329,6 +343,122 @@ export async function POST(request: NextRequest) {
       { ok: false, error: "Orario arrivo non valido o mancante. Inserisci un orario reale nel formato HH:MM prima di salvare." },
       { status: 422 }
     );
+  }
+
+  // ── AGGIORNA PRENOTAZIONE ESISTENTE ─────────────────────────────────────
+  // Stessa semantica di app/api/email/inbox-approve/route.ts: il server non si
+  // fida dell'ID del client, riesegue il deduplicatore e aggiorna in-place
+  // (stesso ID, relazioni intatte) i soli campi realmente cambiati.
+  if (updateExistingId) {
+    const probe = buildDuplicateProbe({
+      practiceNumber,
+      customerName,
+      phone: clean(form.cliente_cellulare),
+      arrivalDate,
+      hotelName,
+    });
+    const { certain_service_id, matches } = await lookupBookingDuplicates(admin, tenantId, probe);
+    const allowed = new Set<string>(
+      [certain_service_id, ...matches.map((m) => m.service_id)].filter((x): x is string => Boolean(x))
+    );
+    if (!allowed.has(updateExistingId)) {
+      auditLog({
+        event: "inbox_duplicate_resolution",
+        level: "warn",
+        tenantId,
+        userId,
+        role: auth.membership.role,
+        serviceId: updateExistingId,
+        duplicate: true,
+        outcome: "update_existing_rejected",
+        details: { reason: "service_not_in_matches", channel: "pdf_upload" },
+      });
+      return NextResponse.json(
+        { ok: false, error: "La prenotazione da aggiornare non corrisponde a nessuno dei duplicati rilevati per questo import." },
+        { status: 422 }
+      );
+    }
+
+    const before = await readServiceSnapshot(auth, tenantId, updateExistingId);
+    if (!before) {
+      return NextResponse.json({ ok: false, error: "Prenotazione esistente non trovata." }, { status: 404 });
+    }
+
+    const patch: Record<string, unknown> = {};
+    const setIfChanged = (col: string, value: string | number | null | undefined) => {
+      if (value === null || value === undefined || value === "") return;
+      const current = (before as Record<string, unknown>)[col] ?? null;
+      if (JSON.stringify(current) === JSON.stringify(value)) return;
+      patch[col] = value;
+    };
+    const transportCode = trainArrivalNumber && trainDepartureNumber
+      ? `${trainArrivalNumber} / ${trainDepartureNumber}`
+      : trainArrivalNumber ?? trainDepartureNumber ?? null;
+    setIfChanged("customer_name", customerName);
+    setIfChanged("phone", clean(form.cliente_cellulare));
+    setIfChanged("pax", passengers);
+    setIfChanged("time", outboundTime);
+    setIfChanged("outbound_time", outboundTime);
+    setIfChanged("arrival_time", outboundTime);
+    setIfChanged("return_time", returnTime);
+    setIfChanged("departure_time", returnTime);
+    setIfChanged("arrival_date", arrivalDate);
+    if (before.direction === "arrival") setIfChanged("date", arrivalDate);
+    setIfChanged("departure_date", departureDate);
+    setIfChanged("meeting_point", arrivalPlace);
+    setIfChanged("transport_code", transportCode);
+    setIfChanged("source_total_amount_cents", sourceTotalCents);
+    setIfChanged("source_price_per_pax_cents", sourcePricePerPaxCents);
+
+    if (hotelName) {
+      const newHotelId = await resolveOrCreateHotel(auth.admin, tenantId, hotelName);
+      if (newHotelId && newHotelId !== before.hotel_id) patch.hotel_id = newHotelId;
+    }
+
+    const currentNotes = typeof before.notes === "string" ? before.notes : "";
+    if (practiceNumber) {
+      const nextNotes = /\[practice:[^\]]+\]/.test(currentNotes)
+        ? currentNotes.replace(/\[practice:[^\]]+\]/, `[practice:${practiceNumber}]`)
+        : `${currentNotes}${currentNotes ? " | " : ""}[practice:${practiceNumber}]`;
+      if (nextNotes !== currentNotes) patch.notes = nextNotes;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const { error: updErr } = await admin
+        .from("services")
+        .update(patch)
+        .eq("tenant_id", tenantId)
+        .eq("id", updateExistingId);
+      if (updErr) return NextResponse.json({ ok: false, error: updErr.message }, { status: 500 });
+    }
+
+    const after = await readServiceSnapshot(auth, tenantId, updateExistingId);
+    await logServiceChange({
+      auth,
+      tenantId,
+      serviceId: updateExistingId,
+      rootServiceId: updateExistingId,
+      before,
+      after,
+      fields: Object.keys(patch),
+    });
+    auditLog({
+      event: "inbox_duplicate_resolution",
+      tenantId,
+      userId,
+      role: auth.membership.role,
+      serviceId: updateExistingId,
+      duplicate: true,
+      outcome: "update_existing",
+      details: { existing_service_id: updateExistingId, changed_fields: Object.keys(patch), channel: "pdf_upload" },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      updated: true,
+      draft_service_id: updateExistingId,
+      changed_fields: Object.keys(patch),
+    });
   }
 
   // ── Hash / dedupe ─────────────────────────────────────────────────────────
@@ -557,6 +687,28 @@ export async function POST(request: NextRequest) {
       userId
     ).catch((err) => ({ allocated: false, reason: String(err?.message ?? err) }));
   } else {
+  }
+
+  // Traccia la decisione "Aggiungi come nuova" quando l'operatore ha creato un
+  // nuovo record pur avendo visto il pannello duplicati (force / action:"create_new").
+  // Stesso evento del flusso email (app/api/email/inbox-approve/route.ts), sullo
+  // stesso sistema audit — nessun sistema parallelo. `channel:"pdf_upload"`
+  // allinea i details agli altri rami (update_existing / update_existing_rejected).
+  if (force) {
+    auditLog({
+      event: "inbox_duplicate_resolution",
+      tenantId,
+      userId,
+      role: auth.membership.role,
+      inboundEmailId: inboundEmail.id,
+      serviceId: service.id,
+      duplicate: true,
+      outcome: "create_new",
+      details: {
+        existing_service_id: clean(body.existing_service_id) ?? null,
+        channel: "pdf_upload",
+      },
+    });
   }
 
   return NextResponse.json({

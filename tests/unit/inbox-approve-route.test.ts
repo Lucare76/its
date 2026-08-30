@@ -591,6 +591,167 @@ describe("POST /api/email/inbox-approve — controllo duplicati LIVE (regression
     expect(pj.linked_service_id).toBe(MARIOTTI_EXISTING_ID);
   });
 
+  it("SCARTA DUPLICATO (action:discard_duplicate): nessun INSERT, nessun UPDATE, inbound_email marcata scartata", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const inboundEmailUpdates: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(makeFakeAdmin({ serviceInserts, inboundEmailUpdates }))
+    );
+
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        action: "discard_duplicate",
+        existing_service_id: MARIOTTI_EXISTING_ID,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.discarded).toBe(true);
+    expect(serviceInserts).toHaveLength(0);
+    expect(inboundEmailUpdates).toHaveLength(1);
+    const pj = inboundEmailUpdates[0]!.parsed_json as Record<string, unknown>;
+    expect(pj.duplicate_resolution).toBe("discarded");
+    expect(pj.review_status).toBe("confirmed");
+  });
+
+  it("AGGIORNA ESISTENTE (action:update_existing): update in-place dello stesso ID, nessun INSERT, changed_fields solo campi realmente cambiati e non distruttivi", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const inboundEmailUpdates: Array<Record<string, unknown>> = [];
+    const existingRow = {
+      id: MARIOTTI_EXISTING_ID,
+      direction: "arrival",
+      status: "new",
+      is_draft: false,
+      hotel_id: HOTEL_ID,
+      customer_name: "MARIOTTI SERENA",
+      phone: "3289126048",
+      pax: 2,
+      time: "12:28",
+      outbound_time: "12:28",
+      arrival_time: "12:28",
+      return_time: "13:20",
+      departure_time: "13:20",
+      arrival_date: "2026-09-06",
+      date: "2026-09-06",
+      departure_date: "2026-09-13",
+      meeting_point: "FIRENZE",
+      transport_code: null,
+      notes:
+        "[pdf_import] Booking finale creato da PDF | [practice:26/140508] | " +
+        "[pdf_composite:mariotti-serena-2026-09-06-isola-verde-hotel-thermal-spa]",
+    };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          inboundEmailUpdates,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
+          dupCertainRow: { id: MARIOTTI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
+          dupListRows: [existingRow],
+          existingServicesById: { [MARIOTTI_EXISTING_ID]: existingRow },
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        form: mariottiForm(),
+        action: "update_existing",
+        existing_service_id: MARIOTTI_EXISTING_ID,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.updated).toBe(true);
+    expect(json.service_id).toBe(MARIOTTI_EXISTING_ID);
+    expect(serviceInserts).toHaveLength(0);
+    // orari cambiati + mezzo + swap marker pratica
+    expect(json.changed_fields).toEqual(
+      expect.arrayContaining(["time", "arrival_time", "return_time", "departure_time", "transport_code", "notes"])
+    );
+    // Mai campi distruttivi / non presenti nella nuova comunicazione
+    expect(json.changed_fields).not.toContain("status");
+    expect(json.changed_fields).not.toContain("is_draft");
+    expect(json.changed_fields).not.toContain("customer_name");
+    expect(json.changed_fields).not.toContain("pax");
+    expect(json.changed_fields).not.toContain("hotel_id");
+    // email collegata al service esistente
+    const pj = inboundEmailUpdates.at(-1)!.parsed_json as Record<string, unknown>;
+    expect(pj.linked_service_id).toBe(MARIOTTI_EXISTING_ID);
+    expect(pj.linked_via).toBe("duplicate_update");
+  });
+
+  it("SICUREZZA (action:update_existing): existing_service_id NON fra i duplicati rilevati → 422, nessun INSERT", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const OTHER_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
+          dupCertainRow: null,
+          dupListRows: [],
+          existingServicesById: { [OTHER_ID]: { id: OTHER_ID, direction: "arrival" } },
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        form: mariottiForm(),
+        action: "update_existing",
+        existing_service_id: OTHER_ID,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(422);
+    expect(json.ok).toBe(false);
+    expect(String(json.error)).toMatch(/non corrisponde/i);
+    expect(serviceInserts).toHaveLength(0);
+  });
+
+  it("AGGIUNGI COME NUOVA (action:create_new) su possibile duplicato: crea la nuova prenotazione", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const comitivaRow = {
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      status: "new",
+      is_draft: false,
+      customer_name: "MARIOTTI SERENA",
+      phone: "3289126048",
+      date: "2026-09-06",
+      pax: 2,
+      hotel_id: HOTEL_ID,
+      notes: "",
+      hotels: { name: "Isola Verde Hotel & Thermal Spa" },
+      agencies: null,
+    };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
+          dupCertainRow: null,
+          dupListRows: [comitivaRow],
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: mariottiForm(), action: "create_new" })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(serviceInserts).toHaveLength(1);
+  });
+
   it("COMITIVE: stesso telefono + stessa data, persone diverse → 409 come possibile match (NON certo), operatore può aggiungere", async () => {
     const serviceInserts: Array<Record<string, unknown>> = [];
     // Membro comitiva già a sistema: stesso telefono, altra persona.
