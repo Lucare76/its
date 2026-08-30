@@ -74,6 +74,10 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
         writes.deletes.push({ table, filters: { ...filters } });
         return Promise.resolve({ data: null, error: null }).then(resolve, reject);
       }
+      if (pending) {
+        // insert/update/upsert awaitati senza .single()
+        return Promise.resolve(finish()).then(resolve, reject);
+      }
       return Promise.resolve({ data: rowsForFilters(), error: null }).then(resolve, reject);
     };
     return b;
@@ -293,6 +297,148 @@ describe("GET list / detail", () => {
     expect(res.status).toBe(200);
     expect(json.summary.pax).toMatchObject({ expectedPax: 50, plannedPax: 40, unplannedPax: 10, overbooked: false });
     expect(json.summary.suggestedStatus).toBe("stops_defined");
+  });
+});
+
+describe("POST create_group_service / batch — FASE 2 (service collegato al gruppo)", () => {
+  const GROUP = { id: GROUP_ID, tenant_id: TENANT, kind: "bus_exclusive", service_date: "2026-09-12" };
+  const STOP = { id: STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Tivoli", pickup_point: "Villa d'Este", direction: "arrival" };
+
+  it("F: batch 4 nominativi Tivoli → 4 services, 20 pax, booking_group_id + booking_group_stop_id + bus_city_origin + meeting_point corretti", async () => {
+    const { admin, writes } = makeAdmin({ booking_groups: [GROUP], booking_group_stops: [STOP] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+
+    const res = await POST(post({
+      action: "create_group_services_batch",
+      booking_group_id: GROUP_ID,
+      booking_group_stop_id: STOP_ID,
+      passengers: [
+        { customer_name: "Rossi", pax: 4 },
+        { customer_name: "Verdi", pax: 10 },
+        { customer_name: "Pinco Pallo", pax: 2 },
+        { customer_name: "Gennaro", pax: 4 },
+      ],
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.created_count).toBe(4);
+    expect(json.failed_count).toBe(0);
+
+    const svcInserts = writes.inserts.filter((w) => w.table === "services");
+    expect(svcInserts).toHaveLength(4);
+    const totalPax = svcInserts.reduce((n, w) => n + Number(w.row.pax), 0);
+    expect(totalPax).toBe(20);
+    for (const w of svcInserts) {
+      expect(w.row).toMatchObject({
+        tenant_id: TENANT,
+        booking_group_id: GROUP_ID,
+        booking_group_stop_id: STOP_ID,
+        bus_city_origin: "Tivoli",
+        meeting_point: "Villa d'Este",
+        direction: "arrival",
+        date: "2026-09-12",
+        is_draft: true,
+        status: "needs_review",
+        booking_service_kind: "bus_city_hotel",
+        service_type_code: "bus_line",
+      });
+    }
+    // status_events per ogni service creato
+    expect(writes.inserts.filter((w) => w.table === "status_events")).toHaveLength(4);
+  });
+
+  it("create_group_service singolo → 1 service collegato", async () => {
+    const { admin, writes } = makeAdmin({ booking_groups: [GROUP], booking_group_stops: [STOP] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group_service", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, customer_name: "Rossi", pax: 4,
+    }));
+    expect(res.status).toBe(200);
+    const svc = writes.inserts.filter((w) => w.table === "services");
+    expect(svc).toHaveLength(1);
+    expect(svc[0]!.row).toMatchObject({ customer_name: "Rossi", pax: 4, booking_group_stop_id: STOP_ID });
+  });
+
+  it("gruppo senza service_date → 422 (nessun service creato)", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, service_date: null }],
+      booking_group_stops: [STOP],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group_service", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, customer_name: "Rossi", pax: 4,
+    }));
+    expect(res.status).toBe(422);
+    expect(writes.inserts.filter((w) => w.table === "services")).toHaveLength(0);
+  });
+
+  it("stop non appartenente al gruppo → 404", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: [{ ...STOP, booking_group_id: "99999999-9999-4999-8999-999999999999" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group_service", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, customer_name: "X", pax: 1,
+    }));
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST unlink_group_service — soft unlink (M: nessuna cancellazione)", () => {
+  it("azzera booking_group_id + booking_group_stop_id, NON cancella il service", async () => {
+    const SVC = "77777777-7777-4777-8777-777777777777";
+    const { admin, writes } = makeAdmin({ services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID }] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "unlink_group_service", service_id: SVC }));
+    expect(res.status).toBe(200);
+    expect(writes.deletes.filter((w) => w.table === "services")).toHaveLength(0);
+    const upd = writes.updates.filter((w) => w.table === "services");
+    expect(upd).toHaveLength(1);
+    expect(upd[0]!.payload).toMatchObject({ booking_group_id: null, booking_group_stop_id: null });
+  });
+});
+
+describe("GET detail — stop_summaries per fermata (FASE 2)", () => {
+  it("G: Tivoli 20 previsti con 16 pax in services → remaining 4; Guidonia 20 con 0 → remaining 20", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, name: "Parrocchia Natività", expected_pax: 50, status: "stops_defined" }],
+      booking_group_stops: [
+        { id: "tiv", tenant_id: TENANT, booking_group_id: GROUP_ID, expected_pax: 20, direction: "arrival", sort_order: 0, city: "Tivoli", pickup_point: "Villa d'Este" },
+        { id: "gui", tenant_id: TENANT, booking_group_id: GROUP_ID, expected_pax: 20, direction: "arrival", sort_order: 1, city: "Guidonia", pickup_point: "Fermata Bus" },
+      ],
+      booking_group_bus_reservations: [],
+      services: [
+        { id: "s1", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "tiv", pax: 10 },
+        { id: "s2", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "tiv", pax: 6 },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await GET(get(`?id=${GROUP_ID}`));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    const tiv = json.stop_summaries.find((s: { stopId: string }) => s.stopId === "tiv");
+    const gui = json.stop_summaries.find((s: { stopId: string }) => s.stopId === "gui");
+    expect(tiv).toMatchObject({ expectedPax: 20, servicePax: 16, remainingServicePax: 4, overbooked: false });
+    expect(gui).toMatchObject({ expectedPax: 20, servicePax: 0, remainingServicePax: 20 });
+  });
+});
+
+describe("migration 0264 — services.booking_group_stop_id", () => {
+  const sql = readFileSync(new URL("../../supabase/migrations/0264_services_booking_group_stop_id.sql", import.meta.url), "utf8");
+  it("colonna nullable, FK -> booking_group_stops ON DELETE SET NULL, indice tenant-aware", () => {
+    expect(sql).toMatch(/add column if not exists booking_group_stop_id uuid null/);
+    expect(sql).toMatch(/references public\.booking_group_stops\(id\) on delete set null/);
+    expect(sql).toMatch(/create index if not exists idx_services_tenant_booking_group_stop/);
+    expect(sql).toMatch(/\(tenant_id, booking_group_stop_id\)/);
+  });
+  it("non tocca trip_groups / tenant_bus_allocations / tenant_bus_units / bus_line_ferry_config", () => {
+    expect(sql).not.toMatch(/alter table public\.trip_groups/i);
+    expect(sql).not.toMatch(/alter table public\.tenant_bus_allocations/i);
+    expect(sql).not.toMatch(/alter table public\.tenant_bus_units/i);
+    expect(sql).not.toMatch(/alter table public\.bus_line_ferry_config/i);
   });
 });
 

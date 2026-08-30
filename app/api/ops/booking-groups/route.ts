@@ -18,11 +18,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { auditLog } from "@/lib/server/ops-audit";
 import {
   BOOKING_GROUP_KINDS,
   BOOKING_GROUP_STATUSES,
   BOOKING_GROUP_MAX_PAX,
   computeBookingGroupStatusSummary,
+  summarizeStopPax,
   type BookingGroup,
   type BookingGroupBusReservation,
   type BookingGroupStop,
@@ -120,6 +122,32 @@ const deleteReservationSchema = z.object({
   id: z.string().uuid(),
 });
 
+const passengerRowSchema = z.object({
+  customer_name: z.string().trim().min(1).max(200),
+  pax: paxInt,
+  phone: z.string().trim().max(60).nullable().optional(),
+  hotel_id: z.string().uuid().nullable().optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+});
+
+const createGroupServiceSchema = z.object({
+  action: z.literal("create_group_service"),
+  booking_group_id: z.string().uuid(),
+  booking_group_stop_id: z.string().uuid(),
+}).merge(passengerRowSchema);
+
+const createGroupServicesBatchSchema = z.object({
+  action: z.literal("create_group_services_batch"),
+  booking_group_id: z.string().uuid(),
+  booking_group_stop_id: z.string().uuid(),
+  passengers: z.array(passengerRowSchema).min(1).max(100),
+});
+
+const unlinkGroupServiceSchema = z.object({
+  action: z.literal("unlink_group_service"),
+  service_id: z.string().uuid(),
+});
+
 const bodySchema = z.discriminatedUnion("action", [
   createGroupSchema,
   updateGroupSchema,
@@ -128,6 +156,9 @@ const bodySchema = z.discriminatedUnion("action", [
   deleteStopSchema,
   upsertReservationSchema,
   deleteReservationSchema,
+  createGroupServiceSchema,
+  createGroupServicesBatchSchema,
+  unlinkGroupServiceSchema,
 ]);
 
 // ─── helpers ───────────────────────────────────────────────────────────────
@@ -172,7 +203,7 @@ async function loadGroupDetail(admin: SupabaseClient, tenantId: string, groupId:
       .order("service_date"),
     admin
       .from("services")
-      .select("id, pax, direction, date, status")
+      .select("id, pax, direction, date, status, is_draft, customer_name, booking_group_stop_id, bus_city_origin, meeting_point")
       .eq("tenant_id", tenantId)
       .eq("booking_group_id", groupId),
   ]);
@@ -185,6 +216,11 @@ async function loadGroupDetail(admin: SupabaseClient, tenantId: string, groupId:
     direction: string | null;
     date: string | null;
     status: string | null;
+    is_draft: boolean | null;
+    customer_name: string | null;
+    booking_group_stop_id: string | null;
+    bus_city_origin: string | null;
+    meeting_point: string | null;
   }>;
 
   const summary = computeBookingGroupStatusSummary({
@@ -195,12 +231,21 @@ async function loadGroupDetail(admin: SupabaseClient, tenantId: string, groupId:
     busReservationCount: reservationRows.length,
   });
 
+  const stop_summaries = stopRows.map((stop) =>
+    summarizeStopPax({
+      stopId: stop.id,
+      expectedPax: stop.expected_pax,
+      servicePax: serviceRows.filter((s) => s.booking_group_stop_id === stop.id).map((s) => Number(s.pax ?? 0)),
+    }),
+  );
+
   return {
     group: group as BookingGroup,
     stops: stopRows,
     bus_reservations: reservationRows,
     services: serviceRows,
     summary,
+    stop_summaries,
   };
 }
 
@@ -272,6 +317,7 @@ export async function POST(request: NextRequest) {
     });
     const { data, error } = await admin.from("booking_groups").insert(insert).select("*").single();
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    auditLog({ event: "booking_group_created", tenantId, userId, role: auth.membership.role, outcome: "created", details: { id: (data as BookingGroup).id, name: (data as BookingGroup).name, expected_pax: (data as BookingGroup).expected_pax, kind: (data as BookingGroup).kind } });
     return NextResponse.json({ ok: true, group: data as BookingGroup });
   }
 
@@ -316,6 +362,7 @@ export async function POST(request: NextRequest) {
     const insert = compact({ ...rest, tenant_id: tenantId, sort_order: rest.sort_order ?? 0 });
     const { data, error } = await admin.from("booking_group_stops").insert(insert).select("*").single();
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    auditLog({ event: "booking_group_stop_added", tenantId, userId, role: auth.membership.role, outcome: "created", details: { booking_group_id: body.booking_group_id, city: body.city, expected_pax: body.expected_pax, direction: body.direction } });
     return NextResponse.json({ ok: true, stop: data as BookingGroupStop });
   }
 
@@ -378,6 +425,7 @@ export async function POST(request: NextRequest) {
       .select("*")
       .single();
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    auditLog({ event: "booking_group_bus_reservation_changed", tenantId, userId, role: auth.membership.role, outcome: "upserted", details: { booking_group_id: body.booking_group_id, bus_unit_id: body.bus_unit_id, service_date: body.service_date, reserved_pax: body.reserved_pax, exclusive: body.exclusive ?? false } });
     return NextResponse.json({ ok: true, reservation: data as BookingGroupBusReservation });
   }
 
@@ -390,6 +438,112 @@ export async function POST(request: NextRequest) {
       .eq("id", body.id);
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, deleted: body.id });
+  }
+
+  // ── create_group_service / batch ─────────────────────────────────────
+  if (body.action === "create_group_service" || body.action === "create_group_services_batch") {
+    const { data: group } = await admin
+      .from("booking_groups")
+      .select("id, kind, service_date")
+      .eq("tenant_id", tenantId)
+      .eq("id", body.booking_group_id)
+      .maybeSingle();
+    if (!group?.id) return NextResponse.json({ ok: false, error: "Gruppo non trovato." }, { status: 404 });
+
+    const { data: stop } = await admin
+      .from("booking_group_stops")
+      .select("id, booking_group_id, city, pickup_point, direction")
+      .eq("tenant_id", tenantId)
+      .eq("id", body.booking_group_stop_id)
+      .maybeSingle();
+    if (!stop?.id || stop.booking_group_id !== body.booking_group_id) {
+      return NextResponse.json({ ok: false, error: "Fermata del gruppo non trovata." }, { status: 404 });
+    }
+
+    const serviceDate = (group as { service_date: string | null }).service_date;
+    if (!serviceDate) {
+      return NextResponse.json(
+        { ok: false, error: "Imposta prima la data del gruppo (service_date) per creare i servizi." },
+        { status: 422 },
+      );
+    }
+
+    const g = group as { kind: string };
+    const isBusKind = g.kind === "bus_exclusive" || g.kind === "bus_group";
+    const st = stop as { city: string; pickup_point: string | null; direction: string };
+
+    const buildInsert = (row: { customer_name: string; pax: number; phone?: string | null; hotel_id?: string | null; notes?: string | null }) => ({
+      tenant_id: tenantId,
+      booking_group_id: body.booking_group_id,
+      booking_group_stop_id: body.booking_group_stop_id,
+      is_draft: true,
+      status: "needs_review" as const,
+      date: serviceDate,
+      time: "00:00",
+      direction: st.direction,
+      service_type: "transfer" as const,
+      vessel: `Bus da ${st.city}`,
+      pax: row.pax,
+      customer_name: row.customer_name,
+      phone: (row.phone ?? "").trim(),
+      hotel_id: row.hotel_id ?? null,
+      bus_city_origin: st.city,
+      meeting_point: st.pickup_point,
+      notes: (row.notes ?? "").trim(),
+      ...(isBusKind ? { booking_service_kind: "bus_city_hotel", service_type_code: "bus_line" } : {}),
+    });
+
+    const rows = body.action === "create_group_service"
+      ? [{ customer_name: body.customer_name, pax: body.pax, phone: body.phone, hotel_id: body.hotel_id, notes: body.notes }]
+      : body.passengers;
+
+    // Valida gli hotel_id (una volta, riusando il set)
+    const hotelIds = [...new Set(rows.map((r) => r.hotel_id).filter((v): v is string => Boolean(v)))];
+    for (const hid of hotelIds) {
+      if (!(await tenantRowExists(admin, "hotels", tenantId, hid))) {
+        return NextResponse.json({ ok: false, error: `Hotel ${hid} non valido per il tenant.` }, { status: 400 });
+      }
+    }
+
+    const created: Array<{ id: string; customer_name: string; pax: number }> = [];
+    const failed: Array<{ customer_name: string; error: string }> = [];
+    for (const row of rows) {
+      const { data: svc, error } = await admin.from("services").insert(buildInsert(row)).select("id").single();
+      if (error || !svc?.id) {
+        failed.push({ customer_name: row.customer_name, error: error?.message ?? "insert fallita" });
+        continue;
+      }
+      created.push({ id: svc.id as string, customer_name: row.customer_name, pax: row.pax });
+      await admin.from("status_events").insert({ tenant_id: tenantId, service_id: svc.id, status: "needs_review", by_user_id: userId });
+      auditLog({
+        event: "booking_group_service_created",
+        tenantId, userId, role: auth.membership.role,
+        serviceId: svc.id as string, outcome: "created",
+        details: { booking_group_id: body.booking_group_id, booking_group_stop_id: body.booking_group_stop_id, pax: row.pax, city: st.city },
+      });
+    }
+
+    const status = failed.length === 0 ? 200 : created.length === 0 ? 500 : 207;
+    return NextResponse.json({ ok: failed.length === 0, created, failed, created_count: created.length, failed_count: failed.length }, { status });
+  }
+
+  // ── unlink_group_service ──────────────────────────────────────────────
+  if (body.action === "unlink_group_service") {
+    const { data: svc } = await admin
+      .from("services")
+      .select("id, booking_group_id")
+      .eq("tenant_id", tenantId)
+      .eq("id", body.service_id)
+      .maybeSingle();
+    if (!svc?.id) return NextResponse.json({ ok: false, error: "Servizio non trovato." }, { status: 404 });
+    const { error } = await admin
+      .from("services")
+      .update({ booking_group_id: null, booking_group_stop_id: null })
+      .eq("tenant_id", tenantId)
+      .eq("id", body.service_id);
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    auditLog({ event: "booking_group_service_unlinked", tenantId, userId, role: auth.membership.role, serviceId: body.service_id, outcome: "unlinked" });
+    return NextResponse.json({ ok: true, unlinked: body.service_id });
   }
 
   return NextResponse.json({ ok: false, error: "Azione non riconosciuta." }, { status: 400 });

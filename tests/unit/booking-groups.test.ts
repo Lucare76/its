@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   summarizeBookingGroupPax,
   computeBookingGroupStatusSummary,
+  summarizeStopPax,
   BOOKING_GROUP_KINDS,
   BOOKING_GROUP_STATUSES,
 } from "@/lib/booking-groups";
@@ -84,6 +85,32 @@ describe("computeBookingGroupStatusSummary — suggerimento NON vincolante", () 
   it("cancelled non viene mai promosso", () => {
     const r = computeBookingGroupStatusSummary({ status: "cancelled", expectedPax: 50, stopExpectedPax: [20], servicePax: [10], busReservationCount: 1 });
     expect(r.suggestedStatus).toBe("cancelled");
+  });
+});
+
+describe("summarizeStopPax — pax service per fermata (FASE 2)", () => {
+  it("G: fermata Guidonia 20 previsti, solo 10 creati → 10/20, 10 mancanti", () => {
+    const s = summarizeStopPax({ stopId: "guidonia", expectedPax: 20, servicePax: [5, 5] });
+    expect(s.expectedPax).toBe(20);
+    expect(s.servicePax).toBe(10);
+    expect(s.remainingServicePax).toBe(10);
+    expect(s.serviceCount).toBe(2);
+    expect(s.overbooked).toBe(false);
+  });
+
+  it("Tivoli 20/20 completa (Rossi 4 + Verdi 10 + Pinco 2 + Gennaro 4)", () => {
+    const s = summarizeStopPax({ stopId: "tivoli", expectedPax: 20, servicePax: [4, 10, 2, 4] });
+    expect(s.servicePax).toBe(20);
+    expect(s.remainingServicePax).toBe(0);
+    expect(s.serviceCount).toBe(4);
+    expect(s.overbooked).toBe(false);
+  });
+
+  it("H: over-service — expected 20, services 22 → overbooked=true, non corretto", () => {
+    const s = summarizeStopPax({ stopId: "x", expectedPax: 20, servicePax: [12, 10] });
+    expect(s.servicePax).toBe(22);
+    expect(s.remainingServicePax).toBe(-2);
+    expect(s.overbooked).toBe(true);
   });
 });
 

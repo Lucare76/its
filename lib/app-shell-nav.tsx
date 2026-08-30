@@ -262,6 +262,7 @@ export const GESTIONE_GROUP: NavMainGroup = {
   icon: "G",
   items: [
     { href: "/services", label: "Servizi", icon: "B" },
+    { href: "/booking-groups", label: "Gruppi prenotazione", icon: "👥" },
     { href: "/dispatch", label: "Assegnazioni", icon: "G" },
     { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
     { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },

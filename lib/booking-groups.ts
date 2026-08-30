@@ -186,3 +186,37 @@ export function computeBookingGroupStatusSummary(input: {
 
   return { status: input.status, hasStops, hasServices, hasBusReservation, pax, suggestedStatus };
 }
+
+export interface BookingGroupStopPaxSummary {
+  stopId: string;
+  expectedPax: number;
+  /** Somma dei pax dei services collegati a QUESTA fermata (via booking_group_stop_id). */
+  servicePax: number;
+  /** expectedPax - servicePax (può essere negativo). */
+  remainingServicePax: number;
+  serviceCount: number;
+  /** true se servicePax > expectedPax sulla fermata. */
+  overbooked: boolean;
+}
+
+/**
+ * Quadro pax per singola fermata: previsti vs già trasformati in services.
+ * Fail-safe: NON corregge, segnala solo `overbooked`.
+ */
+export function summarizeStopPax(input: {
+  stopId: string;
+  expectedPax: number;
+  servicePax: number[];
+}): BookingGroupStopPaxSummary {
+  const expectedPax = toNonNegativeInt(input.expectedPax);
+  const list = input.servicePax ?? [];
+  const servicePax = list.reduce((sum, v) => sum + toNonNegativeInt(v), 0);
+  return {
+    stopId: input.stopId,
+    expectedPax,
+    servicePax,
+    remainingServicePax: expectedPax - servicePax,
+    serviceCount: list.length,
+    overbooked: servicePax > expectedPax,
+  };
+}
