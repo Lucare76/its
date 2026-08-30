@@ -16,6 +16,7 @@ import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/serv
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
+import { resolveIncomingFerryMeta } from "@/lib/server/ferry-connection-lookup";
 import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 import { type SupabaseClient } from "@supabase/supabase-js";
@@ -538,12 +539,27 @@ export async function POST(request: NextRequest) {
     const { certain_service_id, matches } = await lookupBookingDuplicates(admin, tenantId, probe);
     if (matches.length > 0) {
       const hydrated = await hydrateDuplicateMatches(admin, tenantId, matches);
+      // Preview canonica (PARTE 3, audit 26/010806): stesso helper server di
+      // GET /api/ops/services/[id], mai un resolver ferry nel client. hotel_id
+      // best-effort dal match trovato (se già a sistema) — se assente resta
+      // comunque valutabile una regola generale, mai una zona indovinata.
+      const incoming_ferry_meta = await resolveIncomingFerryMeta(admin, {
+        bookingServiceKind: bookingKind,
+        arrivalDate,
+        arrivalTime: outboundTime,
+        departureDate,
+        departureTime: returnTime,
+        hotelId: hydrated[0]?.hotel_id ?? null,
+        agencyName: form.agenzia,
+        pax: passengers,
+      });
       return NextResponse.json(
         {
           ok: false,
           duplicate: true,
           certain_service_id: certain_service_id ?? null,
           matches: hydrated,
+          incoming_ferry_meta,
         },
         { status: 409 }
       );

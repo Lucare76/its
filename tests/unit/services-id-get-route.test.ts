@@ -39,12 +39,13 @@ function makeRequest(id: string) {
   };
 }
 
-/** Query builder generico per tabelle read-only (hotels/agencies/ferry_schedules/service_change_logs). */
-function readOnlyListBuilder(data: unknown[] = []) {
+/** Query builder generico per tabelle read-only (hotels/agencies/ferry_schedules/ferry_pickup_rules/service_change_logs). */
+function readOnlyListBuilder(data: unknown[] = [], singleData: unknown = null) {
   const b: Record<string, unknown> = {};
   for (const m of ["select", "eq", "order", "limit", "or", "ilike", "in", "neq"]) b[m] = () => b;
   b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
     Promise.resolve({ data, error: null }).then(resolve, reject);
+  b.maybeSingle = async () => ({ data: singleData, error: null });
   b.insert = () => { throw new Error("unexpected write: insert su tabella read-only durante GET"); };
   b.update = () => { throw new Error("unexpected write: update su tabella read-only durante GET"); };
   b.delete = () => { throw new Error("unexpected write: delete su tabella read-only durante GET"); };
@@ -67,10 +68,16 @@ function servicesBuilder(rowsById: Map<string, Record<string, unknown>>) {
   return b;
 }
 
-function makeAdmin(rowsById: Map<string, Record<string, unknown>>) {
+function makeAdmin(
+  rowsById: Map<string, Record<string, unknown>>,
+  opts: { ferryPickupRules?: unknown[]; ferrySchedules?: unknown[]; hotelZone?: string | null } = {}
+) {
   return {
     from(table: string) {
       if (table === "services") return servicesBuilder(rowsById);
+      if (table === "ferry_pickup_rules") return readOnlyListBuilder(opts.ferryPickupRules ?? []);
+      if (table === "ferry_schedules") return readOnlyListBuilder(opts.ferrySchedules ?? []);
+      if (table === "hotels") return readOnlyListBuilder([], opts.hotelZone !== undefined ? { zone: opts.hotelZone } : null);
       return readOnlyListBuilder([]);
     },
   } as never;
@@ -208,5 +215,125 @@ describe("GET /api/ops/services/[id] — campi strutturati + fallback read-model
     // Se la route avesse tentato una scrittura, i builder mock avrebbero
     // lanciato — arrivare a 200 dimostra che nessuna write path è stata presa.
     expect(res.status).toBe(200);
+  });
+
+  it("1. ferry_meta.return usa la regola canonica MEDMAR (Aleste/treno/13:20), MAI l'ALILAURO coincidente in ferry_schedules", async () => {
+    const row = baseRow({
+      hotel_id: "hotel-1",
+      arrival_time: "12:53",
+      departure_time: "13:20:00",
+      departure_date: "2026-09-06",
+    });
+    const medmarRule = {
+      agency_logic: "aleste", transport_type: "train", direction: "from_ischia", boat_type: "traghetto",
+      hotel_id: null, zone: "forio", transport_from: "13:20", transport_to: "16:30",
+      company: "medmar", departure_time: "10:10", embark_port: "casamicciola", arrival_port: "pozzuoli",
+      arrival_time: null, pickup_time: "08:30", valid_from: null, valid_to: null, days_of_week: null,
+    };
+    const alilauroSchedule = {
+      id: "sched-alilauro-1320", company: "alilauro", departure_port: "ischia_porto", arrival_port: "napoli_beverello",
+      departure_time: "13:20:00", arrival_time: "14:05:00", direction: "ischia_to_mainland",
+      days_of_week: null, valid_from: null, valid_to: null,
+    };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(makeAdmin(new Map([[SERVICE_ID, row]]), {
+        ferryPickupRules: [medmarRule],
+        ferrySchedules: [alilauroSchedule],
+        hotelZone: "forio",
+      }))
+    );
+
+    const { request, params } = makeRequest(SERVICE_ID);
+    const res = await GET(request, { params });
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ferry_meta.return).not.toBeNull();
+    expect(json.ferry_meta.return.company).toBe("MEDMAR");
+    expect(json.ferry_meta.return.company).not.toBe("ALILAURO");
+    expect(json.ferry_meta.return.departure_time).toBe("10:10");
+    // arrival_time/departure_time del trasporto terrestre restano invariati —
+    // l'orario nave (10:10) non li sovrascrive.
+    expect(json.service.arrival_time).toBe("12:53");
+    expect(json.service.departure_time).toBe("13:20:00");
+  });
+
+  it("2. nessuna regola canonica applicabile: ferry_meta.return è null (undetermined), anche con ALILAURO coincidente in ferry_schedules", async () => {
+    const row = baseRow({
+      hotel_id: "hotel-1",
+      arrival_time: "12:53",
+      departure_time: "13:20:00",
+      departure_date: "2026-09-06",
+    });
+    const alilauroSchedule = {
+      id: "sched-alilauro-1320", company: "alilauro", departure_port: "ischia_porto", arrival_port: "napoli_beverello",
+      departure_time: "13:20:00", arrival_time: "14:05:00", direction: "ischia_to_mainland",
+      days_of_week: null, valid_from: null, valid_to: null,
+    };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(makeAdmin(new Map([[SERVICE_ID, row]]), {
+        ferryPickupRules: [], // nessuna regola canonica configurata
+        ferrySchedules: [alilauroSchedule],
+        hotelZone: "forio",
+      }))
+    );
+
+    const { request, params } = makeRequest(SERVICE_ID);
+    const res = await GET(request, { params });
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ferry_meta.return).toBeNull();
+  });
+
+  it("4. stessa riga con arrival_time + departure_time -> outbound e return entrambi risolti, a prescindere da `direction`", async () => {
+    const medmarReturnRule = {
+      agency_logic: "aleste", transport_type: "train", direction: "from_ischia", boat_type: "traghetto",
+      hotel_id: null, zone: "forio", transport_from: "13:20", transport_to: "16:30",
+      company: "medmar", departure_time: "10:10", embark_port: "casamicciola", arrival_port: "pozzuoli",
+      arrival_time: null, pickup_time: "08:30", valid_from: null, valid_to: null, days_of_week: null,
+    };
+    const medmarArrivalRule = {
+      agency_logic: "aleste", transport_type: "train", direction: "to_ischia", boat_type: "traghetto",
+      hotel_id: null, zone: null, transport_from: "12:15", transport_to: "13:30",
+      company: "medmar", departure_time: "14:20", embark_port: null, arrival_port: "ischia_porto",
+      arrival_time: "15:40", pickup_time: null, valid_from: null, valid_to: null, days_of_week: null,
+    };
+    const alilauroSchedule = {
+      id: "sched-alilauro-1320", company: "alilauro", departure_port: "ischia_porto", arrival_port: "napoli_beverello",
+      departure_time: "13:20:00", arrival_time: "14:05:00", direction: "ischia_to_mainland",
+      days_of_week: null, valid_from: null, valid_to: null,
+    };
+
+    // La riga combinata ha `direction: "departure"`: prima, l'outbound veniva
+    // saltato del tutto (gate su arrivalLeg). Ora entrambe le gambe si
+    // risolvono dai campi della riga stessa.
+    const row = baseRow({
+      hotel_id: "hotel-1",
+      direction: "departure",
+      arrival_time: "12:53",
+      arrival_date: "2026-09-01",
+      departure_time: "13:20:00",
+      departure_date: "2026-09-06",
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(makeAdmin(new Map([[SERVICE_ID, row]]), {
+        ferryPickupRules: [medmarReturnRule, medmarArrivalRule],
+        ferrySchedules: [alilauroSchedule],
+        hotelZone: "forio",
+      }))
+    );
+
+    const { request, params } = makeRequest(SERVICE_ID);
+    const res = await GET(request, { params });
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ferry_meta.outbound).not.toBeNull();
+    expect(json.ferry_meta.outbound.company).toBe("MEDMAR");
+    expect(json.ferry_meta.outbound.arrival_port).toBe("Ischia Porto");
+    expect(json.ferry_meta.return).not.toBeNull();
+    expect(json.ferry_meta.return.company).toBe("MEDMAR");
+    expect(json.ferry_meta.return.company).not.toBe("ALILAURO");
   });
 });

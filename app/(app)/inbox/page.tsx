@@ -16,7 +16,7 @@ import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
-type FormState = {
+export type FormState = {
   cliente_nome: string;
   cliente_cellulare: string;
   n_pax: string;
@@ -316,15 +316,27 @@ type IncomingSummary = {
   transport_code: string;
 };
 
+// Gamba nave risolta server-side (resolveOperationalConnection, sola lettura
+// — vedi lib/server/ferry-connection-lookup.ts). Il client non calcola mai
+// compagnia/traghetto-aliscafo/zona: legge solo questo shape già risolto.
+export type FerryLegMeta = {
+  company?: string | null;
+  ferry_type?: "traghetto" | "aliscafo" | null;
+  departure_port?: string | null;
+  arrival_port?: string | null;
+  departure_time?: string | null;
+  arrival_time?: string | null;
+  pickup_time?: string | null;
+} | null;
+
+export type FerryMeta = { outbound?: FerryLegMeta; return?: FerryLegMeta } | null;
+
 // Shape (parziale) di GET /api/ops/services/[id] — solo i campi mostrati
 // nell'accordion "Visualizza pratica già caricata". Endpoint invariato.
 type DupExistingDetail = {
   service?: Record<string, unknown> | null;
   linked_service?: Record<string, unknown> | null;
-  ferry_meta?: {
-    outbound?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null;
-    return?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null;
-  } | null;
+  ferry_meta?: FerryMeta;
   hotels?: Array<{ id: string; name: string }>;
   agencies?: Array<{ id: string; name: string }>;
   change_logs?: Array<{
@@ -355,18 +367,42 @@ function incomingSummaryFromForm(f: FormState): IncomingSummary {
 export type SideBySideRow = { label: string; existing: string; incoming: string; changed: boolean };
 
 /**
+ * Etichetta compatta di una connessione marittima già risolta server-side
+ * (resolveOperationalConnection, via ferry_meta / incoming_ferry_meta — MAI
+ * ricalcolata qui). Combina andata+ritorno quando entrambe presenti. La
+ * signature (stessa stringa) è usata anche per il confronto di uguaglianza.
+ */
+export function ferrySingleLegLabel(leg: FerryLegMeta): string | null {
+  if (!leg || !leg.company) return null;
+  const time = leg.departure_time ? ` · ${fmtTimeShort(leg.departure_time)}` : "";
+  return `${leg.company} · ${leg.departure_port ?? "?"} → ${leg.arrival_port ?? "?"}${time}`;
+}
+
+export function ferryMetaLabel(meta: FerryMeta): string {
+  return [ferrySingleLegLabel(meta?.outbound ?? null), ferrySingleLegLabel(meta?.return ?? null)]
+    .filter((v): v is string => Boolean(v))
+    .join("  |  ");
+}
+
+/**
  * Righe del confronto SIDE-BY-SIDE nella modale duplicati (esistente | nuova).
  * Pure/locale a questa pagina — NON sostituisce computeDuplicateDiff (lib/duplicate-compare.ts),
  * che resta l'unica fonte per "identical"/etichetta azione di scarto (invariato).
  * `existingService` = GET /api/ops/services/[id] .service (endpoint invariato,
  * vedi loadDupDetail); `incomingForm` = FormState della nuova comunicazione.
+ * `existingFerryMeta`/`incomingFerryMeta` arrivano già risolti dal server
+ * (ferry_meta / incoming_ferry_meta) — questa funzione non chiama mai
+ * resolveOperationalConnection né replica regole zona/traghetto-aliscafo/
+ * compagnia: si limita a formattare ed eventualmente segnalare "Da
+ * determinare" quando il booking è treno/volo ma nessuna gamba è risolta.
  */
-function buildDuplicateSideBySideRows(
+export function buildDuplicateSideBySideRows(
   existingService: Record<string, unknown> | null,
   existingHotelName: string | null,
   existingAgencyName: string | null,
   incomingForm: FormState,
-  ferryLine: string | null
+  existingFerryMeta: FerryMeta,
+  incomingFerryMeta: FerryMeta
 ): SideBySideRow[] {
   const s = existingService ?? {};
   const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).trim());
@@ -375,6 +411,19 @@ function buildDuplicateSideBySideRows(
   const existingTrainArrival = str(s.train_arrival_number);
   const existingTrainDeparture = str(s.train_departure_number);
   const existingTransportCode = str(s.transport_code) || [existingTrainArrival, existingTrainDeparture].filter(Boolean).join(" / ");
+
+  // "Applicabile" = booking treno/volo (dominio di resolveOperationalConnection),
+  // NON una regola ferry: stessa categoria già usata per l'etichetta "Tipo
+  // servizio" qui sotto, solo per decidere se un risultato vuoto significa
+  // "Da determinare" (booking nel dominio, connessione non risolta) invece di
+  // "non applicabile" (es. bus/escursione — riga omessa come gli altri campi
+  // non pertinenti).
+  const TRAIN_OR_FLIGHT_KIND = /train|flight|airport|station_hotel/;
+  const existingKindRaw = str(s.service_type_code) || str(s.booking_service_kind);
+  const incomingKindRaw = incomingForm.tipo_servizio ?? "";
+  const ferryApplicable = TRAIN_OR_FLIGHT_KIND.test(existingKindRaw) || TRAIN_OR_FLIGHT_KIND.test(incomingKindRaw);
+  const existingFerryLabel = ferryMetaLabel(existingFerryMeta) || (ferryApplicable ? "Da determinare" : "");
+  const incomingFerryLabel = ferryMetaLabel(incomingFerryMeta) || (ferryApplicable ? "Da determinare" : "");
 
   const rows: Array<[string, string, string]> = [
     ["Cliente", str(s.customer_name), (incomingForm.cliente_nome ?? "").trim()],
@@ -395,7 +444,7 @@ function buildDuplicateSideBySideRows(
     ["Orario treno ritorno", fmtTimeShort(str(s.train_departure_time) || str(s.departure_time) || str(s.return_time)), fmtTimeShort(incomingForm.orario_partenza)],
     ["Punto di carico", str(s.meeting_point) || str(s.vessel), (incomingForm.citta_partenza ?? "").trim()],
     ["Pickup hotel", str(s.pickup_hotel), (incomingForm.pickup_hotel ?? "").trim()],
-    ["Traghetto", ferryLine ?? "", ""],
+    ["Traghetto", existingFerryLabel, incomingFerryLabel],
   ];
 
   const normTime = (v: string) => {
@@ -413,11 +462,16 @@ function buildDuplicateSideBySideRows(
   return rows
     .filter(([, existing, incoming]) => existing || incoming)
     .map(([label, existing, incoming]) => {
+      // "Traghetto": "Da determinare" su un lato non è mai una vera differenza
+      // comunicata (nessun dato reale da confrontare) — evidenziato SOLO
+      // quando entrambi i lati hanno una connessione risolta e diversa.
       const same = timeLabels.has(label)
         ? normTime(existing) === normTime(incoming)
         : textLabels.has(label)
           ? sameDisplayText(existing, incoming)
-          : existing === incoming;
+          : label === "Traghetto" && (existing === "Da determinare" || incoming === "Da determinare")
+            ? true
+            : existing === incoming;
       const changed = incoming !== "" && !same;
       return { label, existing, incoming, changed };
     });
@@ -490,6 +544,10 @@ export default function InboxPage() {
     certainId: string | null;
     incoming: IncomingSummary;
     form: FormState;
+    // Preview canonica della connessione marittima della NUOVA prenotazione,
+    // calcolata server-side (stesso resolveOperationalConnection di
+    // ferry_meta) — mai un resolver ferry lato client.
+    incomingFerryMeta: FerryMeta;
   } | null>(null);
   const [dupBusy, setDupBusy] = useState(false);
   // Accordion "Visualizza pratica già caricata": fetch on-demand di
@@ -810,7 +868,7 @@ export default function InboxPage() {
       });
       const body = (await response.json().catch(() => null)) as {
         ok?: boolean; inbound_email_id?: string; duplicate?: boolean; error?: string;
-        matches?: DupMatch[]; certain_service_id?: string | null;
+        matches?: DupMatch[]; certain_service_id?: string | null; incoming_ferry_meta?: FerryMeta;
       } | null;
       if (response.status === 409 && body?.duplicate) {
         if (Array.isArray(body.matches) && body.matches.length > 0) {
@@ -821,6 +879,7 @@ export default function InboxPage() {
             certainId: body.certain_service_id ?? null,
             incoming: incomingSummaryFromForm(pdfEditForm),
             form: pdfEditForm,
+            incomingFerryMeta: body.incoming_ferry_meta ?? null,
           });
           // Precarica i dati per il confronto side-by-side (stesso GET usato
           // dall'accordion "dettagli completi", solo eseguito prima).
@@ -1039,7 +1098,7 @@ export default function InboxPage() {
       });
       const body = (await res.json().catch(() => ({}))) as {
         ok?: boolean; service_id?: string; error?: string;
-        duplicate?: boolean; matches?: DupMatch[]; certain_service_id?: string | null;
+        duplicate?: boolean; matches?: DupMatch[]; certain_service_id?: string | null; incoming_ferry_meta?: FerryMeta;
       };
       if (res.status === 409 && body.duplicate && Array.isArray(body.matches) && body.matches.length > 0) {
         setDupModal({
@@ -1048,6 +1107,7 @@ export default function InboxPage() {
           certainId: body.certain_service_id ?? null,
           incoming: incomingSummaryFromForm(form),
           form,
+          incomingFerryMeta: body.incoming_ferry_meta ?? null,
         });
         // Precarica i dati per il confronto side-by-side (stesso GET usato
         // dall'accordion "dettagli completi", solo eseguito prima).
@@ -2561,15 +2621,15 @@ export default function InboxPage() {
           ? (detailData?.agencies ?? []).find((a) => a.id === existingServiceForCompare.agency_id)?.name
             ?? single.agency_name ?? single.billing_party_name ?? null
           : null;
-        const ferryLegLabel = (leg?: { company?: string | null; departure_port?: string | null; arrival_port?: string | null } | null) =>
-          leg && (leg.company || leg.departure_port || leg.arrival_port)
-            ? `${leg.company ?? "—"} · ${leg.departure_port ?? "?"} → ${leg.arrival_port ?? "?"}`
-            : null;
-        const ferryLineStr = detailData?.ferry_meta
-          ? [ferryLegLabel(detailData.ferry_meta.outbound), ferryLegLabel(detailData.ferry_meta.return)].filter(Boolean).join("  |  ") || null
-          : null;
         const sideBySideRows = single
-          ? buildDuplicateSideBySideRows(existingServiceForCompare, existingHotelName, existingAgencyName, dupModal.form, ferryLineStr)
+          ? buildDuplicateSideBySideRows(
+              existingServiceForCompare,
+              existingHotelName,
+              existingAgencyName,
+              dupModal.form,
+              detailData?.ferry_meta ?? null,
+              dupModal.incomingFerryMeta ?? null
+            )
           : [];
 
         // Accordion "Visualizza dettagli completi pratica esistente": SOLO i
@@ -2600,10 +2660,10 @@ export default function InboxPage() {
               ) : (
                 <p className="border-t border-slate-200 pt-2 text-slate-400">Nessuna gamba A/R collegata.</p>
               )}
-              {ferryLegLabel(fm?.outbound) || ferryLegLabel(fm?.return) ? (
+              {ferrySingleLegLabel(fm?.outbound ?? null) || ferrySingleLegLabel(fm?.return ?? null) ? (
                 <div className="border-t border-slate-200 pt-2">
-                  {ferryLegLabel(fm?.outbound) ? <p><span className="font-semibold text-slate-500">Traghetto andata:</span> {ferryLegLabel(fm?.outbound)}</p> : null}
-                  {ferryLegLabel(fm?.return) ? <p><span className="font-semibold text-slate-500">Traghetto ritorno:</span> {ferryLegLabel(fm?.return)}</p> : null}
+                  {ferrySingleLegLabel(fm?.outbound ?? null) ? <p><span className="font-semibold text-slate-500">Traghetto andata:</span> {ferrySingleLegLabel(fm?.outbound ?? null)}</p> : null}
+                  {ferrySingleLegLabel(fm?.return ?? null) ? <p><span className="font-semibold text-slate-500">Traghetto ritorno:</span> {ferrySingleLegLabel(fm?.return ?? null)}</p> : null}
                 </div>
               ) : null}
               {typeof s.internal_notes === "string" && s.internal_notes.trim() ? (

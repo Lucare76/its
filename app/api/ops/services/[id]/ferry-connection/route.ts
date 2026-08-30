@@ -31,25 +31,20 @@ import {
   applyManualOverride,
   clearManualOverride,
 } from "@/lib/server/ferry-connection-persistence";
+import { loadFerryConnectionContext, resolveHotelZone } from "@/lib/server/ferry-connection-lookup";
 
 export const runtime = "nodejs";
 
-const ZONE_PATTERN = /forio|lacco|casamicciola|barano|ischia/;
-
+// loadContext locale rimosso: stessa query ora condivisa in
+// lib/server/ferry-connection-lookup.ts (loadFerryConnectionContext +
+// resolveHotelZone), riusata anche da GET /api/ops/services/[id] — nessuna
+// duplicazione tra le due route.
 async function loadContext(admin: any, service: any) {
-  const [rulesRes, schedulesRes, hotelRes] = await Promise.all([
-    admin.from("ferry_pickup_rules").select("*"),
-    admin
-      .from("ferry_schedules")
-      .select("id, company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to"),
-    service.hotel_id ? admin.from("hotels").select("id, name, zone").eq("id", service.hotel_id).maybeSingle() : Promise.resolve({ data: null }),
+  const [ferryContext, hotelZone] = await Promise.all([
+    loadFerryConnectionContext(admin),
+    resolveHotelZone(admin, service.hotel_id ?? null),
   ]);
-  const operationalRules = (rulesRes.data ?? []) as OperationalPickupRule[];
-  const ferrySchedules = (schedulesRes.data ?? []) as FerryScheduleRow[];
-  const hotel = hotelRes.data as { id: string; name: string; zone: string | null } | null;
-  const rawZone = (hotel?.zone ?? "").toLowerCase();
-  const zoneRecognized = ZONE_PATTERN.test(rawZone);
-  return { operationalRules, ferrySchedules, zone: rawZone || null, zoneRecognized };
+  return { ...ferryContext, zone: hotelZone.zone, zoneRecognized: hotelZone.zoneRecognized };
 }
 
 function resolveForService(

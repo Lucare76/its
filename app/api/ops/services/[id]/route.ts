@@ -3,9 +3,7 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { auditLog } from "@/lib/server/ops-audit";
 import { z } from "zod";
 import {
-  ferryPortLabel,
   findArrivalScheduleForService,
-  findDepartureScheduleForService,
   type FerryScheduleRow
 } from "@/lib/ferry-schedule-options";
 import {
@@ -15,6 +13,13 @@ import {
   readServiceSnapshot,
   type ServiceSnapshot,
 } from "@/lib/server/service-audit-log";
+import {
+  loadFerryConnectionContext,
+  resolveHotelZone,
+  resolveFerryLeg,
+  ferryLegForResponse,
+  type FerryConnectionLeg,
+} from "@/lib/server/ferry-connection-lookup";
 
 export const runtime = "nodejs";
 
@@ -56,11 +61,6 @@ const hardDeleteSchema = z.object({
     });
   }
 });
-
-function ferryCompanyLabel(company: string | null | undefined) {
-  if (!company) return null;
-  return company.toUpperCase();
-}
 
 /**
  * Numero pratica dell'AGENZIA (marker `[practice:XXX]` in notes, scritto da
@@ -198,29 +198,65 @@ export async function GET(
     );
     const departureLeg = serviceRes.data.direction === "departure" ? serviceRes.data
       : linkedServiceRes.data?.direction === "departure" ? linkedServiceRes.data : null;
-    const returnFerryDepartureTime = departureLeg?.orario_barca ?? serviceRes.data.orario_barca ?? departureLeg?.departure_time ?? serviceRes.data.departure_time;
-    const returnSchedule = findDepartureScheduleForService(
-      (schedulesRes.data ?? []) as FerryScheduleRow[],
-      departureLeg?.departure_date ?? serviceRes.data.departure_date ?? serviceRes.data.date,
-      returnFerryDepartureTime,
-      departureLeg?.booking_service_kind ?? serviceRes.data.booking_service_kind
-    );
+
+    // Connessione marittima agency-aware (audit pratica 26/010806, MATTIOLI
+    // ALESSANDRA): resolveOperationalConnection è l'UNICA fonte canonica —
+    // mai un match generico su ferry_schedules per sola coincidenza di
+    // orario (era il bug: un aliscafo ALILAURO delle 13:20 scambiato per il
+    // traghetto del ritorno solo perché coincide con l'orario del treno).
+    // MATTIOLI è una riga singola con sia arrival_time che departure_time:
+    // le due gambe si risolvono indipendentemente dalla `direction` della
+    // riga, non solo per quella corrispondente. Gli orari nave restano
+    // separati da arrival_time/departure_time del trasporto terrestre —
+    // questi ultimi non vengono mai toccati qui.
+    const [ferryContext, hotelZone] = await Promise.all([
+      loadFerryConnectionContext(auth.admin),
+      resolveHotelZone(auth.admin, serviceRes.data.hotel_id),
+    ]);
+    // Entrambe le gambe si risolvono indipendentemente dalla `direction` della
+    // riga (MATTIOLI: riga singola con arrival_time + departure_time): l'orario
+    // treno/volo si legge prima dalla gamba dedicata (prenotazione A/R su 2
+    // righe collegate), poi — per la riga combinata — dai campi della riga
+    // stessa. Nessun lato dipende più solo da `direction`, come già fa il ritorno.
+    const outboundTransportTime = arrivalLeg?.arrival_time ?? arrivalLeg?.time
+      ?? serviceRes.data.arrival_time ?? serviceRes.data.outbound_time ?? serviceRes.data.time ?? null;
+    const outboundDate = arrivalLeg?.arrival_date ?? arrivalLeg?.date
+      ?? serviceRes.data.arrival_date ?? serviceRes.data.date ?? null;
+    const outboundLeg: FerryConnectionLeg | null = outboundTransportTime ? resolveFerryLeg({
+      direction: "to_ischia",
+      bookingServiceKind: (arrivalLeg?.booking_service_kind ?? serviceRes.data.booking_service_kind) as string | null,
+      transportTime: outboundTransportTime as string | null,
+      date: outboundDate as string | null,
+      hotelId: serviceRes.data.hotel_id,
+      zone: hotelZone.zone,
+      zoneRecognized: hotelZone.zoneRecognized,
+      agencyName: serviceRes.data.billing_party_name,
+      pax: serviceRes.data.pax,
+      context: ferryContext,
+    }) : null;
+    const returnTransportTime = departureLeg?.departure_time ?? departureLeg?.time
+      ?? serviceRes.data.departure_time ?? serviceRes.data.return_time ?? null;
+    const returnDate = departureLeg?.departure_date ?? serviceRes.data.departure_date ?? serviceRes.data.date ?? null;
+    const returnLeg: FerryConnectionLeg | null = returnTransportTime ? resolveFerryLeg({
+      direction: "from_ischia",
+      bookingServiceKind: departureLeg?.booking_service_kind ?? serviceRes.data.booking_service_kind,
+      transportTime: returnTransportTime,
+      date: returnDate,
+      hotelId: serviceRes.data.hotel_id,
+      zone: hotelZone.zone,
+      zoneRecognized: hotelZone.zoneRecognized,
+      agencyName: serviceRes.data.billing_party_name,
+      pax: serviceRes.data.pax,
+      context: ferryContext,
+    }) : null;
 
     return NextResponse.json({
       ok: true,
       service: { ...correctedService, phone_e164: null, reminder_status: null, sent_at: null },
       linked_service: correctedLinked ?? null,
       ferry_meta: {
-        outbound: arrivalSchedule ? {
-          company: ferryCompanyLabel(arrivalSchedule.company),
-          departure_port: ferryPortLabel(arrivalSchedule.departurePort),
-          arrival_port: ferryPortLabel(arrivalSchedule.arrivalPort),
-        } : null,
-        return: returnSchedule ? {
-          company: ferryCompanyLabel(returnSchedule.company),
-          departure_port: ferryPortLabel(returnSchedule.departurePort),
-          arrival_port: ferryPortLabel(returnSchedule.arrivalPort),
-        } : null,
+        outbound: ferryLegForResponse(outboundLeg),
+        return: ferryLegForResponse(returnLeg),
       },
       hotels: hotelsRes.data ?? [],
       agencies: agenciesRes.data ?? [],
