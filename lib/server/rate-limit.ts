@@ -1,5 +1,5 @@
-import { Redis } from "@upstash/redis";
 import { Ratelimit } from "@upstash/ratelimit";
+import { getSharedRedis } from "@/lib/server/redis";
 
 export interface RateLimitConfig {
   maxAttempts: number;
@@ -37,16 +37,8 @@ function memCheck(key: string, config: RateLimitConfig) {
 }
 
 // ── Upstash Redis ─────────────────────────────────────────────────────────────
-
-let _redis: Redis | null = null;
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL?.trim().replace(/^["']|["']$/g, "");
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim().replace(/^["']|["']$/g, "");
-  if (!url || !token) return null;
-  if (!_redis) _redis = new Redis({ url, token });
-  return _redis;
-}
+// Client condiviso in lib/server/redis.ts (stesse env, stesso parsing) — nessun
+// secondo client dedicato al rate limiter.
 
 function msToWindow(ms: number): `${number} ${"ms" | "s" | "m" | "h" | "d"}` {
   const minutes = Math.round(ms / 60000);
@@ -61,7 +53,7 @@ export async function checkRateLimit(
   identifier: string,
   config: RateLimitConfig,
 ): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
-  const redis = getRedis();
+  const redis = getSharedRedis();
   if (!redis) return memCheck(memKey(type, identifier), config);
 
   const limiter = new Ratelimit({

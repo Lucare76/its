@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { McpContext } from "@/lib/mcp/context";
 
 const mockGetTool = vi.fn();
@@ -32,9 +32,18 @@ function errorResult(code: string, message: string) {
 }
 
 describe("runMarioAssistant", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     mockGetTool.mockReset();
     mockRunTool.mockReset();
+    // FASE A.1 — runMarioAssistant ora legge il session store (async) a inizio
+    // turno: forza il fallback in-memory deterministico nei test.
+    const { __setSharedRedisForTests } = await import("@/lib/server/redis");
+    __setSharedRedisForTests(null);
+  });
+
+  afterEach(async () => {
+    const { __setSharedRedisForTests } = await import("@/lib/server/redis");
+    __setSharedRedisForTests(undefined);
   });
 
   it("16. il client NON può selezionare il tool: l'intent 'operational_brief' chiama SEMPRE its.get_operational_brief, mai un nome arbitrario", async () => {
