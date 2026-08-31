@@ -26,6 +26,7 @@ import {
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
+  findAvailableBusesForGroup,
   type BgActor,
 } from "@/lib/server/booking-groups-service";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -208,6 +209,25 @@ export async function GET(request: NextRequest) {
   }
 
   const q = url.searchParams.get("q");
+  const availableForGroup = url.searchParams.get("available_buses_for_group");
+  if (availableForGroup) {
+    if (!/^[0-9a-fA-F-]{36}$/.test(availableForGroup)) {
+      return NextResponse.json({ ok: false, error: "id gruppo non valido." }, { status: 400 });
+    }
+    const date = url.searchParams.get("service_date");
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return NextResponse.json({ ok: false, error: "service_date non valida." }, { status: 400 });
+    }
+    const requiredCapacity = Number(url.searchParams.get("required_capacity") ?? "0");
+    if (!Number.isInteger(requiredCapacity) || requiredCapacity <= 0 || requiredCapacity > BOOKING_GROUP_MAX_PAX) {
+      return NextResponse.json({ ok: false, error: "required_capacity non valida." }, { status: 400 });
+    }
+    const group = await loadGroupDetail(admin, tenantId, availableForGroup);
+    if (!group) return NextResponse.json({ ok: false, error: "Gruppo non trovato." }, { status: 404 });
+    const buses = await findAvailableBusesForGroup(admin, tenantId, { serviceDate: date, requiredCapacity });
+    return NextResponse.json({ ok: true, buses });
+  }
+
   if (q !== null) {
     const found = await findBookingGroups(admin, tenantId, { query: q });
     return NextResponse.json({ ok: true, ...found });
