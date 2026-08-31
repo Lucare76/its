@@ -30,10 +30,11 @@ import {
 // fallback (§14/§15): questi import intervengono solo per i messaggi che
 // oggi il parser non sa gestire con sicurezza (unsupported/write_unsupported/
 // booking_group_write).
-import { isMarioLlmEnabled, isMarioLlmShadowMode } from "./llm-client";
+import { isMarioLlmEnabled, isMarioLlmShadowMode, getMarioLlmModel } from "./llm-client";
 import { buildMarioToolCatalog } from "./tool-catalog";
 import { routeMarioWithLlm, type MarioRouterStepResult } from "./llm-router";
 import { logMarioLlmRoute } from "./telemetry";
+import { calcMarioLlmCost } from "./pricing";
 import {
   getMarioSession,
   updateMarioSession,
@@ -50,6 +51,21 @@ export type MarioAssistantResult = {
   answer: string;
   actions: Array<{ label: string; href: string }>;
   data?: unknown;
+  /** FASE A.2 — costo/uso LLM di QUESTO turno (somma delle chiamate del loop
+   *  multi-step). Assente = nessuna chiamata LLM (fast-path deterministico o
+   *  conferma): la UI lo tratta come costo 0 / nessuna "chiamata AI". */
+  llm?: MarioTurnLlmUsage;
+};
+
+export type MarioTurnLlmUsage = {
+  llmCalled: boolean;
+  calls: number;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** null = tariffe non configurate: la UI mostra i token, non un costo. */
+  costUsd: number | null;
+  fallbackUsed: boolean;
 };
 
 /** Un tool MCP fallito produce un errore leggibile, mai uno stack trace o il codice McpError grezzo. */
@@ -301,8 +317,10 @@ function getMaxLlmSteps(): number {
   return Math.max(1, Number(process.env.MARIO_LLM_MAX_STEPS ?? 3) || 3);
 }
 
-const YES_RE = /\b(s[iì]|confermo|conferma(to)?|ok(ay)?|va\s*bene|vai|procedi|fai\s*pure)\b/i;
-const NO_RE = /\b(no|annulla|lascia\s*perdere|niente|stop|fermati|non\s*(farlo|procedere|confermo))\b/i;
+// Confine di "parola" robusto agli accenti: `\b` non funziona dopo 'ì' (non è
+// \w), quindi "sì" non veniva riconosciuto. Lookaround su \p{L} (flag u).
+const YES_RE = /(?<!\p{L})(s[iì]|confermo|conferma(?:to)?|ok(?:ay)?|va\s*bene|vai|procedi|fai\s*pure|d['’ ]?accordo|certo)(?!\p{L})/iu;
+const NO_RE = /(?<!\p{L})(no|annulla(?:re)?|lascia\s*(?:perdere|stare)|niente|stop|fermati|non\s*(?:farlo|procedere|confermo))(?!\p{L})/iu;
 // Una risposta di conferma e' sempre breve: oltre questa soglia trattiamo il
 // messaggio come una richiesta nuova (evita falsi positivi su frasi lunghe
 // che contengono per caso "no"/"ok" come parola).
@@ -517,12 +535,55 @@ function hasSessionContext(ctx: MarioSessionContext): boolean {
   );
 }
 
+/** Accumulatore uso LLM del turno (§7/§16): mutato in un SOLO punto (dopo
+ *  ogni routeMarioWithLlm), letto in un SOLO punto (runMarioAssistant, dove
+ *  attacca `.llm` alla risposta). Le chiamate del loop multi-step si sommano. */
+type TurnLlmAcc = { calls: number; inputTokens: number; outputTokens: number; fallbackUsed: boolean };
+function newTurnLlmAcc(): TurnLlmAcc {
+  return { calls: 0, inputTokens: 0, outputTokens: 0, fallbackUsed: false };
+}
+const ATTEMPTED_FAILURE_REASONS = new Set(["timeout", "network_error", "http_error", "empty_response", "unknown_error"]);
+function accumulateTurnLlm(acc: TurnLlmAcc, routed: Awaited<ReturnType<typeof routeMarioWithLlm>>): void {
+  const attemptedButFailed = routed.usage == null && routed.fallbackReason != null && ATTEMPTED_FAILURE_REASONS.has(routed.fallbackReason);
+  if (routed.usage != null || attemptedButFailed) acc.calls += 1;
+  acc.inputTokens += routed.usage?.inputTokens ?? 0;
+  acc.outputTokens += routed.usage?.outputTokens ?? 0;
+  if (routed.fallbackUsed) acc.fallbackUsed = true;
+}
+function finalizeTurnLlm(acc: TurnLlmAcc): MarioTurnLlmUsage {
+  const model = getMarioLlmModel();
+  const cost = calcMarioLlmCost(model, acc.inputTokens, acc.outputTokens);
+  return {
+    llmCalled: true,
+    calls: acc.calls,
+    model,
+    inputTokens: acc.inputTokens,
+    outputTokens: acc.outputTokens,
+    costUsd: cost ? cost.totalCostUsd : null,
+    fallbackUsed: acc.fallbackUsed,
+  };
+}
+
+/** Esegue un turno che passa dal router LLM e attacca alla risposta il
+ *  riepilogo costi del turno (§14). Se nessuna chiamata LLM è avvenuta
+ *  (es. no_api_key), `.llm` resta assente → la UI lo tratta come costo 0. */
+async function runLlmTurn(context: McpContext, message: string, detected: MarioIntentResult): Promise<MarioAssistantResult> {
+  const acc = newTurnLlmAcc();
+  const result = await runMarioLlmFlow(context, message, detected, acc);
+  return acc.calls > 0 ? { ...result, llm: finalizeTurnLlm(acc) } : result;
+}
+
 /** Ciclo limitato (§8/§16, MAX_LLM_STEPS passi): il router puo' incatenare
  *  SOLO tool READ senza token (es. find_booking_group -> preview_*). Appena
  *  un risultato porta un confirmationToken, il ciclo si ferma e si passa alla
  *  conferma esplicita — mai due scritture non confermate nello stesso turno
  *  (§20). */
-async function runMarioLlmFlow(context: McpContext, message: string, detected: MarioIntentResult): Promise<MarioAssistantResult> {
+async function runMarioLlmFlow(
+  context: McpContext,
+  message: string,
+  detected: MarioIntentResult,
+  turnLlm: TurnLlmAcc,
+): Promise<MarioAssistantResult> {
   const catalog = buildMarioToolCatalog(context);
   const priorSteps: MarioRouterStepResult[] = [];
   const maxSteps = getMaxLlmSteps();
@@ -539,10 +600,12 @@ async function runMarioLlmFlow(context: McpContext, message: string, detected: M
       toolCatalog: catalog,
       priorSteps,
     });
+    accumulateTurnLlm(turnLlm, routed);
 
     logMarioLlmRoute({
       tenantId: context.tenantId,
       userId: context.userId,
+      requestId: context.requestId,
       role: context.role,
       step,
       decision: routed.decision,
@@ -650,6 +713,7 @@ async function runMarioLlmShadow(context: McpContext, message: string): Promise<
     logMarioLlmRoute({
       tenantId: context.tenantId,
       userId: context.userId,
+      requestId: context.requestId,
       role: context.role,
       step: 0,
       decision: routed.decision,
@@ -708,7 +772,7 @@ export async function runMarioAssistant(
   const shadowMode = isMarioLlmShadowMode();
 
   if (detected.intent === "unsupported" || detected.intent === "write_unsupported") {
-    if (llmEnabled) return runMarioLlmFlow(context, message, detected);
+    if (llmEnabled) return runLlmTurn(context, message, detected);
     if (shadowMode) await runMarioLlmShadow(context, message);
     return detected.intent === "unsupported"
       ? { intent: "unsupported", answer: UNSUPPORTED_ANSWER, actions: [] }
@@ -719,7 +783,7 @@ export async function runMarioAssistant(
   // flusso anteprima → conferma (stessa pipeline runTool, nessun secondo motore).
   if (detected.intent.startsWith("booking_group_")) {
     if (detected.intent === "booking_group_write") {
-      if (llmEnabled) return runMarioLlmFlow(context, message, detected);
+      if (llmEnabled) return runLlmTurn(context, message, detected);
       if (shadowMode) await runMarioLlmShadow(context, message);
     }
     return runBookingGroupIntent(context, detected as Extract<MarioIntentResult, { intent: `booking_group_${string}` }>);

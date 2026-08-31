@@ -40,7 +40,7 @@ function normalize(text: string): string {
 // finisca qui invece che in write_unsupported).
 const BOOKING_GROUP_CTX_RE = /\bgrupp[oi]\b|prenotazion/;
 const BOOKING_GROUP_WRITE_RE =
-  /\b(crea(re|mi)?|aggiung(i|ere)|aggiorna(re)?|riserv(a|are)|prenot(a|are)|impost(a|are)|operativizz\w*|rendi(lo)? operativ\w*|collega(re)?|metti)\b/;
+  /\b(crea(re|mi)?|fa(mmi|i)(?!\s+veder)|aggiung(i|ere)|aggiorna(re)?|riserv(a|are)|prenot(a|are)|impost(a|are)|operativizz\w*|rendi(lo)? operativ\w*|collega(re)?|metti)\b/;
 const BOOKING_GROUP_INSPECT_RE =
   /\b(pront[oi]|cosa manca|che cosa manca|manca(no)? qualcosa|operativizzabil\w*|verifica (i )?servizi|avanzament\w*|completezza|è completo|quanti pax mancano)\b/;
 const BOOKING_GROUP_DETAIL_RE =

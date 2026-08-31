@@ -40,6 +40,8 @@ export const ENV_REQUIREMENTS: EnvRequirement[] = [
   { key: "WHATSAPP_ALLOW_TEXT_FALLBACK", requiredForBeta: false, category: "whatsapp", notes: "Optional tuning." },
   { key: "UPSTASH_REDIS_REST_URL", requiredForBeta: false, category: "ops", notes: "Upstash Redis per rate limiting distribuito. Senza, il rate limit è in-memory (non efficace su Vercel multi-istanza)." },
   { key: "UPSTASH_REDIS_REST_TOKEN", requiredForBeta: false, category: "ops", notes: "Token Upstash Redis (vedi UPSTASH_REDIS_REST_URL)." },
+  { key: "MARIO_LLM_INPUT_USD_PER_MILLION", requiredForBeta: false, category: "ops", notes: "Tariffa input LLM (USD per 1M token) per il cost tracking di Mario. Se assente (con MARIO_LLM_OUTPUT_USD_PER_MILLION) si usa la mappa AI_PRICING; se il modello non è mappato il costo resta null (i token sono comunque registrati). Mai NEXT_PUBLIC_*." },
+  { key: "MARIO_LLM_OUTPUT_USD_PER_MILLION", requiredForBeta: false, category: "ops", notes: "Tariffa output LLM (USD per 1M token) per il cost tracking di Mario. Vedi MARIO_LLM_INPUT_USD_PER_MILLION." },
   { key: "MEDMAR_API_BASE_URL", requiredForBeta: false, category: "medmar", notes: "Base URL API Medmar (es. https://biglietteria.medmargroup.it), usata sia per le chiamate read-only sia per il login automatico (Fase 2A)." },
   { key: "MEDMAR_EMAIL", requiredForBeta: false, category: "medmar", notes: "Credenziale login automatico Medmar (Fase 2A). Richiede anche MEDMAR_PASSWORD: se manca uno dei due, il preflight fallisce a runtime con medmar_auth_not_configured, mai a build time." },
   { key: "MEDMAR_PASSWORD", requiredForBeta: false, category: "medmar", notes: "Vedi MEDMAR_EMAIL. Server-side only, mai NEXT_PUBLIC_*." },

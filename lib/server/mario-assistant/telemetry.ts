@@ -12,10 +12,13 @@ import { getMarioLlmModel } from "./llm-client";
 import type { MarioRouterDecision, MarioLlmFallbackReason } from "./llm-router";
 import type { LlmUsage } from "./llm-client";
 import type { MarioSessionStoreKind } from "./session-context";
+import { persistMarioLlmUsage } from "./usage-log";
 
 export type MarioLlmRouteLogInput = {
   tenantId: string;
   userId: string;
+  /** McpContext.requestId — uuid non sensibile, per correlare le righe usage. */
+  requestId?: string;
   role: string;
   step: number;
   decision: MarioRouterDecision;
@@ -64,4 +67,38 @@ export function logMarioLlmRoute(input: MarioLlmRouteLogInput): void {
     schema_issue_codes: input.schemaIssueCodes ?? null,
   };
   console.info(JSON.stringify(line));
+
+  // FASE A.2 — cost tracking: una riga mario_llm_usage per chiamata LLM REALE.
+  // Shadow mode escluso (diagnostico, non guida risposte → non è una "chiamata
+  // AI" per l'utente). Fire-and-forget: mai await, mai throw (§18/§19).
+  if (input.shadow) return;
+  const hasUsage = input.usage != null;
+  const attemptedButFailed =
+    !hasUsage && input.fallbackReason != null && ATTEMPTED_FAILURE_REASONS.has(input.fallbackReason);
+  if (!hasUsage && !attemptedButFailed) return; // es. no_api_key: nessuna chiamata avvenuta
+
+  void persistMarioLlmUsage({
+    tenantId: input.tenantId,
+    userId: input.userId,
+    requestId: input.requestId ?? null,
+    model: getMarioLlmModel(),
+    action: input.decision.action,
+    fallbackUsed: input.fallbackUsed,
+    failed: attemptedButFailed,
+    inputTokens: input.usage?.inputTokens ?? 0,
+    outputTokens: input.usage?.outputTokens ?? 0,
+    latencyMs: input.latencyMs,
+  });
 }
+
+// Reason di fallback in cui il provider È stato contattato ma non ha
+// restituito usage affidabile (§16): riga `failed` con 0 token, costo null.
+// `no_api_key` / `invalid_json` / `invalid_schema` NON sono qui: le prime non
+// contattano il provider, le seconde hanno `usage` valido (token consumati).
+const ATTEMPTED_FAILURE_REASONS: ReadonlySet<MarioLlmFallbackReason> = new Set([
+  "timeout",
+  "network_error",
+  "http_error",
+  "empty_response",
+  "unknown_error",
+]);

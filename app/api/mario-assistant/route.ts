@@ -70,5 +70,9 @@ export async function POST(request: NextRequest) {
     answer: result.answer,
     actions: result.actions,
     data: result.data ?? null,
+    // FASE A.2 — uso/costo LLM di QUESTO turno (assente = fast-path
+    // deterministico o conferma: nessuna chiamata AI, costo 0). La persistenza
+    // aggregata (oggi/mese) è su mario_llm_usage via /usage-summary.
+    llm: result.llm ?? null,
   });
 }
