@@ -23,3 +23,6 @@ tsconfig.tsbuildinfo
 .chrome-codex-profile/
 artifacts/mockups/
 artifacts/screenshots/
+.env
+.env.*
+!.env.example

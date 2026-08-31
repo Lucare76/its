@@ -1,7 +1,17 @@
+.chrome-codex-profile
+.git
+.next
+node_modules
+artifacts
+test-results
+playwright-report
+
 /server/
 /client/
 /server/backups/
 /server/logs/
 /docs/demo/
+
 .env
 .env.*
+!.env.example
