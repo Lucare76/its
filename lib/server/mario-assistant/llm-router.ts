@@ -58,7 +58,10 @@ const routerDecisionSchema = z.discriminatedUnion("action", [
     // da zero. Nessun testo libero, nessun token.
     operation: z
       .object({
-        type: z.literal("create_booking_group"),
+        // FASE A.4 — chiave dell'operazione conversazionale. Il router
+        // classifica (es. "create_bus_group" vs "create_generic_booking_group");
+        // la policy deterministica valida comunque required/tool.
+        type: z.string().min(1).max(60),
         collected: z
           .object({
             name: z.string().max(200).optional(),
@@ -141,7 +144,9 @@ const SYSTEM_PROMPT = `Sei il router operativo dell'Assistente Mario (gestionale
 
 REGOLE FERREE:
 - Non inventare MAI dati mancanti (nomi, pax, città, orari, ID). Se manca un parametro OBBLIGATORIO per chiamare un tool, usa action "clarification" e chiedi SOLO l'informazione mancante.
-- I campi OPZIONALI di un tool (marcati con "?" nello schema, es. data servizio, tipo, fermate, contatti) NON vanno chiesti se l'utente non li ha indicati: procedi comunque con il tool "preview_" usando solo i campi forniti. La preview mostra un riepilogo e l'utente conferma; potrà aggiungere il resto in un passo successivo. Chiedi "clarification" solo se manca un campo OBBLIGATORIO (senza "?").
+- I campi OPZIONALI di un tool (marcati con "?" nello schema, es. tipo, fermate, contatti) NON vanno chiesti se l'utente non li ha indicati: procedi comunque con il tool "preview_" usando solo i campi forniti. Chiedi "clarification" solo se manca un campo OBBLIGATORIO.
+- REGOLA OPERATIVA (booking group): se l'utente parla di un BUS / PULLMAN / AUTOBUS / bus esclusivo / mezzo dedicato al gruppo, è un servizio operativo e la DATA del servizio è OBBLIGATORIA prima della preview: se manca, usa "clarification" e chiedi SOLO la data. Un gruppo puramente commerciale ("fammi un gruppo X da N persone", senza bus) NON richiede la data.
+- Classifica l'operazione nel campo "operation.type": "create_generic_booking_group" | "create_bus_group" | "create_exclusive_bus_group" | "add_booking_group_stop" | "reserve_bus_for_group" | "update_group_ferry" | "operationalize_group" (usa la più aderente).
 - clarification_question: UNA domanda sintetica e diretta (1-2 frasi, niente elenchi lunghi, niente markdown).
 - Se il CONTESTO contiene "OPERAZIONE IN CORSO", il nuovo MESSAGGIO UTENTE va interpretato PRIMA come completamento o correzione di quell'operazione. NON richiedere campi già presenti in "collected". Una correzione esplicita ("anzi 55", "no, 45", "nome X") sovrascrive il valore in "collected". Quando "collected" ha tutti i campi OBBLIGATORI del tool "preview_" corrispondente, chiamalo unendo collected + eventuali nuovi/corretti dal messaggio (esclusi i campi non previsti dallo schema, es. "origin"). Se una clarification resta necessaria, valorizza il campo "operation" con { type, collected (tutto ciò che sai finora), missing (i soli campi obbligatori ancora assenti) }.
 - Usa SOLO i tool elencati nel catalogo fornito. Non nominare mai un tool che non è nel catalogo.

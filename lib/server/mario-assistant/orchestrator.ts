@@ -38,6 +38,16 @@ import { calcMarioLlmCost } from "./pricing";
 import { parseMarioSlotDate } from "./date-time";
 import { BOOKING_GROUP_KINDS } from "@/lib/booking-groups";
 import {
+  MARIO_OPERATION_POLICIES,
+  classifyMarioOperation,
+  evaluateMarioOperationPolicy,
+  buildMcpArguments,
+  questionForMissingField,
+  mentionsPhysicalBus,
+  BLOCKING_PREVIEW_WARNINGS,
+  type MarioOperationKey,
+} from "./operation-policy";
+import {
   getMarioSession,
   updateMarioSession,
   clearPendingConfirmation,
@@ -603,69 +613,95 @@ function pruneUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== "")) as Partial<T>;
 }
 
-/** Estrae i soli slot supportati da its.preview_create_booking_group dagli
- *  arguments del router (mai `origin`, che non è un campo del tool — §6). */
+/** Estrae gli slot del gruppo dagli arguments del router. `origin`/`pickupPoint`
+ *  vengono conservati NEL DRAFT (§6/§33) ma il tool argument builder li scarta
+ *  perché non sono campi di its.preview_create_booking_group. */
 function slotsFromCreateArgs(args: Record<string, unknown>): MarioDraftSlots {
   const out: MarioDraftSlots = {};
   if (typeof args.name === "string" && args.name.trim()) out.name = args.name.trim();
   if (typeof args.expectedPax === "number" && Number.isFinite(args.expectedPax)) out.expectedPax = args.expectedPax;
   if (typeof args.serviceDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.serviceDate)) out.serviceDate = args.serviceDate;
   if (typeof args.kind === "string" && (BOOKING_GROUP_KINDS as readonly string[]).includes(args.kind)) out.kind = args.kind;
+  if (typeof args.origin === "string" && args.origin.trim()) out.origin = args.origin.trim();
+  if (typeof args.pickupPoint === "string" && args.pickupPoint.trim()) out.pickupPoint = args.pickupPoint.trim();
+  for (const f of ["agency", "hotel", "contact", "notes", "contactName", "contactPhone"]) {
+    if (typeof args[f] === "string" && (args[f] as string).trim()) (out as Record<string, unknown>)[f] = (args[f] as string).trim();
+  }
   return out;
 }
 
-/** §17 — fast-path deterministico: se al draft manca SOLO una data e il
- *  messaggio la contiene in modo affidabile, la riempie senza chiamare l'LLM.
- *  Ritorna gli slot completi pronti per la preview, o null se non applicabile. */
-function tryDeterministicDraftFill(draft: MarioDraftOperation, message: string, now: Date): MarioDraftSlots | null {
-  if (draft.type !== "create_booking_group") return null;
-  if (!draft.collected.name || typeof draft.collected.expectedPax !== "number") return null;
-  const outstanding = draft.missing.filter((m) => !draft.collected[m as keyof MarioDraftSlots]);
-  if (outstanding.length !== 1 || outstanding[0] !== "serviceDate") return null;
-  const date = parseMarioSlotDate(message, now);
-  if (!date) return null;
-  return { ...draft.collected, serviceDate: date };
+/** La chiave operazione del draft, ricondotta a MarioOperationKey via policy. */
+function draftOperationKey(draft: MarioDraftOperation): MarioOperationKey {
+  return classifyMarioOperation({ rawType: draft.type, kind: draft.collected.kind });
 }
 
-/** Esegue direttamente its.preview_create_booking_group dagli slot del draft,
- *  SENZA chiamata LLM (§17). Stessa pipeline runTool / stesso pending
- *  confirmation / stesso testo "Confermi?" del flusso normale. */
-async function runDraftDirectPreview(context: McpContext, slots: MarioDraftSlots): Promise<MarioAssistantResult> {
-  const tool = getTool("its.preview_create_booking_group");
-  if (!tool) return { intent: "mario_llm_tool_error", answer: "Non riesco a preparare la creazione adesso. Riprova.", actions: [] };
+/** §17/§28/§41 — fast-path deterministico: se il messaggio contiene una data
+ *  affidabile e ciò basta (secondo la POLICY) a rendere il draft pronto per la
+ *  preview, la riempie SENZA chiamare l'LLM. Ritorna { operation, slots } o
+ *  null se non applicabile. Solo per le operazioni di creazione gruppo (le
+ *  altre hanno slot che richiedono NLU). */
+function tryDeterministicDraftFill(
+  draft: MarioDraftOperation,
+  message: string,
+  now: Date,
+): { operation: MarioOperationKey; slots: MarioDraftSlots } | null {
+  const operation = draftOperationKey(draft);
+  if (operation !== "create_generic_booking_group" && operation !== "create_bus_group" && operation !== "create_exclusive_bus_group") {
+    return null;
+  }
+  // Il fast-path scatta SOLO se il messaggio porta una DATA affidabile: è
+  // l'unico slot risolvibile senza NLU. Un messaggio senza data ("anzi 45",
+  // "La Marra", un nome) va al router — è una correzione, non un
+  // completamento deterministico.
+  const date = parseMarioSlotDate(message, now);
+  if (!date) return null;
+  const candidate: MarioDraftSlots = { ...draft.collected, serviceDate: date };
+  const evalR = evaluateMarioOperationPolicy({ operation, collected: candidate });
+  return evalR.readyForPreview ? { operation, slots: candidate } : null;
+}
 
-  const args: Record<string, unknown> = { name: slots.name, expectedPax: slots.expectedPax };
-  if (slots.serviceDate) args.serviceDate = slots.serviceDate;
-  if (slots.kind && (BOOKING_GROUP_KINDS as readonly string[]).includes(slots.kind)) args.kind = slots.kind;
-  // §6 — `origin` NON è un campo del tool: resta solo nel draft.
+/** Esegue direttamente il tool "preview_" dell'operazione dagli slot del draft,
+ *  SENZA chiamata LLM (§17/§28). `buildMcpArguments` scarta i campi non
+ *  supportati dallo schema (mai `origin`, §6). Stessa pipeline runTool / stesso
+ *  pending confirmation / stesso testo "Confermi?" del flusso normale. */
+async function runDraftDirectPreview(
+  context: McpContext,
+  operation: MarioOperationKey,
+  slots: MarioDraftSlots,
+): Promise<MarioAssistantResult> {
+  const previewToolName = MARIO_OPERATION_POLICIES[operation].mcpTool;
+  const tool = getTool(previewToolName);
+  if (!tool) return { intent: "mario_llm_tool_error", answer: "Non riesco a preparare l'operazione adesso. Riprova.", actions: [] };
 
+  const args = buildMcpArguments(operation, slots as Record<string, unknown>);
   const raw = await runTool(context, tool, args);
   if (!isMcpToolContentResult(raw) || raw.isError) {
-    return { intent: "mario_llm_tool_error", answer: "Non riesco a completare la creazione. Riprova o specifica meglio.", actions: [] };
+    return { intent: "mario_llm_tool_error", answer: "Non riesco a completare l'operazione. Riprova o specifica meglio.", actions: [] };
   }
   let output: Record<string, unknown> = {};
   try {
     output = raw.content[0]?.text ? (JSON.parse(raw.content[0]!.text!) as Record<string, unknown>) : {};
   } catch {
-    return { intent: "mario_llm_tool_error", answer: "Non riesco a completare la creazione. Riprova o specifica meglio.", actions: [] };
+    return { intent: "mario_llm_tool_error", answer: "Non riesco a completare l'operazione. Riprova o specifica meglio.", actions: [] };
   }
   const token = typeof output.confirmationToken === "string" ? output.confirmationToken : null;
-  if (!token) return { intent: "mario_llm_tool_error", answer: "Non riesco a completare la creazione. Riprova o specifica meglio.", actions: [] };
+  if (!token) return { intent: "mario_llm_tool_error", answer: "Non riesco a completare l'operazione. Riprova o specifica meglio.", actions: [] };
 
+  const executeTool = PREVIEW_TO_EXECUTE_TOOL[previewToolName];
   await updateMarioSession(context.tenantId, context.userId, {
-    ...deriveContextFromToolOutput("its.preview_create_booking_group", output),
-    draftOperation: { type: "create_booking_group", collected: slots, missing: [], updatedAt: Date.now() },
+    ...deriveContextFromToolOutput(previewToolName, output),
+    draftOperation: { type: operation, collected: slots, missing: [], updatedAt: Date.now() },
     pendingConfirmation: {
-      toolName: "its.create_booking_group",
+      toolName: executeTool ?? "its.create_booking_group",
       confirmationToken: token,
-      op: "its.preview_create_booking_group",
+      op: previewToolName,
       createdAt: Date.now(),
     },
   });
   return {
     intent: "mario_llm_pending_confirmation",
-    answer: buildConfirmationPrompt("its.preview_create_booking_group", output),
-    actions: bgActionsIfRelevant("its.preview_create_booking_group"),
+    answer: buildConfirmationPrompt(previewToolName, output),
+    actions: bgActionsIfRelevant(previewToolName),
   };
 }
 
@@ -673,8 +709,70 @@ async function runDraftDirectPreview(context: McpContext, slots: MarioDraftSlots
  *  passa al router con il draft nel contesto. */
 async function runDraftTurn(context: McpContext, message: string, draft: MarioDraftOperation, now: Date): Promise<MarioAssistantResult> {
   const fast = tryDeterministicDraftFill(draft, message, now);
-  if (fast) return runDraftDirectPreview(context, fast); // nessuna chiamata LLM
+  if (fast) return runDraftDirectPreview(context, fast.operation, fast.slots); // nessuna chiamata LLM
   return runLlmTurn(context, message, { intent: "booking_group_write", params: {} });
+}
+
+type CreateGateResult =
+  | { proceed: false; result: MarioAssistantResult }
+  | { proceed: true; operation: MarioOperationKey; mergedSlots: MarioDraftSlots; toolArgs: Record<string, unknown> }
+  | { proceed: "passthrough" };
+
+/**
+ * FASE A.4 §5/§27/§28/§30 — gate deterministico prima di eseguire la preview di
+ * CREAZIONE gruppo. Classifica l'operazione (bus / bus esclusivo / generico) e
+ * verifica i campi OPERATIVI via policy. Se non pronta → salva draft con
+ * `missing` autoritativo + clarification mirata. Se pronta → ritorna gli
+ * arguments RICOSTRUITI dal builder deterministico (mai `origin` o campi
+ * illegali) e gli slot da salvare nel draft. Nessuna seconda chiamata LLM.
+ */
+async function applyCreatePreviewPolicyGate(
+  context: McpContext,
+  toolName: string,
+  args: Record<string, unknown>,
+  message: string,
+): Promise<CreateGateResult> {
+  if (toolName !== "its.preview_create_booking_group") return { proceed: "passthrough" };
+
+  // §11/§37 — ambiguità "bus": se il messaggio indica un MEZZO FISICO
+  // (posti/targa/capacità), NON creare automaticamente un gruppo da quella
+  // capienza: chiedi cosa vuole davvero.
+  if (mentionsPhysicalBus(message)) {
+    return {
+      proceed: false,
+      result: {
+        intent: "mario_llm_clarification",
+        answer: "Vuoi creare il gruppo bus (prenotazione commerciale) o riservare un mezzo fisico per il gruppo?",
+        actions: [],
+      },
+    };
+  }
+
+  const existingDraft = await readMarioDraftOperation(context.tenantId, context.userId);
+  const merged: MarioDraftSlots = { ...(existingDraft?.collected ?? {}), ...slotsFromCreateArgs(args) };
+  const operation = classifyMarioOperation({ toolName, kind: merged.kind, message });
+  const evalR = evaluateMarioOperationPolicy({ operation, collected: merged as Record<string, unknown> });
+
+  if (!evalR.readyForPreview) {
+    await setMarioDraftOperation(context.tenantId, context.userId, {
+      type: operation,
+      collected: merged,
+      missing: evalR.missingRequired,
+    });
+    return { proceed: false, result: { intent: "mario_llm_clarification", answer: questionForMissingField(evalR.nextQuestionField), actions: [] } };
+  }
+
+  return { proceed: true, operation, mergedSlots: merged, toolArgs: buildMcpArguments(operation, merged as Record<string, unknown>) };
+}
+
+/** §36 — testo per il warning pax fermate > totale gruppo. */
+function paxOverbookedQuestion(toolName: string, output: Record<string, unknown>): string {
+  if (toolName === "its.preview_add_booking_group_stop") {
+    const after = output.planned_pax_after ?? "?";
+    const total = output.group_expected_pax ?? "?";
+    return `Con questa fermata i pax pianificati salgono a ${after}, oltre i ${total} previsti per il gruppo. Vuoi alzare il totale del gruppo o correggere i pax della fermata?`;
+  }
+  return "Questa operazione supererebbe i pax previsti. Vuoi correggere?";
 }
 
 /** Ciclo limitato (§8/§16, MAX_LLM_STEPS passi): il router puo' incatenare
@@ -731,15 +829,17 @@ async function runMarioLlmFlow(
     if (routed.decision.action === "clarification") {
       const op = routed.decision.operation;
       if (op) {
-        // FASE A.3 §3/§4 — slot filling: salva l'operazione in costruzione con
-        // i campi già raccolti, unendo a quelli di eventuali turni precedenti
-        // (i nuovi vincono: il router include un campo solo se l'utente l'ha
-        // fornito/corretto). Nessun testo libero, nessun token.
+        // FASE A.3 §3/§4 — slot filling. FASE A.4 §25/§27 — `missing` NON è
+        // deciso dal modello: si ricalcola con la policy deterministica dopo il
+        // merge (l'LLM estrae slot, la policy decide cosa è obbligatorio).
         const existing = await readMarioDraftOperation(context.tenantId, context.userId);
+        const merged = { ...(existing?.collected ?? {}), ...pruneUndefined(op.collected) };
+        const operation = classifyMarioOperation({ rawType: op.type, kind: merged.kind, message });
+        const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
         await setMarioDraftOperation(context.tenantId, context.userId, {
-          type: op.type,
-          collected: { ...(existing?.collected ?? {}), ...pruneUndefined(op.collected) },
-          missing: op.missing,
+          type: operation,
+          collected: merged,
+          missing: evalR.missingRequired,
         });
       } else {
         await updateMarioSession(context.tenantId, context.userId, { lastIntent: "mario_llm_clarification" });
@@ -759,7 +859,17 @@ async function runMarioLlmFlow(
     // §19 — difesa in profondità: un token eventualmente "suggerito"
     // dal modello nei suoi argomenti viene sempre ignorato. Il router LLM
     // non possiede mai un confirmationToken reale.
-    const { confirmationToken: _ignoredHallucinatedToken, ...safeArguments } = (routed.decision.arguments ?? {}) as Record<string, unknown>;
+    const { confirmationToken: _ignoredHallucinatedToken, ...rawArguments } = (routed.decision.arguments ?? {}) as Record<string, unknown>;
+
+    // FASE A.4 §5/§27/§28/§30 — GATE POLICY prima di eseguire una preview di
+    // CREAZIONE gruppo: se manca un dato OPERATIVO (es. la data per un bus)
+    // non si esegue la preview — si salva il draft e si chiede SOLO quello.
+    // Se pronta, gli arguments passano dal builder deterministico (mai campi
+    // illegali come `origin` — §28/§33).
+    const gate = await applyCreatePreviewPolicyGate(context, toolName, rawArguments, message);
+    if (gate.proceed === false) return gate.result;
+    const gateCreate = gate.proceed === true ? gate : null;
+    const safeArguments = gateCreate ? gateCreate.toolArgs : rawArguments;
 
     const raw = await runTool(context, tool, safeArguments);
     if (!isMcpToolContentResult(raw) || raw.isError) {
@@ -779,18 +889,25 @@ async function runMarioLlmFlow(
       const executeTool = PREVIEW_TO_EXECUTE_TOOL[toolName];
       if (!executeTool) return staticFallbackAnswer(context, detected); // difesa: preview senza execute mappato
 
+      // FASE A.4 §36 — warning bloccanti (es. pax fermate > totale gruppo):
+      // NON confermare silenziosamente. Chiedi conferma del totale o correzione.
+      const blocking = (Array.isArray(output.warnings) ? (output.warnings as string[]) : []).filter((w) => BLOCKING_PREVIEW_WARNINGS.has(w));
+      if (blocking.length > 0) {
+        return { intent: "mario_llm_clarification", answer: paxOverbookedQuestion(toolName, output), actions: bgActionsIfRelevant(toolName) };
+      }
+
       const patch: Partial<Omit<MarioSessionContext, "updatedAt">> = {
         ...deriveContextFromToolOutput(toolName, output),
         pendingConfirmation: { toolName: executeTool, confirmationToken: token, op: toolName, createdAt: Date.now() },
       };
-      // §9 — creazione gruppo: tieni il draft aggiornato con gli slot usati
-      // (serve per una correzione tipo "anzi 45" DOPO la preview). Il draft
-      // viene ripulito solo alla conferma del write / al reset / al TTL.
-      if (toolName === "its.preview_create_booking_group") {
-        const existingDraft = await readMarioDraftOperation(context.tenantId, context.userId);
+      // §9/§33 — creazione gruppo: tieni il draft aggiornato con gli slot usati
+      // (incl. `origin` preservato per il passo successivo). Serve anche per
+      // una correzione tipo "anzi 45" DOPO la preview. Ripulito solo alla
+      // conferma del write / al reset / al TTL.
+      if (gateCreate) {
         patch.draftOperation = {
-          type: "create_booking_group",
-          collected: { ...(existingDraft?.collected ?? {}), ...slotsFromCreateArgs(safeArguments) },
+          type: gateCreate.operation,
+          collected: gateCreate.mergedSlots,
           missing: [],
           updatedAt: Date.now(),
         };

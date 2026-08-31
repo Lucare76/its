@@ -59,10 +59,17 @@ export type MarioDraftSlots = {
   serviceDate?: string; // "YYYY-MM-DD"
   origin?: string;
   kind?: string;
+  // FASE A.4 — altri slot operativi (fermate, ferry, reservation…). Solo
+  // valori scalari/array semplici; mai testo libero, mai prompt (§16/§42).
+  [slot: string]: string | number | boolean | unknown[] | undefined;
 };
 
 export type MarioDraftOperation = {
-  type: "create_booking_group";
+  /** FASE A.4 — chiave dell'operazione CONVERSAZIONALE (MarioOperationKey):
+   *  es. "create_generic_booking_group" | "create_bus_group" |
+   *  "create_exclusive_bus_group" | "add_booking_group_stop" | … La policy
+   *  centrale (operation-policy.ts) è l'unica autorità su cosa serve. */
+  type: string;
   collected: MarioDraftSlots;
   missing: string[];
   updatedAt: number;

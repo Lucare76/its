@@ -119,7 +119,9 @@ describe("runMarioAssistant — FASE A LLM router integration", () => {
     );
 
     const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
-    const result = await runMarioAssistant(makeContext(), "creami un bus Natività con 50 persone", new Date());
+    // FASE A.4: "gruppo" generico (non "bus") → nessuna data richiesta, la
+    // preview procede. Per un bus senza data la policy chiederebbe la data (§30).
+    const result = await runMarioAssistant(makeContext(), "creami un gruppo Natività con 50 persone", new Date());
 
     expect(mockRunTool).toHaveBeenCalledTimes(1);
     expect(mockRunTool.mock.calls[0]?.[2]).toEqual({ name: "Natività", expectedPax: 50 });

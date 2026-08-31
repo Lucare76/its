@@ -107,8 +107,10 @@ describe("§11 TEST A — La Marra: chiede solo la data, poi crea", () => {
     expect(r2.llm).toBeUndefined(); // §17 — nessun costo LLM per il completamento
 
     const args = mockRunTool.mock.calls[0]![2] as Record<string, unknown>;
-    expect(args).toEqual({ name: "Lucia La Marra", expectedPax: 50, serviceDate: "2026-09-13" });
-    expect(args).not.toHaveProperty("origin"); // §6
+    // §28 — tool argument builder: name+pax+data, kind forzato "bus_exclusive"
+    // ("bus esclusivo" nel testo), MAI `origin` (§6/§33).
+    expect(args).toMatchObject({ name: "Lucia La Marra", expectedPax: 50, serviceDate: "2026-09-13", kind: "bus_exclusive" });
+    expect(args).not.toHaveProperty("origin");
   });
 });
 

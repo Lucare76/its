@@ -100,7 +100,9 @@ describe("§23 TEST 2 — La Marra: preview → No annulla → niente gruppo", (
   it("nessun its.create_booking_group eseguito", async () => {
     mockRoute.mockResolvedValueOnce(toolCall("its.preview_create_booking_group", { name: "La Marra", expectedPax: 50 }));
     mockRunTool.mockResolvedValueOnce(ok({ name: "La Marra", expected_pax: 50, confirmationToken: "TOK2", expiresAt: "2026-09-01T09:03:00Z" }));
-    const r1 = await run("Creami un bus La Marra con 50 persone");
+    // "gruppo" generico → preview immediata (per un "bus" senza data la policy
+    // FASE A.4 chiederebbe prima la data — coperto da mario-operation-policy).
+    const r1 = await run("Creami un gruppo La Marra con 50 persone");
     expect(r1.intent).toBe("mario_llm_pending_confirmation");
 
     const r2 = await run("No annulla");
