@@ -52,6 +52,25 @@ const routerDecisionSchema = z.discriminatedUnion("action", [
     clarification_question: z.string().min(1).max(MAX_CLARIFICATION_CHARS),
     confidence: z.number().min(0).max(1).optional(),
     reasoning_summary: z.string().max(MAX_REASONING_CHARS).optional(),
+    // FASE A.3 — slot filling: quando la clarification riguarda un'operazione
+    // di creazione in corso, il router riporta cosa ha già capito, così
+    // l'orchestrator lo salva nel draft e ai turni successivi non si riparte
+    // da zero. Nessun testo libero, nessun token.
+    operation: z
+      .object({
+        type: z.literal("create_booking_group"),
+        collected: z
+          .object({
+            name: z.string().max(200).optional(),
+            expectedPax: z.number().int().positive().max(2000).optional(),
+            serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+            origin: z.string().max(160).optional(),
+            kind: z.string().max(40).optional(),
+          })
+          .default({}),
+        missing: z.array(z.string().max(40)).max(12).default([]),
+      })
+      .optional(),
   }),
   z.object({
     action: z.literal("answer"),
@@ -124,6 +143,7 @@ REGOLE FERREE:
 - Non inventare MAI dati mancanti (nomi, pax, città, orari, ID). Se manca un parametro OBBLIGATORIO per chiamare un tool, usa action "clarification" e chiedi SOLO l'informazione mancante.
 - I campi OPZIONALI di un tool (marcati con "?" nello schema, es. data servizio, tipo, fermate, contatti) NON vanno chiesti se l'utente non li ha indicati: procedi comunque con il tool "preview_" usando solo i campi forniti. La preview mostra un riepilogo e l'utente conferma; potrà aggiungere il resto in un passo successivo. Chiedi "clarification" solo se manca un campo OBBLIGATORIO (senza "?").
 - clarification_question: UNA domanda sintetica e diretta (1-2 frasi, niente elenchi lunghi, niente markdown).
+- Se il CONTESTO contiene "OPERAZIONE IN CORSO", il nuovo MESSAGGIO UTENTE va interpretato PRIMA come completamento o correzione di quell'operazione. NON richiedere campi già presenti in "collected". Una correzione esplicita ("anzi 55", "no, 45", "nome X") sovrascrive il valore in "collected". Quando "collected" ha tutti i campi OBBLIGATORI del tool "preview_" corrispondente, chiamalo unendo collected + eventuali nuovi/corretti dal messaggio (esclusi i campi non previsti dallo schema, es. "origin"). Se una clarification resta necessaria, valorizza il campo "operation" con { type, collected (tutto ciò che sai finora), missing (i soli campi obbligatori ancora assenti) }.
 - Usa SOLO i tool elencati nel catalogo fornito. Non nominare mai un tool che non è nel catalogo.
 - Per qualunque modifica (creazione, aggiunta, prenotazione, aggiornamento) usa SEMPRE un tool che inizia con "preview_": non esiste un tool di scrittura diretta che tu possa scegliere.
 - Non generare mai SQL, non descrivere query al database, non inventare ID (booking_group_id, service_id, bookingGroupStopId, ecc.): se serve un ID e non lo conosci, scegli prima un tool di ricerca/lookup (es. find_booking_group).
@@ -172,6 +192,16 @@ function buildContextBlock(summary: MarioSessionSummary, priorSteps: MarioRouter
   if (summary.lastDate) parts.push(`ultima_data: ${summary.lastDate}`);
   if (summary.lastIntent) parts.push(`ultima_operazione: ${summary.lastIntent}`);
   if (summary.pendingConfirmationOp) parts.push(`conferma_in_sospeso_per: ${summary.pendingConfirmationOp}`);
+  if (summary.draftOperation) {
+    const d = summary.draftOperation;
+    parts.push("OPERAZIONE IN CORSO:");
+    parts.push(`  type: ${d.type}`);
+    const entries = Object.entries(d.collected).filter(([, v]) => v != null && v !== "");
+    parts.push("  collected:");
+    if (entries.length === 0) parts.push("    (nessun campo ancora)");
+    for (const [k, v] of entries) parts.push(`    ${k}: ${v}`);
+    parts.push(`  missing: ${d.missing.length ? d.missing.join(", ") : "(nessuno)"}`);
+  }
   if (priorSteps.length > 0) {
     parts.push("passi_gia_eseguiti_in_questo_turno:");
     for (const step of priorSteps) {

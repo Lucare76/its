@@ -9,6 +9,9 @@ import {
   clearMarioSession,
   toMarioSessionSummary,
   getLastMarioSessionStore,
+  readMarioDraftOperation,
+  setMarioDraftOperation,
+  clearMarioDraftOperation,
   __resetMarioSessionsForTests,
 } from "@/lib/server/mario-assistant/session-context";
 
@@ -219,5 +222,73 @@ describe("toMarioSessionSummary — §10", () => {
     expect(summary.pendingConfirmationOp).toBe("its.preview_create_booking_group");
     expect((summary as Record<string, unknown>).pendingConfirmation).toBeUndefined();
     expect((summary as Record<string, unknown>).confirmationToken).toBeUndefined();
+  });
+
+  it("FASE A.3 — il draft finisce nel summary SENZA updatedAt", () => {
+    const summary = toMarioSessionSummary({
+      updatedAt: Date.now(),
+      draftOperation: { type: "create_booking_group", collected: { name: "La Marra", expectedPax: 50 }, missing: ["serviceDate"], updatedAt: 123 },
+    });
+    expect(summary.draftOperation).toEqual({ type: "create_booking_group", collected: { name: "La Marra", expectedPax: 50 }, missing: ["serviceDate"] });
+    expect((summary.draftOperation as Record<string, unknown>).updatedAt).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FASE A.3 — draft operativo (slot filling)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("draft operation — set / read / clear / TTL / isolamento", () => {
+  let fake: FakeUpstashRedis;
+  beforeEach(() => {
+    fake = new FakeUpstashRedis();
+    __setSharedRedisForTests(fake as unknown as Redis);
+    __resetMarioSessionsForTests();
+  });
+
+  it("set + read round-trip, merge col resto del contesto", async () => {
+    await updateMarioSession(A.t, A.u, { lastBookingGroupName: "prev" });
+    await setMarioDraftOperation(A.t, A.u, { type: "create_booking_group", collected: { name: "La Marra", expectedPax: 50, origin: "Rimini" }, missing: ["serviceDate"] });
+    const d = await readMarioDraftOperation(A.t, A.u);
+    expect(d?.collected).toMatchObject({ name: "La Marra", expectedPax: 50, origin: "Rimini" });
+    expect(d?.missing).toEqual(["serviceDate"]);
+    expect(typeof d?.updatedAt).toBe("number");
+    // il resto del contesto non è stato perso
+    expect((await getMarioSession(A.t, A.u)).lastBookingGroupName).toBe("prev");
+  });
+
+  it("clearMarioDraftOperation rimuove SOLO il draft", async () => {
+    await updateMarioSession(A.t, A.u, { lastBookingGroupId: "g1" });
+    await setMarioDraftOperation(A.t, A.u, { type: "create_booking_group", collected: { name: "X" }, missing: [] });
+    await clearMarioDraftOperation(A.t, A.u);
+    expect(await readMarioDraftOperation(A.t, A.u)).toBeNull();
+    expect((await getMarioSession(A.t, A.u)).lastBookingGroupId).toBe("g1");
+  });
+
+  it("§2 draft oltre 10 min → scartato logicamente (anche se la key vive)", async () => {
+    let clock = new Date("2026-09-01T10:00:00Z").getTime();
+    fake = new FakeUpstashRedis({ now: () => clock });
+    __setSharedRedisForTests(fake as unknown as Redis);
+    vi.useFakeTimers();
+    vi.setSystemTime(clock);
+    await setMarioDraftOperation(A.t, A.u, { type: "create_booking_group", collected: { name: "X" }, missing: [] });
+    clock += 11 * 60 * 1000;
+    vi.setSystemTime(clock);
+    expect(await readMarioDraftOperation(A.t, A.u)).toBeNull();
+  });
+
+  it("§16 isolamento tenant/utente", async () => {
+    await setMarioDraftOperation("tenant-a", "user-1", { type: "create_booking_group", collected: { name: "A1" }, missing: [] });
+    await setMarioDraftOperation("tenant-b", "user-1", { type: "create_booking_group", collected: { name: "BX" }, missing: [] });
+    await setMarioDraftOperation("tenant-a", "user-2", { type: "create_booking_group", collected: { name: "A2" }, missing: [] });
+    expect((await readMarioDraftOperation("tenant-a", "user-1"))?.collected.name).toBe("A1");
+    expect((await readMarioDraftOperation("tenant-b", "user-1"))?.collected.name).toBe("BX");
+    expect((await readMarioDraftOperation("tenant-a", "user-2"))?.collected.name).toBe("A2");
+  });
+
+  it("§16 nessun token / raw prompt nel draft salvato", async () => {
+    await setMarioDraftOperation(A.t, A.u, { type: "create_booking_group", collected: { name: "La Marra", expectedPax: 50 }, missing: ["serviceDate"] });
+    const rawKey = fake.raw("mario:session:tenant-a:user-1") as Record<string, unknown>;
+    const json = JSON.stringify(rawKey);
+    expect(json).not.toMatch(/confirmationToken|prompt|system|clarification_question|MESSAGGIO/i);
   });
 });

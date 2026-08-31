@@ -35,15 +35,22 @@ import { buildMarioToolCatalog } from "./tool-catalog";
 import { routeMarioWithLlm, type MarioRouterStepResult } from "./llm-router";
 import { logMarioLlmRoute } from "./telemetry";
 import { calcMarioLlmCost } from "./pricing";
+import { parseMarioSlotDate } from "./date-time";
+import { BOOKING_GROUP_KINDS } from "@/lib/booking-groups";
 import {
   getMarioSession,
   updateMarioSession,
   clearPendingConfirmation,
   readPendingConfirmation,
+  readMarioDraftOperation,
+  setMarioDraftOperation,
+  clearMarioDraftOperation,
   toMarioSessionSummary,
   getLastMarioSessionStore,
   type MarioSessionContext,
   type MarioPendingConfirmation,
+  type MarioDraftOperation,
+  type MarioDraftSlots,
 } from "./session-context";
 
 export type MarioAssistantResult = {
@@ -505,6 +512,8 @@ async function executeConfirmedWrite(context: McpContext, pending: MarioPendingC
   }
 
   await updateMarioSession(context.tenantId, context.userId, deriveContextFromWriteOutput(pending.toolName, output));
+  // §9 — operazione completata e confermata: il draft non serve più.
+  await clearMarioDraftOperation(context.tenantId, context.userId);
   return { intent: "mario_llm_confirmed", answer: "Fatto. Operazione completata.", actions: BG_ACTIONS, data: output };
 }
 
@@ -573,6 +582,101 @@ async function runLlmTurn(context: McpContext, message: string, detected: MarioI
   return acc.calls > 0 ? { ...result, llm: finalizeTurnLlm(acc) } : result;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FASE A.3 — slot filling: draft operativo multi-turno.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Intent (deterministici) che, con un draft attivo, vanno dirottati al flusso
+ *  draft-aware invece di ripartire da zero o finire in find_booking_group.
+ *  Gli intent READ chiari (operational_brief, ecc.) NON sono qui: restano sul
+ *  fast-path deterministico anche a draft attivo (§7/§17). */
+const DRAFT_DIVERT_INTENTS = new Set(["unsupported", "write_unsupported", "booking_group_find", "booking_group_write"]);
+
+// §8 — reset del draft. Nessuna frase hardcoded specifica: verbi generici.
+const DRAFT_RESET_RE = /(?<!\p{L})(annulla(?:re)?|lascia\s*(?:stare|perdere)|ricomincia\w*|dimentica(?:re)?\s+(?:questa|l['’ ]?operazione)?|azzera|reset)(?!\p{L})/iu;
+function isDraftReset(message: string): boolean {
+  const t = message.trim().toLowerCase();
+  return t.split(/\s+/).filter(Boolean).length <= 6 && DRAFT_RESET_RE.test(t);
+}
+
+function pruneUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== "")) as Partial<T>;
+}
+
+/** Estrae i soli slot supportati da its.preview_create_booking_group dagli
+ *  arguments del router (mai `origin`, che non è un campo del tool — §6). */
+function slotsFromCreateArgs(args: Record<string, unknown>): MarioDraftSlots {
+  const out: MarioDraftSlots = {};
+  if (typeof args.name === "string" && args.name.trim()) out.name = args.name.trim();
+  if (typeof args.expectedPax === "number" && Number.isFinite(args.expectedPax)) out.expectedPax = args.expectedPax;
+  if (typeof args.serviceDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.serviceDate)) out.serviceDate = args.serviceDate;
+  if (typeof args.kind === "string" && (BOOKING_GROUP_KINDS as readonly string[]).includes(args.kind)) out.kind = args.kind;
+  return out;
+}
+
+/** §17 — fast-path deterministico: se al draft manca SOLO una data e il
+ *  messaggio la contiene in modo affidabile, la riempie senza chiamare l'LLM.
+ *  Ritorna gli slot completi pronti per la preview, o null se non applicabile. */
+function tryDeterministicDraftFill(draft: MarioDraftOperation, message: string, now: Date): MarioDraftSlots | null {
+  if (draft.type !== "create_booking_group") return null;
+  if (!draft.collected.name || typeof draft.collected.expectedPax !== "number") return null;
+  const outstanding = draft.missing.filter((m) => !draft.collected[m as keyof MarioDraftSlots]);
+  if (outstanding.length !== 1 || outstanding[0] !== "serviceDate") return null;
+  const date = parseMarioSlotDate(message, now);
+  if (!date) return null;
+  return { ...draft.collected, serviceDate: date };
+}
+
+/** Esegue direttamente its.preview_create_booking_group dagli slot del draft,
+ *  SENZA chiamata LLM (§17). Stessa pipeline runTool / stesso pending
+ *  confirmation / stesso testo "Confermi?" del flusso normale. */
+async function runDraftDirectPreview(context: McpContext, slots: MarioDraftSlots): Promise<MarioAssistantResult> {
+  const tool = getTool("its.preview_create_booking_group");
+  if (!tool) return { intent: "mario_llm_tool_error", answer: "Non riesco a preparare la creazione adesso. Riprova.", actions: [] };
+
+  const args: Record<string, unknown> = { name: slots.name, expectedPax: slots.expectedPax };
+  if (slots.serviceDate) args.serviceDate = slots.serviceDate;
+  if (slots.kind && (BOOKING_GROUP_KINDS as readonly string[]).includes(slots.kind)) args.kind = slots.kind;
+  // §6 — `origin` NON è un campo del tool: resta solo nel draft.
+
+  const raw = await runTool(context, tool, args);
+  if (!isMcpToolContentResult(raw) || raw.isError) {
+    return { intent: "mario_llm_tool_error", answer: "Non riesco a completare la creazione. Riprova o specifica meglio.", actions: [] };
+  }
+  let output: Record<string, unknown> = {};
+  try {
+    output = raw.content[0]?.text ? (JSON.parse(raw.content[0]!.text!) as Record<string, unknown>) : {};
+  } catch {
+    return { intent: "mario_llm_tool_error", answer: "Non riesco a completare la creazione. Riprova o specifica meglio.", actions: [] };
+  }
+  const token = typeof output.confirmationToken === "string" ? output.confirmationToken : null;
+  if (!token) return { intent: "mario_llm_tool_error", answer: "Non riesco a completare la creazione. Riprova o specifica meglio.", actions: [] };
+
+  await updateMarioSession(context.tenantId, context.userId, {
+    ...deriveContextFromToolOutput("its.preview_create_booking_group", output),
+    draftOperation: { type: "create_booking_group", collected: slots, missing: [], updatedAt: Date.now() },
+    pendingConfirmation: {
+      toolName: "its.create_booking_group",
+      confirmationToken: token,
+      op: "its.preview_create_booking_group",
+      createdAt: Date.now(),
+    },
+  });
+  return {
+    intent: "mario_llm_pending_confirmation",
+    answer: buildConfirmationPrompt("its.preview_create_booking_group", output),
+    actions: bgActionsIfRelevant("its.preview_create_booking_group"),
+  };
+}
+
+/** Turno con draft attivo: prova il fast-path deterministico (§17), altrimenti
+ *  passa al router con il draft nel contesto. */
+async function runDraftTurn(context: McpContext, message: string, draft: MarioDraftOperation, now: Date): Promise<MarioAssistantResult> {
+  const fast = tryDeterministicDraftFill(draft, message, now);
+  if (fast) return runDraftDirectPreview(context, fast); // nessuna chiamata LLM
+  return runLlmTurn(context, message, { intent: "booking_group_write", params: {} });
+}
+
 /** Ciclo limitato (§8/§16, MAX_LLM_STEPS passi): il router puo' incatenare
  *  SOLO tool READ senza token (es. find_booking_group -> preview_*). Appena
  *  un risultato porta un confirmationToken, il ciclo si ferma e si passa alla
@@ -625,7 +729,21 @@ async function runMarioLlmFlow(
     }
 
     if (routed.decision.action === "clarification") {
-      await updateMarioSession(context.tenantId, context.userId, { lastIntent: "mario_llm_clarification" });
+      const op = routed.decision.operation;
+      if (op) {
+        // FASE A.3 §3/§4 — slot filling: salva l'operazione in costruzione con
+        // i campi già raccolti, unendo a quelli di eventuali turni precedenti
+        // (i nuovi vincono: il router include un campo solo se l'utente l'ha
+        // fornito/corretto). Nessun testo libero, nessun token.
+        const existing = await readMarioDraftOperation(context.tenantId, context.userId);
+        await setMarioDraftOperation(context.tenantId, context.userId, {
+          type: op.type,
+          collected: { ...(existing?.collected ?? {}), ...pruneUndefined(op.collected) },
+          missing: op.missing,
+        });
+      } else {
+        await updateMarioSession(context.tenantId, context.userId, { lastIntent: "mario_llm_clarification" });
+      }
       return { intent: "mario_llm_clarification", answer: routed.decision.clarification_question, actions: [] };
     }
 
@@ -661,10 +779,23 @@ async function runMarioLlmFlow(
       const executeTool = PREVIEW_TO_EXECUTE_TOOL[toolName];
       if (!executeTool) return staticFallbackAnswer(context, detected); // difesa: preview senza execute mappato
 
-      await updateMarioSession(context.tenantId, context.userId, {
+      const patch: Partial<Omit<MarioSessionContext, "updatedAt">> = {
         ...deriveContextFromToolOutput(toolName, output),
         pendingConfirmation: { toolName: executeTool, confirmationToken: token, op: toolName, createdAt: Date.now() },
-      });
+      };
+      // §9 — creazione gruppo: tieni il draft aggiornato con gli slot usati
+      // (serve per una correzione tipo "anzi 45" DOPO la preview). Il draft
+      // viene ripulito solo alla conferma del write / al reset / al TTL.
+      if (toolName === "its.preview_create_booking_group") {
+        const existingDraft = await readMarioDraftOperation(context.tenantId, context.userId);
+        patch.draftOperation = {
+          type: "create_booking_group",
+          collected: { ...(existingDraft?.collected ?? {}), ...slotsFromCreateArgs(safeArguments) },
+          missing: [],
+          updatedAt: Date.now(),
+        };
+      }
+      await updateMarioSession(context.tenantId, context.userId, patch);
 
       return { intent: "mario_llm_pending_confirmation", answer: buildConfirmationPrompt(toolName, output), actions: bgActionsIfRelevant(toolName) };
     }
@@ -738,6 +869,9 @@ export async function runMarioAssistant(
   message: string,
   now: Date = new Date()
 ): Promise<MarioAssistantResult> {
+  const llmEnabled = isMarioLlmEnabled();
+  const shadowMode = isMarioLlmShadowMode();
+
   // §11/§12 — una conferma in sospeso ha priorità su qualunque altro routing:
   // se l'utente risponde sì/no, si esegue/annulla, punto. Qualunque altro
   // messaggio fa decadere la conferma (mai eseguita alla cieca su un turno
@@ -750,9 +884,23 @@ export async function runMarioAssistant(
     }
     if (reply === "no") {
       await clearPendingConfirmation(context.tenantId, context.userId);
+      await clearMarioDraftOperation(context.tenantId, context.userId); // §8
       return { intent: "confirmation_cancelled", answer: "Ok, annullato. Nessuna modifica è stata applicata.", actions: [] };
     }
+    // Risposta non sì/no: la preview stale decade, MA se c'è un'operazione in
+    // corso il messaggio è quasi sempre una correzione ("anzi 45") → non
+    // ripartire da zero, riprendi il draft (§12).
     await clearPendingConfirmation(context.tenantId, context.userId);
+    if (llmEnabled) {
+      const draftForCorrection = await readMarioDraftOperation(context.tenantId, context.userId);
+      if (draftForCorrection && !isDraftReset(message)) {
+        return runDraftTurn(context, message, draftForCorrection, now);
+      }
+      if (draftForCorrection && isDraftReset(message)) {
+        await clearMarioDraftOperation(context.tenantId, context.userId);
+        return { intent: "operation_cancelled", answer: "Ok, ho annullato l'operazione in corso.", actions: [] };
+      }
+    }
   } else if (pending.status === "expired") {
     // §13 — la sessione può vivere 10 min, ma una conferma oltre i 180s del
     // TTL HMAC è logicamente morta: mai eseguire il WRITE su un "confermo"
@@ -768,8 +916,23 @@ export async function runMarioAssistant(
   }
 
   const detected = detectMarioIntent(message, now);
-  const llmEnabled = isMarioLlmEnabled();
-  const shadowMode = isMarioLlmShadowMode();
+
+  // FASE A.3 §7 — operazione in costruzione: un messaggio che altrimenti
+  // ripartirebbe da zero (unsupported/write_unsupported) o verrebbe mal
+  // instradato (booking_group_find/write) va interpretato PRIMA come
+  // completamento/correzione del draft. Gli intent READ deterministici chiari
+  // (situazione, alert, autisti…) restano sul loro fast-path anche a draft
+  // attivo. Reset esplicito → cancella il draft.
+  if (llmEnabled && DRAFT_DIVERT_INTENTS.has(detected.intent)) {
+    const draft = await readMarioDraftOperation(context.tenantId, context.userId);
+    if (draft) {
+      if (isDraftReset(message)) {
+        await clearMarioDraftOperation(context.tenantId, context.userId);
+        return { intent: "operation_cancelled", answer: "Ok, ho annullato l'operazione in corso. Dimmi pure quando vuoi ricominciare.", actions: [] };
+      }
+      return runDraftTurn(context, message, draft, now);
+    }
+  }
 
   if (detected.intent === "unsupported" || detected.intent === "write_unsupported") {
     if (llmEnabled) return runLlmTurn(context, message, detected);

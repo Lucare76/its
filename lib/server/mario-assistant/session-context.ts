@@ -44,6 +44,30 @@ export type MarioPendingConfirmation = {
   createdAt: number;
 };
 
+/**
+ * FASE A.3 — operazione in costruzione (slot filling multi-turno). Tiene
+ * l'INTENTO operativo e i soli campi funzionali già forniti dall'utente per
+ * eseguire l'azione — mai testo libero, mai prompt, mai risposta LLM, mai
+ * PII oltre a quanto l'utente ha esplicitamente chiesto (§2/§16).
+ * `origin` NON è un campo di its.preview_create_booking_group: si conserva
+ * solo per un eventuale passo successivo (add stop), mai infilato negli
+ * arguments del tool di creazione (§6).
+ */
+export type MarioDraftSlots = {
+  name?: string;
+  expectedPax?: number;
+  serviceDate?: string; // "YYYY-MM-DD"
+  origin?: string;
+  kind?: string;
+};
+
+export type MarioDraftOperation = {
+  type: "create_booking_group";
+  collected: MarioDraftSlots;
+  missing: string[];
+  updatedAt: number;
+};
+
 export type MarioSessionContext = {
   lastBookingGroupId?: string;
   lastBookingGroupName?: string;
@@ -52,7 +76,15 @@ export type MarioSessionContext = {
   lastDate?: string;
   lastIntent?: string;
   pendingConfirmation?: MarioPendingConfirmation;
+  draftOperation?: MarioDraftOperation;
   updatedAt: number;
+};
+
+/** FASE A.3 — vista draft per l'LLM: nessun `updatedAt`. */
+export type MarioDraftSummary = {
+  type: string;
+  collected: MarioDraftSlots;
+  missing: string[];
 };
 
 /** Vista MINIMA sicura del contesto per il router LLM (§10): nessun token,
@@ -66,6 +98,8 @@ export type MarioSessionSummary = {
   lastIntent?: string;
   /** Solo l'`op` della conferma in sospeso, MAI il token. */
   pendingConfirmationOp?: string;
+  /** FASE A.3 — operazione in costruzione (senza `updatedAt`). */
+  draftOperation?: MarioDraftSummary;
 };
 
 export type MarioSessionStoreKind = "shared" | "memory_fallback" | "unavailable";
@@ -73,6 +107,9 @@ export type MarioSessionStoreKind = "shared" | "memory_fallback" | "unavailable"
 const SESSION_TTL_SECONDS = 10 * 60;
 const SESSION_TTL_MS = SESSION_TTL_SECONDS * 1000;
 const PENDING_TTL_MS = CONFIRMATION_TTL_SECONDS * 1000;
+// FASE A.3 §2 — un draft più vecchio della sessione è logicamente morto anche
+// se la key Redis vive ancora (allineato al TTL sessione, 10 min).
+const DRAFT_TTL_MS = SESSION_TTL_MS;
 const KEY_PREFIX = "mario:session:";
 
 function sessionKey(tenantId: string, userId: string): string {
@@ -104,14 +141,23 @@ function emptyContext(now: number): MarioSessionContext {
   return { updatedAt: now };
 }
 
-/** Rimuove `pendingConfirmation` se più vecchia del TTL HMAC (180s). Ritorna
- *  il contesto (eventualmente ripulito) e se è cambiato qualcosa. */
+/** Rimuove `pendingConfirmation` oltre il TTL HMAC (180s) e `draftOperation`
+ *  oltre il TTL sessione (10 min). Ritorna il contesto ripulito e se è
+ *  cambiato qualcosa. */
 function stripExpiredPending(ctx: MarioSessionContext, now: number): { ctx: MarioSessionContext; changed: boolean } {
-  if (ctx.pendingConfirmation && now - ctx.pendingConfirmation.createdAt > PENDING_TTL_MS) {
-    const { pendingConfirmation: _expired, ...rest } = ctx;
-    return { ctx: rest, changed: true };
+  let next = ctx;
+  let changed = false;
+  if (next.pendingConfirmation && now - next.pendingConfirmation.createdAt > PENDING_TTL_MS) {
+    const { pendingConfirmation: _expired, ...rest } = next;
+    next = rest;
+    changed = true;
   }
-  return { ctx, changed: false };
+  if (next.draftOperation && now - next.draftOperation.updatedAt > DRAFT_TTL_MS) {
+    const { draftOperation: _stale, ...rest } = next;
+    next = rest;
+    changed = true;
+  }
+  return { ctx: next, changed };
 }
 
 // ── Lettura ─────────────────────────────────────────────────────────────────
@@ -303,6 +349,61 @@ export async function clearPendingConfirmation(tenantId: string, userId: string)
   }
 }
 
+// ── FASE A.3 — draft operativo (slot filling) ──────────────────────────────
+
+/** Legge il draft in costruzione, o null se assente/scaduto (>10 min). */
+export async function readMarioDraftOperation(tenantId: string, userId: string): Promise<MarioDraftOperation | null> {
+  const now = Date.now();
+  const raw = await readRawContext(tenantId, userId);
+  const d = raw?.draftOperation;
+  if (!d || typeof d.updatedAt !== "number") return null;
+  if (now - d.updatedAt > DRAFT_TTL_MS) return null;
+  return d;
+}
+
+/** Salva/aggiorna il draft (merge per campo con il resto del contesto). Il
+ *  chiamante (orchestrator) ha già fatto il merge degli slot. */
+export async function setMarioDraftOperation(
+  tenantId: string,
+  userId: string,
+  draft: Omit<MarioDraftOperation, "updatedAt">,
+): Promise<void> {
+  await updateMarioSession(tenantId, userId, { draftOperation: { ...draft, updatedAt: Date.now() } });
+}
+
+/** Rimuove SOLO il draft (reset esplicito / operazione completata), lasciando
+ *  intatto il resto del contesto. */
+export async function clearMarioDraftOperation(tenantId: string, userId: string): Promise<void> {
+  const now = Date.now();
+  const backend = resolveBackendKind();
+  if (backend === "unavailable") {
+    lastStore = "unavailable";
+    return;
+  }
+  if (backend === "memory_fallback") {
+    lastStore = "memory_fallback";
+    const current = memory.get(sessionKey(tenantId, userId));
+    if (!current?.draftOperation) return;
+    const { draftOperation: _drop, ...rest } = current;
+    memory.set(sessionKey(tenantId, userId), { ...rest, updatedAt: now });
+    return;
+  }
+  const redis = getSharedRedis();
+  if (!redis) {
+    lastStore = "unavailable";
+    return;
+  }
+  try {
+    const raw = await redis.get<MarioSessionContext>(sessionKey(tenantId, userId));
+    lastStore = "shared";
+    if (!raw?.draftOperation) return;
+    const { draftOperation: _drop, ...rest } = raw;
+    await redis.set(sessionKey(tenantId, userId), { ...rest, updatedAt: now }, { keepTtl: true });
+  } catch {
+    lastStore = "unavailable";
+  }
+}
+
 /** Cancella l'INTERO contesto della sessione (tenant+utente). Non usato nel
  *  flusso normale (il contesto scade da solo); utile per un reset esplicito. */
 export async function clearMarioSession(tenantId: string, userId: string): Promise<void> {
@@ -340,6 +441,9 @@ export function toMarioSessionSummary(ctx: MarioSessionContext): MarioSessionSum
     lastDate: ctx.lastDate,
     lastIntent: ctx.lastIntent,
     pendingConfirmationOp: ctx.pendingConfirmation?.op,
+    draftOperation: ctx.draftOperation
+      ? { type: ctx.draftOperation.type, collected: ctx.draftOperation.collected, missing: ctx.draftOperation.missing }
+      : undefined,
   };
 }
 

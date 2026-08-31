@@ -319,6 +319,71 @@ describe("normalizeMarioRouterDecision (pura)", () => {
   });
 });
 
+describe("FASE A.3 — slot filling nel router", () => {
+  it("clarification con campo 'operation' → accettata e valida", async () => {
+    const r = await routeMarioWithLlm(
+      baseInput({
+        completion: textCompletion(
+          JSON.stringify({
+            action: "clarification",
+            clarification_question: "Qual è la data del servizio?",
+            operation: {
+              type: "create_booking_group",
+              collected: { name: "Lucia La Marra", expectedPax: 50, origin: "Rimini" },
+              missing: ["serviceDate"],
+            },
+          }),
+        ),
+      }),
+    );
+    expect(r.fallbackUsed).toBe(false);
+    expect(r.decision.action).toBe("clarification");
+    if (r.decision.action === "clarification") {
+      expect(r.decision.operation?.collected).toMatchObject({ name: "Lucia La Marra", expectedPax: 50, origin: "Rimini" });
+      expect(r.decision.operation?.missing).toEqual(["serviceDate"]);
+    }
+  });
+
+  it("clarification senza 'operation' resta valida (retrocompatibile)", async () => {
+    const r = await routeMarioWithLlm(
+      baseInput({ completion: textCompletion(JSON.stringify({ action: "clarification", clarification_question: "Quanti pax?" })) }),
+    );
+    expect(r.decision.action).toBe("clarification");
+    if (r.decision.action === "clarification") expect(r.decision.operation).toBeUndefined();
+  });
+
+  it("il draft in corso finisce nel prompt come 'OPERAZIONE IN CORSO' (mai token, mai testo libero)", async () => {
+    let seenUser = "";
+    const completion = async (params: { user: string }) => {
+      seenUser = params.user;
+      return { text: JSON.stringify({ action: "fallback" }), usage: { inputTokens: 1, outputTokens: 1 } };
+    };
+    await routeMarioWithLlm(
+      baseInput({
+        completion,
+        sessionSummary: {
+          draftOperation: { type: "create_booking_group", collected: { name: "Lucia La Marra", expectedPax: 50, origin: "Rimini" }, missing: ["serviceDate"] },
+        },
+      }),
+    );
+    expect(seenUser).toContain("OPERAZIONE IN CORSO");
+    expect(seenUser).toContain("name: Lucia La Marra");
+    expect(seenUser).toContain("expectedPax: 50");
+    expect(seenUser).toContain("missing: serviceDate");
+  });
+
+  it("il SYSTEM_PROMPT istruisce a NON richiedere campi già raccolti", async () => {
+    let seenSystem = "";
+    const completion = async (params: { system: string }) => {
+      seenSystem = params.system;
+      return { text: JSON.stringify({ action: "fallback" }), usage: { inputTokens: 1, outputTokens: 1 } };
+    };
+    await routeMarioWithLlm(baseInput({ completion }));
+    expect(seenSystem.toLowerCase()).toMatch(/operazione in corso/);
+    expect(seenSystem.toLowerCase()).toMatch(/non richiedere campi già presenti/);
+  });
+});
+
 describe("extractJson (robusto ma non permissivo)", () => {
   it("JSON puro", () => {
     expect(extractJson('{"action":"fallback"}')).toEqual({ action: "fallback" });

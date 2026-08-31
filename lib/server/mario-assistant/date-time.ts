@@ -27,6 +27,70 @@ export function parseRelativeOrIsoDate(text: string, now: Date): string | undefi
   return undefined;
 }
 
+const MONTHS_IT: Record<string, number> = {
+  gennaio: 1, febbraio: 2, marzo: 3, aprile: 4, maggio: 5, giugno: 6,
+  luglio: 7, agosto: 8, settembre: 9, sett: 9, ottobre: 10, novembre: 11, dicembre: 12,
+};
+const WEEKDAYS_IT: Record<string, number> = {
+  // 0 = domenica … 6 = sabato (come Date.getUTCDay)
+  domenica: 0, lunedì: 1, lunedi: 1, martedì: 2, martedi: 2, mercoledì: 3, mercoledi: 3,
+  giovedì: 4, giovedi: 4, venerdì: 5, venerdi: 5, sabato: 6,
+};
+
+/**
+ * FASE A.3 §5 — parsing data per lo slot-filling deterministico. Estende
+ * `parseRelativeOrIsoDate` (ISO / "oggi" / "domani") con:
+ *   - "dopodomani"
+ *   - "13 settembre" / "13 sett" / "13/09" / "13-09"  → anno corrente, o anno
+ *     successivo se la data sarebbe già passata (regola "prossima occorrenza")
+ *   - "lunedì" / "lunedì prossimo" / … → prossima occorrenza di quel giorno
+ * Ritorna "YYYY-MM-DD" (Europe/Rome) o undefined se non è affidabile.
+ * Nessuna libreria: solo aritmetica su Date + `romeDateKey`.
+ */
+export function parseMarioSlotDate(text: string, now: Date): string | undefined {
+  const base = parseRelativeOrIsoDate(text, now);
+  if (base) return base;
+
+  const t = text.toLowerCase();
+
+  if (/\bdopodomani\b/.test(t)) {
+    return romeDateKey(new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000));
+  }
+
+  const todayKey = romeDateKey(now);
+  const currentYear = Number(todayKey.slice(0, 4));
+
+  // giorno + mese (nome o numerico "13/09")
+  const dm =
+    /\b(\d{1,2})\s+(?:di\s+)?(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|sett|ottobre|novembre|dicembre)\b/.exec(t) ??
+    /\b(\d{1,2})[/-](\d{1,2})(?![/-]?\d)\b/.exec(t);
+  if (dm) {
+    const day = Number(dm[1]);
+    const month = Number.isNaN(Number(dm[2])) ? MONTHS_IT[dm[2]!]! : Number(dm[2]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      const mk = (y: number) => `${y}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      let candidate = mk(currentYear);
+      if (candidate < todayKey) candidate = mk(currentYear + 1);
+      const parsed = new Date(`${candidate}T12:00:00Z`);
+      if (!Number.isNaN(parsed.getTime()) && parsed.getUTCDate() === day) return candidate;
+    }
+  }
+
+  // giorno della settimana ("lunedì", "lunedì prossimo"). Split su non-lettere
+  // (`\b` non funziona dopo 'ì').
+  const words = new Set(t.split(/[^\p{L}]+/u).filter(Boolean));
+  const wdName = Object.keys(WEEKDAYS_IT).find((w) => words.has(w));
+  if (wdName) {
+    const target = WEEKDAYS_IT[wdName]!;
+    for (let i = 1; i <= 7; i += 1) {
+      const key = romeDateKey(new Date(now.getTime() + i * 24 * 60 * 60 * 1000));
+      if (new Date(`${key}T12:00:00Z`).getUTCDay() === target) return key;
+    }
+  }
+
+  return undefined;
+}
+
 export type TimeWindow = { fromMinutes: number; toMinutes: number; label: string };
 
 const EXPLICIT_RANGE_RE = /\bdalle\s+(\d{1,2})(?:[:.](\d{2}))?\s+alle\s+(\d{1,2})(?:[:.](\d{2}))?\b/;
