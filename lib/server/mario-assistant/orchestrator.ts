@@ -35,7 +35,7 @@ import { buildMarioToolCatalog } from "./tool-catalog";
 import { routeMarioWithLlm, type MarioRouterStepResult } from "./llm-router";
 import { logMarioLlmRoute, logMarioDraftPersistence } from "./telemetry";
 import { calcMarioLlmCost } from "./pricing";
-import { parseMarioSlotDate, formatMarioDateForUser } from "./date-time";
+import { parseMarioDraftDateSlots, formatMarioDateForUser } from "./date-time";
 import { BOOKING_GROUP_KINDS } from "@/lib/booking-groups";
 import {
   MARIO_OPERATION_POLICIES,
@@ -46,6 +46,7 @@ import {
   mentionsPhysicalBus,
   BLOCKING_PREVIEW_WARNINGS,
   extractMarioDraftSlotsFromMessage,
+  sanitizeExpectedPax,
   type MarioOperationKey,
 } from "./operation-policy";
 import {
@@ -666,9 +667,12 @@ function tryDeterministicDraftFill(
   // l'unico slot risolvibile senza NLU. Un messaggio senza data ("anzi 45",
   // "La Marra", un nome) va al router — è una correzione, non un
   // completamento deterministico.
-  const date = parseMarioSlotDate(message, now);
-  if (!date) return null;
-  const candidate: MarioDraftSlots = { ...draft.collected, serviceDate: date };
+  // FIX A.4.5 §8 — anche un INTERVALLO esplicito ("dal 13 al 20 settembre")
+  // completa il draft deterministicamente: serviceDate = inizio, returnDate
+  // (draft-only, mai inviato al tool §5) = fine.
+  const dateSlots = parseMarioDraftDateSlots(message, now);
+  if (!dateSlots) return null;
+  const candidate: MarioDraftSlots = { ...draft.collected, ...dateSlots };
   const evalR = evaluateMarioOperationPolicy({ operation, collected: candidate });
   return evalR.readyForPreview ? { operation, slots: candidate } : null;
 }
@@ -769,8 +773,10 @@ async function applyCreatePreviewPolicyGate(
   // `serviceDate` proposto dal router LLM (arguments.serviceDate) — mai il
   // contrario. Seconda rete di sicurezza deterministica anche se l'LLM ha
   // comunque tentato di reinterpretare/allucinare la data.
-  const explicitDate = parseMarioSlotDate(message, now);
-  if (explicitDate) merged.serviceDate = explicitDate;
+  // FIX A.4.5 §4/§5 — anche un intervallo esplicito ("dal 13 al 20 settembre")
+  // vince qui: serviceDate = inizio, returnDate = fine (draft-only, §5).
+  const explicitDateSlots = parseMarioDraftDateSlots(message, now);
+  if (explicitDateSlots) Object.assign(merged, explicitDateSlots);
   const operation = classifyMarioOperation({ toolName, kind: merged.kind, message });
   const evalR = evaluateMarioOperationPolicy({ operation, collected: merged as Record<string, unknown> });
 
@@ -881,12 +887,31 @@ async function runMarioLlmFlow(
         // deciso dal modello: si ricalcola con la policy deterministica dopo il
         // merge (l'LLM estrae slot, la policy decide cosa è obbligatorio).
         const merged = { ...(existing?.collected ?? {}), ...pruneUndefined(op.collected) };
+        // FIX A.4.5 §3 — seconda rete di sicurezza sul tipo di expectedPax nel
+        // MERGE (oltre alla coercizione nell'envelope in llm-router.ts): mai
+        // un valore non-numero/non-finito/non-positivo nel draft.
+        if (merged.expectedPax !== undefined) {
+          const clean = sanitizeExpectedPax(merged.expectedPax);
+          if (clean === undefined) delete merged.expectedPax;
+          else merged.expectedPax = clean;
+        }
+        // FIX A.4.5 §2 — bug live esatto: il router ha valorizzato `operation`
+        // ma ha omesso `name` pur essendo presente nel messaggio. Backstop
+        // deterministico: se manca ancora il nome, prova prima l'estrattore
+        // posizionale pax→origin, poi il generico "gruppo <nome>" (mai una
+        // regex per nomi specifici).
+        if (!merged.name) {
+          const opType = classifyMarioOperation({ rawType: op.type, kind: merged.kind, message });
+          const recovered = extractMarioDraftSlotsFromMessage(message, opType).name ?? extractBookingGroupQuery(message);
+          if (recovered) merged.name = recovered;
+        }
         // FIX A.4.4 §5/§6/§16 — una data ESPLICITA nel messaggio corrente vince
         // SEMPRE sul `serviceDate` proposto dall'LLM (`op.collected`) e su
         // quello già nel draft: mai fidarsi ciecamente dell'interpretazione
-        // del modello quando il dato è deterministicamente ricavabile.
-        const explicitDate = parseMarioSlotDate(message, now);
-        if (explicitDate) merged.serviceDate = explicitDate;
+        // del modello quando il dato è deterministicamente ricavabile. FIX
+        // A.4.5 §4/§5 — include anche un intervallo esplicito.
+        const explicitDateSlots = parseMarioDraftDateSlots(message, now);
+        if (explicitDateSlots) Object.assign(merged, explicitDateSlots);
         const operation = classifyMarioOperation({ rawType: op.type, kind: merged.kind, message });
         const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
         await setMarioDraftOperation(context.tenantId, context.userId, {
@@ -912,19 +937,25 @@ async function runMarioLlmFlow(
         // lo segnerà `missing`, non `lastIntent` perso.
         const existingCollected = existing?.collected ?? {};
         const operation = classifyMarioOperation({ rawType: existing?.type, kind: existingCollected.kind, message });
+        // FIX A.4.5 §2 — extractMarioDraftSlotsFromMessage ora prova anche il
+        // nome (estrattore posizionale pax→origin); extractBookingGroupQuery
+        // resta il fallback per il pattern generico "gruppo <nome>".
         const extractedSlots = extractMarioDraftSlotsFromMessage(message, operation);
-        const recoveredName = existingCollected.name ? undefined : extractBookingGroupQuery(message);
+        const recoveredName = existingCollected.name ? undefined : (extractedSlots.name ?? extractBookingGroupQuery(message));
         // FIX A.4.4 §6/§17 — una data ESPLICITA nel messaggio corrente
         // sostituisce SEMPRE quella già nel draft (anche se presente e magari
         // stale da un turno precedente): mai riusare una data vecchia quando
-        // l'utente ne ha appena fornita una nuova e inequivocabile.
-        const recoveredDate = parseMarioSlotDate(message, now);
+        // l'utente ne ha appena fornita una nuova e inequivocabile. FIX A.4.5
+        // §4/§5 — include anche un intervallo esplicito (serviceDate=inizio,
+        // returnDate=fine, draft-only).
+        const recoveredDateSlots = parseMarioDraftDateSlots(message, now);
+        const cleanExtractedPax = sanitizeExpectedPax(extractedSlots.expectedPax);
         const merged: MarioDraftSlots = {
           ...existingCollected,
           ...(recoveredName ? { name: recoveredName } : {}),
-          ...(!existingCollected.expectedPax && extractedSlots.expectedPax ? { expectedPax: extractedSlots.expectedPax } : {}),
+          ...(!existingCollected.expectedPax && cleanExtractedPax !== undefined ? { expectedPax: cleanExtractedPax } : {}),
           ...(!existingCollected.origin && extractedSlots.origin ? { origin: extractedSlots.origin } : {}),
-          ...(recoveredDate ? { serviceDate: recoveredDate } : {}),
+          ...(recoveredDateSlots ?? {}),
         };
         const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
         await setMarioDraftOperation(context.tenantId, context.userId, {

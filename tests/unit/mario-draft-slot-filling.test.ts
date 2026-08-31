@@ -223,6 +223,64 @@ describe("FIX A.4.2/A.4.3 §10/§3 — clarification SENZA operation su un messa
   });
 });
 
+describe("FIX A.4.5 §2/§6 — bug live esatto: nome recuperato quando il router valorizza operation ma omette name", () => {
+  it("'Creami un bus per un gruppo di 50 persone La Marra con partenza da Rimini' -> name recuperato, solo la data manca", async () => {
+    // Riproduce ESATTAMENTE il log del bug: action=clarification,
+    // draft_operation_type=create_bus_group, draft_missing_fields=["name"]
+    // — il router ha capito l'operazione ma non ha estratto il nome.
+    mockRoute.mockResolvedValueOnce(
+      clarification("Per quale data?", {
+        type: "create_bus_group",
+        collected: { expectedPax: 50, origin: "Rimini" }, // name assente dal router (bug live)
+        missing: ["name", "serviceDate"],
+      }),
+    );
+    const r1 = await run("Creami un bus per un gruppo di 50 persone La Marra con partenza da Rimini");
+    expect(r1.intent).toBe("mario_llm_clarification");
+
+    const d1 = await readDraft();
+    expect(d1?.collected).toMatchObject({ name: "La Marra", expectedPax: 50, origin: "Rimini" });
+    // Mario NON deve chiedere il nome: la policy lo ricalcola dopo il recupero deterministico.
+    expect(d1?.missing).toEqual(["serviceDate"]);
+  });
+});
+
+describe("FIX A.4.5 §7/§8 — range di date nello stesso messaggio o come follow-up", () => {
+  it("§7 nome+pax+origin+range nello stesso messaggio -> nessuna domanda su dati già presenti", async () => {
+    mockRoute.mockResolvedValueOnce(clarification("Confermi il periodo?")); // nessun operation
+    const r1 = await run(
+      "Creami un bus per un gruppo di 50 persone La Marra con partenza da Rimini dal 13 al 20 settembre",
+    );
+    expect(r1.intent).toBe("mario_llm_clarification");
+    const d1 = await readDraft();
+    expect(d1?.collected).toMatchObject({ name: "La Marra", expectedPax: 50, origin: "Rimini", serviceDate: "2026-09-13", returnDate: "2026-09-20" });
+    expect(d1?.missing).toEqual([]); // tutto già presente: nessun campo obbligatorio mancante
+  });
+
+  it("§8 range come follow-up completa il draft deterministicamente, zero LLM", async () => {
+    mockRoute.mockResolvedValueOnce(
+      clarification("Per quale periodo?", {
+        type: "create_bus_group",
+        collected: { name: "La Marra", expectedPax: 50, origin: "Rimini" },
+        missing: ["serviceDate"],
+      }),
+    );
+    await run("Creami un bus La Marra da 50 persone con partenza da Rimini");
+    expect((await readDraft())?.missing).toEqual(["serviceDate"]);
+
+    mockRunTool.mockResolvedValueOnce(
+      ok({ name: "La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TOKG", expiresAt: "2026-09-01T09:03:00Z" }),
+    );
+    const r2 = await run("dal 13 al 20 settembre");
+    expect(mockRoute).toHaveBeenCalledTimes(1); // ZERO chiamate LLM al turno 2
+    expect(r2.intent).toBe("mario_llm_pending_confirmation");
+    expect(r2.answer).not.toMatch(/cosa vuoi fare|dimmi nome e pax/i);
+    const args = mockRunTool.mock.calls[0]![2] as Record<string, unknown>;
+    expect(args.serviceDate).toBe("2026-09-13");
+    expect(args).not.toHaveProperty("returnDate"); // mai inviato al tool: non è un campo dello schema
+  });
+});
+
 describe("FIX A.4.2 §11 — clarification CON operation: draft salvato, turno 2 senza LLM", () => {
   it("operation strutturata nel primo turno -> preview diretta al turno 2, zero chiamate LLM", async () => {
     mockRoute.mockResolvedValueOnce(

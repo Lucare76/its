@@ -354,6 +354,28 @@ export function normalizeMarioRouterDecision(raw: unknown): unknown {
     if (Number.isFinite(n)) out.confidence = n;
   }
 
+  // FIX A.4.5 §3/§9 — `operation.collected.expectedPax` come stringa numerica
+  // PULITA ("50") → number. Root cause live: il router a volte restituisce
+  // expectedPax come stringa, lo schema Zod (z.number()) rifiuta l'intero
+  // envelope con invalid_schema/invalid_type e si perde una clarification
+  // altrimenti valida. Coercizione SOLO se la stringa è un intero positivo
+  // puro — "cinquanta"/"50/60"/"50 pax?" restano intatti e falliscono
+  // volutamente la validazione Zod sotto (fallback/clarification controllata,
+  // mai un'interpretazione ambigua indovinata qui).
+  if (
+    out.operation != null &&
+    typeof out.operation === "object" &&
+    !Array.isArray(out.operation)
+  ) {
+    const op = out.operation as Record<string, unknown>;
+    if (op.collected != null && typeof op.collected === "object" && !Array.isArray(op.collected)) {
+      const collected = op.collected as Record<string, unknown>;
+      if (typeof collected.expectedPax === "string" && /^\d{1,4}$/.test(collected.expectedPax.trim())) {
+        collected.expectedPax = Number(collected.expectedPax.trim());
+      }
+    }
+  }
+
   // (G) campi testuali troppo lunghi. `reasoning_summary` è NON funzionale
   // (solo diagnostica). `clarification_question` / `answer` sono user-facing ma
   // un testo troncato-ma-coerente è sempre meglio di un fallback cieco che

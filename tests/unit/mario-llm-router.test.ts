@@ -317,6 +317,35 @@ describe("normalizeMarioRouterDecision (pura)", () => {
     expect(normalizeMarioRouterDecision(null)).toBe(null);
     expect(normalizeMarioRouterDecision([1, 2])).toEqual([1, 2]);
   });
+
+  // FIX A.4.5 §3/§9 — expectedPax stringa numerica pulita -> number.
+  it("operation.collected.expectedPax stringa numerica pulita ('50') -> 50 (number)", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "Per quale data?",
+      operation: { type: "create_bus_group", collected: { name: "La Marra", expectedPax: "50" }, missing: ["serviceDate"] },
+    }) as { operation: { collected: { expectedPax: unknown } } };
+    expect(out.operation.collected.expectedPax).toBe(50);
+    expect(typeof out.operation.collected.expectedPax).toBe("number");
+  });
+
+  it("operation.collected.expectedPax 'cinquanta' NON viene normalizzato (resta stringa)", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "Per quale data?",
+      operation: { type: "create_bus_group", collected: { name: "La Marra", expectedPax: "cinquanta" }, missing: ["serviceDate"] },
+    }) as { operation: { collected: { expectedPax: unknown } } };
+    expect(out.operation.collected.expectedPax).toBe("cinquanta");
+  });
+
+  it("operation.collected.expectedPax '50/60' NON viene normalizzato", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "?",
+      operation: { type: "create_bus_group", collected: { expectedPax: "50/60" }, missing: [] },
+    }) as { operation: { collected: { expectedPax: unknown } } };
+    expect(out.operation.collected.expectedPax).toBe("50/60");
+  });
 });
 
 describe("FASE A.3 — slot filling nel router", () => {

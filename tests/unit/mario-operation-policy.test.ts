@@ -8,6 +8,7 @@ import {
   mentionsPhysicalBus,
   BLOCKING_PREVIEW_WARNINGS,
   extractMarioDraftSlotsFromMessage,
+  sanitizeExpectedPax,
 } from "@/lib/server/mario-assistant/operation-policy";
 
 describe("FIX A.4.3 — extractMarioDraftSlotsFromMessage", () => {
@@ -41,6 +42,64 @@ describe("FIX A.4.3 — extractMarioDraftSlotsFromMessage", () => {
 
   it("nessun segnale bus/esclusivo/generico creazione → nessuna estrazione (es. add_booking_group_stop)", () => {
     expect(extractMarioDraftSlotsFromMessage("aggiungi 20 persone a Tivoli per 50 pax con partenza da Rimini", "add_booking_group_stop")).toEqual({});
+  });
+});
+
+describe("FIX A.4.5 §2/§11 — estrazione nome POSIZIONALE (pax→origin), mai regex per nome specifico", () => {
+  it("§11 bug live esatto: 'CREAMI UN BUS PER UN GRUPPO DI 50 PERSONE LA MARRA CON PARTENZA DA RIMINI' -> name La Marra", () => {
+    const r = extractMarioDraftSlotsFromMessage(
+      "CREAMI UN BUS PER UN GRUPPO DI 50 PERSONE LA MARRA CON PARTENZA DA RIMINI",
+      "create_bus_group",
+    );
+    expect(r.name).toBe("LA MARRA");
+    expect(r.expectedPax).toBe(50);
+    expect(r.origin).toBe("RIMINI");
+  });
+
+  it("§11 'Creami bus per 50 persone La Marra con partenza da Rimini' -> name La Marra", () => {
+    const r = extractMarioDraftSlotsFromMessage("Creami bus per 50 persone La Marra con partenza da Rimini", "create_bus_group");
+    expect(r.name).toBe("La Marra");
+  });
+
+  it("§11 'Creami bus per 50 persone Juventus con partenza da Roma' -> name Juventus", () => {
+    const r = extractMarioDraftSlotsFromMessage("Creami bus per 50 persone Juventus con partenza da Roma", "create_bus_group");
+    expect(r.name).toBe("Juventus");
+  });
+
+  it("§11 'Creami bus per 50 persone Associazione San Giuseppe con partenza da Napoli' -> name multi-parola", () => {
+    const r = extractMarioDraftSlotsFromMessage(
+      "Creami bus per 50 persone Associazione San Giuseppe con partenza da Napoli",
+      "create_bus_group",
+    );
+    expect(r.name).toBe("Associazione San Giuseppe");
+  });
+
+  it("§7 nome + pax + origin + range nello stesso messaggio: il range non finisce dentro il nome", () => {
+    const r = extractMarioDraftSlotsFromMessage(
+      "Creami un bus per un gruppo di 50 persone La Marra con partenza da Rimini dal 13 al 20 settembre",
+      "create_bus_group",
+    );
+    expect(r.name).toBe("La Marra");
+    expect(r.origin).toBe("Rimini");
+  });
+
+  it("senza ancora pax non estrae un nome (nessun punto di riferimento affidabile)", () => {
+    expect(extractMarioDraftSlotsFromMessage("Creami un bus per La Marra con partenza da Rimini", "create_bus_group").name).toBeUndefined();
+  });
+});
+
+describe("FIX A.4.5 §3 — sanitizeExpectedPax", () => {
+  it("intero positivo finito -> passthrough", () => {
+    expect(sanitizeExpectedPax(50)).toBe(50);
+  });
+  it("stringa, NaN, negativo, zero, non-intero, oltre il limite -> undefined", () => {
+    expect(sanitizeExpectedPax("50")).toBeUndefined();
+    expect(sanitizeExpectedPax(NaN)).toBeUndefined();
+    expect(sanitizeExpectedPax(-1)).toBeUndefined();
+    expect(sanitizeExpectedPax(0)).toBeUndefined();
+    expect(sanitizeExpectedPax(50.5)).toBeUndefined();
+    expect(sanitizeExpectedPax(2001)).toBeUndefined();
+    expect(sanitizeExpectedPax(undefined)).toBeUndefined();
   });
 });
 

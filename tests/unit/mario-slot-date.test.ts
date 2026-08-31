@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMarioSlotDate, formatMarioDateForUser } from "@/lib/server/mario-assistant/date-time";
+import { parseMarioSlotDate, formatMarioDateForUser, parseMarioDateRange, parseMarioDraftDateSlots } from "@/lib/server/mario-assistant/date-time";
 
 // now fissato a martedì 1 settembre 2026 (Europe/Rome)
 const NOW = new Date("2026-09-01T09:00:00Z");
@@ -96,5 +96,45 @@ describe("FIX A.4.4 §2/§10/§15 — formatMarioDateForUser: SEMPRE DD-MM-YYYY,
     expect(formatMarioDateForUser(null)).toBeNull();
     expect(formatMarioDateForUser(undefined)).toBeNull();
     expect(formatMarioDateForUser("non una data")).toBeNull();
+  });
+});
+
+describe("FIX A.4.5 §4/§12 — parseMarioDateRange", () => {
+  it("'dal 13 al 20 settembre' → 2026-09-13 / 2026-09-20", () => {
+    expect(parseMarioDateRange("dal 13 al 20 settembre", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+  });
+  it("'dal 13 al 20 settembre 2026' → stesso risultato (anno esplicito)", () => {
+    expect(parseMarioDateRange("dal 13 al 20 settembre 2026", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+  });
+  it("'13-09-2026 al 20-09-2026' → 2026-09-13 / 2026-09-20", () => {
+    expect(parseMarioDateRange("13-09-2026 al 20-09-2026", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+  });
+  it("'13/09/2026 - 20/09/2026' → 2026-09-13 / 2026-09-20", () => {
+    expect(parseMarioDateRange("13/09/2026 - 20/09/2026", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+  });
+  it("'dal 13 settembre al 20 settembre' → 2026-09-13 / 2026-09-20", () => {
+    expect(parseMarioDateRange("dal 13 settembre al 20 settembre", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+  });
+  it("§12 'dal 30 settembre al 2 ottobre' → 2026-09-30 / 2026-10-02 (a cavallo di due mesi)", () => {
+    expect(parseMarioDateRange("dal 30 settembre al 2 ottobre", NOW)).toEqual({ startDate: "2026-09-30", endDate: "2026-10-02" });
+  });
+  it("§12 'dal 20 al 13 settembre' → undefined (range invertito, mai una data indovinata)", () => {
+    expect(parseMarioDateRange("dal 20 al 13 settembre", NOW)).toBeUndefined();
+  });
+  it("testo senza range → undefined", () => {
+    expect(parseMarioDateRange("13 settembre", NOW)).toBeUndefined();
+    expect(parseMarioDateRange("La Marra", NOW)).toBeUndefined();
+  });
+});
+
+describe("FIX A.4.5 §5 — parseMarioDraftDateSlots (data singola o intervallo)", () => {
+  it("data singola → solo serviceDate", () => {
+    expect(parseMarioDraftDateSlots("13/09/2026", NOW)).toEqual({ serviceDate: "2026-09-13" });
+  });
+  it("intervallo → serviceDate=inizio, returnDate=fine", () => {
+    expect(parseMarioDraftDateSlots("dal 13 al 20 settembre", NOW)).toEqual({ serviceDate: "2026-09-13", returnDate: "2026-09-20" });
+  });
+  it("nessuna data → undefined", () => {
+    expect(parseMarioDraftDateSlots("anzi 45", NOW)).toBeUndefined();
   });
 });

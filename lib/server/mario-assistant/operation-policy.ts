@@ -53,7 +53,14 @@ export type MarioOperationPolicy = {
 
 const CREATE_TOOL = "its.preview_create_booking_group";
 const CREATE_ARG_FIELDS = ["name", "expectedPax", "serviceDate", "kind", "status", "contactName", "contactPhone", "agencyId", "hotelId", "notes"];
-const CREATE_PRESERVED = ["origin", "pickupPoint", "agency", "hotel", "contact", "notes", "kind", "serviceDate"];
+// FIX A.4.5 §1/§5 — `returnDate` è un dato OPERATIVO conversazionale (fine
+// di un intervallo "dal X al Y"), NON un campo di its.preview_create_booking_group
+// (che accetta una sola serviceDate — audit schema booking_groups: colonna
+// service_date singola, nessun campo arrival/departure lì). Si preserva nel
+// draft come `origin`/`pickupPoint` — mai inviato al tool di creazione, mai
+// perso: resta disponibile per il passo successivo del flusso (fermata di
+// ritorno/reservation) che lo consumerà quando pertinente.
+const CREATE_PRESERVED = ["origin", "pickupPoint", "agency", "hotel", "contact", "notes", "kind", "serviceDate", "returnDate"];
 
 export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationPolicy> = {
   create_generic_booking_group: {
@@ -62,7 +69,7 @@ export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationP
     mcpTool: CREATE_TOOL,
     requiredBeforePreview: ["name", "expectedPax"], // §4 — data opzionale
     optionalPreserved: CREATE_PRESERVED,
-    supportedDraftFields: ["name", "expectedPax", "serviceDate", "kind", "origin", "agency", "hotel", "contact", "notes"],
+    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "agency", "hotel", "contact", "notes"],
     toolArgumentFields: CREATE_ARG_FIELDS,
   },
   create_bus_group: {
@@ -71,7 +78,7 @@ export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationP
     mcpTool: CREATE_TOOL,
     requiredBeforePreview: ["name", "expectedPax", "serviceDate"], // §5 — data obbligatoria (business rule)
     optionalPreserved: CREATE_PRESERVED,
-    supportedDraftFields: ["name", "expectedPax", "serviceDate", "kind", "origin", "pickupPoint", "agency", "hotel", "contact", "notes"],
+    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "pickupPoint", "agency", "hotel", "contact", "notes"],
     toolArgumentFields: CREATE_ARG_FIELDS,
     forcedKind: "bus_group",
     postCreateHints: ["if origin present and no stop exists -> propose add_booking_group_stop for origin"],
@@ -82,7 +89,7 @@ export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationP
     mcpTool: CREATE_TOOL,
     requiredBeforePreview: ["name", "expectedPax", "serviceDate"],
     optionalPreserved: CREATE_PRESERVED,
-    supportedDraftFields: ["name", "expectedPax", "serviceDate", "kind", "origin", "pickupPoint", "agency", "hotel", "contact", "notes"],
+    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "pickupPoint", "agency", "hotel", "contact", "notes"],
     toolArgumentFields: CREATE_ARG_FIELDS,
     forcedKind: "bus_exclusive",
     postCreateHints: ["if origin present and no stop exists -> propose add_booking_group_stop for origin"],
@@ -180,10 +187,47 @@ const PAX_RE = /\b(\d{1,4})\s*(?:persone|pax|passeggeri)\b|\bgruppo\s+di\s+(\d{1
 // va estratto). Cattura fino al primo separatore/parola di stop (fermata
 // successiva, destinazione, o riferimento al gruppo).
 const ORIGIN_RE =
-  /\b(?:partenza\s+da|parte\s+da)\s+([\p{L}][\p{L}'’ -]{1,60}?)(?=\s*[,.;!?]|$|\s+(?:a|per|con|gruppo|prenotazione)\b)/iu;
+  /\b(?:partenza\s+da|parte\s+da)\s+([\p{L}][\p{L}'’ -]{1,60}?)(?=\s*[,.;!?]|$|\s+(?:a|per|con|gruppo|prenotazione|dal)\b)/iu;
 
 /**
- * FIX A.4.3 — estrae SOLO slot ad alta confidenza per le operazioni di
+ * FIX A.4.5 §2 — estrazione POSIZIONALE del nome gruppo, mai per-frase.
+ * Usa gli indici di fine-match di PAX_RE e inizio-match di ORIGIN_RE (le
+ * STESSE regex già usate per pax/origin, unica fonte) per isolare la
+ * porzione di testo tra "quante persone" e "da dove parte": in tutte le
+ * frasi italiane naturali di creazione gruppo osservate ("... N persone
+ * <NOME> con partenza da <ORIGIN>"), quella porzione è il nome. Nessuna
+ * lista di articoli/filler da rimuovere (evita di mangiare "La" da "La
+ * Marra" — l'errore di un approccio per-parola): si taglia solo ai due
+ * ancoraggi già affidabili e si ripulisce un residuo di connettivo NOTO
+ * (persone/pax iniziale, con/per/di finale, una clausola data finale).
+ * Ritorna undefined se manca l'ancora pax (senza di essa non c'è un punto
+ * di partenza affidabile) o se il residuo non sembra un nome plausibile.
+ */
+function extractCreateGroupNameCandidate(message: string): string | undefined {
+  const paxMatch = PAX_RE.exec(message);
+  if (!paxMatch) return undefined;
+  const paxEnd = paxMatch.index + paxMatch[0].length;
+
+  const originMatch = ORIGIN_RE.exec(message);
+  const sliceEnd = originMatch ? originMatch.index : message.length;
+  if (sliceEnd <= paxEnd) return undefined;
+
+  let candidate = message.slice(paxEnd, sliceEnd);
+  candidate = candidate.replace(/^\s*(?:persone|pax|passeggeri)\b\s*/iu, "");
+  // Clausola data finale residua (es. "... La Marra dal 13 al 20 settembre"
+  // quando non c'è "partenza da" a delimitare): tagliata via prima dei
+  // connettivi generici, mai un pattern per nome.
+  candidate = candidate.replace(/\s+(?:dal|il)\s+\d[\s\S]*$/iu, "");
+  candidate = candidate.replace(/\s+(?:con|per|del|della|di)\s*$/iu, "");
+  candidate = candidate.replace(/[?.,;!]+$/u, "").trim();
+
+  if (candidate.length < 2 || candidate.length > 80) return undefined;
+  if (!/\p{L}/u.test(candidate)) return undefined;
+  return candidate;
+}
+
+/**
+ * FIX A.4.3/A.4.5 — estrae SOLO slot ad alta confidenza per le operazioni di
  * creazione gruppo. Non chiamata su nessun'altra operazione (add_stop,
  * reserve_bus, ecc. — quei campi richiedono ID/lookup, non estrazione da
  * testo libero). Ogni campo assente resta assente: la policy (non questo
@@ -217,7 +261,23 @@ export function extractMarioDraftSlotsFromMessage(
     }
   }
 
+  // FIX A.4.5 §2 — nome dalla posizione pax→origin (o pax→fine testo).
+  const nameCandidate = extractCreateGroupNameCandidate(message);
+  if (nameCandidate) out.name = nameCandidate;
+
   return out;
+}
+
+/**
+ * FIX A.4.5 §3 — guardia di tipo per `expectedPax` nel MERGE del draft
+ * (seconda rete di sicurezza oltre alla normalizzazione nell'envelope del
+ * router in llm-router.ts): qualunque valore che non sia un intero finito
+ * positivo (entro il limite già usato altrove, 2000) viene scartato, mai
+ * propagato nel draft come stringa/NaN/negativo.
+ */
+export function sanitizeExpectedPax(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0 && value <= 2000) return value;
+  return undefined;
 }
 
 export type ClassifySignal = {
