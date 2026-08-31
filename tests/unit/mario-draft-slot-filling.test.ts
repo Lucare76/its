@@ -190,6 +190,60 @@ describe("§8 reset draft", () => {
   });
 });
 
+describe("FIX A.4.2/A.4.3 §10/§3 — clarification SENZA operation su un messaggio operativo (bug live)", () => {
+  it("'Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?' -> draft con name+expectedPax+origin, turno 2 preview diretta senza LLM", async () => {
+    mockRoute.mockResolvedValueOnce(clarification("Per quale data?")); // nessun `operation`, come nel bug live
+    const r1 = await run("Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?");
+    expect(r1.intent).toBe("mario_llm_clarification");
+
+    const d1 = await readDraft();
+    expect(d1).not.toBeNull();
+    expect(d1?.type).toBe("create_bus_group");
+    // FIX A.4.3 — pax/origin evidenti recuperati deterministicamente, non solo il nome.
+    expect(d1?.collected).toMatchObject({ name: expect.stringMatching(/la marra/i), expectedPax: 50, origin: "Rimini" });
+    expect(d1?.missing).toEqual(["serviceDate"]);
+
+    // turno 2: solo la data manca -> tryDeterministicDraftFill completa il
+    // draft SENZA una seconda chiamata LLM, preview diretta (§3 spec A.4.3).
+    mockRunTool.mockResolvedValueOnce(
+      ok({ name: "La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "TOKR", expiresAt: "2026-09-01T09:03:00Z" }),
+    );
+    const r2 = await run("13 settembre");
+    expect(mockRoute).toHaveBeenCalledTimes(1); // nessuna seconda chiamata LLM
+    expect(r2.intent).toBe("mario_llm_pending_confirmation");
+    expect(r2.answer).toMatch(/La Marra/);
+    expect(r2.answer).toMatch(/50 pax/);
+    expect(r2.answer).toMatch(/13\/09\/2026/);
+    expect(r2.answer).toMatch(/Confermi\?$/);
+    expect(r2.llm).toBeUndefined();
+  });
+});
+
+describe("FIX A.4.2 §11 — clarification CON operation: draft salvato, turno 2 senza LLM", () => {
+  it("operation strutturata nel primo turno -> preview diretta al turno 2, zero chiamate LLM", async () => {
+    mockRoute.mockResolvedValueOnce(
+      clarification("Per quale data?", {
+        type: "create_bus_group",
+        collected: { name: "La Marra", expectedPax: 50, origin: "Rimini" },
+        missing: ["serviceDate"],
+      }),
+    );
+    const r1 = await run("Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?");
+    expect(r1.intent).toBe("mario_llm_clarification");
+    const d1 = await readDraft();
+    expect(d1?.collected).toMatchObject({ name: "La Marra", expectedPax: 50, origin: "Rimini" });
+    expect(d1?.missing).toEqual(["serviceDate"]);
+
+    mockRunTool.mockResolvedValueOnce(
+      ok({ name: "La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "TOKE", expiresAt: "2026-09-01T09:03:00Z" }),
+    );
+    const r2 = await run("13 settembre");
+    expect(mockRoute).toHaveBeenCalledTimes(1); // nessuna seconda chiamata LLM
+    expect(r2.intent).toBe("mario_llm_pending_confirmation");
+    expect(r2.llm).toBeUndefined();
+  });
+});
+
 describe("§15 TEST continuità Redis (due istanze)", () => {
   it("istanza A salva il draft, istanza B (modulo ricreato) lo recupera e completa", async () => {
     mockRoute.mockResolvedValueOnce(

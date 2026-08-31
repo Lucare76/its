@@ -165,6 +165,61 @@ const EXCLUSIVE_RE = /\b(esclusiv\w*|dedicat\w*|riservat\w*|solo per (?:il|quest
 // "posti" = capienza mezzo; "pax"/"persone" = dimensione gruppo (NON qui).
 const PHYSICAL_BUS_RE = /(\b\d{1,3}\s*posti\b|\btarga\b|\bcapacità\b|\bcapienza\b|\bmezzo\s*n\.?\s*\d+|\bbus\s*n\.?\s*\d+)/i;
 
+// FIX A.4.3 — estrattori CONSERVATIVI di slot "evidenti" per il fallback
+// deterministico quando il router LLM omette `operation` su una clarification
+// operativa (§A.4.2). Pattern SEMANTICI generali (unità di misura/parole
+// chiave), MAI per nome specifico. In caso di dubbio: nessuna estrazione,
+// mai un valore indovinato (§2/§6 spec fix).
+//
+// PAX: solo se il numero è esplicitamente legato a "persone/pax/passeggeri"
+// o alla frase "gruppo di N" — MAI un numero seguito da "posti" (quello è
+// capacità del MEZZO FISICO: "bus da 54 posti" != expectedPax=54, §4 spec).
+const PAX_RE = /\b(\d{1,4})\s*(?:persone|pax|passeggeri)\b|\bgruppo\s+di\s+(\d{1,4})\b/iu;
+// ORIGIN: solo con un marcatore esplicito "partenza da"/"parte da" (§6 —
+// "da Rimini a Napoli" da solo, senza questo marcatore, resta ambiguo e non
+// va estratto). Cattura fino al primo separatore/parola di stop (fermata
+// successiva, destinazione, o riferimento al gruppo).
+const ORIGIN_RE =
+  /\b(?:partenza\s+da|parte\s+da)\s+([\p{L}][\p{L}'’ -]{1,60}?)(?=\s*[,.;!?]|$|\s+(?:a|per|con|gruppo|prenotazione)\b)/iu;
+
+/**
+ * FIX A.4.3 — estrae SOLO slot ad alta confidenza per le operazioni di
+ * creazione gruppo. Non chiamata su nessun'altra operazione (add_stop,
+ * reserve_bus, ecc. — quei campi richiedono ID/lookup, non estrazione da
+ * testo libero). Ogni campo assente resta assente: la policy (non questo
+ * estrattore) decide poi cosa è ancora `missing` (§2 spec — mai inventare).
+ */
+export function extractMarioDraftSlotsFromMessage(
+  message: string,
+  operation: MarioOperationKey,
+): { name?: string; expectedPax?: number; origin?: string } {
+  const out: { name?: string; expectedPax?: number; origin?: string } = {};
+  if (operation !== "create_generic_booking_group" && operation !== "create_bus_group" && operation !== "create_exclusive_bus_group") {
+    return out;
+  }
+
+  const paxMatch = PAX_RE.exec(message);
+  if (paxMatch) {
+    const raw = paxMatch[1] ?? paxMatch[2];
+    const n = raw ? Number(raw) : NaN;
+    if (Number.isFinite(n) && n > 0 && n <= 2000) out.expectedPax = n;
+  }
+
+  // §4 — un segnale di MEZZO FISICO ("54 posti", "targa", "capacità"…) nello
+  // stesso messaggio rende l'intero messaggio ambiguo tra gruppo commerciale
+  // e reservation: non si estrae origin in quel caso (resta a un turno
+  // successivo/chiarimento esplicito, mai una scelta arbitraria).
+  if (!mentionsPhysicalBus(message)) {
+    const originMatch = ORIGIN_RE.exec(message);
+    if (originMatch?.[1]) {
+      const origin = originMatch[1].trim();
+      if (origin.length >= 2) out.origin = origin;
+    }
+  }
+
+  return out;
+}
+
 export type ClassifySignal = {
   /** Tool scelto dal router / dal flusso. */
   toolName?: string;

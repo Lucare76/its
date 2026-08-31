@@ -8,7 +8,7 @@
 import { getTool } from "@/lib/mcp/registry";
 import { runTool } from "@/lib/mcp/server";
 import type { McpContext } from "@/lib/mcp/context";
-import { detectMarioIntent, UNSUPPORTED_ANSWER, WRITE_UNSUPPORTED_ANSWER, type MarioIntentResult } from "./intent-parser";
+import { detectMarioIntent, extractBookingGroupQuery, UNSUPPORTED_ANSWER, WRITE_UNSUPPORTED_ANSWER, type MarioIntentResult } from "./intent-parser";
 import {
   formatOperationalBriefAnswer,
   formatHealthStatusAnswer,
@@ -33,7 +33,7 @@ import {
 import { isMarioLlmEnabled, isMarioLlmShadowMode, getMarioLlmModel } from "./llm-client";
 import { buildMarioToolCatalog } from "./tool-catalog";
 import { routeMarioWithLlm, type MarioRouterStepResult } from "./llm-router";
-import { logMarioLlmRoute } from "./telemetry";
+import { logMarioLlmRoute, logMarioDraftPersistence } from "./telemetry";
 import { calcMarioLlmCost } from "./pricing";
 import { parseMarioSlotDate } from "./date-time";
 import { BOOKING_GROUP_KINDS } from "@/lib/booking-groups";
@@ -45,6 +45,7 @@ import {
   questionForMissingField,
   mentionsPhysicalBus,
   BLOCKING_PREVIEW_WARNINGS,
+  extractMarioDraftSlotsFromMessage,
   type MarioOperationKey,
 } from "./operation-policy";
 import {
@@ -586,9 +587,9 @@ function finalizeTurnLlm(acc: TurnLlmAcc): MarioTurnLlmUsage {
 /** Esegue un turno che passa dal router LLM e attacca alla risposta il
  *  riepilogo costi del turno (§14). Se nessuna chiamata LLM è avvenuta
  *  (es. no_api_key), `.llm` resta assente → la UI lo tratta come costo 0. */
-async function runLlmTurn(context: McpContext, message: string, detected: MarioIntentResult): Promise<MarioAssistantResult> {
+async function runLlmTurn(context: McpContext, message: string, detected: MarioIntentResult, now: Date): Promise<MarioAssistantResult> {
   const acc = newTurnLlmAcc();
-  const result = await runMarioLlmFlow(context, message, detected, acc);
+  const result = await runMarioLlmFlow(context, message, detected, acc, now);
   return acc.calls > 0 ? { ...result, llm: finalizeTurnLlm(acc) } : result;
 }
 
@@ -710,7 +711,7 @@ async function runDraftDirectPreview(
 async function runDraftTurn(context: McpContext, message: string, draft: MarioDraftOperation, now: Date): Promise<MarioAssistantResult> {
   const fast = tryDeterministicDraftFill(draft, message, now);
   if (fast) return runDraftDirectPreview(context, fast.operation, fast.slots); // nessuna chiamata LLM
-  return runLlmTurn(context, message, { intent: "booking_group_write", params: {} });
+  return runLlmTurn(context, message, { intent: "booking_group_write", params: {} }, now);
 }
 
 type CreateGateResult =
@@ -775,6 +776,25 @@ function paxOverbookedQuestion(toolName: string, output: Record<string, unknown>
   return "Questa operazione supererebbe i pax previsti. Vuoi correggere?";
 }
 
+/**
+ * FIX A.4.2 §2/§4/§12 — riconosce, SENZA regex per-frase, se una clarification
+ * priva di `operation` riguarda comunque un'operazione OPERATIVA in corso (che
+ * quindi NON può restare solo testo/`lastIntent`, pena la perdita del
+ * contesto al turno successivo — bug live confermato). Riusa solo segnali
+ * deterministici già esistenti:
+ *  - un draft già aperto (continuazione/correzione) è sempre operativo;
+ *  - `detectMarioIntent` ha già riconosciuto un WRITE di gruppo;
+ *  - `classifyMarioOperation` (categorie bus/esclusivo di operation-policy.ts,
+ *    non frasi) si scosta dal default generico.
+ * Una clarification puramente informativa (nessuno di questi segnali) resta
+ * senza draft — principio §2 del fix.
+ */
+function isOperativeClarificationContext(message: string, existingDraft: MarioDraftOperation | null, detected: MarioIntentResult): boolean {
+  if (existingDraft) return true;
+  if (detected.intent === "booking_group_write") return true;
+  return classifyMarioOperation({ message }) !== "create_generic_booking_group";
+}
+
 /** Ciclo limitato (§8/§16, MAX_LLM_STEPS passi): il router puo' incatenare
  *  SOLO tool READ senza token (es. find_booking_group -> preview_*). Appena
  *  un risultato porta un confirmationToken, il ciclo si ferma e si passa alla
@@ -785,6 +805,7 @@ async function runMarioLlmFlow(
   message: string,
   detected: MarioIntentResult,
   turnLlm: TurnLlmAcc,
+  now: Date,
 ): Promise<MarioAssistantResult> {
   const catalog = buildMarioToolCatalog(context);
   const priorSteps: MarioRouterStepResult[] = [];
@@ -828,11 +849,17 @@ async function runMarioLlmFlow(
 
     if (routed.decision.action === "clarification") {
       const op = routed.decision.operation;
+      const existing = await readMarioDraftOperation(context.tenantId, context.userId);
+      const draftPresentBefore = Boolean(existing);
+      let draftSavedAfter = false;
+      let draftOperationType: string | undefined;
+      let draftMissingFields: string[] | undefined;
+      let reason: "operation_from_router" | "operation_reconstructed" | "non_operative_clarification";
+
       if (op) {
         // FASE A.3 §3/§4 — slot filling. FASE A.4 §25/§27 — `missing` NON è
         // deciso dal modello: si ricalcola con la policy deterministica dopo il
         // merge (l'LLM estrae slot, la policy decide cosa è obbligatorio).
-        const existing = await readMarioDraftOperation(context.tenantId, context.userId);
         const merged = { ...(existing?.collected ?? {}), ...pruneUndefined(op.collected) };
         const operation = classifyMarioOperation({ rawType: op.type, kind: merged.kind, message });
         const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
@@ -841,9 +868,60 @@ async function runMarioLlmFlow(
           collected: merged,
           missing: evalR.missingRequired,
         });
+        draftSavedAfter = true;
+        draftOperationType = operation;
+        draftMissingFields = evalR.missingRequired;
+        reason = "operation_from_router";
+      } else if (isOperativeClarificationContext(message, existing, detected)) {
+        // FIX A.4.2 §2/§4/§12 — guardia deterministica: il router ha capito che
+        // manca un dato ma NON ha valorizzato `operation` (bug live). Ricostruisce
+        // il draft SOLO da segnali già affidabili (mai inventando slot): il tipo
+        // operazione da classifyMarioOperation, il nome gruppo dal generico
+        // extractBookingGroupQuery già usato da FASE 3 (nessun regex nuovo
+        // per-frase). FIX A.4.3 — in più, pax/origin "evidenti" (unità di
+        // misura esplicite: "50 persone/pax", "partenza da X") via
+        // extractMarioDraftSlotsFromMessage, e la data via lo stesso
+        // parseMarioSlotDate del fast-path deterministico. Ogni campo NON
+        // riconosciuto con certezza resta assente (mai inventato): la policy
+        // lo segnerà `missing`, non `lastIntent` perso.
+        const existingCollected = existing?.collected ?? {};
+        const operation = classifyMarioOperation({ rawType: existing?.type, kind: existingCollected.kind, message });
+        const extractedSlots = extractMarioDraftSlotsFromMessage(message, operation);
+        const recoveredName = existingCollected.name ? undefined : extractBookingGroupQuery(message);
+        const recoveredDate = existingCollected.serviceDate ? undefined : parseMarioSlotDate(message, now);
+        const merged: MarioDraftSlots = {
+          ...existingCollected,
+          ...(recoveredName ? { name: recoveredName } : {}),
+          ...(!existingCollected.expectedPax && extractedSlots.expectedPax ? { expectedPax: extractedSlots.expectedPax } : {}),
+          ...(!existingCollected.origin && extractedSlots.origin ? { origin: extractedSlots.origin } : {}),
+          ...(recoveredDate ? { serviceDate: recoveredDate } : {}),
+        };
+        const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
+        await setMarioDraftOperation(context.tenantId, context.userId, {
+          type: operation,
+          collected: merged,
+          missing: evalR.missingRequired,
+        });
+        draftSavedAfter = true;
+        draftOperationType = operation;
+        draftMissingFields = evalR.missingRequired;
+        reason = "operation_reconstructed";
       } else {
         await updateMarioSession(context.tenantId, context.userId, { lastIntent: "mario_llm_clarification" });
+        reason = "non_operative_clarification";
       }
+
+      logMarioDraftPersistence({
+        tenantId: context.tenantId,
+        userId: context.userId,
+        step,
+        draftPresentBefore,
+        draftSavedAfter,
+        draftOperationType,
+        draftMissingFields,
+        reason,
+      });
+
       return { intent: "mario_llm_clarification", answer: routed.decision.clarification_question, actions: [] };
     }
 
@@ -1052,7 +1130,7 @@ export async function runMarioAssistant(
   }
 
   if (detected.intent === "unsupported" || detected.intent === "write_unsupported") {
-    if (llmEnabled) return runLlmTurn(context, message, detected);
+    if (llmEnabled) return runLlmTurn(context, message, detected, now);
     if (shadowMode) await runMarioLlmShadow(context, message);
     return detected.intent === "unsupported"
       ? { intent: "unsupported", answer: UNSUPPORTED_ANSWER, actions: [] }
@@ -1063,7 +1141,7 @@ export async function runMarioAssistant(
   // flusso anteprima → conferma (stessa pipeline runTool, nessun secondo motore).
   if (detected.intent.startsWith("booking_group_")) {
     if (detected.intent === "booking_group_write") {
-      if (llmEnabled) return runLlmTurn(context, message, detected);
+      if (llmEnabled) return runLlmTurn(context, message, detected, now);
       if (shadowMode) await runMarioLlmShadow(context, message);
     }
     return runBookingGroupIntent(context, detected as Extract<MarioIntentResult, { intent: `booking_group_${string}` }>);

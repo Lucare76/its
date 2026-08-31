@@ -7,7 +7,42 @@ import {
   questionForMissingField,
   mentionsPhysicalBus,
   BLOCKING_PREVIEW_WARNINGS,
+  extractMarioDraftSlotsFromMessage,
 } from "@/lib/server/mario-assistant/operation-policy";
+
+describe("FIX A.4.3 — extractMarioDraftSlotsFromMessage", () => {
+  it("§3 caso reale: pax + origin estratti, name NON è compito di questo estrattore", () => {
+    const r = extractMarioDraftSlotsFromMessage(
+      "Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?",
+      "create_bus_group",
+    );
+    expect(r).toMatchObject({ expectedPax: 50, origin: "Rimini" });
+    expect(r).not.toHaveProperty("name");
+  });
+
+  it("§4 'Prenotami un bus da 54 posti per La Marra' → NON estrae expectedPax=54 (capacità mezzo, non pax gruppo)", () => {
+    const r = extractMarioDraftSlotsFromMessage("Prenotami un bus da 54 posti per La Marra", "create_bus_group");
+    expect(r.expectedPax).toBeUndefined();
+  });
+
+  it("§5 'bus La Marra per 50 pax' → expectedPax=50", () => {
+    expect(extractMarioDraftSlotsFromMessage("bus La Marra per 50 pax", "create_bus_group").expectedPax).toBe(50);
+  });
+  it("§5 'bus per un gruppo di 50 persone' → expectedPax=50", () => {
+    expect(extractMarioDraftSlotsFromMessage("bus per un gruppo di 50 persone", "create_bus_group").expectedPax).toBe(50);
+  });
+
+  it("§6 'partenza da Rimini' → origin=Rimini", () => {
+    expect(extractMarioDraftSlotsFromMessage("bus con partenza da Rimini per 50 persone", "create_bus_group").origin).toBe("Rimini");
+  });
+  it("§6 'da Rimini a Napoli' (senza 'partenza da'/'parte da') → nessuna estrazione ambigua", () => {
+    expect(extractMarioDraftSlotsFromMessage("bus da Rimini a Napoli per 50 persone", "create_bus_group").origin).toBeUndefined();
+  });
+
+  it("nessun segnale bus/esclusivo/generico creazione → nessuna estrazione (es. add_booking_group_stop)", () => {
+    expect(extractMarioDraftSlotsFromMessage("aggiungi 20 persone a Tivoli per 50 pax con partenza da Rimini", "add_booking_group_stop")).toEqual({});
+  });
+});
 
 describe("classifyMarioOperation — §3/§5/§11", () => {
   it("rawType già valido → passthrough", () => {

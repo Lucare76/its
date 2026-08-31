@@ -91,6 +91,44 @@ export function logMarioLlmRoute(input: MarioLlmRouteLogInput): void {
   });
 }
 
+/**
+ * FIX A.4.2 §9 — telemetria SAFE dedicata alla persistenza del draft su una
+ * clarification: booleani/etichette non sensibili, mai il nome gruppo, mai
+ * origin/pax (dati operativi), mai prompt/risposta grezza, mai il token di
+ * conferma. Serve a vedere SUBITO, dal log, se il draft è stato salvato dopo
+ * una clarification — root cause del bug live era proprio l'assenza di
+ * questa evidenza.
+ */
+export type MarioDraftTelemetryInput = {
+  tenantId: string;
+  userId: string;
+  step: number;
+  draftPresentBefore: boolean;
+  draftSavedAfter: boolean;
+  /** Chiave operazione (es. "create_bus_group") — non è un dato utente. */
+  draftOperationType?: string;
+  /** NOMI dei campi ancora mancanti (es. "expectedPax"), mai i valori. */
+  draftMissingFields?: string[];
+  reason: "operation_from_router" | "operation_reconstructed" | "non_operative_clarification";
+};
+
+export function logMarioDraftPersistence(input: MarioDraftTelemetryInput): void {
+  console.info(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "mario_draft_persistence",
+      tenant_id: input.tenantId,
+      user_id: input.userId,
+      step: input.step,
+      draft_present_before: input.draftPresentBefore,
+      draft_saved_after: input.draftSavedAfter,
+      draft_operation_type: input.draftOperationType ?? null,
+      draft_missing_fields: input.draftMissingFields ?? null,
+      reason: input.reason,
+    }),
+  );
+}
+
 // Reason di fallback in cui il provider È stato contattato ma non ha
 // restituito usage affidabile (§16): riga `failed` con 0 token, costo null.
 // `no_api_key` / `invalid_json` / `invalid_schema` NON sono qui: le prime non
