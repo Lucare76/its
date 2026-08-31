@@ -281,6 +281,40 @@ describe("FIX A.4.5 §7/§8 — range di date nello stesso messaggio o come foll
   });
 });
 
+describe("FIX A.4.6 §5 — bug live: operation.missing verboso non deve far fallire l'intero decision", () => {
+  it("'CARICAMI LA MARRA, 50 PERSONE, RIMINI, 13-20 SETTEMBRE' -> nessun fallback, draft completo", async () => {
+    // Simula il router che ha classificato correttamente l'operazione e
+    // capito i campi (name/expectedPax/origin), ma ha restituito una frase
+    // libera in `missing` invece di un codice campo — root cause live.
+    mockRoute.mockResolvedValueOnce(
+      clarification("Confermi il periodo?", {
+        type: "create_bus_group",
+        collected: { name: "La Marra", expectedPax: 50, origin: "Rimini" },
+        missing: ["Mi manca ancora sapere la data esatta del servizio per poter procedere con la creazione del gruppo"],
+      }),
+    );
+    const r = await run("CARICAMI LA MARRA, 50 PERSONE, RIMINI, 13-20 SETTEMBRE");
+
+    // Nessun fallback statico (mai "unsupported"/"write_unsupported"): la
+    // decisione del router è stata accettata, non scartata per invalid_schema.
+    expect(r.intent).toBe("mario_llm_clarification");
+
+    const d = await readDraft();
+    expect(d?.type).toBe("create_bus_group");
+    expect(d?.collected).toMatchObject({
+      name: "La Marra",
+      expectedPax: 50,
+      origin: "Rimini",
+      serviceDate: "2026-09-13", // dal range terse "13-20 settembre", deterministico
+      returnDate: "2026-09-20",
+    });
+    // La policy ha ricalcolato missing dai collected: nessun campo obbligatorio
+    // manca più (name+expectedPax+serviceDate tutti presenti), MAI la frase
+    // libera del router.
+    expect(d?.missing).toEqual([]);
+  });
+});
+
 describe("FIX A.4.2 §11 — clarification CON operation: draft salvato, turno 2 senza LLM", () => {
   it("operation strutturata nel primo turno -> preview diretta al turno 2, zero chiamate LLM", async () => {
     mockRoute.mockResolvedValueOnce(

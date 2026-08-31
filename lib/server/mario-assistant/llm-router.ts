@@ -71,7 +71,12 @@ const routerDecisionSchema = z.discriminatedUnion("action", [
             kind: z.string().max(40).optional(),
           })
           .default({}),
-        missing: z.array(z.string().max(40)).max(12).default([]),
+        // FIX A.4.6 §4 — limite alzato (era 40): rete di sicurezza in più
+        // oltre alla normalizzazione in normalizeMarioRouterDecision (che
+        // scarta comunque le frasi troppo lunghe prima di arrivare qui).
+        // Il CONTENUTO resta advisory: l'unica autorità sui campi mancanti
+        // è evaluateMarioOperationPolicy (§3), mai questo array grezzo.
+        missing: z.array(z.string().max(200)).max(12).default([]),
       })
       .optional(),
   }),
@@ -374,6 +379,19 @@ export function normalizeMarioRouterDecision(raw: unknown): unknown {
         collected.expectedPax = Number(collected.expectedPax.trim());
       }
     }
+    // FIX A.4.6 §1/§2 — `operation.missing` deve restare un array di CODICI
+    // campo corti, non frasi libere: una frase lunga ("Mi serve sapere
+    // esattamente quale data...") supera il limite Zod per elemento e fa
+    // fallire l'INTERO envelope con invalid_schema/too_big, buttando via
+    // anche un `collected` per il resto valido (root cause live). Qui si
+    // mappano SOLO alias non ambigui verso il codice canonico; una frase non
+    // riconducibile con certezza viene scartata (mai inventato un campo) —
+    // `operation.missing` resta comunque SOLO advisory: l'unica autorità sui
+    // campi mancanti è evaluateMarioOperationPolicy su `collected` (§3),
+    // MAI questo array (l'orchestrator non lo usa già oggi per la readiness).
+    if (Array.isArray(op.missing)) {
+      op.missing = normalizeMissingFieldCodes(op.missing);
+    }
   }
 
   // (G) campi testuali troppo lunghi. `reasoning_summary` è NON funzionale
@@ -386,6 +404,64 @@ export function normalizeMarioRouterDecision(raw: unknown): unknown {
   if (typeof out.clarification_question === "string") out.clarification_question = clampText(out.clarification_question, MAX_CLARIFICATION_CHARS);
   if (typeof out.answer === "string") out.answer = clampText(out.answer, MAX_ANSWER_CHARS);
 
+  return out;
+}
+
+// FIX A.4.6 §2 — codici campo canonici noti (stessi usati da
+// MARIO_FIELD_QUESTIONS in operation-policy.ts) e alias ovvi in italiano
+// verso quei codici. Nessuna interpretazione ambigua: solo corrispondenze
+// esatte (dopo trim/lowercase), mai un match parziale/fuzzy.
+const CANONICAL_MISSING_CODES = new Set([
+  "name", "expectedPax", "serviceDate", "returnDate", "origin", "city",
+  "pickupPoint", "direction", "bookingGroupId", "bookingGroupStopId",
+  "passengers", "busUnitId", "reservedPax", "ferryDirection", "ferryField",
+  "serviceId", "driverId", "targetStatus",
+]);
+const MISSING_FIELD_ALIASES: Record<string, string> = {
+  "data": "serviceDate",
+  "data servizio": "serviceDate",
+  "data del servizio": "serviceDate",
+  "nome": "name",
+  "nome gruppo": "name",
+  "numero persone": "expectedPax",
+  "persone": "expectedPax",
+  "pax": "expectedPax",
+  "ritorno": "returnDate",
+  "data ritorno": "returnDate",
+  "data di ritorno": "returnDate",
+  "città partenza": "origin",
+  "citta partenza": "origin",
+  "partenza": "origin",
+  "origine": "origin",
+};
+// Frasi oltre questa soglia non sono mai un "codice campo": se non
+// riconducibili con certezza tramite l'alias map, si scartano (mai
+// inventate) — l'array resta comunque solo advisory (§3), la policy decide.
+const MAX_MISSING_CODE_CHARS = 40;
+
+function normalizeMissingFieldCodes(raw: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      out.push(item); // non una stringa: lasciato a Zod, che lo respingerà correttamente
+      continue;
+    }
+    const trimmed = item.trim();
+    if (CANONICAL_MISSING_CODES.has(trimmed)) {
+      out.push(trimmed);
+      continue;
+    }
+    const alias = MISSING_FIELD_ALIASES[trimmed.toLowerCase()];
+    if (alias) {
+      out.push(alias);
+      continue;
+    }
+    if (trimmed.length <= MAX_MISSING_CODE_CHARS) {
+      out.push(trimmed); // stringa corta non riconosciuta: innocua, ignorata a valle dalla policy
+    }
+    // altrimenti: scartata silenziosamente (mai un elemento troppo lungo che
+    // farebbe fallire l'intero envelope — root cause live del fix).
+  }
   return out;
 }
 

@@ -346,6 +346,71 @@ describe("normalizeMarioRouterDecision (pura)", () => {
     }) as { operation: { collected: { expectedPax: unknown } } };
     expect(out.operation.collected.expectedPax).toBe("50/60");
   });
+
+  // FIX A.4.6 §2/§6/§7/§8 — operation.missing: alias -> codice canonico,
+  // frase verbosa scartata (mai invalid_schema per una frase libera).
+  it("§7 missing canonico invariato", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "?",
+      operation: { type: "create_bus_group", collected: {}, missing: ["serviceDate"] },
+    }) as { operation: { missing: unknown[] } };
+    expect(out.operation.missing).toEqual(["serviceDate"]);
+  });
+
+  it("alias ovvi ('data', 'nome gruppo', 'pax', 'ritorno') -> codici canonici", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "?",
+      operation: { type: "create_bus_group", collected: {}, missing: ["data", "nome gruppo", "pax", "ritorno"] },
+    }) as { operation: { missing: unknown[] } };
+    expect(out.operation.missing).toEqual(["serviceDate", "name", "expectedPax", "returnDate"]);
+  });
+
+  it("§6 frase verbosa in missing -> scartata (mai un campo inventato, mai invalid_schema a valle)", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "?",
+      operation: {
+        type: "create_bus_group",
+        collected: { name: "La Marra", expectedPax: 50 },
+        missing: ["Mi manca ancora sapere la data esatta del servizio per poter procedere con la creazione del gruppo"],
+      },
+    }) as { operation: { missing: unknown[] } };
+    expect(out.operation.missing).toEqual([]);
+  });
+
+  it("§6 la frase verbosa NON fa fallire lo schema a valle (pipeline reale routeMarioWithLlm)", async () => {
+    const r = await routeMarioWithLlm(
+      baseInput({
+        completion: textCompletion(
+          JSON.stringify({
+            action: "clarification",
+            clarification_question: "Per quale data?",
+            operation: {
+              type: "create_bus_group",
+              collected: { name: "La Marra", expectedPax: 50 },
+              missing: ["Mi manca ancora sapere la data esatta del servizio per poter procedere con la creazione del gruppo"],
+            },
+          }),
+        ),
+      }),
+    );
+    expect(r.fallbackUsed).toBe(false);
+    expect(r.fallbackReason).toBeUndefined();
+    expect(r.decision.action).toBe("clarification");
+  });
+
+  it("§8 stringa breve non interpretabile -> lasciata innocua, mai promossa a codice inventato", () => {
+    const out = normalizeMarioRouterDecision({
+      action: "clarification",
+      clarification_question: "?",
+      operation: { type: "create_bus_group", collected: {}, missing: ["qualcosa di non interpretabile"] },
+    }) as { operation: { missing: unknown[] } };
+    expect(out.operation.missing).toEqual(["qualcosa di non interpretabile"]);
+    expect(out.operation.missing).not.toContain("name");
+    expect(out.operation.missing).not.toContain("serviceDate");
+  });
 });
 
 describe("FASE A.3 — slot filling nel router", () => {

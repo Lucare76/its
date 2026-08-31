@@ -112,6 +112,10 @@ describe("FIX A.4.5 §4/§12 — parseMarioDateRange", () => {
   it("'13/09/2026 - 20/09/2026' → 2026-09-13 / 2026-09-20", () => {
     expect(parseMarioDateRange("13/09/2026 - 20/09/2026", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
   });
+  it("FIX A.4.6 §5 — forma terse del bug live '13-20 settembre' → 2026-09-13 / 2026-09-20", () => {
+    expect(parseMarioDateRange("13-20 settembre", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+    expect(parseMarioDateRange("13-20 SETTEMBRE", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
+  });
   it("'dal 13 settembre al 20 settembre' → 2026-09-13 / 2026-09-20", () => {
     expect(parseMarioDateRange("dal 13 settembre al 20 settembre", NOW)).toEqual({ startDate: "2026-09-13", endDate: "2026-09-20" });
   });

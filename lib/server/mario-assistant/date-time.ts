@@ -147,6 +147,11 @@ const RANGE_MONTH_BOTH_RE = new RegExp(
   `\\bdal\\s+(\\d{1,2})\\s+(?:di\\s+)?(${MONTH_ALT})\\s+al\\s+(\\d{1,2})\\s+(?:di\\s+)?(${MONTH_ALT})(?:\\s+(\\d{4}))?\\b`,
   "iu",
 );
+// FIX A.4.6 §5 — forma terse osservata nel bug live: "13-20 settembre" (mese
+// condiviso, trattino invece di "dal ... al ..."). Distinta senza ambiguità
+// dalla data singola "DD-MM" perché qui il secondo numero è seguito da un
+// NOME di mese, non da altre cifre.
+const RANGE_MONTH_SHARED_BARE_RE = new RegExp(`\\b(\\d{1,2})\\s*-\\s*(\\d{1,2})\\s+(?:di\\s+)?(${MONTH_ALT})(?:\\s+(\\d{4}))?\\b`, "iu");
 
 export type MarioDateRange = { startDate: string; endDate: string };
 
@@ -187,12 +192,13 @@ export function parseMarioDateRange(text: string, now: Date): MarioDateRange | u
   const todayKey = romeDateKey(now);
   const currentYear = Number(todayKey.slice(0, 4));
 
-  const monthShared = RANGE_MONTH_SHARED_RE.exec(t);
-  if (monthShared) {
-    const day1 = Number(monthShared[1]);
-    const day2 = Number(monthShared[2]);
-    const month = MONTHS_IT[monthShared[3]!]!;
-    const explicitYear = monthShared[4] ? Number(monthShared[4]) : undefined;
+  // FIX A.4.6 §5 — stessa logica per "dal D al D mese" e per la forma terse
+  // "D-D mese" osservata nel bug live: un solo helper, due pattern di ingresso.
+  const resolveMonthShared = (match: RegExpExecArray): MarioDateRange | undefined => {
+    const day1 = Number(match[1]);
+    const day2 = Number(match[2]);
+    const month = MONTHS_IT[match[3]!]!;
+    const explicitYear = match[4] ? Number(match[4]) : undefined;
     if (explicitYear) {
       if (!isValidCalendarDate(explicitYear, month, day1) || !isValidCalendarDate(explicitYear, month, day2)) return undefined;
       return validRangeOrder(
@@ -206,7 +212,13 @@ export function parseMarioDateRange(text: string, now: Date): MarioDateRange | u
     if (!isValidCalendarDate(startYear, month, day2)) return undefined;
     const end = `${startYear}-${String(month).padStart(2, "0")}-${String(day2).padStart(2, "0")}`;
     return validRangeOrder(start, end);
-  }
+  };
+
+  const monthShared = RANGE_MONTH_SHARED_RE.exec(t);
+  if (monthShared) return resolveMonthShared(monthShared);
+
+  const monthSharedBare = RANGE_MONTH_SHARED_BARE_RE.exec(t);
+  if (monthSharedBare) return resolveMonthShared(monthSharedBare);
 
   const monthBoth = RANGE_MONTH_BOTH_RE.exec(t);
   if (monthBoth) {
