@@ -29,6 +29,11 @@ export type MarioLlmRouteLogInput = {
   contextLoaded?: boolean;
   /** true se al momento del routing c'era una conferma in sospeso (mai il token). */
   pendingConfirmation?: boolean;
+  /** SANITIZZATO — path/codici degli issue Zod quando fallback_reason ===
+   *  "invalid_schema": diagnostica della prossima divergenza di envelope del
+   *  modello SENZA conoscere il contenuto (mai valori, mai PII, mai raw LLM). */
+  schemaIssuePaths?: string[];
+  schemaIssueCodes?: string[];
   /** true quando il router e' stato invocato in shadow mode (§28): la
    *  decisione e' stata solo osservata, non ha guidato la risposta. */
   shadow?: boolean;
@@ -55,6 +60,8 @@ export function logMarioLlmRoute(input: MarioLlmRouteLogInput): void {
     session_store: input.sessionStore ?? null,
     context_loaded: input.contextLoaded ?? null,
     pending_confirmation: input.pendingConfirmation ?? null,
+    schema_issue_paths: input.schemaIssuePaths ?? null,
+    schema_issue_codes: input.schemaIssueCodes ?? null,
   };
   console.info(JSON.stringify(line));
 }

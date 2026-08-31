@@ -553,6 +553,8 @@ async function runMarioLlmFlow(context: McpContext, message: string, detected: M
       sessionStore: getLastMarioSessionStore(),
       contextLoaded: hasSessionContext(sessionCtx),
       pendingConfirmation: Boolean(sessionCtx.pendingConfirmation),
+      schemaIssuePaths: routed.schemaIssues?.paths,
+      schemaIssueCodes: routed.schemaIssues?.codes,
     });
 
     if (routed.fallbackUsed || routed.decision.action === "fallback") {
@@ -658,6 +660,8 @@ async function runMarioLlmShadow(context: McpContext, message: string): Promise<
       sessionStore: getLastMarioSessionStore(),
       contextLoaded: hasSessionContext(sessionCtx),
       pendingConfirmation: Boolean(sessionCtx.pendingConfirmation),
+      schemaIssuePaths: routed.schemaIssues?.paths,
+      schemaIssueCodes: routed.schemaIssues?.codes,
       shadow: true,
     });
   } catch {
