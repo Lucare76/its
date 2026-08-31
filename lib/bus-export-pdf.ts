@@ -1,13 +1,25 @@
-type Direction = "arrival" | "departure";
+﻿type Direction = "arrival" | "departure";
 
 export type BusPdfAllocation = {
   stop_name: string;
+  stop_city?: string | null;
   stop_pickup_note?: string | null;
   stop_pickup_time?: string | null;
   hotel_pickup_time?: string | null;
   pax_assigned: number;
   customer_name: string;
   customer_phone?: string | null;
+  booking_group_contact_name?: string | null;
+  booking_group_contact_phone?: string | null;
+  booking_group_outbound_ferry_company?: string | null;
+  booking_group_outbound_departure_port?: string | null;
+  booking_group_outbound_ferry_time?: string | null;
+  booking_group_outbound_arrival_port?: string | null;
+  booking_group_return_ferry_company?: string | null;
+  booking_group_return_departure_port?: string | null;
+  booking_group_return_ferry_time?: string | null;
+  booking_group_return_arrival_port?: string | null;
+  is_booking_group?: boolean;
   hotel_name?: string | null;
   agency_name?: string | null;
   notes?: string | null;
@@ -97,13 +109,63 @@ function visiblePickupNote(stopName: string, pickupNote: string | null | undefin
   return normalizedNote && normalizedStop.includes(normalizedNote) ? "" : note;
 }
 
-function splitStopAndPickup(stopName: string, pickupNote: string | null | undefined) {
-  const note = (pickupNote ?? "").trim();
-  const parts = stopName.split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
-  if (parts.length >= 2 && note && normalizeLabel(parts.slice(1).join(" ")).includes(normalizeLabel(note))) {
-    return { city: parts[0], pickup: note };
+function displayStopName(alloc: BusPdfAllocation) {
+  return (alloc.stop_name ?? "").trim();
+}
+
+function displayStopCity(alloc: BusPdfAllocation) {
+  const city = (alloc.stop_city ?? "").trim();
+  if (city) return city;
+  const [firstPart] = (alloc.stop_name ?? "").split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
+  return firstPart ?? alloc.stop_name;
+}
+
+function displayPickupPoint(alloc: BusPdfAllocation, fallbackPickup: string | null | undefined) {
+  const pickup = (fallbackPickup ?? "").trim();
+  if (pickup) return pickup;
+  const city = displayStopCity(alloc);
+  const stop = displayStopName(alloc);
+  if (normalizeLabel(stop) === normalizeLabel(city)) return "";
+  if (normalizeLabel(stop).startsWith(`${normalizeLabel(city)} `)) {
+    return stop.slice(city.length).replace(/^\s*-\s*/, "").trim();
   }
-  return { city: stopName, pickup: note };
+  return stop;
+}
+
+function displayHotel(alloc: BusPdfAllocation, hotelFromNotes: string) {
+  if (alloc.is_booking_group) return "";
+  return alloc.hotel_name || hotelFromNotes;
+}
+
+function firstBookingGroupContact(allocations: BusPdfAllocation[]) {
+  const match = allocations.find((alloc) => alloc.booking_group_contact_name || alloc.booking_group_contact_phone);
+  if (!match) return null;
+  return {
+    name: match.booking_group_contact_name?.trim() ?? "",
+    phone: match.booking_group_contact_phone?.trim() ?? "",
+  };
+}
+
+function firstBookingGroupFerry(allocations: BusPdfAllocation[], direction: Direction) {
+  const match = allocations.find((alloc) => (
+    direction === "arrival"
+      ? alloc.booking_group_outbound_ferry_company || alloc.booking_group_outbound_departure_port || alloc.booking_group_outbound_ferry_time || alloc.booking_group_outbound_arrival_port
+      : alloc.booking_group_return_ferry_company || alloc.booking_group_return_departure_port || alloc.booking_group_return_ferry_time || alloc.booking_group_return_arrival_port
+  ));
+  if (!match) return null;
+  return direction === "arrival"
+    ? {
+        company: match.booking_group_outbound_ferry_company?.trim() ?? "",
+        departurePort: match.booking_group_outbound_departure_port?.trim() ?? "",
+        time: time5(match.booking_group_outbound_ferry_time),
+        arrivalPort: match.booking_group_outbound_arrival_port?.trim() ?? "",
+      }
+    : {
+        company: match.booking_group_return_ferry_company?.trim() ?? "",
+        departurePort: match.booking_group_return_departure_port?.trim() ?? "",
+        time: time5(match.booking_group_return_ferry_time),
+        arrivalPort: match.booking_group_return_arrival_port?.trim() ?? "",
+      };
 }
 
 function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = [], direction: Direction = "arrival") {
@@ -113,8 +175,8 @@ function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] 
       const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
       const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
       if (orderA !== orderB) return orderA - orderB;
-      const stopA = a.stop_name.toUpperCase();
-      const stopB = b.stop_name.toUpperCase();
+      const stopA = displayStopName(a).toUpperCase();
+      const stopB = displayStopName(b).toUpperCase();
       if (stopA !== stopB) return stopA.localeCompare(stopB, "it");
       const hotelA = (a.hotel_name ?? "").toUpperCase();
       const hotelB = (b.hotel_name ?? "").toUpperCase();
@@ -134,8 +196,8 @@ function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] 
 }
 
 function groupKey(alloc: BusPdfAllocation, direction: Direction) {
-  if (direction === "departure") return alloc.stop_name.toUpperCase();
-  return `${time5(alloc.stop_pickup_time || alloc.hotel_pickup_time)}|${alloc.stop_name.toUpperCase()}`;
+  if (direction === "departure") return displayStopName(alloc).toUpperCase();
+  return `${time5(alloc.stop_pickup_time || alloc.hotel_pickup_time)}|${displayStopName(alloc).toUpperCase()}`;
 }
 
 function buildRows(input: BusPdfInput) {
@@ -152,16 +214,13 @@ function buildRows(input: BusPdfInput) {
       total += alloc.pax_assigned;
       const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
       const stopTime = time5(alloc.stop_pickup_time || alloc.hotel_pickup_time);
+      const stopName = displayStopName(alloc);
       const rawStopNote = alloc.stop_pickup_note ?? input.stops?.find((s) => s.stop_name.toUpperCase() === alloc.stop_name.toUpperCase())?.pickup_note ?? "";
-      const stopNote = visiblePickupNote(alloc.stop_name, rawStopNote);
-      const stopParts = splitStopAndPickup(alloc.stop_name, rawStopNote || stopNote);
-      const hasPickupCell = Boolean(stopParts.pickup);
-      const pickupCellHtml = stopParts.pickup
-        ? `<strong>${escapeHtml(stopParts.city)}</strong><br><span>${escapeHtml(stopParts.pickup)}</span>`
-        : `<strong>${escapeHtml(stopParts.city)}</strong>`;
-      const hotel = alloc.hotel_name || hotelFromNotes;
+      const stopCity = displayStopCity(alloc);
+      const stopNote = displayPickupPoint(alloc, rawStopNote);
+      const hotel = displayHotel(alloc, hotelFromNotes);
       const agency = alloc.agency_name || agencyFromNotes;
-      return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity: stopParts.city, hasPickupCell, pickupCellHtml, hotel, agency, cleanNote, runningTotal: total };
+      return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hotel, agency, cleanNote, runningTotal: total };
     }),
   };
 }
@@ -194,24 +253,29 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
   const directionTitle = input.title ?? (input.direction === "arrival" ? "ARRIVI" : "PARTENZE");
   const { rows, totalPax } = buildRows(input);
   const departureUnloadRows = buildDepartureUnloadRows(input);
-  const driver = `${input.driverName || "N/D"}${input.driverPhone ? ` · ${input.driverPhone}` : ""}`;
-  const subtitle = `${input.lineName}${input.busLabel ? ` — Bus ${input.busLabel}` : ""} · ${fmtDate(input.dateIso)}`;
+  const groupContact = firstBookingGroupContact(input.allocations);
+  const groupFerry = firstBookingGroupFerry(input.allocations, input.direction);
+  const driver = `${input.driverName || "N/D"}${input.driverPhone ? ` - ${input.driverPhone}` : ""}`;
+  const isExclusiveGroupLine = normalizeLabel(input.lineName) === "bus esclusivi gruppi";
+  const subtitle = isExclusiveGroupLine && input.busLabel
+    ? `${input.busLabel} - ${fmtDate(input.dateIso)}`
+    : `${input.lineName}${input.busLabel ? ` - Bus ${input.busLabel}` : ""} - ${fmtDate(input.dateIso)}`;
   const headerColumns = input.direction === "arrival"
     ? ["orario", "punto di carico", "n° pax", "nominativo", "cell", "HOTEL", "note", "agenzia"]
     : ["pickup", "hotel partenza", "n° pax", "nominativo", "cell", "destinazione", "agenzia", "note"];
 
-  const bodyRows = rows.map(({ alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hasPickupCell, pickupCellHtml, hotel, agency, cleanNote }) => {
+  const bodyRows = rows.map(({ alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hotel, agency, cleanNote }) => {
     const shouldShowStopBand = shouldRenderStop;
     const stopBand = shouldShowStopBand
-      ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">▣</span><strong>${escapeHtml(stopCity)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
+      ? `<tr class="stop-row"><td colspan="8"><span class="bus-icon">&bull;</span><strong>${escapeHtml(stopCity)}</strong><span>${escapeHtml(stopNote)}</span></td></tr>`
       : "";
     const cells = input.direction === "arrival"
       ? [
           stopTime,
           "",
           alloc.pax_assigned,
-          alloc.customer_name,
-          alloc.customer_phone,
+          alloc.is_booking_group ? "" : alloc.customer_name,
+          alloc.is_booking_group ? "" : alloc.customer_phone,
           hotel,
           cleanNote,
           agency,
@@ -220,22 +284,34 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
           time5(alloc.hotel_pickup_time || alloc.stop_pickup_time),
           hotel,
           alloc.pax_assigned,
-          alloc.customer_name,
-          alloc.customer_phone,
-          stopNote ? `${alloc.stop_name} - ${stopNote}` : alloc.stop_name,
+          alloc.is_booking_group ? "" : alloc.customer_name,
+          alloc.is_booking_group ? "" : alloc.customer_phone,
+          stopNote ? `${displayStopName(alloc)} - ${stopNote}` : displayStopName(alloc),
           agency,
           cleanNote,
         ];
     return `${stopBand}<tr class="${index % 2 === 1 ? "alt" : ""}">${cells.map((cell, cellIndex) => {
-      const isPickupCell = input.direction === "arrival" && cellIndex === 1;
-      const className = isPickupCell ? "pickup-cell" : cellIndex === 2 ? "center" : "";
-      return `<td class="${className}">${isPickupCell ? cell : escapeHtml(cell)}</td>`;
+      const className = cellIndex === 2 ? "center" : "";
+      return `<td class="${className}">${escapeHtml(cell)}</td>`;
     }).join("")}</tr>`;
   }).join("");
 
   const logoMarkup = input.logoBase64
     ? `<img class="logo" src="${input.logoBase64}" alt="Ischia Transfer Service" />`
     : `<div class="logo-fallback"><strong>ISCHIA</strong><span>TRANSFER SERVICE</span></div>`;
+  const groupContactMarkup = groupContact
+    ? `<section class="group-contact"><strong>Capogruppo</strong><span>${escapeHtml(groupContact.name || "N/D")}</span>${groupContact.phone ? `<span>${escapeHtml(groupContact.phone)}</span>` : ""}</section>`
+    : "";
+  const groupFerryLabel = groupFerry
+    ? [
+        groupFerry.company,
+        groupFerry.departurePort && groupFerry.arrivalPort ? `${groupFerry.departurePort} → ${groupFerry.arrivalPort}` : groupFerry.departurePort || groupFerry.arrivalPort,
+        groupFerry.time,
+      ].filter(Boolean).join(" - ")
+    : "";
+  const groupFerryMarkup = groupFerryLabel
+    ? `<section class="group-contact"><strong>Traghetto previsto</strong><span>${escapeHtml(groupFerryLabel)}</span></section>`
+    : "";
 
   return `<!doctype html>
 <html lang="it">
@@ -282,6 +358,28 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
       background: linear-gradient(180deg, #ffffff, #f8fbff);
     }
     .chip strong { color: #079669; font-size: 18px; }
+    .group-contact {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 4mm;
+      border: 1px solid ${BRAND_BLUE};
+      border-radius: 6px;
+      background: #f8fbff;
+      color: ${BRAND_NAVY};
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .group-contact strong {
+      text-transform: uppercase;
+      color: ${BRAND_BLUE};
+      letter-spacing: 0.08em;
+      font-size: 10px;
+    }
+    .group-contact span {
+      font-size: 13px;
+    }
     table { width: 100%; margin-top: 4mm; border-collapse: collapse; table-layout: fixed; }
     th {
       background: linear-gradient(180deg, #0b4a91, ${BRAND_NAVY});
@@ -383,27 +481,20 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
       white-space: nowrap;
     }
     .footer {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14mm;
+      display: flex;
+      justify-content: flex-end;
       margin-top: 5mm;
       color: ${BRAND_NAVY};
       font-size: 12px;
       font-weight: 700;
     }
-    .signature { text-align: center; }
+    .signature { width: 95mm; text-align: center; }
     .signature::after {
       content: "";
       display: block;
       width: 85mm;
       margin: 9px auto 0;
       border-bottom: 1.5px solid #6b7b8f;
-    }
-    .driver-box {
-      border: 1px solid #d7e2ef;
-      border-radius: 8px;
-      padding: 7px 10px;
-      background: #f8fbff;
     }
     .screen-actions { position: sticky; top: 0; display: flex; justify-content: center; gap: 12px; padding: 12px; }
     .screen-actions button {
@@ -439,6 +530,8 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
           <div class="chip">Autista: ${escapeHtml(driver)}</div>
         </div>
       </header>
+      ${groupContactMarkup}
+      ${groupFerryMarkup}
       <table>
         <colgroup>
           <col style="width: 10%" />
@@ -458,7 +551,6 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
         </tbody>
       </table>
       <footer class="footer">
-        <div class="driver-box">Autista: ${escapeHtml(driver)}</div>
         <div class="signature">Firma autista</div>
       </footer>
     </section>

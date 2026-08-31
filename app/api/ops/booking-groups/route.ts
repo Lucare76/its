@@ -27,13 +27,16 @@ import {
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
   findAvailableBusesForGroup,
+  isSupportedBookingGroupDate,
   type BgActor,
 } from "@/lib/server/booking-groups-service";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const isoDate = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => isSupportedBookingGroupDate(value), "Data non valida: usa un anno tra 2020 e 2100.");
 const clock = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/);
 const paxInt = z.number().int().positive().max(BOOKING_GROUP_MAX_PAX);
 
@@ -92,6 +95,9 @@ const addStopSchema = z.object({
   pickup_point: z.string().trim().max(200).nullable().optional(),
   expected_pax: paxInt,
   stop_id: z.string().uuid().nullable().optional(),
+  create_catalog_stop: z.boolean().optional(),
+  bus_line_id: z.string().uuid().nullable().optional(),
+  pickup_time: clock.nullable().optional(),
   direction: z.enum(["arrival", "departure"]),
   sort_order: z.number().int().min(0).max(9999).optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
@@ -213,6 +219,17 @@ export async function GET(request: NextRequest) {
   }
 
   const q = url.searchParams.get("q");
+  if (url.searchParams.get("catalog") === "bus_lines") {
+    const { data, error } = await admin
+      .from("tenant_bus_lines")
+      .select("id, name, code, family_name, variant_label, active")
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .order("name");
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, lines: data ?? [] });
+  }
+
   const availableForGroup = url.searchParams.get("available_buses_for_group");
   if (availableForGroup) {
     if (!/^[0-9a-fA-F-]{36}$/.test(availableForGroup)) {
@@ -228,7 +245,11 @@ export async function GET(request: NextRequest) {
     }
     const group = await loadGroupDetail(admin, tenantId, availableForGroup);
     if (!group) return NextResponse.json({ ok: false, error: "Gruppo non trovato." }, { status: 404 });
-    const buses = await findAvailableBusesForGroup(admin, tenantId, { serviceDate: date, requiredCapacity });
+    const buses = await findAvailableBusesForGroup(admin, tenantId, {
+      serviceDate: date,
+      requiredCapacity,
+      exclusiveOnly: group.group.kind === "bus_exclusive",
+    });
     return NextResponse.json({ ok: true, buses });
   }
 
@@ -276,6 +297,29 @@ export async function POST(request: NextRequest) {
 
   // ── update_group (patch generico, FK validate) ───────────────────────
   if (body.action === "update_group") {
+    if (body.status === "cancelled") {
+      const { data: linkedServices } = await admin
+        .from("services")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("booking_group_id", body.id);
+      const serviceIds = ((linkedServices ?? []) as Array<{ id: string }>).map((service) => service.id);
+      if (serviceIds.length > 0) {
+        const { error: allocationError } = await admin
+          .from("tenant_bus_allocations")
+          .delete()
+          .eq("tenant_id", tenantId)
+          .in("service_id", serviceIds);
+        if (allocationError) return NextResponse.json({ ok: false, error: allocationError.message }, { status: 500 });
+
+        const { error: servicesError } = await admin
+          .from("services")
+          .update({ status: "cancelled", booking_group_id: null, booking_group_stop_id: null, updated_at: new Date().toISOString() })
+          .eq("tenant_id", tenantId)
+          .in("id", serviceIds);
+        if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
+      }
+    }
     const { action: _action, id, returnDate, ...rest } = body;
     void _action;
     const patch = { ...rest, ...(returnDate !== undefined ? { return_date: returnDate } : {}) };
@@ -317,6 +361,27 @@ export async function POST(request: NextRequest) {
 
   // ── delete_stop ───────────────────────────────────────────────────────
   if (body.action === "delete_stop") {
+    const { data: linkedServices } = await admin
+      .from("services")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_stop_id", body.id);
+    const serviceIds = ((linkedServices ?? []) as Array<{ id: string }>).map((service) => service.id);
+    if (serviceIds.length > 0) {
+      const { error: allocationError } = await admin
+        .from("tenant_bus_allocations")
+        .delete()
+        .eq("tenant_id", tenantId)
+        .in("service_id", serviceIds);
+      if (allocationError) return NextResponse.json({ ok: false, error: allocationError.message }, { status: 500 });
+
+      const { error: servicesError } = await admin
+        .from("services")
+        .update({ status: "cancelled", booking_group_id: null, booking_group_stop_id: null, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId)
+        .in("id", serviceIds);
+      if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
+    }
     const { error } = await admin
       .from("booking_group_stops")
       .delete()

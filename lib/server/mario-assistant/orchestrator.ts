@@ -833,10 +833,11 @@ async function runReserveBusSelectStep(
   const targetDate = stage.dateIndex === 0 ? serviceDate : (returnDate as string);
   const groupName = (collected.name as string | undefined) ?? "il gruppo";
   const dateLabel = formatMarioDateForUser(targetDate) ?? targetDate;
+  const exclusiveOnly = collected.kind === "bus_exclusive";
 
   let candidates: AvailableBus[];
   try {
-    candidates = await findAvailableBusesForGroup(context.admin, context.tenantId, { serviceDate: targetDate, requiredCapacity: expectedPax });
+    candidates = await findAvailableBusesForGroup(context.admin, context.tenantId, { serviceDate: targetDate, requiredCapacity: expectedPax, exclusiveOnly });
   } catch {
     await clearMarioDraftOperation(context.tenantId, context.userId);
     return { intent: "mario_operational_chain_error", answer: `Gruppo pronto, ma non riesco a verificare i bus disponibili per il ${dateLabel}. Puoi completare da Gruppi prenotazione.`, actions: BG_ACTIONS };
@@ -856,7 +857,7 @@ async function runReserveBusSelectStep(
   let coversBothDates = false;
   if (stage.dateIndex === 0 && returnDate) {
     try {
-      const returnCandidates = await findAvailableBusesForGroup(context.admin, context.tenantId, { serviceDate: returnDate, requiredCapacity: expectedPax });
+      const returnCandidates = await findAvailableBusesForGroup(context.admin, context.tenantId, { serviceDate: returnDate, requiredCapacity: expectedPax, exclusiveOnly });
       const returnIds = new Set(returnCandidates.map((b) => b.id));
       const both = candidates.filter((b) => returnIds.has(b.id));
       if (both.length > 0) {

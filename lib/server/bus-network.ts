@@ -1,7 +1,7 @@
 import { BUS_LINES_2026, findBusLineByCode, findNearestBusStop } from "@/lib/bus-lines-catalog";
 import type { Hotel, Service } from "@/lib/types";
 
-export type BusLineFamilyCode = "ITALIA" | "CENTRO" | "ADRIATICA";
+export type BusLineFamilyCode = "ITALIA" | "CENTRO" | "ADRIATICA" | "GRUPPI_ESCLUSIVI";
 
 export type BusNetworkLine = {
   code: string;
@@ -60,7 +60,8 @@ type RawBusAllocation = {
 const DEFAULT_BUS_FAMILY_CAPACITY: Record<BusLineFamilyCode, { buses: number; capacity: number }> = {
   ITALIA: { buses: 5, capacity: 54 },
   CENTRO: { buses: 3, capacity: 54 },
-  ADRIATICA: { buses: 1, capacity: 54 }
+  ADRIATICA: { buses: 1, capacity: 54 },
+  GRUPPI_ESCLUSIVI: { buses: 6, capacity: 54 }
 };
 
 function extractLineNumber(source: string) {
@@ -84,6 +85,9 @@ export function deriveBusFamily(code?: string | null, name?: string | null): { f
   if (normalized.trim() === "adriatica" || normalized.includes(" family adriatica")) {
     return { family_code: "ADRIATICA", family_name: "Linea Adriatica" };
   }
+  if (normalized.trim() === "gruppi_esclusivi" || normalized.includes("gruppi esclusivi") || normalized.includes("bus esclusivi")) {
+    return { family_code: "GRUPPI_ESCLUSIVI", family_name: "Bus esclusivi gruppi" };
+  }
 
   // Line number takes priority over name keywords
   if (normalized.includes("centro")) {
@@ -105,7 +109,8 @@ export function getDefaultBusNetworkLines(): BusNetworkLine[] {
   return ([
     { code: "ITALIA", name: "Linea Italia", family_code: "ITALIA", family_name: "Linea Italia", variant_label: "Linea 1/2/3/4/5/6/8/9/10", default_capacity: 54, alert_threshold: 5, active: true },
     { code: "CENTRO", name: "Linea Centro", family_code: "CENTRO", family_name: "Linea Centro", variant_label: "Linea 7 Centro", default_capacity: 54, alert_threshold: 5, active: true },
-    { code: "ADRIATICA", name: "Linea Adriatica", family_code: "ADRIATICA", family_name: "Linea Adriatica", variant_label: "Linea 11 Adriatica", default_capacity: 54, alert_threshold: 5, active: true }
+    { code: "ADRIATICA", name: "Linea Adriatica", family_code: "ADRIATICA", family_name: "Linea Adriatica", variant_label: "Linea 11 Adriatica", default_capacity: 54, alert_threshold: 5, active: true },
+    { code: "GRUPPI_ESCLUSIVI", name: "Bus esclusivi gruppi", family_code: "GRUPPI_ESCLUSIVI", family_name: "Bus esclusivi gruppi", variant_label: "Gruppi fuori linea standard", default_capacity: 54, alert_threshold: 5, active: true }
   ] satisfies BusNetworkLine[]);
 }
 

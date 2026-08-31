@@ -98,7 +98,12 @@ export async function validateBusAllocationRequest(
     throw new Error("Il servizio selezionato non appartiene al flusso bus operativo.");
   }
 
-  if (serviceIdentity.family_code !== line.family_code) {
+  const isBookingGroupService = Boolean(
+    (service as Service & { booking_group_id?: string | null; booking_group_stop_id?: string | null }).booking_group_id &&
+    (service as Service & { booking_group_id?: string | null; booking_group_stop_id?: string | null }).booking_group_stop_id,
+  );
+
+  if (serviceIdentity.family_code !== line.family_code && !isBookingGroupService) {
     throw new Error("Il servizio selezionato non e coerente con la linea bus scelta.");
   }
 

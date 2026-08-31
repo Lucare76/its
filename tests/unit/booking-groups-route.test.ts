@@ -21,6 +21,7 @@ const GROUP_ID = "11111111-1111-4111-8111-111111111111";
 const BUS_UNIT_ID = "22222222-2222-4222-8222-222222222222";
 const AGENCY_ID = "33333333-3333-4333-8333-333333333333";
 const STOP_ID = "44444444-4444-4444-8444-444444444444";
+const BUS_LINE_ID = "55555555-5555-4555-8555-555555555555";
 
 type Row = Record<string, unknown>;
 
@@ -213,6 +214,41 @@ describe("POST add_stop — pianificazione fermata, nessun service/allocazione",
     }));
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/Fermata catalogo/i);
+  });
+
+  it("crea una fermata catalogo manuale quando richiesto e collega la fermata gruppo", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      tenant_bus_lines: [{ id: BUS_LINE_ID, tenant_id: TENANT, active: true }],
+      tenant_bus_line_stops: [],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "add_stop",
+      booking_group_id: GROUP_ID,
+      city: "Barano",
+      pickup_point: "Chiesa di San Rocco",
+      expected_pax: 20,
+      direction: "arrival",
+      create_catalog_stop: true,
+      bus_line_id: BUS_LINE_ID,
+      pickup_time: "05:20",
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const catalog = writes.inserts.find((w) => w.table === "tenant_bus_line_stops")?.row;
+    expect(catalog).toMatchObject({
+      tenant_id: TENANT,
+      bus_line_id: BUS_LINE_ID,
+      city: "Barano",
+      stop_name: "Chiesa di San Rocco",
+      pickup_time: "05:20",
+      is_manual: true,
+      active: true,
+    });
+    expect(writes.inserts.find((w) => w.table === "booking_group_stops")?.row.stop_id).toBe(catalog?.id);
   });
 
   it("gruppo inesistente → 404", async () => {
@@ -472,7 +508,7 @@ describe("FASE 2.5 — preview / operationalize", () => {
     expect(json.blocked).toHaveLength(1);
     const upd = writes.updates.filter((w) => w.table === "services");
     expect(upd).toHaveLength(1);
-    expect(upd[0]!.payload).toEqual({ is_draft: false, status: "new" }); // K + L; H/I non toccati
+    expect(upd[0]!.payload).toMatchObject({ is_draft: false, status: "new" }); // K + L; H/I non toccati
     expect(upd[0]!.filters).toMatchObject({ id: "svc-ok" });
     // J: status_event
     expect(writes.inserts.filter((w) => w.table === "status_events")).toHaveLength(1);

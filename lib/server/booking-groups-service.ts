@@ -25,6 +25,7 @@ import {
   computeBookingGroupStatusSummary,
   summarizeStopPax,
   evaluateBookingGroupServiceReadiness,
+  BOOKING_GROUP_PLACEHOLDER_TIME,
   type BookingGroup,
   type BookingGroupBusReservation,
   type BookingGroupStop,
@@ -65,6 +66,26 @@ export function normalizeCityKey(value?: string | null): string {
     .trim();
 }
 
+export function isSupportedBookingGroupDate(value?: string | null): boolean {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  return year >= 2020 && year <= 2100;
+}
+
+const EXCLUSIVE_GROUP_LINE_CODE = "GRUPPI_ESCLUSIVI";
+
+async function getExclusiveGroupLineId(admin: SupabaseClient, tenantId: string): Promise<string | null> {
+  const { data } = await admin
+    .from("tenant_bus_lines")
+    .select("id, code, family_code")
+    .eq("tenant_id", tenantId)
+    .eq("active", true);
+  const line = ((data ?? []) as Array<{ id: string; code?: string | null; family_code?: string | null }>).find(
+    (row) => row.code === EXCLUSIVE_GROUP_LINE_CODE || row.family_code === EXCLUSIVE_GROUP_LINE_CODE,
+  );
+  return line?.id ?? null;
+}
+
 /**
  * Risolve la fermata canonica `tenant_bus_line_stops` per città+direzione,
  * SOLO su match esatto (city o stop_name normalizzati) e SOLO se univoco.
@@ -77,17 +98,33 @@ export async function resolveCanonicalBookingGroupStop(
   tenantId: string,
   city: string,
   direction: "arrival" | "departure",
+  pickupPoint?: string | null,
+  busLineId?: string | null,
 ): Promise<{ stopId: string; pickupTime: string | null } | null> {
   const target = normalizeCityKey(city);
-  if (!target) return null;
+  const pickupTarget = normalizeCityKey(pickupPoint);
+  if (!target && !pickupTarget) return null;
   const { data } = await admin
     .from("tenant_bus_line_stops")
-    .select("id, city, stop_name, pickup_time")
+    .select("id, bus_line_id, city, stop_name, pickup_note, pickup_time")
     .eq("tenant_id", tenantId)
     .eq("direction", direction)
     .eq("active", true);
-  const rows = (data ?? []) as Array<{ id: string; city: string; stop_name: string; pickup_time: string | null }>;
-  const matches = rows.filter((r) => normalizeCityKey(r.city) === target || normalizeCityKey(r.stop_name) === target);
+  const rows = ((data ?? []) as Array<{ id: string; bus_line_id: string | null; city: string | null; stop_name: string | null; pickup_note?: string | null; pickup_time: string | null }>)
+    .filter((r) => !busLineId || r.bus_line_id === busLineId);
+  const matches = rows.filter((r) => {
+    const cityKey = normalizeCityKey(r.city);
+    const stopKey = normalizeCityKey(r.stop_name);
+    const noteKey = normalizeCityKey(r.pickup_note);
+    if (pickupTarget) {
+      return (
+        stopKey === pickupTarget ||
+        noteKey === pickupTarget ||
+        (cityKey === target && (stopKey.includes(pickupTarget) || noteKey.includes(pickupTarget)))
+      );
+    }
+    return cityKey === target || stopKey === target;
+  });
   if (matches.length !== 1) return null;
   return { stopId: matches[0]!.id, pickupTime: matches[0]!.pickup_time ?? null };
 }
@@ -291,10 +328,35 @@ export async function buildOperationalizeView(admin: SupabaseClient, tenantId: s
     admin.from("booking_group_bus_reservations").select("*").eq("tenant_id", tenantId).eq("booking_group_id", groupId),
   ]);
 
-  const stopRows = (stops ?? []) as Array<{ id: string; city: string; pickup_point: string | null; stop_id: string | null; expected_pax: number }>;
+  const stopRows = (stops ?? []) as Array<{ id: string; city: string; pickup_point: string | null; stop_id: string | null; expected_pax: number; direction?: "arrival" | "departure" | null }>;
   const svcRows = (services ?? []) as OpSvcRow[];
   const resRows = (reservations ?? []) as BookingGroupBusReservation[];
   const stopById = new Map(stopRows.map((s) => [s.id, s]));
+
+  for (const s of svcRows) {
+    const time = (s.time ?? "").trim();
+    if (time && !time.startsWith(BOOKING_GROUP_PLACEHOLDER_TIME)) continue;
+    const stop = s.booking_group_stop_id ? stopById.get(s.booking_group_stop_id) ?? null : null;
+    const direction = s.direction === "arrival" || s.direction === "departure" ? s.direction : null;
+    if (!stop || !direction) continue;
+    let pickupTime: string | null = null;
+    if (stop.stop_id) {
+      const { data: canonicalStop } = await admin
+        .from("tenant_bus_line_stops")
+        .select("pickup_time")
+        .eq("tenant_id", tenantId)
+        .eq("id", stop.stop_id)
+        .maybeSingle();
+      pickupTime = (canonicalStop as { pickup_time: string | null } | null)?.pickup_time ?? null;
+    } else {
+      const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, stop.city, direction, stop.pickup_point);
+      if (canonical) {
+        stop.stop_id = canonical.stopId;
+        pickupTime = canonical.pickupTime ?? null;
+      }
+    }
+    if (pickupTime?.trim()) s.time = pickupTime.trim();
+  }
 
   const groupWarnings: BookingGroupWarningCode[] = [];
   if (!g.outbound_ferry_time && !g.outbound_ferry_company) groupWarnings.push("ferry_outbound_missing");
@@ -411,10 +473,11 @@ export async function operationalizeBookingGroup(
     if (!selected.has(p.service_id)) continue;
     if (p.already_operational) { already_operational.push(p.service_id); continue; }
     if (!p.ready) { blocked.push({ service_id: p.service_id, missing_fields: p.missing_fields, warnings: p.warnings }); continue; }
+    const svc = view.svcRows.find((s) => s.id === p.service_id);
 
     const { error } = await admin
       .from("services")
-      .update({ is_draft: false, status: "new" })
+      .update(compact({ is_draft: false, status: "new", time: svc?.time }))
       .eq("tenant_id", tenantId)
       .eq("id", p.service_id)
       .eq("is_draft", true);
@@ -423,7 +486,6 @@ export async function operationalizeBookingGroup(
     await admin.from("status_events").insert({ tenant_id: tenantId, service_id: p.service_id, status: "new", by_user_id: userId });
 
     const warnings: BookingGroupWarningCode[] = [...p.warnings];
-    const svc = view.svcRows.find((s) => s.id === p.service_id);
     if (svc?.booking_service_kind === "bus_city_hotel" && !warnings.includes("allocation_pending")) {
       // FASE A.5 §P / FASE A.5.1 §15 — un gruppo bus_exclusive non deve MAI
       // finire allocato automaticamente su un bus condiviso
@@ -526,6 +588,9 @@ export async function createBookingGroup(
   const { tenantId, userId, role } = actor;
   const serviceDate = input.service_date ?? null;
   const returnDate = input.return_date ?? input.returnDate ?? null;
+  if ((serviceDate && !isSupportedBookingGroupDate(serviceDate)) || (returnDate && !isSupportedBookingGroupDate(returnDate))) {
+    return err(400, "Data gruppo non valida: usa un anno tra 2020 e 2100.");
+  }
   if (input.kind === "bus_exclusive" && !serviceDate && !returnDate) {
     return err(400, "Per un bus esclusivo inserisci almeno una data tra arrivo e ritorno.");
   }
@@ -570,6 +635,11 @@ export async function patchBookingGroup(
   const { tenantId } = actor;
   if (!(await tenantRowExists(admin, "booking_groups", tenantId, id))) {
     return err(404, "Gruppo non trovato.");
+  }
+  const serviceDate = typeof fields.service_date === "string" ? fields.service_date : null;
+  const returnDate = typeof fields.return_date === "string" ? fields.return_date : null;
+  if ((serviceDate && !isSupportedBookingGroupDate(serviceDate)) || (returnDate && !isSupportedBookingGroupDate(returnDate))) {
+    return err(400, "Data gruppo non valida: usa un anno tra 2020 e 2100.");
   }
   if (opts.validateFks) {
     if (fields.agency_id && !(await tenantRowExists(admin, "agencies", tenantId, fields.agency_id as string))) {
@@ -624,10 +694,103 @@ export type AddStopInput = {
   pickup_point?: string | null;
   expected_pax: number;
   stop_id?: string | null;
+  create_catalog_stop?: boolean;
+  bus_line_id?: string | null;
+  pickup_time?: string | null;
   direction: "arrival" | "departure";
   sort_order?: number;
   notes?: string | null;
 };
+
+type CreatedCatalogStop = { id: string; pickup_time: string | null };
+
+async function syncPlaceholderTimesForBookingGroupStop(
+  admin: SupabaseClient,
+  tenantId: string,
+  bookingGroupStopId: string,
+  pickupTime?: string | null,
+) {
+  const time = pickupTime?.trim();
+  if (!time) return;
+  await admin
+    .from("services")
+    .update({ time, updated_at: new Date().toISOString() })
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_stop_id", bookingGroupStopId)
+    .eq("time", BOOKING_GROUP_PLACEHOLDER_TIME);
+}
+
+async function createManualCatalogStopForBookingGroup(
+  admin: SupabaseClient,
+  actor: BgActor,
+  input: AddStopInput,
+): Promise<BgResult<CreatedCatalogStop>> {
+  const { tenantId } = actor;
+  if (!input.bus_line_id) return err(400, "Se crei una fermata nel catalogo devi scegliere la linea bus.");
+  if (!(await tenantRowExists(admin, "tenant_bus_lines", tenantId, input.bus_line_id))) {
+    return err(400, "Linea bus non valida per il tenant.");
+  }
+  const stopName = (input.pickup_point ?? input.city).trim();
+  const { data: existing } = await admin
+    .from("tenant_bus_line_stops")
+    .select("id, pickup_time")
+    .eq("tenant_id", tenantId)
+    .eq("bus_line_id", input.bus_line_id)
+    .eq("direction", input.direction)
+    .eq("city", input.city)
+    .eq("stop_name", stopName)
+    .eq("active", true)
+    .limit(1);
+  const found = (existing ?? [])[0] as { id: string; pickup_time: string | null } | undefined;
+  if (found?.id) {
+    const pickupTime = input.pickup_time?.trim() || found.pickup_time || null;
+    if (pickupTime !== found.pickup_time) {
+      await admin
+        .from("tenant_bus_line_stops")
+        .update({ pickup_time: pickupTime, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId)
+        .eq("id", found.id);
+    }
+    return ok({ id: found.id, pickup_time: pickupTime });
+  }
+  const { data: lastStops } = await admin
+    .from("tenant_bus_line_stops")
+    .select("stop_order")
+    .eq("tenant_id", tenantId)
+    .eq("bus_line_id", input.bus_line_id)
+    .eq("direction", input.direction)
+    .order("stop_order", { ascending: false })
+    .limit(1);
+  const lastOrder = Number(((lastStops ?? [])[0] as { stop_order?: number } | undefined)?.stop_order ?? 0);
+  const stopOrder = input.sort_order && input.sort_order > 0 ? input.sort_order : lastOrder + 1;
+  const { data, error } = await admin
+    .from("tenant_bus_line_stops")
+    .insert({
+      tenant_id: tenantId,
+      bus_line_id: input.bus_line_id,
+      direction: input.direction,
+      stop_name: stopName,
+      city: input.city,
+      pickup_note: input.pickup_point ?? null,
+      pickup_time: input.pickup_time?.trim() || null,
+      stop_order: stopOrder,
+      order_index: stopOrder,
+      is_manual: true,
+      active: true,
+    })
+    .select("id, pickup_time")
+    .single();
+  if (error || !data?.id) return err(500, error?.message ?? "Creazione fermata catalogo non riuscita.");
+  auditLog({
+    event: "booking_group_catalog_stop_created",
+    tenantId,
+    userId: actor.userId,
+    role: actor.role,
+    outcome: "created",
+    details: { booking_group_id: input.bookingGroupId, bus_line_id: input.bus_line_id, city: input.city, direction: input.direction },
+  });
+  return ok({ id: data.id as string, pickup_time: (data as { pickup_time: string | null }).pickup_time ?? null });
+}
 
 export async function addBookingGroupStop(
   admin: SupabaseClient,
@@ -635,20 +798,48 @@ export async function addBookingGroupStop(
   input: AddStopInput,
 ): Promise<BgResult<{ stop: BookingGroupStop }>> {
   const { tenantId, userId, role } = actor;
-  if (!(await tenantRowExists(admin, "booking_groups", tenantId, input.bookingGroupId))) {
+  const { data: groupRow } = await admin
+    .from("booking_groups")
+    .select("id, kind")
+    .eq("tenant_id", tenantId)
+    .eq("id", input.bookingGroupId)
+    .maybeSingle();
+  if (!groupRow?.id) {
     return err(404, "Gruppo non trovato.");
+  }
+  const exclusiveLineId = (groupRow as { kind?: string | null }).kind === "bus_exclusive"
+    ? await getExclusiveGroupLineId(admin, tenantId)
+    : null;
+  if ((groupRow as { kind?: string | null }).kind === "bus_exclusive" && input.create_catalog_stop && exclusiveLineId && input.bus_line_id && input.bus_line_id !== exclusiveLineId) {
+    return err(400, "Per i gruppi esclusivi la fermata deve stare sulla linea Bus esclusivi gruppi.");
+  }
+  if ((groupRow as { kind?: string | null }).kind === "bus_exclusive" && input.create_catalog_stop && exclusiveLineId && !input.bus_line_id) {
+    input.bus_line_id = exclusiveLineId;
   }
   if (input.stop_id && !(await tenantRowExists(admin, "tenant_bus_line_stops", tenantId, input.stop_id))) {
     return err(400, "Fermata catalogo non valida per il tenant.");
+  }
+  if (input.pickup_time != null && input.pickup_time.trim() && !/^\d{2}:\d{2}(:\d{2})?$/.test(input.pickup_time.trim())) {
+    return err(400, "Orario punto di carico non valido.");
   }
   // FASE A.5 §E — se il chiamante non ha indicato uno stop_id, prova a
   // risolvere la fermata canonica per città+direzione. Match ambiguo/assente
   // → resta undefined (compact() lo omette, come un input.stop_id non
   // fornito), mai un'assegnazione indovinata.
   let stopId: string | undefined = input.stop_id ?? undefined;
+  let stopPickupTime: string | null = input.pickup_time?.trim() || null;
+  if (!stopId && input.create_catalog_stop) {
+    const created = await createManualCatalogStopForBookingGroup(admin, actor, input);
+    if (!created.ok) return created;
+    stopId = created.data.id;
+    stopPickupTime = created.data.pickup_time ?? stopPickupTime;
+  }
   if (!stopId) {
-    const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, input.city, input.direction);
-    if (canonical) stopId = canonical.stopId;
+    const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, input.city, input.direction, input.pickup_point, exclusiveLineId);
+    if (canonical) {
+      stopId = canonical.stopId;
+      stopPickupTime = canonical.pickupTime ?? stopPickupTime;
+    }
   }
 
   // FASE A.5.1 §2 — idempotenza: stessa città (normalizzata) + direzione sullo
@@ -657,13 +848,18 @@ export async function addBookingGroupStop(
   // già ma non aveva ancora uno stop_id canonico risolto, lo si arricchisce
   // con un update mirato — mai un secondo insert.
   const targetCity = normalizeCityKey(input.city);
+  const targetPickup = normalizeCityKey(input.pickup_point);
   const { data: existingStops } = await admin
     .from("booking_group_stops")
     .select("*")
     .eq("tenant_id", tenantId)
     .eq("booking_group_id", input.bookingGroupId)
     .eq("direction", input.direction);
-  const existingStop = ((existingStops ?? []) as BookingGroupStop[]).find((s) => normalizeCityKey(s.city) === targetCity);
+  const existingStop = ((existingStops ?? []) as BookingGroupStop[]).find((s) => {
+    if (normalizeCityKey(s.city) !== targetCity) return false;
+    if (!targetPickup) return true;
+    return normalizeCityKey(s.pickup_point) === targetPickup;
+  });
   if (existingStop) {
     if (!existingStop.stop_id && stopId) {
       const { data: enriched, error: enrichError } = await admin
@@ -673,8 +869,12 @@ export async function addBookingGroupStop(
         .eq("id", existingStop.id)
         .select("*")
         .single();
-      if (!enrichError && enriched) return ok({ stop: enriched as BookingGroupStop });
+      if (!enrichError && enriched) {
+        await syncPlaceholderTimesForBookingGroupStop(admin, tenantId, existingStop.id, stopPickupTime);
+        return ok({ stop: enriched as BookingGroupStop });
+      }
     }
+    await syncPlaceholderTimesForBookingGroupStop(admin, tenantId, existingStop.id, stopPickupTime);
     auditLog({ event: "booking_group_stop_reused", tenantId, userId, role, outcome: "reused", details: { booking_group_id: input.bookingGroupId, city: input.city, direction: input.direction, stop_id: existingStop.id } });
     return ok({ stop: existingStop });
   }
@@ -720,7 +920,7 @@ export async function addBookingGroupPassengers(
 ): Promise<BgOutcome<AddPassengersResult>> {
   const { tenantId, userId, role } = actor;
 
-  if (input.serviceDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate)) {
+  if (input.serviceDate != null && !isSupportedBookingGroupDate(input.serviceDate)) {
     return err(400, "serviceDate non valida (atteso YYYY-MM-DD).");
   }
 
@@ -749,22 +949,39 @@ export async function addBookingGroupPassengers(
   if (!serviceDate) {
     return err(422, "Imposta prima la data del gruppo (service_date) oppure passa serviceDate per creare i servizi.");
   }
+  if (!isSupportedBookingGroupDate(serviceDate)) {
+    return err(400, "serviceDate non valida: usa un anno tra 2020 e 2100.");
+  }
 
   const g = group as { kind: string };
   const isBusKind = g.kind === "bus_exclusive" || g.kind === "bus_group";
-  const st = stop as { city: string; pickup_point: string | null; direction: string; stop_id: string | null };
+  const exclusiveLineId = g.kind === "bus_exclusive" ? await getExclusiveGroupLineId(admin, tenantId) : null;
+  const st = stop as { city: string; pickup_point: string | null; direction: "arrival" | "departure"; stop_id: string | null };
 
   // FASE A.5 §C/§D — orario reale dalla fermata canonica se risolta, mai
   // inventato: se non c'è un pickup_time valido resta il placeholder
   // "00:00", che evaluateBookingGroupServiceReadiness blocca correttamente
   // (missing_time) finché non viene risolto un orario vero.
   let resolvedTime = "00:00";
-  if (st.stop_id) {
+  let resolvedStopId = st.stop_id;
+  if (!resolvedStopId) {
+    const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, st.city, st.direction, st.pickup_point, exclusiveLineId);
+    if (canonical) {
+      resolvedStopId = canonical.stopId;
+      if (canonical.pickupTime?.trim()) resolvedTime = canonical.pickupTime.trim();
+      await admin
+        .from("booking_group_stops")
+        .update({ stop_id: canonical.stopId, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId)
+        .eq("id", input.bookingGroupStopId);
+    }
+  }
+  if (resolvedStopId && resolvedTime === "00:00") {
     const { data: canonicalStop } = await admin
       .from("tenant_bus_line_stops")
       .select("pickup_time")
       .eq("tenant_id", tenantId)
-      .eq("id", st.stop_id)
+      .eq("id", resolvedStopId)
       .maybeSingle();
     const pt = (canonicalStop as { pickup_time: string | null } | null)?.pickup_time;
     if (pt && pt.trim()) resolvedTime = pt.trim();
@@ -1015,17 +1232,30 @@ export type AvailableBus = { id: string; label: string; capacity: number; tag: s
 export async function findAvailableBusesForGroup(
   admin: SupabaseClient,
   tenantId: string,
-  input: { serviceDate: string; requiredCapacity: number },
+  input: { serviceDate: string; requiredCapacity: number; exclusiveOnly?: boolean },
 ): Promise<AvailableBus[]> {
-  const [{ data: units }, { data: reservations }] = await Promise.all([
-    admin.from("tenant_bus_units").select("id, label, capacity, tag, status, manual_close, active").eq("tenant_id", tenantId).eq("active", true),
+  const [{ data: units }, { data: reservations }, { data: exclusiveLines }] = await Promise.all([
+    admin.from("tenant_bus_units").select("id, bus_line_id, label, capacity, tag, status, manual_close, active").eq("tenant_id", tenantId).eq("active", true),
     admin.from("booking_group_bus_reservations").select("bus_unit_id, exclusive").eq("tenant_id", tenantId).eq("service_date", input.serviceDate),
+    input.exclusiveOnly
+      ? admin
+          .from("tenant_bus_lines")
+          .select("id, code, family_code")
+          .eq("tenant_id", tenantId)
+          .eq("active", true)
+      : Promise.resolve({ data: [], error: null }),
   ]);
+  const exclusiveLineIds = new Set(
+    ((exclusiveLines ?? []) as Array<{ id: string; code?: string | null; family_code?: string | null }>)
+      .filter((line) => line.code === EXCLUSIVE_GROUP_LINE_CODE || line.family_code === EXCLUSIVE_GROUP_LINE_CODE)
+      .map((line) => line.id),
+  );
   const exclusivelyReserved = new Set(
     ((reservations ?? []) as Array<{ bus_unit_id: string; exclusive: boolean | null }>).filter((r) => r.exclusive).map((r) => r.bus_unit_id),
   );
-  const rows = (units ?? []) as Array<{ id: string; label: string; capacity: number; tag: string | null; status: string | null; manual_close: boolean | null }>;
+  const rows = (units ?? []) as Array<{ id: string; bus_line_id: string | null; label: string; capacity: number; tag: string | null; status: string | null; manual_close: boolean | null }>;
   return rows
+    .filter((u) => !input.exclusiveOnly || (u.bus_line_id && exclusiveLineIds.has(u.bus_line_id)))
     .filter((u) => u.capacity >= input.requiredCapacity)
     .filter((u) => u.status !== "closed" && u.status !== "completed" && !u.manual_close)
     .filter((u) => !exclusivelyReserved.has(u.id))
@@ -1061,11 +1291,11 @@ export async function allocateReservedBookingGroupBusService(
 
   const { data: service } = await admin
     .from("services")
-    .select("id, date, direction, pax, bus_city_origin")
+    .select("id, date, direction, pax, bus_city_origin, meeting_point")
     .eq("tenant_id", tenantId)
     .eq("id", serviceId)
     .maybeSingle();
-  const svc = service as { date: string | null; direction: "arrival" | "departure" | null; pax: number | null; bus_city_origin: string | null } | null;
+  const svc = service as { date: string | null; direction: "arrival" | "departure" | null; pax: number | null; bus_city_origin: string | null; meeting_point: string | null } | null;
   if (!svc) return { ok: true, allocated: false, serviceId, reason: "Servizio non trovato" };
   if (!svc.date || !svc.direction || !svc.pax || svc.pax <= 0) return { ok: true, allocated: false, serviceId, reason: "Dati bus incompleti" };
 
@@ -1074,7 +1304,7 @@ export async function allocateReservedBookingGroupBusService(
   if (!busUnit) return { ok: true, allocated: false, serviceId, reason: "Bus non trovato" };
   if (busUnit.capacity < svc.pax) return { ok: true, allocated: false, serviceId, reason: "Capacità del bus riservato insufficiente" };
 
-  const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, svc.bus_city_origin ?? "", svc.direction);
+  const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, svc.bus_city_origin ?? "", svc.direction, svc.meeting_point, busUnit.bus_line_id);
   if (!canonical) return { ok: true, allocated: false, serviceId, reason: `Fermata non risolta per ${svc.bus_city_origin ?? "N/D"}` };
 
   const { data: stopRow } = await admin.from("tenant_bus_line_stops").select("stop_name").eq("tenant_id", tenantId).eq("id", canonical.stopId).maybeSingle();

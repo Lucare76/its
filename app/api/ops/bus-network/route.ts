@@ -593,6 +593,21 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
+      const { data: serviceGroup } = await auth.admin
+        .from("services")
+        .select("booking_group_id, booking_groups(name, kind)")
+        .eq("tenant_id", tenantId)
+        .eq("id", parsed.service_id)
+        .maybeSingle();
+      const bookingGroup = (serviceGroup as { booking_group_id?: string | null; booking_groups?: { name?: string | null; kind?: string | null } | null } | null)?.booking_groups;
+      const bookingGroupName = bookingGroup?.kind === "bus_exclusive" ? bookingGroup.name?.trim() : "";
+      if (bookingGroupName) {
+        await auth.admin
+          .from("tenant_bus_units")
+          .update({ group_name: bookingGroupName, updated_at: new Date().toISOString() })
+          .eq("tenant_id", tenantId)
+          .eq("id", parsed.bus_unit_id);
+      }
       const [networkPayload, allocateAlert] = await Promise.all([
         loadBusNetwork(auth),
         checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)

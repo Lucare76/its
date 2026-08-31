@@ -33,7 +33,7 @@ type BusUnit = { id: string; bus_line_id: string; label: string; capacity: numbe
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
 type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_id?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
-type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null };
+type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null; booking_group_id?: string | null; booking_group_kind?: string | null; booking_group_name?: string | null; booking_group_stop_id?: string | null; booking_group_catalog_stop_id?: string | null; booking_group_contact_name?: string | null; booking_group_contact_phone?: string | null; booking_group_outbound_ferry_company?: string | null; booking_group_outbound_departure_port?: string | null; booking_group_outbound_ferry_time?: string | null; booking_group_outbound_arrival_port?: string | null; booking_group_return_ferry_company?: string | null; booking_group_return_departure_port?: string | null; booking_group_return_ferry_time?: string | null; booking_group_return_arrival_port?: string | null };
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
 type PendingPassenger = { id: string; bus_line_id: string; direction: "arrival" | "departure"; travel_date: string; passenger_name: string; passenger_phone: string | null; city_original: string; pax: number; notes: string | null; geo_suggested_stop: string | null; created_at: string };
@@ -92,6 +92,10 @@ function sortDistAllocations(allocations: IschiaDistAllocation[]): IschiaDistAll
     if (hotelDelta !== 0) return hotelDelta;
     return a.customer_name.localeCompare(b.customer_name, "it");
   });
+}
+
+function busDisplayLabel(unit: Pick<BusUnit, "label" | "group_name">): string {
+  return unit.group_name?.trim() || unit.label;
 }
 
 function InlineCityEdit({ serviceId, currentCity, onSave, saving }: { serviceId: string; currentCity: string; onSave: (city: string) => Promise<unknown>; saving: boolean }) {
@@ -402,6 +406,43 @@ export default function BusNetworkPage() {
     [payload.services]
   );
 
+  const withExportPassengerContact = useCallback((allocation: AllocationDetail): AllocationDetail => {
+    const service = serviceById.get(allocation.service_id);
+    const isBookingGroup = Boolean(service?.booking_group_id);
+    const contactName = service?.booking_group_contact_name?.trim();
+    const contactPhone = service?.booking_group_contact_phone?.trim();
+    return {
+      ...allocation,
+      booking_group_contact_name: contactName || null,
+      booking_group_contact_phone: contactPhone || null,
+      booking_group_outbound_ferry_company: service?.booking_group_outbound_ferry_company ?? null,
+      booking_group_outbound_departure_port: service?.booking_group_outbound_departure_port ?? null,
+      booking_group_outbound_ferry_time: service?.booking_group_outbound_ferry_time ?? null,
+      booking_group_outbound_arrival_port: service?.booking_group_outbound_arrival_port ?? null,
+      booking_group_return_ferry_company: service?.booking_group_return_ferry_company ?? null,
+      booking_group_return_departure_port: service?.booking_group_return_departure_port ?? null,
+      booking_group_return_ferry_time: service?.booking_group_return_ferry_time ?? null,
+      booking_group_return_arrival_port: service?.booking_group_return_arrival_port ?? null,
+      is_booking_group: isBookingGroup,
+      hotel_name: isBookingGroup ? null : allocation.hotel_name,
+    } as AllocationDetail;
+  }, [serviceById]);
+
+  const withExportPassengerContacts = useCallback(
+    (allocations: AllocationDetail[]) => allocations.map(withExportPassengerContact),
+    [withExportPassengerContact]
+  );
+
+  const getExportPassengerName = useCallback((serviceId: string, fallbackName: string) => {
+    const service = serviceById.get(serviceId);
+    return service?.booking_group_contact_name?.trim() || fallbackName;
+  }, [serviceById]);
+
+  const getExportPassengerPhone = useCallback((serviceId: string, fallbackPhone?: string | null) => {
+    const service = serviceById.get(serviceId);
+    return service?.booking_group_contact_phone?.trim() || service?.phone_display || fallbackPhone || "";
+  }, [serviceById]);
+
   const lineStops = useMemo(
     () => {
       const filtered = payload.stops.filter(
@@ -452,17 +493,28 @@ export default function BusNetworkPage() {
 
   // Unassigned services for this date + direction + line family
   const allocatedServiceIds = useMemo(
-    () => new Set(payload.allocations.map((a) => a.service_id)),
-    [payload.allocations]
+    () => new Set(allDateAllocations.map((a) => a.service_id)),
+    [allDateAllocations]
   );
+  const serviceBelongsToLine = useCallback((service: BusService, line: BusLine | null | undefined) => {
+    if (!line) return false;
+    if (service.booking_group_kind === "bus_exclusive") {
+      return line.code === "GRUPPI_ESCLUSIVI" || line.family_code === "GRUPPI_ESCLUSIVI";
+    }
+    if (service.booking_group_catalog_stop_id) {
+      const catalogStop = payload.stops.find((stop) => stop.id === service.booking_group_catalog_stop_id);
+      if (catalogStop) return catalogStop.bus_line_id === line.id;
+    }
+    return service.derived_family_code === line.family_code;
+  }, [payload.stops]);
 
   const unassigned = useMemo(
     () => payload.services.filter(
       (s) => s.date === date && s.direction === direction &&
-        s.derived_family_code === selectedLine?.family_code &&
+        serviceBelongsToLine(s, selectedLine) &&
         !allocatedServiceIds.has(s.id)
     ),
-    [payload.services, date, direction, selectedLine, allocatedServiceIds]
+    [payload.services, date, direction, selectedLine, allocatedServiceIds, serviceBelongsToLine]
   );
 
   // Per-unit loads filtered by date — usa TUTTE le allocazioni (non filtrate per bus selezionato)
@@ -471,9 +523,14 @@ export default function BusNetworkPage() {
       const datePax = allDateAllocations
         .filter((a) => a.bus_unit_id === unit.id)
         .reduce((sum, a) => sum + a.pax_assigned, 0);
-      return { ...unit, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
+      const allocatedGroupName = allDateAllocations
+        .filter((allocation) => allocation.bus_unit_id === unit.id)
+        .map((allocation) => serviceById.get(allocation.service_id))
+        .find((service) => service?.booking_group_kind === "bus_exclusive" && service.booking_group_name?.trim())
+        ?.booking_group_name?.trim();
+      return { ...unit, group_name: unit.group_name ?? allocatedGroupName ?? null, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
     }),
-    [lineUnits, allDateAllocations]
+    [lineUnits, allDateAllocations, serviceById]
   );
 
   // Bus cards — usa TUTTE le allocazioni per mostrare pax corretti su ogni card
@@ -522,14 +579,14 @@ export default function BusNetworkPage() {
       .reduce((sum, a) => sum + a.pax_assigned, 0);
     const unassignedToday = payload.services.filter(
       (s) => s.date === date && s.direction === direction &&
-        s.derived_family_code === line.family_code &&
+        serviceBelongsToLine(s, line) &&
         !allocatedServiceIds.has(s.id)
     ).length;
     const totalCapacity = payload.units
       .filter((u) => u.bus_line_id === line.id && u.status !== "closed" && u.status !== "completed")
       .reduce((sum, u) => sum + u.capacity, 0);
     return { ...line, paxToday, unassignedToday, totalCapacity };
-  }), [payload.lines, payload.allocation_details, payload.services, payload.units, date, direction, allocatedServiceIds]);
+  }), [payload.lines, payload.allocation_details, payload.services, payload.units, date, direction, allocatedServiceIds, serviceBelongsToLine]);
 
   const totalPaxToday = dateAllocations.reduce((sum, a) => sum + a.pax_assigned, 0);
 
@@ -630,7 +687,10 @@ export default function BusNetworkPage() {
       ?? dateUnitLoads.find((u) => u.status !== "closed" && u.status !== "completed")
       ?? null;
     setAssignUnitId(firstAvailable?.id ?? "");
-    const suggestedStop = lineStops.find((s) => s.stop_name === svc.suggested_stop_name) ?? lineStops[0] ?? null;
+    const bookingGroupStop = svc.booking_group_catalog_stop_id
+      ? lineStops.find((s) => s.id === svc.booking_group_catalog_stop_id)
+      : null;
+    const suggestedStop = bookingGroupStop ?? lineStops.find((s) => s.stop_name === svc.suggested_stop_name) ?? lineStops[0] ?? null;
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignModalOpen(true);
   }, [dateUnitLoads, lineStops, selectedLine]);
@@ -1069,14 +1129,14 @@ export default function BusNetworkPage() {
     const lineStopsForExport = payload.stops
       .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
       .sort((a, b) => a.stop_order - b.stop_order);
-    const allAllocs = busCards.flatMap((c) => c.allocations);
+    const allAllocs = withExportPassengerContacts(busCards.flatMap((c) => c.allocations));
     const firstUnit = busCards[0]?.unit;
     const wb = direction === "departure"
       ? await buildDepartureWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_return, firstUnit?.driver_phone_return, logo)
       : await buildArrivalWorkbook(allAllocs, lineStopsForExport, firstUnit?.driver_name_outbound, firstUnit?.driver_phone_outbound, logo);
     await downloadWorkbook(wb, `bus_${selectedLine?.code ?? "export"}_${date}_${direction === "arrival" ? "Andata" : "Ritorno"}.xlsx`);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busCards, date, direction, selectedLine]);
+  }, [busCards, date, direction, selectedLine, withExportPassengerContacts]);
 
   const exportPdf = useCallback(async () => {
     const { openBusLinePdf } = await import("@/lib/bus-export-pdf");
@@ -1085,7 +1145,7 @@ export default function BusNetworkPage() {
     const lineStopsForExport = payload.stops
       .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === direction)
       .sort((a, b) => a.stop_order - b.stop_order);
-    const allAllocs = busCards.flatMap((c) => c.allocations);
+    const allAllocs = withExportPassengerContacts(busCards.flatMap((c) => c.allocations));
     const firstUnit = busCards[0]?.unit;
     openBusLinePdf({
       direction,
@@ -1097,7 +1157,7 @@ export default function BusNetworkPage() {
       stops: lineStopsForExport,
       logoBase64: logo,
     });
-  }, [busCards, date, direction, selectedLine, payload.stops]);
+  }, [busCards, date, direction, selectedLine, payload.stops, withExportPassengerContacts]);
 
   // Export singolo bus: un foglio Andata + un foglio Ritorno
   const exportSingleBus = useCallback(async () => {
@@ -1109,9 +1169,9 @@ export default function BusNetworkPage() {
     const combinedWb = new ExcelJS.Workbook();
     const logo = await fetchLogoBase64();
     for (const dir of ["arrival", "departure"] as const) {
-      const dirAllocs = payload.allocation_details.filter(
+      const dirAllocs = withExportPassengerContacts(payload.allocation_details.filter(
         (a) => a.bus_unit_id === unitId && a.service_date === date && a.direction === dir
-      );
+      ));
       if (dirAllocs.length === 0) continue;
       const stopsForDir = payload.stops
         .filter((s) => s.bus_line_id === selectedLine?.id && s.direction === dir)
@@ -1143,9 +1203,9 @@ export default function BusNetworkPage() {
     }
     if (combinedWb.worksheets.length === 0) return;
     const lineCode = selectedLine?.code ?? "bus";
-    const busLabel = targetCard.unit.label.replace(/\s+/g, "_");
+    const busLabel = busDisplayLabel(targetCard.unit).replace(/\s+/g, "_");
     await downloadWorkbook(combinedWb, `${lineCode}_${busLabel}_${date}.xlsx`);
-  }, [busCards, selectedBusUnitId, date, selectedLine, payload.allocation_details, payload.stops]);
+  }, [busCards, selectedBusUnitId, date, selectedLine, payload.allocation_details, payload.stops, withExportPassengerContacts]);
 
   const exportSingleBusPdf = useCallback(async () => {
     const { openBusLinePdf } = await import("@/lib/bus-export-pdf");
@@ -1159,15 +1219,15 @@ export default function BusNetworkPage() {
     openBusLinePdf({
       direction,
       lineName: selectedLine?.name ?? "Linea Bus",
-      busLabel: targetCard.unit.label,
+      busLabel: busDisplayLabel(targetCard.unit),
       dateIso: date,
       driverName: direction === "departure" ? targetCard.unit.driver_name_return : targetCard.unit.driver_name_outbound,
       driverPhone: direction === "departure" ? targetCard.unit.driver_phone_return : targetCard.unit.driver_phone_outbound,
-      allocations: targetCard.allocations,
+      allocations: withExportPassengerContacts(targetCard.allocations),
       stops: lineStopsForExport,
       logoBase64: logo,
     });
-  }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.stops]);
+  }, [busCards, selectedBusUnitId, date, direction, selectedLine, payload.stops, withExportPassengerContacts]);
 
   // Export tutte le linee: un foglio per bus×direzione (1 bus = 1 sheet)
   const exportAllLines = useCallback(async () => {
@@ -1181,9 +1241,9 @@ export default function BusNetworkPage() {
         const dirLabel = dir === "arrival" ? "And" : "Rit";
         const lineUnitsAll = payload.units.filter((u) => u.bus_line_id === line.id);
         for (const unit of lineUnitsAll) {
-          const unitAllocs = payload.allocation_details.filter(
+          const unitAllocs = withExportPassengerContacts(payload.allocation_details.filter(
             (a) => a.bus_unit_id === unit.id && a.service_date === date && a.direction === dir
-          );
+          ));
           if (unitAllocs.length === 0) continue;
           const stopsForDir = payload.stops
             .filter((s) => s.bus_line_id === line.id && s.direction === dir)
@@ -1192,7 +1252,7 @@ export default function BusNetworkPage() {
             ? await buildDepartureWorkbook(unitAllocs, stopsForDir, unit.driver_name_return, unit.driver_phone_return, logo)
             : await buildArrivalWorkbook(unitAllocs, stopsForDir, unit.driver_name_outbound, unit.driver_phone_outbound, logo);
           const lineShort = (line.code ?? line.name).slice(0, 14);
-          const busShort = unit.label.replace(/\s+/g, "").slice(0, 12);
+          const busShort = busDisplayLabel(unit).replace(/\s+/g, "").slice(0, 12);
           let sheetName = `${lineShort}_${busShort}_${dirLabel}`.slice(0, 31);
           if (usedNames.has(sheetName)) {
             sheetName = sheetName.slice(0, 28) + String(usedNames.size).padStart(2, "0");
@@ -1224,7 +1284,7 @@ export default function BusNetworkPage() {
     }
     if (wb.worksheets.length === 0) return;
     await downloadWorkbook(wb, `bus_tutte_linee_${date}.xlsx`);
-  }, [payload, date]);
+  }, [payload, date, withExportPassengerContacts]);
 
   const exportReturnCollectionExcel = useCallback(async () => {
     if (returnCollectionBuses.length === 0) return;
@@ -1296,11 +1356,12 @@ export default function BusNetworkPage() {
         const hotelPax = allocations
           .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
           .reduce((sum, item) => sum + item.pax_assigned, 0);
-        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        const passengerName = getExportPassengerName(allocation.service_id, allocation.customer_name);
+        const phone = getExportPassengerPhone(allocation.service_id);
         const row = ws.addRow([
           isNewHotel ? hotel : "",
           isNewHotel ? hotelPax : "",
-          allocation.customer_name,
+          passengerName,
           phone && phone !== "N/D" ? phone : "",
           allocation.hotel_zone || bus.zone || "",
           "",
@@ -1341,7 +1402,7 @@ export default function BusNetworkPage() {
     }
 
     await downloadWorkbook(wb, `raccolta_smistamento_${selectedLine?.code ?? "linea"}_${date}.xlsx`);
-  }, [returnCollectionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+  }, [returnCollectionBuses, payload.ischia_dist_allocations, getExportPassengerName, getExportPassengerPhone, selectedLine, date]);
 
   const printReturnCollection = useCallback(async () => {
     if (returnCollectionBuses.length === 0) return;
@@ -1362,11 +1423,12 @@ export default function BusNetworkPage() {
         const hotelPax = allocations
           .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
           .reduce((sum, item) => sum + item.pax_assigned, 0);
-        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        const passengerName = getExportPassengerName(allocation.service_id, allocation.customer_name);
+        const phone = getExportPassengerPhone(allocation.service_id);
         return `<tr class="${index % 2 === 1 ? "alt" : ""}">
           <td class="hotel">${isNewHotel ? `<strong>${escapeHtml(hotel)}</strong><span>${hotelPax} pax</span>` : ""}</td>
           <td class="center">${escapeHtml(allocation.pax_assigned)}</td>
-          <td>${escapeHtml(allocation.customer_name)}</td>
+          <td>${escapeHtml(passengerName)}</td>
           <td>${escapeHtml(phone && phone !== "N/D" ? phone : "")}</td>
           <td>${escapeHtml(allocation.hotel_zone || bus.zone || "")}</td>
         </tr>`;
@@ -1446,7 +1508,7 @@ export default function BusNetworkPage() {
     }
     win.focus();
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }, [returnCollectionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+  }, [returnCollectionBuses, payload.ischia_dist_allocations, getExportPassengerName, getExportPassengerPhone, selectedLine, date]);
 
   const exportArrivalDistributionExcel = useCallback(async () => {
     if (arrivalDistributionBuses.length === 0) return;
@@ -1518,11 +1580,12 @@ export default function BusNetworkPage() {
         const hotelPax = allocations
           .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
           .reduce((sum, item) => sum + item.pax_assigned, 0);
-        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        const passengerName = getExportPassengerName(allocation.service_id, allocation.customer_name);
+        const phone = getExportPassengerPhone(allocation.service_id);
         const row = ws.addRow([
           isNewHotel ? hotel : "",
           isNewHotel ? hotelPax : "",
-          allocation.customer_name,
+          passengerName,
           phone && phone !== "N/D" ? phone : "",
           allocation.hotel_zone || bus.zone || "",
           "",
@@ -1563,7 +1626,7 @@ export default function BusNetworkPage() {
     }
 
     await downloadWorkbook(wb, `distribuzione_ischia_${selectedLine?.code ?? "linea"}_${date}.xlsx`);
-  }, [arrivalDistributionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+  }, [arrivalDistributionBuses, payload.ischia_dist_allocations, getExportPassengerName, getExportPassengerPhone, selectedLine, date]);
 
   const printArrivalDistribution = useCallback(async () => {
     if (arrivalDistributionBuses.length === 0) return;
@@ -1584,11 +1647,12 @@ export default function BusNetworkPage() {
         const hotelPax = allocations
           .filter((item) => (item.hotel_name || "Hotel N/D") === hotel)
           .reduce((sum, item) => sum + item.pax_assigned, 0);
-        const phone = serviceById.get(allocation.service_id)?.phone_display;
+        const passengerName = getExportPassengerName(allocation.service_id, allocation.customer_name);
+        const phone = getExportPassengerPhone(allocation.service_id);
         return `<tr class="${index % 2 === 1 ? "alt" : ""}">
           <td class="hotel">${isNewHotel ? `<strong>${escapeHtml(hotel)}</strong><span>${hotelPax} pax</span>` : ""}</td>
           <td class="center">${escapeHtml(allocation.pax_assigned)}</td>
-          <td>${escapeHtml(allocation.customer_name)}</td>
+          <td>${escapeHtml(passengerName)}</td>
           <td>${escapeHtml(phone && phone !== "N/D" ? phone : "")}</td>
           <td>${escapeHtml(allocation.hotel_zone || bus.zone || "")}</td>
         </tr>`;
@@ -1668,7 +1732,7 @@ export default function BusNetworkPage() {
     }
     win.focus();
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }, [arrivalDistributionBuses, payload.ischia_dist_allocations, serviceById, selectedLine, date]);
+  }, [arrivalDistributionBuses, payload.ischia_dist_allocations, getExportPassengerName, getExportPassengerPhone, selectedLine, date]);
 
   const moveReturnCollectionHotelGroup = useCallback(async (
     busId: string,
@@ -2502,9 +2566,14 @@ export default function BusNetworkPage() {
                               className="w-40 rounded border border-white/40 bg-white/20 px-2 py-0.5 text-base font-bold uppercase tracking-wide text-white focus:outline-none focus:ring-1 focus:ring-white/60"
                             />
                           ) : (
-                            <div>
+                            <div className="min-w-0">
+                              {unit.group_name ? (
+                                <div className={`truncate text-base font-bold uppercase tracking-wide ${selectedLineFerryConfig ? "text-white" : "text-slate-900"}`}>
+                                  {unit.group_name}
+                                </div>
+                              ) : null}
                               <span
-                                className={`cursor-text text-base font-bold uppercase tracking-wide ${selectedLineFerryConfig ? "text-white hover:text-white/80" : "text-slate-900 hover:text-indigo-600"}`}
+                                className={`cursor-text uppercase tracking-wide ${unit.group_name ? "text-[10px] font-semibold opacity-70" : "text-base font-bold"} ${selectedLineFerryConfig ? "text-white hover:text-white/80" : "text-slate-900 hover:text-indigo-600"}`}
                                 title="Clicca per rinominare"
                                 onClick={(e) => { e.stopPropagation(); setEditLabelUnitId(unit.id); setEditLabelValue(unit.label); }}
                               >{unit.label}</span>
@@ -2627,7 +2696,7 @@ export default function BusNetworkPage() {
                           );
                         })()}
                         {/* Campo nome gruppo/cliente — visibile solo se tag gruppi o esclusivo */}
-                        {(unit.tag === "gruppi" || unit.tag === "esclusivo") && (
+                        {(unit.tag === "gruppi" || unit.tag === "esclusivo") && !unit.group_name && (
                           <div className="mt-2">
                             {editGroupNameUnitId === unit.id ? (
                               <input

@@ -23,6 +23,7 @@ type Detail = {
   stop_summaries: BookingGroupStopPaxSummary[];
 };
 type AvailableBus = { id: string; label: string; capacity: number; tag: string | null };
+type BusLineOption = { id: string; name: string; code: string | null; family_name: string | null; variant_label: string | null };
 type PostResult = Record<string, unknown> | null;
 
 const KIND_LABEL: Record<string, string> = {
@@ -65,6 +66,7 @@ export default function BookingGroupsPage() {
   );
   const [detail, setDetail] = useState<Detail | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [busLines, setBusLines] = useState<BusLineOption[]>([]);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -85,10 +87,17 @@ export default function BookingGroupsPage() {
     else setErr(json.error ?? "Errore caricamento dettaglio");
   }, []);
 
+  const loadBusLines = useCallback(async () => {
+    const { ok, json } = await api("/api/ops/booking-groups?catalog=bus_lines");
+    if (ok && json.ok) setBusLines(json.lines ?? []);
+  }, []);
+
   // Il setState avviene dentro loadList/loadDetail dopo un await (fetch), non
   // in modo sincrono nel corpo dell'effect: nessun rischio di cascading render.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void loadList(); }, [loadList]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void loadBusLines(); }, [loadBusLines]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedId) void loadDetail(selectedId); }, [selectedId, loadDetail]);
 
@@ -169,7 +178,7 @@ export default function BookingGroupsPage() {
       </SectionCard>
 
       {detailLoading ? <p className="text-sm text-slate-500">Caricamento dettaglio…</p> : null}
-      {detail ? <GroupDetail detail={detail} onChange={refresh} onMessage={(m) => { setErr(null); setMsg(m); }} onError={(e) => { setMsg(null); setErr(e); }} onClose={closeDetail} /> : null}
+      {detail ? <GroupDetail detail={detail} busLines={busLines} onChange={refresh} onMessage={(m) => { setErr(null); setMsg(m); }} onError={(e) => { setMsg(null); setErr(e); }} onClose={closeDetail} /> : null}
 
       {showNew ? <NewGroupForm onClose={() => setShowNew(false)} onCreated={async (id) => { setShowNew(false); await loadList(); selectGroup(id); }} onError={(e) => { setMsg(null); setErr(e); }} /> : null}
     </div>
@@ -278,8 +287,9 @@ function NewGroupForm({ onClose, onCreated, onError }: { onClose: () => void; on
 
 // ─── Group detail ──────────────────────────────────────────────────────────
 
-function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
+function GroupDetail({ detail, busLines, onChange, onMessage, onError, onClose }: {
   detail: Detail;
+  busLines: BusLineOption[];
   onChange: () => Promise<void> | void;
   onMessage: (m: string) => void;
   onError: (e: string) => void;
@@ -312,7 +322,7 @@ function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
   };
 
   const cancelGroup = async () => {
-    const confirmed = window.confirm("Annullare questo gruppo? I servizi gia creati resteranno nel sistema.");
+    const confirmed = window.confirm("Annullare questo gruppo? I servizi gia creati verranno annullati e rimossi dalla Linea Bus.");
     if (!confirmed) return;
     await post({ action: "update_group", id: group.id, status: "cancelled" });
   };
@@ -367,8 +377,12 @@ function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
         {/* Fermate */}
         <StopsSection stops={stops} stopSummaries={stop_summaries} services={services}
           onAddStop={(s) => post({ action: "add_stop", booking_group_id: group.id, ...s })}
-          onCreateServices={(stopId, passengers) => post({ action: "create_group_services_batch", booking_group_id: group.id, booking_group_stop_id: stopId, passengers })}
-          serviceDateMissing={!group.service_date}
+          onDeleteStop={(id) => post({ action: "delete_stop", id })}
+          onCreateServices={(stopId, passengers, serviceDate) => post({ action: "create_group_services_batch", booking_group_id: group.id, booking_group_stop_id: stopId, service_date: serviceDate, passengers })}
+          arrivalDate={group.service_date}
+          returnDate={group.return_date}
+          busLines={busLines}
+          preferExclusiveLine={group.kind === "bus_exclusive"}
         />
 
         {/* Bus riservato */}
@@ -397,7 +411,7 @@ function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
               Annulla gruppo
             </button>
           ) : null}
-          <span className="text-[11px] text-slate-400">Preferisci lo stato <b>Annullato</b> alla cancellazione fisica: i servizi esistenti non verranno cancellati.</span>
+          <span className="text-[11px] text-slate-400">Annullare il gruppo mantiene lo storico commerciale, ma rimuove i servizi operativi dalla Linea Bus.</span>
         </div>
       </div>
     </SectionCard>
@@ -462,19 +476,37 @@ function GroupEditSection({ group, onSave }: { group: BookingGroup; onSave: (pat
   );
 }
 
-function StopsSection({ stops, stopSummaries, services, onAddStop, onCreateServices, serviceDateMissing }: {
+function StopsSection({ stops, stopSummaries, services, onAddStop, onDeleteStop, onCreateServices, arrivalDate, returnDate, busLines, preferExclusiveLine }: {
   stops: BookingGroupStop[];
   stopSummaries: BookingGroupStopPaxSummary[];
   services: Detail["services"];
-  onAddStop: (s: { city: string; pickup_point: string | null; expected_pax: number; direction: string; notes: string | null }) => Promise<PostResult>;
-  onCreateServices: (stopId: string, passengers: Array<{ customer_name: string; pax: number }>) => Promise<PostResult>;
-  serviceDateMissing: boolean;
+  onAddStop: (s: { city: string; pickup_point: string | null; expected_pax: number; direction: string; notes: string | null; create_catalog_stop?: boolean; bus_line_id?: string | null; pickup_time?: string | null }) => Promise<PostResult>;
+  onDeleteStop: (id: string) => Promise<PostResult>;
+  onCreateServices: (stopId: string, passengers: Array<{ customer_name: string; pax: number }>, serviceDate: string) => Promise<PostResult>;
+  arrivalDate: string | null;
+  returnDate: string | null;
+  busLines: BusLineOption[];
+  preferExclusiveLine: boolean;
 }) {
   const [city, setCity] = useState("");
   const [pickup, setPickup] = useState("");
+  const [pickupTime, setPickupTime] = useState("");
   const [px, setPx] = useState("20");
   const [dir, setDir] = useState("arrival");
+  const [persistCatalog, setPersistCatalog] = useState(true);
+  const [busLineId, setBusLineId] = useState("");
   const [busy, setBusy] = useState(false);
+  const orderedBusLines = useMemo(() => {
+    if (!preferExclusiveLine) return busLines;
+    return [...busLines].sort((a, b) => {
+      const ax = a.code === "GRUPPI_ESCLUSIVI" ? 0 : 1;
+      const bx = b.code === "GRUPPI_ESCLUSIVI" ? 0 : 1;
+      return ax - bx || a.name.localeCompare(b.name);
+    });
+  }, [busLines, preferExclusiveLine]);
+  const preferredBusLineId = preferExclusiveLine ? busLines.find((line) => line.code === "GRUPPI_ESCLUSIVI")?.id ?? "" : "";
+  const effectiveBusLineId = busLineId || preferredBusLineId;
+  const canAdd = !busy && city.trim().length > 0 && Number(px) > 0 && (!persistCatalog || Boolean(effectiveBusLineId));
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
@@ -483,6 +515,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onCreateServi
         {stops.length === 0 ? <p className="text-xs text-slate-400">Nessuna fermata pianificata.</p> : stops.map((s) => {
           const sum = stopSummaries.find((x) => x.stopId === s.id);
           const linked = services.filter((sv) => sv.booking_group_stop_id === s.id);
+          const serviceDate = s.direction === "departure" ? (returnDate ?? arrivalDate) : arrivalDate;
           return (
             <div key={s.id} className={`rounded-lg border p-2 text-xs ${sum?.overbooked ? "border-rose-300 bg-rose-50" : "border-slate-200"}`}>
               <div className="font-semibold uppercase text-slate-700">{s.city}</div>
@@ -498,13 +531,30 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onCreateServi
                   {linked.map((sv) => <li key={sv.id}>{sv.customer_name} — {sv.pax} pax <span className="text-slate-400">({sv.status})</span></li>)}
                 </ul>
               ) : null}
-              <StopPassengerBatch stopId={s.id} disabled={serviceDateMissing} onCreate={onCreateServices} />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {!s.stop_id ? (
+                  <StopCatalogLinker stop={s} busLines={orderedBusLines} defaultBusLineId={effectiveBusLineId} onLink={onAddStop} />
+                ) : null}
+                {linked.length === 0 ? (
+                  <button type="button" className="text-[11px] text-rose-600 underline" onClick={() => void onDeleteStop(s.id)}>Elimina fermata</button>
+                ) : null}
+              </div>
+              {(sum?.remainingServicePax ?? s.expected_pax) <= 0 ? (
+                <div className="mt-1 text-[11px] font-semibold text-emerald-700">Completato: tutti i pax sono gia in services.</div>
+              ) : (
+                <StopPassengerBatch
+                  stop={s}
+                  serviceDate={serviceDate}
+                  suggestedPax={Math.max(1, sum?.remainingServicePax ?? s.expected_pax)}
+                  onCreate={onCreateServices}
+                />
+              )}
             </div>
           );
         })}
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-[1.1fr_1.4fr_90px_110px_110px]">
         <input className="input-saas" placeholder="Citta / localita *" value={city} onChange={(e) => setCity(e.target.value)} />
         <input className="input-saas" placeholder="Punto di carico" value={pickup} onChange={(e) => setPickup(e.target.value)} />
         <input className="input-saas" type="number" min={1} max={500} placeholder="Pax *" value={px} onChange={(e) => setPx(e.target.value)} />
@@ -512,27 +562,112 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onCreateServi
           <option value="arrival">arrivo</option>
           <option value="departure">partenza</option>
         </select>
+        <input className="input-saas" type="time" value={pickupTime} onChange={(e) => setPickupTime(e.target.value)} />
       </div>
-      <button type="button" disabled={busy || !city.trim() || !(Number(px) > 0)}
+      <div className="mt-2 grid gap-2 md:grid-cols-[auto_minmax(220px,1fr)]">
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+          <input type="checkbox" checked={persistCatalog} onChange={(e) => setPersistCatalog(e.target.checked)} />
+          salva nel catalogo bus
+        </label>
+        {persistCatalog ? (
+          <select className="input-saas text-xs" value={effectiveBusLineId} onChange={(e) => setBusLineId(e.target.value)}>
+            <option value="">{busLines.length ? "Seleziona linea bus" : "Nessuna linea bus disponibile"}</option>
+            {orderedBusLines.map((line) => (
+              <option key={line.id} value={line.id}>{[line.name, line.variant_label, line.family_name].filter(Boolean).join(" - ")}</option>
+            ))}
+          </select>
+        ) : null}
+      </div>
+      <button type="button" disabled={!canAdd}
         onClick={async () => {
           setBusy(true);
-          const result = await onAddStop({ city: city.trim(), pickup_point: pickup.trim() || null, expected_pax: Number(px), direction: dir, notes: null });
+          const result = await onAddStop({
+            city: city.trim(),
+            pickup_point: pickup.trim() || null,
+            expected_pax: Number(px),
+            direction: dir,
+            notes: null,
+            create_catalog_stop: persistCatalog,
+            bus_line_id: persistCatalog ? effectiveBusLineId : null,
+            pickup_time: pickupTime || null,
+          });
           setBusy(false);
-          if (result) { setCity(""); setPickup(""); setPx("20"); }
+          if (result) { setCity(""); setPickup(""); setPickupTime(""); setPx("20"); }
         }}
         className="btn-secondary mt-2 px-3 py-1.5 text-xs disabled:opacity-50">{busy ? "Aggiungo…" : "+ Aggiungi fermata"}</button>
     </div>
   );
 }
 
-function StopPassengerBatch({ stopId, disabled, onCreate }: {
-  stopId: string;
-  disabled: boolean;
-  onCreate: (stopId: string, rows: Array<{ customer_name: string; pax: number }>) => Promise<PostResult>;
+function StopCatalogLinker({ stop, busLines, defaultBusLineId, onLink }: {
+  stop: BookingGroupStop;
+  busLines: BusLineOption[];
+  defaultBusLineId: string;
+  onLink: (s: { city: string; pickup_point: string | null; expected_pax: number; direction: string; notes: string | null; create_catalog_stop?: boolean; bus_line_id?: string | null; pickup_time?: string | null }) => Promise<PostResult>;
 }) {
-  const [rows, setRows] = useState<Array<{ name: string; pax: string }>>([{ name: "", pax: "1" }]);
   const [open, setOpen] = useState(false);
+  const [lineId, setLineId] = useState(defaultBusLineId);
+  const [time, setTime] = useState("");
   const [busy, setBusy] = useState(false);
+  const effectiveLineId = lineId || defaultBusLineId;
+
+  if (!open) {
+    return (
+      <button type="button" className="text-[11px] font-semibold text-slate-600 underline" onClick={() => setOpen(true)}>
+        Collega/orario catalogo
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2">
+      <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_110px_auto_auto]">
+        <select className="input-saas text-xs" value={effectiveLineId} onChange={(e) => setLineId(e.target.value)}>
+          <option value="">{busLines.length ? "Seleziona linea bus" : "Nessuna linea bus disponibile"}</option>
+          {busLines.map((line) => (
+            <option key={line.id} value={line.id}>{[line.name, line.variant_label, line.family_name].filter(Boolean).join(" - ")}</option>
+          ))}
+        </select>
+        <input className="input-saas text-xs" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+        <button
+          type="button"
+          className="rounded-lg bg-slate-800 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
+          disabled={busy || !effectiveLineId || !time}
+          onClick={async () => {
+            setBusy(true);
+            await onLink({
+              city: stop.city,
+              pickup_point: stop.pickup_point,
+              expected_pax: stop.expected_pax,
+              direction: stop.direction,
+              notes: stop.notes,
+              create_catalog_stop: true,
+              bus_line_id: effectiveLineId,
+              pickup_time: time,
+            });
+            setBusy(false);
+            setOpen(false);
+          }}
+        >
+          {busy ? "Salvo..." : "Salva orario"}
+        </button>
+        <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setOpen(false)}>chiudi</button>
+      </div>
+    </div>
+  );
+}
+
+function StopPassengerBatch({ stop, serviceDate, suggestedPax, onCreate }: {
+  stop: BookingGroupStop;
+  serviceDate: string | null;
+  suggestedPax: number;
+  onCreate: (stopId: string, rows: Array<{ customer_name: string; pax: number }>, serviceDate: string) => Promise<PostResult>;
+}) {
+  const [open, setOpen] = useState(false);
+  const defaultName = stop.pickup_point ? `${stop.city} - ${stop.pickup_point}` : stop.city;
+  const [rows, setRows] = useState<Array<{ name: string; pax: string }>>([{ name: defaultName, pax: String(suggestedPax) }]);
+  const [busy, setBusy] = useState(false);
+  const disabled = !serviceDate;
   const valid = rows.filter((r) => r.name.trim() && Number(r.pax) > 0);
   const totalPax = useMemo(() => valid.reduce((n, r) => n + Number(r.pax), 0), [valid]);
 
@@ -540,24 +675,34 @@ function StopPassengerBatch({ stopId, disabled, onCreate }: {
     return <button type="button" className="mt-1 text-[11px] text-slate-500 underline" onClick={() => setOpen(true)}>+ Passeggeri / sottogruppi</button>;
   }
   return (
-    <div className="mt-2 rounded border border-slate-200 bg-white p-2">
-      {disabled ? <p className="mb-1 text-[11px] text-rose-600">Imposta prima la data del gruppo per creare i servizi.</p> : null}
+    <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+      {disabled ? <p className="mb-2 text-[11px] text-rose-600">Imposta prima la data {stop.direction === "departure" ? "ritorno" : "arrivo"} del gruppo per creare i servizi.</p> : null}
       {rows.map((r, i) => (
-        <div key={i} className="mb-1 flex gap-1">
-          <input className="input-saas flex-1 text-xs" placeholder="Nominativo / sottogruppo" value={r.name} onChange={(e) => setRows((p) => p.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
-          <input className="input-saas w-16 text-xs" type="number" min={1} value={r.pax} onChange={(e) => setRows((p) => p.map((x, j) => j === i ? { ...x, pax: e.target.value } : x))} />
+        <div key={i} className="mb-2 grid grid-cols-[minmax(0,1fr)_96px_auto] gap-2">
+          <input className="input-saas min-w-0 text-xs" placeholder="Nominativo / sottogruppo" value={r.name} onChange={(e) => setRows((p) => p.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
+          <input className="input-saas text-xs" type="number" min={1} max={500} value={r.pax} onChange={(e) => setRows((p) => p.map((x, j) => j === i ? { ...x, pax: e.target.value } : x))} />
+          <button
+            type="button"
+            className="rounded-lg border border-slate-200 px-2 text-xs text-slate-500 disabled:opacity-40"
+            disabled={rows.length === 1}
+            onClick={() => setRows((p) => p.filter((_, j) => j !== i))}
+          >
+            x
+          </button>
         </div>
       ))}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setRows((p) => [...p, { name: "", pax: "1" }])}>Aggiungi riga</button>
+        <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setOpen(false)}>chiudi</button>
         <button type="button" disabled={busy || disabled || valid.length === 0}
           className="rounded bg-slate-800 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50"
           onClick={async () => {
+            if (!serviceDate) return;
             setBusy(true);
-            const result = await onCreate(stopId, valid.map((r) => ({ customer_name: r.name.trim(), pax: Number(r.pax) })));
+            const result = await onCreate(stop.id, valid.map((r) => ({ customer_name: r.name.trim(), pax: Number(r.pax) })), serviceDate);
             setBusy(false);
             if (result && Number(result.failed_count ?? 0) === 0) {
-              setRows([{ name: "", pax: "1" }]);
+              setRows([{ name: defaultName, pax: String(suggestedPax) }]);
               setOpen(false);
             }
           }}>
