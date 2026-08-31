@@ -19,6 +19,7 @@ import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches }
 import { resolveIncomingFerryMeta } from "@/lib/server/ferry-connection-lookup";
 import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
+import { hasRealDepartureLeg } from "@/lib/booking-list-display";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -267,6 +268,62 @@ function toServiceTypeCode(tipo: string | null | undefined): string | null {
   return VALID_SERVICE_TYPE_CODES.has(raw) ? raw : null;
 }
 
+/**
+ * Pickup hotel per la gamba di partenza in treno — identico a
+ * app/api/email/inbox-approve/route.ts (stessa funzione duplicata per
+ * coerenza con lo stile esistente del file, "identici a claude-save-draft").
+ * Vedi lì per la docstring completa: canonico via applyPickupCalc (dominio A,
+ * regola DB ferry_pickup_rules + fallback statico), segnale forte
+ * hasRealDepartureLeg (departure_date + train_departure_time/number, MAI il
+ * generico departure_time da solo — per non riaprire BIRAGO), applicabile sia
+ * a una riga direction='departure' reale sia a una riga combinata
+ * direction='arrival' con partenza reale nella stessa riga (MATTIOLI 26/010806).
+ */
+async function resolveTrainDeparturePickup(
+  admin: SupabaseClient,
+  opts: {
+    hotelId: string | null;
+    hotelName: string | null;
+    bookingServiceKind: string | null;
+    billingPartyName: string | null;
+    departureDate: string | null;
+    trainDepartureTime: string | null;
+    trainDepartureNumber: string | null;
+  }
+): Promise<{ pickup_hotel: string | null; pickup_alert: string | null } | null> {
+  if (opts.bookingServiceKind !== "transfer_train_hotel") return null;
+  if (!hasRealDepartureLeg({
+    departure_date: opts.departureDate,
+    train_departure_time: opts.trainDepartureTime,
+    train_departure_number: opts.trainDepartureNumber,
+  })) return null;
+
+  const [{ data: hotelZoneRow }, { data: scheduleRows }, { data: operationalRulesRows }] = await Promise.all([
+    admin.from("hotels").select("zone").eq("id", opts.hotelId ?? "").maybeSingle(),
+    admin.from("ferry_schedules")
+      .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to"),
+    admin.from("ferry_pickup_rules").select("*"),
+  ]);
+  const zoneRaw = (hotelZoneRow as { zone?: string | null } | null)?.zone ?? null;
+
+  const pickupFields = applyPickupCalc({
+    direction: "departure",
+    booking_service_kind: opts.bookingServiceKind,
+    time: opts.trainDepartureTime ?? "",
+    billing_party_name: opts.billingPartyName,
+    vessel: opts.trainDepartureNumber,
+    hotel_zone: zoneRaw,
+    hotel_name: opts.hotelName,
+    context: {
+      operationalRules: (operationalRulesRows ?? []) as never,
+      ferrySchedules: (scheduleRows ?? []) as never,
+      date: opts.departureDate ?? "",
+      hotelId: opts.hotelId ?? null,
+    },
+  });
+  return { pickup_hotel: pickupFields.pickup_hotel ?? null, pickup_alert: pickupFields.pickup_alert ?? null };
+}
+
 async function resolveOrCreateHotel(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
   const rawName = clean(hotelName);
   const name = canonicalizeKnownHotelName(rawName) ?? rawName ?? "Hotel da verificare";
@@ -456,6 +513,30 @@ export async function POST(request: NextRequest) {
         ? currentNotes.replace(/\[practice:[^\]]+\]/, `[practice:${practiceNumber}]`)
         : `${currentNotes}${currentNotes ? " | " : ""}[practice:${practiceNumber}]`;
       if (nextNotes !== currentNotes) patch.notes = nextNotes;
+    }
+
+    // Pickup hotel: ricalcola SOLO se la gamba di partenza cambia davvero in
+    // questo update — vedi resolveTrainDeparturePickup e la stessa nota in
+    // app/api/email/inbox-approve/route.ts.
+    const departureLegChanging = ["departure_date", "train_departure_number", "train_departure_time"].some((f) => f in patch);
+    if (departureLegChanging) {
+      const resultingHotelId = (patch.hotel_id as string | undefined) ?? (before.hotel_id as string | null);
+      const resultingDepartureDate = (patch.departure_date as string | undefined) ?? (before.departure_date as string | null);
+      const resultingTrainDepartureTime = (patch.train_departure_time as string | undefined) ?? (before.train_departure_time as string | null);
+      const resultingTrainDepartureNumber = (patch.train_departure_number as string | undefined) ?? (before.train_departure_number as string | null);
+      const trainPickup = await resolveTrainDeparturePickup(auth.admin, {
+        hotelId: resultingHotelId,
+        hotelName,
+        bookingServiceKind: before.booking_service_kind as string | null,
+        billingPartyName: before.billing_party_name as string | null,
+        departureDate: resultingDepartureDate,
+        trainDepartureTime: resultingTrainDepartureTime,
+        trainDepartureNumber: resultingTrainDepartureNumber,
+      });
+      if (trainPickup) {
+        setIfChanged("pickup_hotel", trainPickup.pickup_hotel);
+        setIfChanged("pickup_alert", trainPickup.pickup_alert);
+      }
     }
 
     if (Object.keys(patch).length > 0) {
@@ -653,10 +734,10 @@ export async function POST(request: NextRequest) {
   // ── Pickup hotel per transfer_port_hotel puri (SNAV/MEDMAR diretti) ──────
   // Stessa logica canonica di app/api/email/inbox-approve/route.ts — via
   // applyPickupCalc (lib/server/apply-pickup-calc.ts), MAI una regex locale
-  // parallela. Fuori da questo scenario (es. "HOTEL PICKUP ORE HH:MM" nelle
-  // note di un transfer treno/hotel) non esiste una funzione di dominio che
-  // estragga pickup_hotel/pickup_time/pickup_alert da testo libero: il
-  // valore resta nelle notes, invariato, come oggi.
+  // parallela. Per il treno (dominio A), vedi resolveTrainDeparturePickup
+  // sotto: si attiva SOLO quando la riga porta anche una partenza reale
+  // (departure_date + dato treno strutturato) — altrimenti, come prima, il
+  // valore resta solo nelle notes (es. "HOTEL PICKUP ORE HH:MM").
   let pickupHotel: string | null = null;
   let pickupAlert: string | null = null;
   if (bookingKind === "transfer_port_hotel" && returnTime) {
@@ -673,6 +754,20 @@ export async function POST(request: NextRequest) {
     });
     pickupHotel = pickupFields.pickup_hotel ?? null;
     pickupAlert = pickupFields.pickup_alert ?? null;
+  } else if (isTrainKind) {
+    const trainPickup = await resolveTrainDeparturePickup(auth.admin, {
+      hotelId,
+      hotelName,
+      bookingServiceKind: bookingKind,
+      billingPartyName: form.agenzia,
+      departureDate,
+      trainDepartureTime: returnTime,
+      trainDepartureNumber,
+    });
+    if (trainPickup) {
+      pickupHotel = trainPickup.pickup_hotel;
+      pickupAlert = trainPickup.pickup_alert;
+    }
   }
 
   // ── Note servizio ─────────────────────────────────────────────────────────

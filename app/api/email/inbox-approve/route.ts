@@ -19,6 +19,7 @@ import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches }
 import { resolveIncomingFerryMeta } from "@/lib/server/ferry-connection-lookup";
 import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
+import { hasRealDepartureLeg } from "@/lib/booking-list-display";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -130,6 +131,71 @@ function toServiceTypeCode(tipo: string | null | undefined): string | null {
   if (!raw) return null;
   if (raw === "bus_city_hotel") return "bus_line";
   return VALID_SERVICE_TYPE_CODES.has(raw) ? raw : null;
+}
+
+/**
+ * Pickup hotel per la gamba di partenza in treno (dominio A di
+ * lib/server/apply-pickup-calc.ts) — canonico via regola DB
+ * (ferry_pickup_rules, Livello 1) con fallback statico invariato
+ * (calc-pickup-time.ts, Livello 2), STESSA funzione condivisa da
+ * new-booking/agency-bookings/Excel. Si applica sia a una riga
+ * direction='departure' reale sia a una riga COMBINATA direction='arrival'
+ * che porta anche la partenza nella stessa riga (caso MATTIOLI 26/010806,
+ * stesso modello A/R-su-riga-singola già usato da
+ * app/api/agency/bookings/route.ts).
+ *
+ * Il segnale "gamba di partenza reale" è VOLUTAMENTE forte (hasRealDepartureLeg,
+ * lib/booking-list-display.ts — stesso helper del fix display): richiede
+ * departure_date + un dato TRENO strutturato (train_departure_time o
+ * train_departure_number), mai il generico departure_time da solo — altrimenti
+ * un residuo BIRAGO (departure_date/departure_time senza alcun dato treno,
+ * copiati per errore da un vecchio bug form) farebbe scattare un calcolo su
+ * dati fantasma. Nessun orario inventato: se applyPickupCalc non trova
+ * nessuna regola, ritorna solo un pickup_alert (mai un pickup_hotel finto).
+ */
+async function resolveTrainDeparturePickup(
+  admin: SupabaseClient,
+  opts: {
+    hotelId: string | null;
+    hotelName: string | null;
+    bookingServiceKind: string | null;
+    billingPartyName: string | null;
+    departureDate: string | null;
+    trainDepartureTime: string | null;
+    trainDepartureNumber: string | null;
+  }
+): Promise<{ pickup_hotel: string | null; pickup_alert: string | null } | null> {
+  if (opts.bookingServiceKind !== "transfer_train_hotel") return null;
+  if (!hasRealDepartureLeg({
+    departure_date: opts.departureDate,
+    train_departure_time: opts.trainDepartureTime,
+    train_departure_number: opts.trainDepartureNumber,
+  })) return null;
+
+  const [{ data: hotelZoneRow }, { data: scheduleRows }, { data: operationalRulesRows }] = await Promise.all([
+    admin.from("hotels").select("zone").eq("id", opts.hotelId ?? "").maybeSingle(),
+    admin.from("ferry_schedules")
+      .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to"),
+    admin.from("ferry_pickup_rules").select("*"),
+  ]);
+  const zoneRaw = (hotelZoneRow as { zone?: string | null } | null)?.zone ?? null;
+
+  const pickupFields = applyPickupCalc({
+    direction: "departure",
+    booking_service_kind: opts.bookingServiceKind,
+    time: opts.trainDepartureTime ?? "",
+    billing_party_name: opts.billingPartyName,
+    vessel: opts.trainDepartureNumber,
+    hotel_zone: zoneRaw,
+    hotel_name: opts.hotelName,
+    context: {
+      operationalRules: (operationalRulesRows ?? []) as never,
+      ferrySchedules: (scheduleRows ?? []) as never,
+      date: opts.departureDate ?? "",
+      hotelId: opts.hotelId ?? null,
+    },
+  });
+  return { pickup_hotel: pickupFields.pickup_hotel ?? null, pickup_alert: pickupFields.pickup_alert ?? null };
 }
 
 async function resolveOrCreateHotel(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
@@ -440,6 +506,32 @@ export async function POST(request: NextRequest) {
       if (nextNotes !== currentNotes) patch.notes = nextNotes;
     }
 
+    // Pickup hotel: ricalcola SOLO se la gamba di partenza cambia davvero in
+    // questo update (mai ad ogni conferma email che non tocca la partenza,
+    // altrimenti sovrascriverebbe un pickup_hotel corretto manualmente
+    // dall'operatore per un motivo indipendente). "Cambia" = uno dei campi
+    // dati di partenza è appena entrato in patch sopra.
+    const departureLegChanging = ["departure_date", "train_departure_number", "train_departure_time"].some((f) => f in patch);
+    if (departureLegChanging) {
+      const resultingHotelId = (patch.hotel_id as string | undefined) ?? (before.hotel_id as string | null);
+      const resultingDepartureDate = (patch.departure_date as string | undefined) ?? (before.departure_date as string | null);
+      const resultingTrainDepartureTime = (patch.train_departure_time as string | undefined) ?? (before.train_departure_time as string | null);
+      const resultingTrainDepartureNumber = (patch.train_departure_number as string | undefined) ?? (before.train_departure_number as string | null);
+      const trainPickup = await resolveTrainDeparturePickup(auth.admin, {
+        hotelId: resultingHotelId,
+        hotelName,
+        bookingServiceKind: before.booking_service_kind as string | null,
+        billingPartyName: before.billing_party_name as string | null,
+        departureDate: resultingDepartureDate,
+        trainDepartureTime: resultingTrainDepartureTime,
+        trainDepartureNumber: resultingTrainDepartureNumber,
+      });
+      if (trainPickup) {
+        setIfChanged("pickup_hotel", trainPickup.pickup_hotel);
+        setIfChanged("pickup_alert", trainPickup.pickup_alert);
+      }
+    }
+
     if (Object.keys(patch).length > 0) {
       const { error: updErr } = await admin
         .from("services")
@@ -597,6 +689,20 @@ export async function POST(request: NextRequest) {
     });
     pickupHotel = pickupFields.pickup_hotel ?? null;
     pickupAlert = pickupFields.pickup_alert ?? null;
+  } else if (isTrainKind) {
+    const trainPickup = await resolveTrainDeparturePickup(auth.admin, {
+      hotelId,
+      hotelName,
+      bookingServiceKind: bookingKind,
+      billingPartyName: agency,
+      departureDate,
+      trainDepartureTime: returnTime,
+      trainDepartureNumber,
+    });
+    if (trainPickup) {
+      pickupHotel = trainPickup.pickup_hotel;
+      pickupAlert = trainPickup.pickup_alert;
+    }
   }
   const notesParts = [
     "[email_import] Booking approvato da email",

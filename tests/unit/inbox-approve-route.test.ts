@@ -339,7 +339,7 @@ describe("POST /api/email/inbox-approve — pickup hotel calcolato per transfer_
     expect(row.departure_time).toBe("14:00"); // resta l'orario del traghetto, non sovrascritto dal pickup
   });
 
-  it("treno/aereo (transfer_train_hotel): pickup_hotel resta null, nessuna regola SNAV/MEDMAR applicata (comportamento invariato)", async () => {
+  it("treno con partenza reale (transfer_train_hotel, record combinato MATTIOLI 26/010806): calcola pickup_hotel dal dominio A (fix: prima restava sempre null)", async () => {
     const serviceInserts: Array<Record<string, unknown>> = [];
     mocks.authorizePricingRequest.mockResolvedValue(
       makeAuthContext(makeFakeAdmin({ serviceInserts, hotelsSeed: [] }))
@@ -351,11 +351,48 @@ describe("POST /api/email/inbox-approve — pickup hotel calcolato per transfer_
     expect(res.status).toBe(200);
     expect(json.ok).toBe(true);
     const row = serviceInserts[0]!;
+    // Segnale forte presente (departure_date + train_departure_number "ITA 9940"):
+    // fallback statico calc-pickup-time.ts (nessuna regola canonica DB nel mock,
+    // ferry_pickup_rules vuota) — Aleste/treno/traghetto/13:20 -> pickup 11:00.
+    // Stessa funzione (applyPickupCalc) e stesso risultato che avrebbe
+    // new-booking/agency-bookings per uno scenario equivalente.
+    expect(row.pickup_hotel).toBe("11:00");
+    expect(row.pickup_alert).toBeNull();
+    expect(row.departure_time).toBe("13:20");
+  });
+
+  it("treno SENZA partenza reale (solo arrivo, nessun train_departure_number/time): pickup_hotel resta null, nessun calcolo tentato (non regredisce BIRAGO)", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(makeFakeAdmin({ serviceInserts, hotelsSeed: [] }))
+    );
+
+    const form = alesteForm({ data_partenza: "", orario_partenza: "", treno_ritorno: "" });
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form }));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const row = serviceInserts[0]!;
     expect(row.pickup_hotel).toBeNull();
     expect(row.pickup_alert).toBeNull();
-    // Il calcolo per treno/aereo passa da un altro sistema (calc-pickup-time.ts,
-    // collegato solo a app/api/inbound/email e app/api/excel/import), non toccato qui.
-    expect(row.departure_time).toBe("13:20");
+  });
+
+  it("treno con orario non in nessuna fascia nota: pickup_hotel resta null, pickup_alert lo segnala (nessun orario inventato)", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(makeFakeAdmin({ serviceInserts, hotelsSeed: [] }))
+    );
+
+    const form = alesteForm({ orario_partenza: "03:00" });
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form }));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const row = serviceInserts[0]!;
+    expect(row.pickup_hotel).toBeNull();
+    expect(String(row.pickup_alert)).toMatch(/fascia oraria/i);
   });
 
   it("hotel senza zona impostata: pickup_hotel resta null, pickup_alert segnala il dato anagrafico mancante (nessun orario inventato)", async () => {
@@ -685,6 +722,177 @@ describe("POST /api/email/inbox-approve — controllo duplicati LIVE (regression
     expect(pj.linked_via).toBe("duplicate_update");
   });
 
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pickup hotel su AGGIORNA ESISTENTE (fix: audit pickup hotel su record
+// combinato arrivo+partenza, caso reale MATTIOLI ALESSANDRA 26/010806).
+// ─────────────────────────────────────────────────────────────────────────────
+const MATTIOLI_EXISTING_ID = "99999999-9999-4999-8999-999999999999";
+
+function mattioliUpdateForm(overrides: Partial<FormState> = {}): FormState {
+  return {
+    cliente_nome: "MATTIOLI ALESSANDRA",
+    cliente_cellulare: "3475489819",
+    n_pax: "3",
+    hotel: "VILLA TERESA",
+    data_arrivo: "2026-09-01",
+    orario_arrivo: "12:48",
+    data_partenza: "2026-09-07",
+    orario_partenza: "13:25",
+    tipo_servizio: "transfer_station_hotel",
+    treno_andata: "ITA 8903",
+    treno_ritorno: "ITA 8918",
+    citta_partenza: "ROMA TERMINI",
+    totale_pratica: "168.00",
+    note: "",
+    numero_pratica: "26/010806",
+    agenzia: "Aleste Viaggi",
+    ...overrides,
+  };
+}
+
+/** Riga "prima" — record combinato reale: direction='arrival' con partenza già presente ma con orari VECCHI. */
+function mattioliExistingCombinedRow() {
+  return {
+    id: MATTIOLI_EXISTING_ID,
+    direction: "arrival",
+    status: "new",
+    is_draft: false,
+    hotel_id: HOTEL_ID,
+    booking_service_kind: "transfer_train_hotel",
+    billing_party_name: "Aleste Viaggi",
+    customer_name: "MATTIOLI ALESSANDRA",
+    phone: "3475489819",
+    pax: 3,
+    time: "12:53",
+    outbound_time: "12:53",
+    arrival_time: "12:53",
+    return_time: "13:20",
+    departure_time: "13:20",
+    arrival_date: "2026-09-01",
+    date: "2026-09-01",
+    departure_date: "2026-09-06",
+    meeting_point: "ROMA TERMINI",
+    transport_code: "ITA 9998 / ITA 9940",
+    train_arrival_number: "ITA 9998",
+    train_arrival_time: "12:53",
+    train_departure_number: "ITA 9940",
+    train_departure_time: "13:20",
+    notes: "[pdf_import] Booking finale creato da PDF | [practice:26/010806]",
+  };
+}
+
+describe("POST /api/email/inbox-approve — pickup hotel su record combinato arrivo+partenza (fix: audit MATTIOLI 26/010806)", () => {
+  it("2. Mattioli combinato: direction='arrival' con partenza reale che CAMBIA in questo update → lookup pickup da DB eseguito, pickup_hotel/pickup_alert valorizzati in changed_fields", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const existingRow = mattioliExistingCombinedRow();
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Villa Teresa" }],
+          dupCertainRow: { id: MATTIOLI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
+          dupListRows: [existingRow],
+          existingServicesById: { [MATTIOLI_EXISTING_ID]: existingRow },
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        form: mattioliUpdateForm(),
+        action: "update_existing",
+        existing_service_id: MATTIOLI_EXISTING_ID,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.updated).toBe(true);
+    // La gamba di partenza cambia davvero (departure_date/train_departure_*):
+    // il lookup pickup scatta, stesso fallback statico del test di creazione
+    // sopra — Aleste/treno/traghetto/13:25 rientra nella stessa fascia 13:20-16:50.
+    expect(json.changed_fields).toContain("train_departure_number");
+    expect(json.changed_fields).toContain("train_departure_time");
+    expect(json.changed_fields).toContain("pickup_hotel");
+  });
+
+  it("1. Partenza normale (direction='departure' reale, non combinata): la gamba di partenza cambia → pickup calcolato come per una riga combinata (stesso codice, nessuna distinzione su direction)", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const existingRow = { ...mattioliExistingCombinedRow(), direction: "departure" };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Villa Teresa" }],
+          dupCertainRow: { id: MATTIOLI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
+          dupListRows: [existingRow],
+          existingServicesById: { [MATTIOLI_EXISTING_ID]: existingRow },
+        })
+      )
+    );
+
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        form: mattioliUpdateForm(),
+        action: "update_existing",
+        existing_service_id: MATTIOLI_EXISTING_ID,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.changed_fields).toContain("pickup_hotel");
+  });
+
+  it("3. BIRAGO su update_existing: nessun campo treno/data di partenza cambia → nessun lookup pickup, pickup_hotel resta INTATTO (mai sovrascritto)", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    // Riga con un pickup_hotel già impostato MANUALMENTE dall'operatore per un
+    // motivo indipendente: l'update di oggi tocca solo l'anagrafica, la
+    // partenza (departure_date/train_departure_*) resta invariata.
+    const existingRow = { ...mattioliExistingCombinedRow(), pickup_hotel: "09:00" };
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(
+        makeFakeAdmin({
+          serviceInserts,
+          hotelsSeed: [{ id: HOTEL_ID, name: "Villa Teresa" }],
+          dupCertainRow: { id: MATTIOLI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
+          dupListRows: [existingRow],
+          existingServicesById: { [MATTIOLI_EXISTING_ID]: existingRow },
+        })
+      )
+    );
+
+    // Stessi orari treno/partenza della riga esistente: nessun campo di
+    // partenza in patch, solo eventuali altri campi.
+    const form = mattioliUpdateForm({
+      data_partenza: "2026-09-06",
+      orario_partenza: "13:20",
+      treno_ritorno: "ITA 9940",
+    });
+    const res = await POST(
+      makeRequest({
+        inbound_email_id: INBOUND_EMAIL_ID,
+        form,
+        action: "update_existing",
+        existing_service_id: MATTIOLI_EXISTING_ID,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.changed_fields).not.toContain("pickup_hotel");
+    expect(json.changed_fields).not.toContain("pickup_alert");
+    expect(json.changed_fields).not.toContain("departure_date");
+    expect(json.changed_fields).not.toContain("train_departure_number");
+    expect(json.changed_fields).not.toContain("train_departure_time");
+  });
+});
+
+describe("POST /api/email/inbox-approve — controllo duplicati LIVE (regressione MARIOTTI)", () => {
   it("SICUREZZA (action:update_existing): existing_service_id NON fra i duplicati rilevati → 422, nessun INSERT", async () => {
     const serviceInserts: Array<Record<string, unknown>> = [];
     const OTHER_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";

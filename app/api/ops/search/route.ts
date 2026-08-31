@@ -4,6 +4,7 @@ import { collapseLinkedBookingPairs, filterBookingsBySearch, phoneNeedles } from
 import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleForService, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { findFerryPickupRule, resolveAgencyLogic, type FerryPickupRule } from "@/lib/ferry-pickup-rules";
+import { hasRealDepartureLeg } from "@/lib/booking-list-display";
 import type { Service } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -556,7 +557,18 @@ export async function GET(req: NextRequest) {
           ? serviceById.get(String(r.linked_service_id))
           : null;
         const arrivalLeg = r.direction === "arrival" ? r : linked?.direction === "arrival" ? linked : r;
-        const departureLeg = r.direction === "departure" ? r : linked?.direction === "departure" ? linked : null;
+        // Riga combinata reale (caso MATTIOLI 26/010806): direction='arrival'
+        // ma la stessa riga porta anche un dato di partenza treno strutturato
+        // (train_departure_time/number), non una gamba A/R separata via
+        // linked_service_id. hasRealDepartureLeg (stesso helper del fix
+        // display in lib/booking-list-display.ts) richiede il segnale forte
+        // per non riattivare il bug BIRAGO (departure_date/departure_time
+        // residui generici, mai train_departure_*, restano non trattati come
+        // gamba reale).
+        const departureLeg = r.direction === "departure" ? r
+          : linked?.direction === "departure" ? linked
+          : r.direction === "arrival" && hasRealDepartureLeg(r) ? r
+          : null;
         const schedules = (schedulesResult.data ?? []) as FerryScheduleRow[];
         const ferryPickupRules = (ferryPickupRulesResult.data ?? []) as FerryPickupRule[];
         const joinedName = [r.customer_first_name, r.customer_last_name].filter(Boolean).join(" ").trim();
