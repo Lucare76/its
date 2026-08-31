@@ -355,6 +355,122 @@ describe("GET /api/ops/search — risposta conserva phone_e164", () => {
   });
 });
 
+describe("GET /api/ops/search — tratta nave (fix: card mostra compagnia/orari nave, non solo 'Arrivo indicativo')", () => {
+  it("Mattioli combinato: direction='arrival' con partenza reale -> outbound_ferry_company/arrival_port da ferry_pickup_rules (to_ischia), return_ferry_company/departure_port dalla gamba stessa (barca_compagnia/porto_bruno)", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("mattioli-1", TENANT_A, {
+          customer_name: "MATTIOLI ALESSANDRA",
+          booking_service_kind: "transfer_train_hotel",
+          direction: "arrival",
+          billing_party_name: "Aleste Viaggi",
+          arrival_date: "2026-09-01",
+          arrival_time: "12:48",
+          train_arrival_time: "12:48",
+          departure_date: "2026-09-07",
+          departure_time: "13:25",
+          train_departure_time: "13:25",
+          train_departure_number: "ITA 8918",
+          // Già calcolati e salvati da applyPickupCalc (fix pickup hotel del
+          // turno precedente) — la card di partenza deve leggerli da qui, non
+          // da un match ferry_schedules indipendente.
+          barca_compagnia: "Medmar",
+          porto_bruno: "casamicciola",
+          orario_barca: "10:10",
+          pickup_hotel: "08:30",
+        }),
+      ],
+      ferry_pickup_rules: [
+        {
+          id: "rule-to-ischia",
+          agency_logic: "aleste",
+          transport_type: "train",
+          direction: "to_ischia",
+          boat_type: "traghetto",
+          hotel_id: null,
+          zone: null,
+          transport_from: "12:30",
+          transport_to: "13:00",
+          company: "Medmar",
+          departure_time: "14:20:00",
+          embark_port: null,
+          arrival_port: "ischia_porto",
+          arrival_time: "15:40:00",
+          pickup_time: null,
+          valid_from: null,
+          valid_to: null,
+          days_of_week: null,
+          season_notes: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=MATTIOLI")).json();
+    const row = body.results.find((r: Row) => r.id === "mattioli-1");
+
+    // Arrivo: fonte canonica ferry_pickup_rules (mai il match ferry_schedules
+    // legacy, che qui non ha nessuna riga seedata).
+    expect(row.outbound_ferry_departure_time).toBe("14:20");
+    expect(row.outbound_ferry_arrival_time).toBe("15:40");
+    expect(row.outbound_ferry_company).toBe("MEDMAR");
+    expect(row.outbound_ferry_arrival_port).toBe("Ischia Porto");
+
+    // Partenza: valori già persistiti sulla riga stessa (record combinato).
+    expect(row.return_ferry_company).toBe("MEDMAR");
+    expect(row.return_ferry_departure_port).toBe("Casamicciola");
+    expect(row.return_ferry_departure_time).toBe("10:10");
+  });
+
+  it("BIRAGO arrival-only: nessun train_departure_number/time -> nessun return_ferry_* mostrato (nessuna regressione)", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("birago-1", TENANT_A, {
+          customer_name: "BIRAGO ANNAMARIA",
+          booking_service_kind: "transfer_train_hotel",
+          direction: "arrival",
+          arrival_date: "2026-08-27",
+          arrival_time: "10:00",
+          // Residuo BIRAGO: departure_date/departure_time generici, MAI un
+          // dato treno strutturato.
+          departure_date: "2026-08-26",
+          departure_time: "18:00",
+        }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=BIRAGO")).json();
+    const row = body.results.find((r: Row) => r.id === "birago-1");
+    // return_ferry_company/departure_port restano comunque assenti a monte
+    // (nessun barca_compagnia/porto_bruno seedato): qui il punto è che
+    // hasRealDepartureLeg non deve far crashare o inventare nulla.
+    expect(row.return_ferry_company).toBeFalsy();
+  });
+
+  it("nessuna regola nave applicabile: outbound_ferry_company/arrival_port restano null, nessuna compagnia inventata", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("no-rule-1", TENANT_A, {
+          customer_name: "SENZA REGOLA",
+          booking_service_kind: "transfer_train_hotel",
+          direction: "arrival",
+          billing_party_name: "Aleste Viaggi",
+          arrival_date: "2026-09-01",
+          arrival_time: "03:00", // fuori da qualunque fascia oraria nota
+          train_arrival_time: "03:00",
+        }),
+      ],
+      ferry_pickup_rules: [],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=SENZA REGOLA")).json();
+    const row = body.results.find((r: Row) => r.id === "no-rule-1");
+    expect(row.outbound_ferry_company).toBeNull();
+    expect(row.outbound_ferry_arrival_port).toBeNull();
+  });
+});
+
 describe("Sprint 3566212 — ranking booking search non regredito dal fix", () => {
   it("tests/unit/booking-search.test.ts copre già il ranking: qui verifichiamo solo che la route non lo aggiri", async () => {
     const fake = createFakeAdmin({

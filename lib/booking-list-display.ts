@@ -124,9 +124,18 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   const isBusLine = kind === "bus_city_hotel";
   const outwardTime = cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time);
   const outwardArrivalTime = cleanTime(service.outbound_ferry_arrival_time) ?? cleanTime(service.time);
+  // Tratta nave collegata (fix: prima la card mostrava solo l'orario di
+  // arrivo nave sotto un'etichetta generica, senza compagnia/orario di
+  // partenza — vedi app/(app)/inbox/page.tsx per il rename dell'etichetta).
+  // outbound_ferry_company/arrival_port arrivano da ferryPickupRule
+  // (ferry_pickup_rules, canonico) via app/api/ops/search/route.ts; per
+  // linea bus questi campi non si applicano (gestita separatamente sopra).
+  const outwardFerryCompany = !isBusLine ? service.outbound_ferry_company ?? null : null;
+  const outwardFerryDepartureTime = !isBusLine ? cleanTime(service.outbound_ferry_departure_time) : null;
+  const outwardFerryArrivalPort = !isBusLine ? service.outbound_ferry_arrival_port ?? null : null;
   // Per la linea bus l'orario "outward" è la partenza dalla città di origine
   // (es. Modena), non un arrivo: l'arrivo vero è già mostrato separatamente
-  // in outwardArrivalTime ("Arrivo indicativo").
+  // in outwardArrivalTime ("Arrivo nave").
   const outwardLabel = isAirport
     ? "Arrivo volo"
     : isBusLine
@@ -146,6 +155,14 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   // invariato.
   const hideOutward = service.direction === "departure";
   const hideReturn = service.direction === "arrival" && !hasRealDepartureLeg(service);
+  // Tratta nave di ritorno: return_ferry_company/departure_port arrivano dai
+  // valori GIÀ CALCOLATI E SALVATI sulla gamba di partenza (barca_compagnia/
+  // porto_bruno, scritti da applyPickupCalc — stessa fonte di una partenza
+  // normale, valida anche per un record combinato reale). return_ferry_arrival_time
+  // non esiste (mai calcolato/salvato per la gamba di partenza): mai inventato qui.
+  const returnFerryCompany = !isBusLine ? service.return_ferry_company ?? null : null;
+  const returnFerryDepartureTime = !isBusLine ? cleanTime(service.return_ferry_departure_time) : null;
+  const returnFerryDeparturePort = !isBusLine ? service.return_ferry_departure_port ?? null : null;
   return {
     serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : isBusLine ? "Linea Bus" : "Trasferimento stazione - hotel"}${suffix}`,
     outwardLabel,
@@ -153,12 +170,17 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     outwardTime: hideOutward ? null : outwardTime,
     outwardArrivalTime: hideOutward ? null : isBusLine && outwardArrivalTime === outwardTime ? null : outwardArrivalTime,
     outwardPickupPoint: hideOutward ? null : isBusLine ? service.bus_outward_pickup_point ?? null : null,
-    outwardCompany: hideOutward ? null : isStation ? service.train_arrival_number ?? null : null,
+    outwardCompany: hideOutward ? null : outwardFerryCompany,
+    outwardRoute: hideOutward || !outwardFerryDepartureTime ? null
+      : (outwardArrivalTime ? `${outwardFerryDepartureTime} → ${outwardArrivalTime}` : outwardFerryDepartureTime),
+    outwardArrivalPort: hideOutward ? null : outwardFerryArrivalPort,
     returnLabel: isAirport ? "Partenza volo" : isBusLine ? "Partenza bus" : "Partenza treno",
     returnDate: hideReturn ? null : cleanDate(service.departure_date),
     returnTime: hideReturn ? null : cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
     returnPickupTime: hideReturn ? null : cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),
-    returnCompany: hideReturn ? null : isStation ? service.train_departure_number ?? null : null,
+    returnCompany: hideReturn ? null : returnFerryCompany,
+    returnRoute: hideReturn ? null : returnFerryDepartureTime,
+    returnDeparturePort: hideReturn ? null : returnFerryDeparturePort,
   };
 }
 

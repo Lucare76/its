@@ -123,16 +123,31 @@ describe("bookingListTransportTimes", () => {
         departure_time: "13:25",
         train_departure_number: "ITA 8918",
         train_departure_time: "13:25",
+        // Nave collegata (fix: tratta nave nella card) — company/route/porto
+        // arrivano da app/api/ops/search/route.ts (ferryPickupRule per
+        // l'arrivo, barca_compagnia/porto_bruno per la partenza).
+        outbound_ferry_company: "MEDMAR",
+        outbound_ferry_departure_time: "14:20",
+        outbound_ferry_arrival_time: "15:40",
+        outbound_ferry_arrival_port: "Ischia Porto",
+        return_ferry_company: "MEDMAR",
+        return_ferry_departure_time: "10:10",
+        return_ferry_departure_port: "Casamicciola",
       };
       expect(hasRealDepartureLeg(service)).toBe(true);
       const result = bookingListTransportTimes(service);
       expect(result).toMatchObject({
         outwardDate: "01/09/2026",
         outwardTime: "12:48",
-        outwardCompany: "ITA 8903",
+        outwardArrivalTime: "15:40",
+        outwardCompany: "MEDMAR",
+        outwardRoute: "14:20 → 15:40",
+        outwardArrivalPort: "Ischia Porto",
         returnDate: "07/09/2026",
         returnTime: "13:25",
-        returnCompany: "ITA 8918",
+        returnCompany: "MEDMAR",
+        returnRoute: "10:10",
+        returnDeparturePort: "Casamicciola",
       });
       expect(result?.returnTime).not.toBeNull();
       expect(result?.returnDate).not.toBeNull();
@@ -183,12 +198,17 @@ describe("bookingListTransportTimes", () => {
         departure_time: "13:25",
         train_departure_number: "ITA 8918",
         train_departure_time: "13:25",
+        return_pickup_time: "08:30",
+        return_ferry_company: "MEDMAR",
+        return_ferry_departure_time: "10:10",
       };
       const result = bookingListTransportTimes(service);
       expect(result).toMatchObject({
         returnDate: "07/09/2026",
         returnTime: "13:25",
-        returnCompany: "ITA 8918",
+        returnPickupTime: "08:30",
+        returnCompany: "MEDMAR",
+        returnRoute: "10:10",
       });
     });
 
@@ -207,6 +227,52 @@ describe("bookingListTransportTimes", () => {
       expect(hasRealDepartureLeg(service)).toBe(false);
       const result = bookingListTransportTimes(service);
       expect(result).toMatchObject({ returnDate: null, returnTime: null });
+    });
+
+    it("5. arrivo treno con regola nave (fix: tratta nave nella card, non solo 'Arrivo indicativo')", () => {
+      const service = {
+        booking_service_kind: "transfer_train_hotel" as const,
+        direction: "arrival" as const,
+        arrival_date: "2026-09-01",
+        train_arrival_time: "12:48",
+        arrival_time: "12:48",
+        outbound_ferry_company: "MEDMAR",
+        outbound_ferry_departure_time: "14:20",
+        outbound_ferry_arrival_time: "15:40",
+        outbound_ferry_arrival_port: "Ischia Porto",
+      };
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({
+        outwardTime: "12:48",
+        outwardArrivalTime: "15:40",
+        outwardCompany: "MEDMAR",
+        outwardRoute: "14:20 → 15:40",
+        outwardArrivalPort: "Ischia Porto",
+      });
+    });
+
+    it("6. nessuna regola nave: nessun campo ferry disponibile -> nessuna compagnia/orario/porto inventato", () => {
+      const service = {
+        booking_service_kind: "transfer_train_hotel" as const,
+        direction: "arrival" as const,
+        arrival_date: "2026-09-01",
+        arrival_time: "12:48",
+        departure_date: "2026-09-07",
+        train_departure_number: "ITA 8918",
+        train_departure_time: "13:25",
+      };
+      expect(hasRealDepartureLeg(service)).toBe(true);
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({
+        outwardTime: "12:48",
+        outwardCompany: null,
+        outwardRoute: null,
+        outwardArrivalPort: null,
+        returnTime: "13:25",
+        returnCompany: null,
+        returnRoute: null,
+        returnDeparturePort: null,
+      });
     });
   });
 

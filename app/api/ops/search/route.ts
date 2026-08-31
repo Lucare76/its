@@ -42,6 +42,8 @@ const SERVICE_SEARCH_COLUMNS = [
   "departure_time",
   "train_departure_time",
   "orario_barca",
+  "barca_compagnia",
+  "porto_bruno",
   "pickup_time",
   "transport_code",
   "train_arrival_number",
@@ -691,11 +693,28 @@ export async function GET(req: NextRequest) {
             : departureLeg?.pickup_time ?? departurePickupRule?.pickup ?? departureLeg?.departure_time ?? null,
           return_ferry_departure_time: departureLeg?.orario_barca ?? departurePickupRule?.boat_t ?? null,
           bus_outward_pickup_point: isBus ? busPickupPoint(arrivalBusAllocation) : null,
-          outbound_ferry_company: arrivalSchedule?.company?.toUpperCase() ?? null,
+          // Compagnia/porto ARRIVO: preferisce SEMPRE ferryPickupRule (stessa
+          // regola canonica ferry_pickup_rules già usata per l'orario sopra —
+          // mai una compagnia inventata) e ricade su arrivalSchedule (motore
+          // commerciale ferry_schedules, legacy) solo quando nessuna regola
+          // ferry_pickup_rules è applicabile (kind non treno/volo, o nessun
+          // match) — comportamento invariato per quei casi.
+          outbound_ferry_company: ferryPickupRule?.company?.toUpperCase() ?? arrivalSchedule?.company?.toUpperCase() ?? null,
           outbound_ferry_departure_port: arrivalSchedule ? ferryPortLabel(arrivalSchedule.departurePort) : null,
-          outbound_ferry_arrival_port: arrivalSchedule ? ferryPortLabel(arrivalSchedule.arrivalPort) : null,
-          return_ferry_company: returnSchedule?.company?.toUpperCase() ?? null,
-          return_ferry_departure_port: returnSchedule ? ferryPortLabel(returnSchedule.departurePort) : null,
+          outbound_ferry_arrival_port: ferryPickupRule ? ferryPortLabel(ferryPickupRule.arrivalPort) : arrivalSchedule ? ferryPortLabel(arrivalSchedule.arrivalPort) : null,
+          // Compagnia/porto PARTENZA: preferisce i valori GIÀ CALCOLATI E
+          // SALVATI sulla gamba di partenza (barca_compagnia/porto_bruno,
+          // scritti da applyPickupCalc — stessa fonte canonica di un servizio
+          // di partenza normale, valida anche per un record combinato
+          // direction='arrival' con partenza reale nella stessa riga, es.
+          // MATTIOLI 26/010806). returnSchedule (ferry_schedules, legacy)
+          // resta un fallback per righe più vecchie mai passate da
+          // applyPickupCalc.
+          return_ferry_company: (departureLeg?.barca_compagnia ?? r.barca_compagnia)?.toUpperCase()
+            ?? returnSchedule?.company?.toUpperCase() ?? null,
+          return_ferry_departure_port: (departureLeg?.porto_bruno ?? r.porto_bruno)
+            ? ferryPortLabel((departureLeg?.porto_bruno ?? r.porto_bruno) as string)
+            : returnSchedule ? ferryPortLabel(returnSchedule.departurePort) : null,
           return_ferry_arrival_port: returnSchedule ? ferryPortLabel(returnSchedule.arrivalPort) : null,
           cancellation: cancellationLog ? {
             cancelled_at: cancellationLog.created_at,
