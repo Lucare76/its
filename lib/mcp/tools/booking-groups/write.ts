@@ -111,6 +111,7 @@ registerTool({
         kind: a.kind as string | undefined,
         status: a.status as string | undefined,
         service_date: (a.service_date as string | null) ?? null,
+        return_date: (a.return_date as string | null) ?? null,
         contact_name: (a.contact_name as string | null) ?? null,
         contact_phone: (a.contact_phone as string | null) ?? null,
         agency_id: (a.agency_id as string | null) ?? null,

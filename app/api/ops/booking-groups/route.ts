@@ -57,6 +57,8 @@ const createGroupSchema = z.object({
   kind: z.enum(BOOKING_GROUP_KINDS as unknown as [string, ...string[]]).optional(),
   status: z.enum(BOOKING_GROUP_STATUSES as unknown as [string, ...string[]]).optional(),
   service_date: isoDate.nullable().optional(),
+  return_date: isoDate.nullable().optional(),
+  returnDate: isoDate.nullable().optional(),
   contact_name: z.string().trim().max(160).nullable().optional(),
   contact_phone: z.string().trim().max(60).nullable().optional(),
   agency_id: z.string().uuid().nullable().optional(),
@@ -73,6 +75,8 @@ const updateGroupSchema = z.object({
   kind: z.enum(BOOKING_GROUP_KINDS as unknown as [string, ...string[]]).optional(),
   status: z.enum(BOOKING_GROUP_STATUSES as unknown as [string, ...string[]]).optional(),
   service_date: isoDate.nullable().optional(),
+  return_date: isoDate.nullable().optional(),
+  returnDate: isoDate.nullable().optional(),
   contact_name: z.string().trim().max(160).nullable().optional(),
   contact_phone: z.string().trim().max(60).nullable().optional(),
   agency_id: z.string().uuid().nullable().optional(),
@@ -272,9 +276,10 @@ export async function POST(request: NextRequest) {
 
   // ── update_group (patch generico, FK validate) ───────────────────────
   if (body.action === "update_group") {
-    const { action: _action, id, ...rest } = body;
+    const { action: _action, id, returnDate, ...rest } = body;
     void _action;
-    return toResponse(await patchBookingGroup(admin, actor, id, rest, { validateFks: true }));
+    const patch = { ...rest, ...(returnDate !== undefined ? { return_date: returnDate } : {}) };
+    return toResponse(await patchBookingGroup(admin, actor, id, patch, { validateFks: true }));
   }
 
   // ── add_stop ──────────────────────────────────────────────────────────

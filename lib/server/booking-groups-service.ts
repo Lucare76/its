@@ -112,6 +112,7 @@ export type BookingGroupMatch = {
   kind: string;
   status: string;
   service_date: string | null;
+  return_date: string | null;
 };
 
 export type FindBookingGroupsResult = {
@@ -132,6 +133,7 @@ function slim(g: BookingGroup): BookingGroupMatch {
     kind: g.kind,
     status: g.status,
     service_date: g.service_date ?? null,
+    return_date: g.return_date ?? null,
   };
 }
 
@@ -507,6 +509,8 @@ export type CreateBookingGroupInput = {
   kind?: string;
   status?: string;
   service_date?: string | null;
+  return_date?: string | null;
+  returnDate?: string | null;
   contact_name?: string | null;
   contact_phone?: string | null;
   agency_id?: string | null;
@@ -520,14 +524,26 @@ export async function createBookingGroup(
   input: CreateBookingGroupInput,
 ): Promise<BgResult<{ group: BookingGroup }>> {
   const { tenantId, userId, role } = actor;
+  const serviceDate = input.service_date ?? null;
+  const returnDate = input.return_date ?? input.returnDate ?? null;
+  if (input.kind === "bus_exclusive" && !serviceDate && !returnDate) {
+    return err(400, "Per un bus esclusivo inserisci almeno una data tra arrivo e ritorno.");
+  }
+  if (serviceDate && returnDate && returnDate < serviceDate) {
+    return err(400, "La data di ritorno non puo essere precedente alla data di arrivo.");
+  }
   if (input.agency_id && !(await tenantRowExists(admin, "agencies", tenantId, input.agency_id))) {
     return err(400, "Agenzia non valida per il tenant.");
   }
   if (input.hotel_id && !(await tenantRowExists(admin, "hotels", tenantId, input.hotel_id))) {
     return err(400, "Hotel non valido per il tenant.");
   }
+  const { returnDate: _returnDate, ...dbInput } = input;
+  void _returnDate;
   const insert = compact({
-    ...input,
+    ...dbInput,
+    service_date: serviceDate,
+    return_date: returnDate,
     tenant_id: tenantId,
     kind: input.kind ?? "other",
     status: input.status ?? "draft",

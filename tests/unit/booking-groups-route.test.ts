@@ -620,3 +620,107 @@ describe("migration 0263 — vincoli chiave", () => {
     expect(sql).not.toMatch(/alter table public\.bus_line_ferry_config/);
   });
 });
+describe("migration 0267 - booking_groups.return_date", () => {
+  const sql = readFileSync(new URL("../../supabase/migrations/0267_booking_groups_return_date.sql", import.meta.url), "utf8");
+
+  it("aggiunge return_date nullable senza rinominare service_date", () => {
+    expect(sql).toMatch(/alter table public\.booking_groups\s+add column if not exists return_date date null/i);
+    expect(sql).toMatch(/comment on column public\.booking_groups\.return_date/i);
+    expect(sql).not.toMatch(/rename column service_date/i);
+  });
+});
+
+describe("create_group date rules", () => {
+  it("gruppo generico senza date -> 200", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "create_group", name: "Gruppo generico", expected_pax: 12, kind: "other" }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(writes.inserts.find((w) => w.table === "booking_groups")!.row.service_date).toBeNull();
+  });
+
+  it("gruppo generico con sola data ritorno -> 200", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "create_group", name: "Gruppo generico", expected_pax: 12, kind: "other", return_date: "2026-09-27" }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(writes.inserts.find((w) => w.table === "booking_groups")!.row.return_date).toBe("2026-09-27");
+  });
+
+  it("bus_exclusive senza date -> 400", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "create_group", name: "Bus senza data", expected_pax: 50, kind: "bus_exclusive" }));
+    const json = await res.json();
+    expect(res.status).toBe(400);
+    expect(json.error).toMatch(/arrivo e ritorno/i);
+    expect(writes.inserts.filter((w) => w.table === "booking_groups")).toHaveLength(0);
+  });
+
+  it("bus_exclusive solo data arrivo -> 200", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group",
+      name: "Bus solo arrivo",
+      expected_pax: 50,
+      kind: "bus_exclusive",
+      service_date: "2026-09-20",
+    }));
+    expect(res.status).toBe(200);
+    expect(writes.inserts.find((w) => w.table === "booking_groups")!.row.service_date).toBe("2026-09-20");
+  });
+
+  it("bus_exclusive solo data ritorno -> 200", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group",
+      name: "Bus solo ritorno",
+      expected_pax: 50,
+      kind: "bus_exclusive",
+      return_date: "2026-09-27",
+    }));
+    expect(res.status).toBe(200);
+    expect(writes.inserts.find((w) => w.table === "booking_groups")!.row.return_date).toBe("2026-09-27");
+  });
+
+  it("bus_exclusive con arrivo e ritorno -> 200", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group",
+      name: "Bus andata ritorno",
+      expected_pax: 50,
+      kind: "bus_exclusive",
+      service_date: "2026-09-20",
+      return_date: "2026-09-27",
+    }));
+    expect(res.status).toBe(200);
+    expect(writes.inserts.find((w) => w.table === "booking_groups")!.row).toMatchObject({
+      service_date: "2026-09-20",
+      return_date: "2026-09-27",
+    });
+  });
+
+  it("ritorno prima dell'arrivo -> 400", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "create_group",
+      name: "Bus date invertite",
+      expected_pax: 50,
+      kind: "bus_exclusive",
+      service_date: "2026-09-27",
+      return_date: "2026-09-20",
+    }));
+    const json = await res.json();
+    expect(res.status).toBe(400);
+    expect(json.error).toMatch(/ritorno/i);
+    expect(writes.inserts.filter((w) => w.table === "booking_groups")).toHaveLength(0);
+  });
+});

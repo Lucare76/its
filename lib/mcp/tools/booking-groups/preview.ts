@@ -77,6 +77,7 @@ registerTool({
       kind: z.enum(BOOKING_GROUP_KINDS as unknown as [string, ...string[]]).optional(),
       status: z.string().trim().max(40).optional(),
       serviceDate: isoDateSchema.nullable().optional(),
+      returnDate: isoDateSchema.nullable().optional(),
       contactName: z.string().trim().max(160).nullable().optional(),
       contactPhone: z.string().trim().max(60).nullable().optional(),
       agencyId: uuidSchema.nullable().optional(),
@@ -91,6 +92,8 @@ registerTool({
     kind: z.string(),
     service_date: z.string().nullable(),
     service_date_label: z.string().nullable(),
+    return_date: z.string().nullable(),
+    return_date_label: z.string().nullable(),
     ferry: z.record(z.string(), z.unknown()).nullable(),
     ...tokenFields,
   }),
@@ -103,13 +106,22 @@ registerTool({
       if (input.hotelId && !(await tenantRowExists(context.admin, "hotels", context.tenantId, input.hotelId))) {
         throw new McpError("MCP_INVALID_INPUT", "Hotel non valido per il tenant.");
       }
+      const serviceDate = input.serviceDate ?? null;
+      const returnDate = input.returnDate ?? null;
+      if ((input.kind ?? "other") === "bus_exclusive" && !serviceDate && !returnDate) {
+        throw new McpError("MCP_INVALID_INPUT", "Per un bus esclusivo inserisci almeno una data tra arrivo e ritorno.");
+      }
+      if (serviceDate && returnDate && returnDate < serviceDate) {
+        throw new McpError("MCP_INVALID_INPUT", "La data di ritorno non puo essere precedente alla data di arrivo.");
+      }
 
       const args: Record<string, unknown> = {
         name: input.name,
         expected_pax: input.expectedPax,
         kind: input.kind ?? "other",
         status: input.status,
-        service_date: input.serviceDate ?? null,
+        service_date: serviceDate,
+        return_date: returnDate,
         contact_name: input.contactName ?? null,
         contact_phone: input.contactPhone ?? null,
         agency_id: input.agencyId ?? null,
@@ -130,8 +142,10 @@ registerTool({
         name: input.name,
         expected_pax: input.expectedPax,
         kind: input.kind ?? "other",
-        service_date: input.serviceDate ?? null,
-        service_date_label: fmtDateIt(input.serviceDate ?? null),
+        service_date: serviceDate,
+        service_date_label: fmtDateIt(serviceDate),
+        return_date: returnDate,
+        return_date_label: fmtDateIt(returnDate),
         ferry: input.ferry ? (input.ferry as Record<string, unknown>) : null,
         confirmationToken: generated.token,
         expiresAt: generated.expiresAt,

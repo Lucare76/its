@@ -156,7 +156,9 @@ export default function BookingGroupsPage() {
                   </div>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
                     <span>{KIND_LABEL[g.kind] ?? g.kind}</span>
-                    {g.service_date ? <span>{g.service_date}</span> : <span>data da definire</span>}
+                    {g.service_date ? <span>arrivo {g.service_date}</span> : null}
+                    {g.return_date ? <span>ritorno {g.return_date}</span> : null}
+                    {!g.service_date && !g.return_date ? <span>date da definire</span> : null}
                     <span className="font-semibold text-slate-700">{s.expectedPax} previsti</span>
                   </div>
                 </button>
@@ -181,11 +183,22 @@ function NewGroupForm({ onClose, onCreated, onError }: { onClose: () => void; on
   const [expectedPax, setExpectedPax] = useState("50");
   const [kind, setKind] = useState<string>("bus_exclusive");
   const [status, setStatus] = useState<string>("to_complete");
-  const [serviceDate, setServiceDate] = useState("");
+  const [arrivalDate, setArrivalDate] = useState("");
+  const [returnDate, setReturnDate] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const formError = useMemo(() => {
+    if (kind === "bus_exclusive" && !arrivalDate && !returnDate) {
+      return "Per un bus esclusivo inserisci almeno una data tra arrivo e ritorno.";
+    }
+    if (arrivalDate && returnDate && returnDate < arrivalDate) {
+      return "La data di ritorno non puo essere precedente alla data di arrivo.";
+    }
+    return null;
+  }, [arrivalDate, kind, returnDate]);
+  const canSubmit = !busy && !formError && name.trim().length > 0 && Number(expectedPax) > 0;
 
   const submit = async () => {
     setBusy(true);
@@ -197,7 +210,8 @@ function NewGroupForm({ onClose, onCreated, onError }: { onClose: () => void; on
         expected_pax: Number(expectedPax),
         kind,
         status,
-        service_date: serviceDate || null,
+        service_date: arrivalDate || null,
+        return_date: returnDate || null,
         contact_name: contactName.trim() || null,
         contact_phone: contactPhone.trim() || null,
         notes: notes.trim() || null,
@@ -215,12 +229,15 @@ function NewGroupForm({ onClose, onCreated, onError }: { onClose: () => void; on
         <label className="block text-xs font-medium text-slate-600">Nome gruppo *
           <input className="input-saas mt-1 w-full" value={name} onChange={(e) => setName(e.target.value)} placeholder="Parrocchia Natività" />
         </label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
           <label className="block text-xs font-medium text-slate-600">Pax previsti *
             <input type="number" min={1} max={500} className="input-saas mt-1 w-full" value={expectedPax} onChange={(e) => setExpectedPax(e.target.value)} />
           </label>
-          <label className="block text-xs font-medium text-slate-600">Data
-            <input type="date" className="input-saas mt-1 w-full" value={serviceDate} onChange={(e) => setServiceDate(e.target.value)} />
+          <label className="block text-xs font-medium text-slate-600">Data arrivo
+            <input type="date" className="input-saas mt-1 w-full" value={arrivalDate} onChange={(e) => setArrivalDate(e.target.value)} />
+          </label>
+          <label className="block text-xs font-medium text-slate-600">Data ritorno
+            <input type="date" className="input-saas mt-1 w-full" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
           </label>
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -246,10 +263,11 @@ function NewGroupForm({ onClose, onCreated, onError }: { onClose: () => void; on
         <label className="block text-xs font-medium text-slate-600">Note
           <textarea rows={2} className="input-saas mt-1 w-full resize-none" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
-        <p className="text-[11px] text-slate-400">Solo Nome e Pax previsti sono obbligatori. Hotel, fermate, nominativi, nave e bus si aggiungono dopo.</p>
+        {formError ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{formError}</p> : null}
+        <p className="text-[11px] text-slate-400">Per i bus esclusivi e richiesta almeno una data tra arrivo e ritorno. Punti di carico/fermate, nominativi, nave e bus si aggiungono dopo nella scheda gruppo.</p>
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-slate-200 py-2 text-sm font-semibold text-slate-600">Annulla</button>
-          <button type="button" disabled={busy || !name.trim() || !(Number(expectedPax) > 0)} onClick={() => void submit()} className="flex-1 rounded-xl bg-slate-800 py-2 text-sm font-bold text-white disabled:opacity-50">
+          <button type="button" disabled={!canSubmit} onClick={() => void submit()} className="flex-1 rounded-xl bg-slate-800 py-2 text-sm font-bold text-white disabled:opacity-50">
             {busy ? "Creo…" : "Crea gruppo"}
           </button>
         </div>
@@ -309,7 +327,8 @@ function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
         <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 md:grid-cols-3">
           <span><b>Pax previsti:</b> {group.expected_pax}</span>
           <span><b>Stato:</b> {STATUS_LABEL[group.status] ?? group.status}</span>
-          <span><b>Data:</b> {group.service_date ?? "da definire"}</span>
+          <span><b>Arrivo:</b> {group.service_date ?? "da definire"}</span>
+          <span><b>Ritorno:</b> {group.return_date ?? "da definire"}</span>
           <span><b>Referente:</b> {group.contact_name ?? "—"}</span>
           <span><b>Telefono:</b> {group.contact_phone ?? "—"}</span>
           <span><b>Tipo:</b> {KIND_LABEL[group.kind] ?? group.kind}</span>
@@ -391,6 +410,7 @@ function GroupEditSection({ group, onSave }: { group: BookingGroup; onSave: (pat
   const [name, setName] = useState(group.name);
   const [expectedPax, setExpectedPax] = useState(String(group.expected_pax));
   const [serviceDate, setServiceDate] = useState(group.service_date ?? "");
+  const [returnDate, setReturnDate] = useState(group.return_date ?? "");
   const [contactName, setContactName] = useState(group.contact_name ?? "");
   const [contactPhone, setContactPhone] = useState(group.contact_phone ?? "");
   const [notes, setNotes] = useState(group.notes ?? "");
@@ -408,7 +428,12 @@ function GroupEditSection({ group, onSave }: { group: BookingGroup; onSave: (pat
       <div className="grid gap-2 md:grid-cols-2">
         <input className="input-saas" placeholder="Nome gruppo" value={name} onChange={(e) => setName(e.target.value)} />
         <input className="input-saas" type="number" min={1} max={500} placeholder="Pax previsti" value={expectedPax} onChange={(e) => setExpectedPax(e.target.value)} />
-        <input className="input-saas" type="date" value={serviceDate} onChange={(e) => setServiceDate(e.target.value)} />
+        <label className="block text-xs font-medium text-slate-600">Data arrivo
+          <input className="input-saas mt-1 w-full" type="date" value={serviceDate} onChange={(e) => setServiceDate(e.target.value)} />
+        </label>
+        <label className="block text-xs font-medium text-slate-600">Data ritorno
+          <input className="input-saas mt-1 w-full" type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
+        </label>
         <input className="input-saas" placeholder="Referente" value={contactName} onChange={(e) => setContactName(e.target.value)} />
         <input className="input-saas" placeholder="Telefono" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} />
         <textarea rows={2} className="input-saas resize-none md:col-span-2" placeholder="Note" value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -422,6 +447,7 @@ function GroupEditSection({ group, onSave }: { group: BookingGroup; onSave: (pat
             name: name.trim(),
             expected_pax: Number(expectedPax),
             service_date: serviceDate || null,
+            return_date: returnDate || null,
             contact_name: contactName.trim() || null,
             contact_phone: contactPhone.trim() || null,
             notes: notes.trim() || null,
@@ -452,7 +478,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onCreateServi
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
-      <div className="text-sm font-semibold text-slate-800">Fermate / punti di carico</div>
+      <div className="text-sm font-semibold text-slate-800">Punti di carico / fermate</div>
       <div className="mt-2 space-y-2">
         {stops.length === 0 ? <p className="text-xs text-slate-400">Nessuna fermata pianificata.</p> : stops.map((s) => {
           const sum = stopSummaries.find((x) => x.stopId === s.id);
@@ -479,7 +505,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onCreateServi
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-        <input className="input-saas" placeholder="Città *" value={city} onChange={(e) => setCity(e.target.value)} />
+        <input className="input-saas" placeholder="Citta / localita *" value={city} onChange={(e) => setCity(e.target.value)} />
         <input className="input-saas" placeholder="Punto di carico" value={pickup} onChange={(e) => setPickup(e.target.value)} />
         <input className="input-saas" type="number" min={1} max={500} placeholder="Pax *" value={px} onChange={(e) => setPx(e.target.value)} />
         <select className="input-saas" value={dir} onChange={(e) => setDir(e.target.value)}>
@@ -548,7 +574,7 @@ function BusReservationSection({ group, reservations, onUpsert }: {
   onUpsert: (r: { bus_unit_id: string; service_date: string; reserved_pax: number; exclusive: boolean }) => Promise<unknown>;
 }) {
   const [unitId, setUnitId] = useState("");
-  const [date, setDate] = useState(group.service_date ?? "");
+  const [date, setDate] = useState(group.service_date ?? group.return_date ?? "");
   const [rp, setRp] = useState(String(group.expected_pax));
   const [exclusive, setExclusive] = useState(true);
   const [buses, setBuses] = useState<AvailableBus[]>([]);

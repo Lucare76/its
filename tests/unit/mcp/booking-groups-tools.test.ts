@@ -203,11 +203,42 @@ describe("its.preview_create_booking_group → its.create_booking_group (§30)",
     });
     expect(preview.service_date_label).toBe("12/09/2026");
     expect(typeof preview.confirmationToken).toBe("string");
+    expect(preview.return_date).toBeNull();
 
     const res = await tool("its.create_booking_group").handler(ctx(admin), { confirmationToken: preview.confirmationToken });
     expect(res.name).toBe("Parrocchia Natività");
     expect(db.booking_groups).toHaveLength(1);
     expect(db.booking_groups[0]).toMatchObject({ tenant_id: TENANT, expected_pax: 50, kind: "bus_exclusive", service_date: "2026-09-12", created_by_user_id: USER });
+  });
+
+  it("preview + write supportano bus_exclusive con sola data ritorno", async () => {
+    const { admin, db } = makeAdmin({});
+    const preview = await tool("its.preview_create_booking_group").handler(ctx(admin), {
+      name: "Bus solo ritorno", expectedPax: 42, kind: "bus_exclusive", returnDate: "2026-09-27",
+    });
+    expect(preview.service_date).toBeNull();
+    expect(preview.return_date).toBe("2026-09-27");
+    expect(preview.return_date_label).toBe("27/09/2026");
+
+    const res = await tool("its.create_booking_group").handler(ctx(admin), { confirmationToken: preview.confirmationToken });
+    expect(res.name).toBe("Bus solo ritorno");
+    expect(db.booking_groups[0]).toMatchObject({ kind: "bus_exclusive", service_date: null, return_date: "2026-09-27" });
+  });
+
+  it("preview blocca bus_exclusive senza arrivo e ritorno", async () => {
+    const { admin } = makeAdmin({});
+    await expect(
+      tool("its.preview_create_booking_group").handler(ctx(admin), { name: "Bus senza date", expectedPax: 42, kind: "bus_exclusive" }),
+    ).rejects.toMatchObject({ code: "MCP_INVALID_INPUT" });
+  });
+
+  it("preview blocca ritorno precedente all'arrivo", async () => {
+    const { admin } = makeAdmin({});
+    await expect(
+      tool("its.preview_create_booking_group").handler(ctx(admin), {
+        name: "Bus date invertite", expectedPax: 42, kind: "bus_exclusive", serviceDate: "2026-09-27", returnDate: "2026-09-20",
+      }),
+    ).rejects.toMatchObject({ code: "MCP_INVALID_INPUT" });
   });
 
   it("token riusato → MCP_CONFIRMATION_ALREADY_USED", async () => {

@@ -50,6 +50,7 @@ export interface BookingGroup {
   kind: BookingGroupKind;
   status: BookingGroupStatus;
   service_date: string | null;
+  return_date: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   agency_id: string | null;
