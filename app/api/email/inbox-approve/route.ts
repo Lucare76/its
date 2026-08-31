@@ -113,6 +113,25 @@ function tipoToBookingKind(tipo: string): { bookingKind: string; transportMode: 
   return { bookingKind: "transfer_train_hotel", transportMode: "train" };
 }
 
+// Valori ammessi dal constraint services_service_type_code_valid (vedi
+// supabase/migrations/0021/0024/0030_*.sql) — identico a claude-save-draft.
+const VALID_SERVICE_TYPE_CODES = new Set([
+  "transfer_station_hotel",
+  "transfer_airport_hotel",
+  "transfer_port_hotel",
+  "transfer_hotel_port",
+  "excursion",
+  "ferry_transfer",
+  "bus_line",
+]);
+
+function toServiceTypeCode(tipo: string | null | undefined): string | null {
+  const raw = clean(tipo);
+  if (!raw) return null;
+  if (raw === "bus_city_hotel") return "bus_line";
+  return VALID_SERVICE_TYPE_CODES.has(raw) ? raw : null;
+}
+
 async function resolveOrCreateHotel(admin: SupabaseClient, tenantId: string, hotelName: string | null) {
   const rawName = clean(hotelName);
   const name = canonicalizeKnownHotelName(rawName) ?? rawName ?? "Hotel da verificare";
@@ -305,6 +324,8 @@ export async function POST(request: NextRequest) {
   const sourcePricePerPaxCents = sourceTotalCents && passengers > 0 ? Math.round(sourceTotalCents / passengers) : null;
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
+  const isTrainKind = bookingKind === "transfer_train_hotel";
+  const serviceTypeCode = toServiceTypeCode(form.tipo_servizio);
 
   // Orario andata: dal form; se assente nei bus, prende l'orario dal catalogo fermate
   const resolvedBusStop = bookingKind === "bus_city_hotel" ? resolveBusStop(arrivalPlace) : null;
@@ -391,6 +412,13 @@ export async function POST(request: NextRequest) {
     setIfChanged("departure_date", departureDate);
     setIfChanged("meeting_point", arrivalPlace);
     setIfChanged("transport_code", transportCode);
+    setIfChanged("service_type_code", serviceTypeCode);
+    if (isTrainKind) {
+      setIfChanged("train_arrival_number", trainArrivalNumber);
+      setIfChanged("train_arrival_time", outboundTime);
+      setIfChanged("train_departure_number", trainDepartureNumber);
+      setIfChanged("train_departure_time", returnTime);
+    }
     setIfChanged("source_total_amount_cents", sourceTotalCents);
     setIfChanged("source_price_per_pax_cents", sourcePricePerPaxCents);
 
@@ -614,6 +642,11 @@ export async function POST(request: NextRequest) {
       departure_time: returnTime,
       meeting_point: arrivalPlace,
       transport_code: transportCode,
+      service_type_code: serviceTypeCode,
+      train_arrival_number: isTrainKind ? trainArrivalNumber : null,
+      train_arrival_time: isTrainKind ? outboundTime : null,
+      train_departure_number: isTrainKind ? trainDepartureNumber : null,
+      train_departure_time: isTrainKind ? returnTime : null,
       pickup_hotel: pickupHotel,
       pickup_alert: pickupAlert,
       source_total_amount_cents: sourceTotalCents,
