@@ -268,6 +268,20 @@ function GroupDetail({ detail, onChange, onMessage, onError, onClose }: {
           <span><b>Tipo:</b> {KIND_LABEL[group.kind] ?? group.kind}</span>
         </div>
 
+        {/* FASE A.5 §T — group.status "operational" è uno stato commerciale
+            manuale (FASE 1), non certifica da solo che il gruppo sia
+            realmente pronto/visibile in Linea Bus: se mancano fermate o
+            servizi lo diciamo esplicitamente, senza toccare lo status. */}
+        {group.status === "operational" && (!statusSummary.hasStops || !statusSummary.hasServices) ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+            <div className="font-semibold">Stato gruppo: Operativo — Readiness: Da completare</div>
+            <div className="mt-1">
+              {pax.plannedPax} pianificati su fermate, {Math.max(0, pax.remainingServicePax)} pax ancora da creare come servizi.
+              {!statusSummary.hasStops ? " Nessuna fermata pianificata." : ""} Finché mancano fermate/servizi il gruppo non comparirà in Linea Bus.
+            </div>
+          </div>
+        ) : null}
+
         {/* Avanzamento pax */}
         <div className={`rounded-lg border p-3 text-sm ${pax.overbooked ? "border-rose-300 bg-rose-50 text-rose-800" : "border-slate-200"}`}>
           <div className="font-semibold">Avanzamento pax</div>

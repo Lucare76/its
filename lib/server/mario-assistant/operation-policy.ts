@@ -60,7 +60,11 @@ const CREATE_ARG_FIELDS = ["name", "expectedPax", "serviceDate", "kind", "status
 // draft come `origin`/`pickupPoint` — mai inviato al tool di creazione, mai
 // perso: resta disponibile per il passo successivo del flusso (fermata di
 // ritorno/reservation) che lo consumerà quando pertinente.
-const CREATE_PRESERVED = ["origin", "pickupPoint", "agency", "hotel", "contact", "notes", "kind", "serviceDate", "returnDate"];
+// FASE A.5.2 §1 — `stops` è l'estensione multi-fermata di `origin`: quando
+// presente, sostituisce il singolo `origin`/`pickupPoint` per il resto della
+// catena operativa (§1 del prompt A.5.2 — compatibilità: origin singolo
+// continua a normalizzarsi in `stops = [{ city: origin, expectedPax, direction: "arrival" }]`).
+const CREATE_PRESERVED = ["origin", "pickupPoint", "stops", "agency", "hotel", "contact", "notes", "kind", "serviceDate", "returnDate"];
 
 export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationPolicy> = {
   create_generic_booking_group: {
@@ -78,7 +82,7 @@ export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationP
     mcpTool: CREATE_TOOL,
     requiredBeforePreview: ["name", "expectedPax", "serviceDate"], // §5 — data obbligatoria (business rule)
     optionalPreserved: CREATE_PRESERVED,
-    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "pickupPoint", "agency", "hotel", "contact", "notes"],
+    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "pickupPoint", "stops", "agency", "hotel", "contact", "notes"],
     toolArgumentFields: CREATE_ARG_FIELDS,
     forcedKind: "bus_group",
     postCreateHints: ["if origin present and no stop exists -> propose add_booking_group_stop for origin"],
@@ -89,7 +93,7 @@ export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationP
     mcpTool: CREATE_TOOL,
     requiredBeforePreview: ["name", "expectedPax", "serviceDate"],
     optionalPreserved: CREATE_PRESERVED,
-    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "pickupPoint", "agency", "hotel", "contact", "notes"],
+    supportedDraftFields: ["name", "expectedPax", "serviceDate", "returnDate", "kind", "origin", "pickupPoint", "stops", "agency", "hotel", "contact", "notes"],
     toolArgumentFields: CREATE_ARG_FIELDS,
     forcedKind: "bus_exclusive",
     postCreateHints: ["if origin present and no stop exists -> propose add_booking_group_stop for origin"],
@@ -111,8 +115,10 @@ export const MARIO_OPERATION_POLICIES: Record<MarioOperationKey, MarioOperationP
     mcpTool: "its.preview_add_booking_group_passengers",
     requiredBeforePreview: ["bookingGroupId", "bookingGroupStopId", "passengers"],
     optionalPreserved: [],
-    supportedDraftFields: ["bookingGroupId", "bookingGroupStopId", "passengers"],
-    toolArgumentFields: ["bookingGroupId", "bookingGroupStopId", "passengers"],
+    // FASE A.5 §B/§L — serviceDate opzionale: override esplicito per il
+    // ritorno di un workflow bus operativo (default: group.service_date).
+    supportedDraftFields: ["bookingGroupId", "bookingGroupStopId", "passengers", "serviceDate"],
+    toolArgumentFields: ["bookingGroupId", "bookingGroupStopId", "passengers", "serviceDate"],
   },
   reserve_bus_for_group: {
     operation: "reserve_bus_for_group",
@@ -342,6 +348,64 @@ export function extractMarioDraftSlotsFromMessage(
   }
 
   return out;
+}
+
+// FASE A.5.2 §1/§2 — modello fermata multi-stop. `direction` è opzionale in
+// input (default "arrival": le fermate parlate dall'utente sono sempre
+// quelle di ANDATA salvo indicazione contraria — il ritorno riusa la stessa
+// distribuzione, §5).
+export type MarioStopSlot = {
+  city: string;
+  pickupPoint?: string | null;
+  expectedPax: number;
+  direction?: "arrival" | "departure";
+};
+
+// §2 — parole che seguono il numero SENZA essere una città (il totale pax
+// del gruppo, "50 persone", non è mai una fermata). Nessuna lista di città:
+// qui si esclude solo il rumore noto, mai si valida un gazetteer.
+const STOP_NON_CITY_WORDS = new Set(["persone", "pax", "passeggeri", "posti"]);
+// "<N> [persone|pax ]?[salgono a |salendo a |a ]?<Città [Pickup...]>" — il
+// connettivo è opzionale per coprire sia "20 Tivoli" sia "20 a Tivoli" sia
+// "20 salgono a Tivoli Villa d'Este".
+const STOP_ITEM_RE =
+  /^(\d{1,4})\s+(?:persone\s+|pax\s+)?(?:salgono\s+a\s+|salendo\s+a\s+|sale\s+a\s+|a\s+)?([\p{L}][\p{L}'’]*(?:\s+[\p{L}][\p{L}'’]*)*)$/u;
+
+/**
+ * FASE A.5.2 §2 — parsing CONSERVATIVO di più fermate dallo stesso messaggio
+ * ("20 Tivoli e 30 Guidonia" / "20 salgono a Tivoli, 30 a Guidonia" / "20 a
+ * Tivoli Villa d'Este e 30 a Guidonia"). Un segmento (tra virgole o tra " e ")
+ * è una fermata SOLO se inizia con un numero seguito da una o più parole:
+ * la prima parola è la città, le eventuali successive sono il pickup point
+ * (mai inventato se assente — "20 Tivoli" -> pickupPoint null). Ritorna
+ * `undefined` (nessuna estrazione, mai un singolo falso positivo) a meno che
+ * non emergano ALMENO DUE fermate valide: un solo segmento "<N> <Parola>" è
+ * strutturalmente distinguibile dal totale pax del gruppo ("50 persone", che
+ * non ha una città dopo) ma da solo non basta a differenziare in modo
+ * affidabile un'origine singola già gestita da `origin` — evita ambiguità
+ * (§2 spec: "Se parsing ambiguo: chiedere chiarimento", qui ottenuto restando
+ * silenti: il chiamante ricade sul flusso a singola origine esistente).
+ */
+export function extractMarioStopSlotsFromMessage(message: string): MarioStopSlot[] | undefined {
+  const stops: MarioStopSlot[] = [];
+  const topSegments = message.split(",").map((s) => s.trim()).filter(Boolean);
+  for (const seg of topSegments) {
+    const subSegments = seg.split(/\s+e\s+/iu).map((s) => s.trim()).filter(Boolean);
+    for (const sub of subSegments) {
+      const m = STOP_ITEM_RE.exec(sub);
+      if (!m) continue;
+      const pax = Number(m[1]);
+      if (!Number.isFinite(pax) || pax <= 0 || pax > 2000) continue;
+      const rest = (m[2] ?? "").trim();
+      const words = rest.split(/\s+/).filter(Boolean);
+      if (words.length === 0) continue;
+      const city = words[0]!;
+      if (STOP_NON_CITY_WORDS.has(city.toLowerCase())) continue;
+      const pickupPoint = words.length > 1 ? words.slice(1).join(" ") : null;
+      stops.push({ city, pickupPoint, expectedPax: pax, direction: "arrival" });
+    }
+  }
+  return stops.length >= 2 ? stops : undefined;
 }
 
 /**

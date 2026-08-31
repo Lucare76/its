@@ -133,12 +133,16 @@ const createGroupServiceSchema = z.object({
   action: z.literal("create_group_service"),
   booking_group_id: z.string().uuid(),
   booking_group_stop_id: z.string().uuid(),
+  // FASE A.5 §B — override esplicito della data (es. ritorno), altrimenti
+  // resta il default group.service_date (invariato).
+  service_date: isoDate.optional(),
 }).merge(passengerRowSchema);
 
 const createGroupServicesBatchSchema = z.object({
   action: z.literal("create_group_services_batch"),
   booking_group_id: z.string().uuid(),
   booking_group_stop_id: z.string().uuid(),
+  service_date: isoDate.optional(),
   passengers: z.array(passengerRowSchema).min(1).max(100),
 });
 
@@ -329,6 +333,7 @@ export async function POST(request: NextRequest) {
       bookingGroupId: body.booking_group_id,
       bookingGroupStopId: body.booking_group_stop_id,
       passengers,
+      serviceDate: body.service_date,
     }));
   }
 

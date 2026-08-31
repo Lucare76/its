@@ -247,6 +247,9 @@ registerTool({
       bookingGroupId: uuidSchema,
       bookingGroupStopId: uuidSchema,
       passengers: z.array(passengerInput).min(1).max(100),
+      // FASE A.5 §B — override esplicito della data (es. ritorno di un gruppo
+      // la cui service_date rappresenta l'andata). Default: group.service_date.
+      serviceDate: isoDateSchema.nullable().optional(),
     })
     .strict(),
   outputSchema: z.object({
@@ -271,8 +274,9 @@ registerTool({
       const stop = detail.stops.find((s) => s.id === input.bookingGroupStopId);
       if (!stop) throw new McpError("MCP_NOT_FOUND", "Fermata del gruppo non trovata.");
 
+      const effectiveServiceDate = input.serviceDate ?? detail.group.service_date ?? null;
       const warnings: string[] = [];
-      if (!detail.group.service_date) warnings.push("group_service_date_missing");
+      if (!effectiveServiceDate) warnings.push("group_service_date_missing");
 
       for (const p of input.passengers) {
         if (p.hotelId && !(await tenantRowExists(context.admin, "hotels", context.tenantId, p.hotelId))) {
@@ -288,6 +292,7 @@ registerTool({
 
       const args: Record<string, unknown> = {
         booking_group_stop_id: input.bookingGroupStopId,
+        service_date: input.serviceDate ?? null,
         passengers: input.passengers.map((p) => ({
           customer_name: p.customerName,
           pax: p.pax,
@@ -309,8 +314,8 @@ registerTool({
         booking_group_stop_id: input.bookingGroupStopId,
         group_name: detail.group.name,
         stop_city: (stop.city as string | null) ?? null,
-        service_date: detail.group.service_date ?? null,
-        service_date_label: fmtDateIt(detail.group.service_date),
+        service_date: effectiveServiceDate,
+        service_date_label: fmtDateIt(effectiveServiceDate),
         passenger_count: input.passengers.length,
         total_pax: totalPax,
         stop_expected_pax: stopExpected,

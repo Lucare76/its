@@ -53,6 +53,45 @@ export function compact<T extends Record<string, unknown>>(input: T): Partial<T>
   return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
+// FASE A.5.3 §2 — esportata per riuso deterministico dal resume multi-stop
+// dell'orchestratore Mario (stessa normalizzazione dell'idempotenza qui sotto,
+// mai una seconda implementazione del match città).
+export function normalizeCityKey(value?: string | null): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Risolve la fermata canonica `tenant_bus_line_stops` per città+direzione,
+ * SOLO su match esatto (city o stop_name normalizzati) e SOLO se univoco.
+ * Nessun fuzzy/substring: un match ambiguo o assente ritorna `null` — mai
+ * un'assegnazione indovinata (FASE A.5 §E). Usata sia per pre-risolvere
+ * `booking_group_stops.stop_id` sia per l'orario reale del service (§D).
+ */
+export async function resolveCanonicalBookingGroupStop(
+  admin: SupabaseClient,
+  tenantId: string,
+  city: string,
+  direction: "arrival" | "departure",
+): Promise<{ stopId: string; pickupTime: string | null } | null> {
+  const target = normalizeCityKey(city);
+  if (!target) return null;
+  const { data } = await admin
+    .from("tenant_bus_line_stops")
+    .select("id, city, stop_name, pickup_time")
+    .eq("tenant_id", tenantId)
+    .eq("direction", direction)
+    .eq("active", true);
+  const rows = (data ?? []) as Array<{ id: string; city: string; stop_name: string; pickup_time: string | null }>;
+  const matches = rows.filter((r) => normalizeCityKey(r.city) === target || normalizeCityKey(r.stop_name) === target);
+  if (matches.length !== 1) return null;
+  return { stopId: matches[0]!.id, pickupTime: matches[0]!.pickup_time ?? null };
+}
+
 /** Verifica che una riga di una tabella parent esista NELLO STESSO tenant. */
 export async function tenantRowExists(
   admin: SupabaseClient,
@@ -291,7 +330,7 @@ export async function buildOperationalizeView(admin: SupabaseClient, tenantId: s
   const blocked = perService.filter((p) => !p.ready && !p.already_operational);
   const already = perService.filter((p) => p.already_operational);
 
-  return { group: g, stops: stopRows, svcRows, reservation, groupWarnings, perService, ready, blocked, already };
+  return { group: g, stops: stopRows, svcRows, reservation, reservations: resRows, groupWarnings, perService, ready, blocked, already };
 }
 
 export type OperationalizeViewShape = {
@@ -384,11 +423,34 @@ export async function operationalizeBookingGroup(
     const warnings: BookingGroupWarningCode[] = [...p.warnings];
     const svc = view.svcRows.find((s) => s.id === p.service_id);
     if (svc?.booking_service_kind === "bus_city_hotel" && !warnings.includes("allocation_pending")) {
-      try {
-        const alloc = await autoAllocateBusService({ admin, tenantId, serviceId: p.service_id, userId: userId ?? "" });
-        if (!alloc || (typeof alloc === "object" && "allocated" in alloc && !alloc.allocated)) warnings.push("allocation_pending");
-      } catch {
-        warnings.push("allocation_pending");
+      // FASE A.5 §P / FASE A.5.1 §15 — un gruppo bus_exclusive non deve MAI
+      // finire allocato automaticamente su un bus condiviso
+      // (autoAllocateBusService non distingue esclusivo/condiviso). Se esiste
+      // una reservation esclusiva per LA DATA DI QUESTO SERVICE (andata e
+      // ritorno possono avere reservation diverse, §17), si alloca sul bus
+      // predeterminato dalla reservation; altrimenti resta allocation_pending
+      // (mezzo dedicato ancora da riservare — mai un fallback su bus condiviso).
+      if (view.group.kind === "bus_exclusive") {
+        const matchingReservation = view.reservations.find((r) => r.service_date === svc.date && r.exclusive);
+        if (matchingReservation) {
+          try {
+            const alloc = await allocateReservedBookingGroupBusService(admin, {
+              tenantId, serviceId: p.service_id, busUnitId: matchingReservation.bus_unit_id, userId: userId ?? "",
+            });
+            if (!alloc.allocated) warnings.push("allocation_pending");
+          } catch {
+            warnings.push("allocation_pending");
+          }
+        } else {
+          warnings.push("allocation_pending");
+        }
+      } else {
+        try {
+          const alloc = await autoAllocateBusService({ admin, tenantId, serviceId: p.service_id, userId: userId ?? "" });
+          if (!alloc || (typeof alloc === "object" && "allocated" in alloc && !alloc.allocated)) warnings.push("allocation_pending");
+        } catch {
+          warnings.push("allocation_pending");
+        }
       }
     }
     operationalized.push({ service_id: p.service_id, warnings });
@@ -563,13 +625,51 @@ export async function addBookingGroupStop(
   if (input.stop_id && !(await tenantRowExists(admin, "tenant_bus_line_stops", tenantId, input.stop_id))) {
     return err(400, "Fermata catalogo non valida per il tenant.");
   }
+  // FASE A.5 §E — se il chiamante non ha indicato uno stop_id, prova a
+  // risolvere la fermata canonica per città+direzione. Match ambiguo/assente
+  // → resta undefined (compact() lo omette, come un input.stop_id non
+  // fornito), mai un'assegnazione indovinata.
+  let stopId: string | undefined = input.stop_id ?? undefined;
+  if (!stopId) {
+    const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, input.city, input.direction);
+    if (canonical) stopId = canonical.stopId;
+  }
+
+  // FASE A.5.1 §2 — idempotenza: stessa città (normalizzata) + direzione sullo
+  // stesso gruppo NON deve mai duplicare la fermata (comando ripetuto,
+  // riavvio conversazione dopo scadenza Redis, ecc.). Se la fermata esiste
+  // già ma non aveva ancora uno stop_id canonico risolto, lo si arricchisce
+  // con un update mirato — mai un secondo insert.
+  const targetCity = normalizeCityKey(input.city);
+  const { data: existingStops } = await admin
+    .from("booking_group_stops")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.bookingGroupId)
+    .eq("direction", input.direction);
+  const existingStop = ((existingStops ?? []) as BookingGroupStop[]).find((s) => normalizeCityKey(s.city) === targetCity);
+  if (existingStop) {
+    if (!existingStop.stop_id && stopId) {
+      const { data: enriched, error: enrichError } = await admin
+        .from("booking_group_stops")
+        .update({ stop_id: stopId, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId)
+        .eq("id", existingStop.id)
+        .select("*")
+        .single();
+      if (!enrichError && enriched) return ok({ stop: enriched as BookingGroupStop });
+    }
+    auditLog({ event: "booking_group_stop_reused", tenantId, userId, role, outcome: "reused", details: { booking_group_id: input.bookingGroupId, city: input.city, direction: input.direction, stop_id: existingStop.id } });
+    return ok({ stop: existingStop });
+  }
+
   const insert = compact({
     tenant_id: tenantId,
     booking_group_id: input.bookingGroupId,
     city: input.city,
     pickup_point: input.pickup_point,
     expected_pax: input.expected_pax,
-    stop_id: input.stop_id,
+    stop_id: stopId,
     direction: input.direction,
     sort_order: input.sort_order ?? 0,
     notes: input.notes,
@@ -600,9 +700,13 @@ export type AddPassengersResult = {
 export async function addBookingGroupPassengers(
   admin: SupabaseClient,
   actor: BgActor,
-  input: { bookingGroupId: string; bookingGroupStopId: string; passengers: PassengerRow[] },
+  input: { bookingGroupId: string; bookingGroupStopId: string; passengers: PassengerRow[]; serviceDate?: string | null },
 ): Promise<BgOutcome<AddPassengersResult>> {
   const { tenantId, userId, role } = actor;
+
+  if (input.serviceDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate)) {
+    return err(400, "serviceDate non valida (atteso YYYY-MM-DD).");
+  }
 
   const { data: group } = await admin
     .from("booking_groups")
@@ -614,7 +718,7 @@ export async function addBookingGroupPassengers(
 
   const { data: stop } = await admin
     .from("booking_group_stops")
-    .select("id, booking_group_id, city, pickup_point, direction")
+    .select("id, booking_group_id, city, pickup_point, direction, stop_id")
     .eq("tenant_id", tenantId)
     .eq("id", input.bookingGroupStopId)
     .maybeSingle();
@@ -622,14 +726,33 @@ export async function addBookingGroupPassengers(
     return err(404, "Fermata del gruppo non trovata.");
   }
 
-  const serviceDate = (group as { service_date: string | null }).service_date;
+  // FASE A.5 §B — serviceDate esplicito (es. ritorno) vince sulla data del
+  // gruppo, che resta il default per l'andata. Nessuna migration: campo
+  // opzionale a livello di dominio, non di schema DB.
+  const serviceDate = input.serviceDate ?? (group as { service_date: string | null }).service_date;
   if (!serviceDate) {
-    return err(422, "Imposta prima la data del gruppo (service_date) per creare i servizi.");
+    return err(422, "Imposta prima la data del gruppo (service_date) oppure passa serviceDate per creare i servizi.");
   }
 
   const g = group as { kind: string };
   const isBusKind = g.kind === "bus_exclusive" || g.kind === "bus_group";
-  const st = stop as { city: string; pickup_point: string | null; direction: string };
+  const st = stop as { city: string; pickup_point: string | null; direction: string; stop_id: string | null };
+
+  // FASE A.5 §C/§D — orario reale dalla fermata canonica se risolta, mai
+  // inventato: se non c'è un pickup_time valido resta il placeholder
+  // "00:00", che evaluateBookingGroupServiceReadiness blocca correttamente
+  // (missing_time) finché non viene risolto un orario vero.
+  let resolvedTime = "00:00";
+  if (st.stop_id) {
+    const { data: canonicalStop } = await admin
+      .from("tenant_bus_line_stops")
+      .select("pickup_time")
+      .eq("tenant_id", tenantId)
+      .eq("id", st.stop_id)
+      .maybeSingle();
+    const pt = (canonicalStop as { pickup_time: string | null } | null)?.pickup_time;
+    if (pt && pt.trim()) resolvedTime = pt.trim();
+  }
 
   const buildInsert = (row: PassengerRow) => ({
     tenant_id: tenantId,
@@ -638,7 +761,7 @@ export async function addBookingGroupPassengers(
     is_draft: true,
     status: "needs_review" as const,
     date: serviceDate,
-    time: "00:00",
+    time: resolvedTime,
     direction: st.direction,
     service_type: "transfer" as const,
     vessel: `Bus da ${st.city}`,
@@ -659,9 +782,40 @@ export async function addBookingGroupPassengers(
     }
   }
 
+  // FASE A.5.1 §3 — idempotenza: stesso gruppo+fermata+data+direzione+
+  // nominativo (case-insensitive) NON deve mai produrre un secondo service
+  // identico (comando Mario ripetuto, o batch reinviato dopo un errore
+  // parziale). Il nominativo aggregato usato dal workflow bus
+  // ("Gruppo <nome>") rientra qui naturalmente.
+  const { data: existingSvcRows } = await admin
+    .from("services")
+    .select("id, customer_name, pax")
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.bookingGroupId)
+    .eq("booking_group_stop_id", input.bookingGroupStopId)
+    .eq("date", serviceDate)
+    .eq("direction", st.direction);
+  const existingByName = new Map(
+    ((existingSvcRows ?? []) as Array<{ id: string; customer_name: string | null; pax: number | null }>).map((r) => [
+      (r.customer_name ?? "").trim().toLowerCase(),
+      r,
+    ]),
+  );
+
   const created: AddPassengersResult["created"] = [];
   const failed: AddPassengersResult["failed"] = [];
   for (const row of input.passengers) {
+    const existing = existingByName.get(row.customer_name.trim().toLowerCase());
+    if (existing) {
+      created.push({ id: existing.id, customer_name: row.customer_name, pax: Number(existing.pax ?? row.pax) });
+      auditLog({
+        event: "booking_group_service_reused",
+        tenantId, userId, role,
+        serviceId: existing.id, outcome: "reused",
+        details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, customer_name: row.customer_name },
+      });
+      continue;
+    }
     const { data: svc, error } = await admin.from("services").insert(buildInsert(row)).select("id").single();
     if (error || !svc?.id) {
       failed.push({ customer_name: row.customer_name, error: error?.message ?? "insert fallita" });
@@ -726,4 +880,202 @@ export async function reserveBookingGroupBus(
   if (error) return err(500, error.message);
   auditLog({ event: "booking_group_bus_reservation_changed", tenantId, userId, role, outcome: "upserted", details: { booking_group_id: input.bookingGroupId, bus_unit_id: input.busUnitId, service_date: input.service_date, reserved_pax: input.reserved_pax, exclusive: input.exclusive ?? false } });
   return ok({ reservation: data as BookingGroupBusReservation });
+}
+
+// ─── FASE A.5.1 §20 — reconciliation: stato reale dal DB (fonte di verità) ─
+
+export type OperationalBusGroupNextStep =
+  | "create_group"
+  | "add_outbound_stop"
+  | "add_outbound_service"
+  | "add_return_stop"
+  | "add_return_service"
+  | "reserve_bus"
+  | "operationalize"
+  | "blocked"
+  | "completed";
+
+export type OperationalBusGroupState = {
+  groupExists: boolean;
+  group: BookingGroup | null;
+  arrivalStops: BookingGroupStop[];
+  departureStops: BookingGroupStop[];
+  /** Fermate arrival/departure che esistono ma non hanno ancora un service collegato. */
+  arrivalStopsMissingService: BookingGroupStop[];
+  departureStopsMissingService: BookingGroupStop[];
+  reservations: BookingGroupBusReservation[];
+  allocations: Array<{ service_id: string; bus_unit_id: string }>;
+  readiness: OperationalizeViewShape | null;
+  nextStep: OperationalBusGroupNextStep;
+};
+
+/**
+ * FASE A.5.1 §19/§20 — unica fonte di verità sullo stato operativo di un
+ * gruppo bus: legge SEMPRE dal DB (mai da Redis/sessione), batch (nessuna
+ * query per fermata/service, §24). Usata sia per riprendere un workflow dopo
+ * scadenza sessione (§19) sia per decidere se un comando ripetuto deve
+ * riusare un gruppo esistente invece di duplicarlo (§1).
+ *
+ * `expectReturn`/`returnDate`: il chiamante (Mario) sa se il workflow
+ * richiede anche un ritorno — questa funzione NON lo indovina dal solo stato
+ * DB (un gruppo può legittimamente essere solo andata).
+ */
+export async function inspectOperationalBusGroupState(
+  admin: SupabaseClient,
+  tenantId: string,
+  bookingGroupId: string,
+  opts: { expectReturn?: boolean; returnDate?: string | null } = {},
+): Promise<OperationalBusGroupState> {
+  const detail = await loadGroupDetail(admin, tenantId, bookingGroupId);
+  if (!detail) {
+    return {
+      groupExists: false, group: null, arrivalStops: [], departureStops: [],
+      arrivalStopsMissingService: [], departureStopsMissingService: [],
+      reservations: [], allocations: [], readiness: null, nextStep: "create_group",
+    };
+  }
+
+  const arrivalStops = detail.stops.filter((s) => s.direction === "arrival");
+  const departureStops = detail.stops.filter((s) => s.direction === "departure");
+  const servicedStopIds = new Set(detail.services.map((s) => s.booking_group_stop_id).filter((v): v is string => Boolean(v)));
+  const arrivalStopsMissingService = arrivalStops.filter((s) => !servicedStopIds.has(s.id));
+  const departureStopsMissingService = departureStops.filter((s) => !servicedStopIds.has(s.id));
+
+  const readinessRes = await previewOperationalizeBookingGroup(admin, tenantId, bookingGroupId);
+  const readiness = readinessRes.ok ? readinessRes.data : null;
+
+  const serviceIds = detail.services.map((s) => s.id);
+  let allocations: Array<{ service_id: string; bus_unit_id: string }> = [];
+  if (serviceIds.length > 0) {
+    const { data } = await admin.from("tenant_bus_allocations").select("service_id, bus_unit_id").eq("tenant_id", tenantId).in("service_id", serviceIds);
+    allocations = (data ?? []) as Array<{ service_id: string; bus_unit_id: string }>;
+  }
+
+  const expectReturn = Boolean(opts.expectReturn);
+  let nextStep: OperationalBusGroupNextStep;
+  if (arrivalStops.length === 0) {
+    nextStep = "add_outbound_stop";
+  } else if (arrivalStopsMissingService.length > 0) {
+    nextStep = "add_outbound_service";
+  } else if (expectReturn && departureStops.length === 0) {
+    nextStep = "add_return_stop";
+  } else if (expectReturn && departureStopsMissingService.length > 0) {
+    nextStep = "add_return_service";
+  } else if (
+    detail.group.kind === "bus_exclusive" &&
+    [detail.group.service_date, ...(expectReturn && opts.returnDate ? [opts.returnDate] : [])]
+      .filter((d): d is string => Boolean(d))
+      .some((d) => !detail.bus_reservations.some((r) => r.service_date === d))
+  ) {
+    // FASE A.5.1 §17 — andata e ritorno possono richiedere reservation
+    // separate: manca lo step finché anche solo UNA delle date attese non ha
+    // una reservation.
+    nextStep = "reserve_bus";
+  } else if (readiness && readiness.services_ready > 0) {
+    nextStep = "operationalize";
+  } else if (readiness && readiness.services_blocked > 0 && readiness.services_ready === 0 && readiness.services_already_operational === 0) {
+    nextStep = "blocked";
+  } else {
+    nextStep = "completed";
+  }
+
+  return {
+    groupExists: true, group: detail.group, arrivalStops, departureStops,
+    arrivalStopsMissingService, departureStopsMissingService,
+    reservations: detail.bus_reservations, allocations, readiness, nextStep,
+  };
+}
+
+// ─── FASE A.5.1 §13 — disponibilità mezzi (READ, tenant-scoped) ───────────
+
+export type AvailableBus = { id: string; label: string; capacity: number; tag: string | null };
+
+/**
+ * Bus tenant-scoped compatibili con una prenotazione: capacità sufficiente,
+ * non chiusi, non già riservati IN ESCLUSIVA per la stessa data da un altro
+ * gruppo. FASE A.5.1 §16 — bus con capacità insufficiente non compaiono mai
+ * nell'elenco: Mario non può proporli, a monte, non serve un blocco a valle.
+ */
+export async function findAvailableBusesForGroup(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: { serviceDate: string; requiredCapacity: number },
+): Promise<AvailableBus[]> {
+  const [{ data: units }, { data: reservations }] = await Promise.all([
+    admin.from("tenant_bus_units").select("id, label, capacity, tag, status, manual_close, active").eq("tenant_id", tenantId).eq("active", true),
+    admin.from("booking_group_bus_reservations").select("bus_unit_id, exclusive").eq("tenant_id", tenantId).eq("service_date", input.serviceDate),
+  ]);
+  const exclusivelyReserved = new Set(
+    ((reservations ?? []) as Array<{ bus_unit_id: string; exclusive: boolean | null }>).filter((r) => r.exclusive).map((r) => r.bus_unit_id),
+  );
+  const rows = (units ?? []) as Array<{ id: string; label: string; capacity: number; tag: string | null; status: string | null; manual_close: boolean | null }>;
+  return rows
+    .filter((u) => u.capacity >= input.requiredCapacity)
+    .filter((u) => u.status !== "closed" && u.status !== "completed" && !u.manual_close)
+    .filter((u) => !exclusivelyReserved.has(u.id))
+    .map((u) => ({ id: u.id, label: u.label, capacity: u.capacity, tag: u.tag ?? null }))
+    .sort((a, b) => a.capacity - b.capacity);
+}
+
+// ─── FASE A.5.1 §15 — allocazione su bus RISERVATO (predeterminato) ───────
+
+export type ReservedAllocationResult =
+  | { ok: true; allocated: true; serviceId: string; busUnitId: string; busLabel: string; stopId: string; stopName: string; pax: number }
+  | { ok: true; allocated: false; serviceId: string; reason: string };
+
+/**
+ * Alloca un service verso un bus_unit_id GIÀ DETERMINATO da una reservation
+ * (gruppo bus_exclusive), riusando l'RPC `allocate_bus_service` esistente —
+ * NON un nuovo motore di allocazione, NON SQL duplicato. A differenza di
+ * `autoAllocateBusService` (che sceglie il primo bus di linea con posto
+ * libero) qui il bus è vincolato: se non ha capienza sufficiente o la
+ * fermata canonica non è risolvibile, non alloca (mai un fallback silenzioso
+ * su un bus diverso da quello riservato).
+ */
+export async function allocateReservedBookingGroupBusService(
+  admin: SupabaseClient,
+  params: { tenantId: string; serviceId: string; busUnitId: string; userId: string },
+): Promise<ReservedAllocationResult> {
+  const { tenantId, serviceId, busUnitId, userId } = params;
+
+  const existingAlloc = await admin.from("tenant_bus_allocations").select("id").eq("tenant_id", tenantId).eq("service_id", serviceId).limit(1);
+  if (((existingAlloc.data as unknown[] | null) ?? []).length > 0) {
+    return { ok: true, allocated: false, serviceId, reason: "Già allocato" };
+  }
+
+  const { data: service } = await admin
+    .from("services")
+    .select("id, date, direction, pax, bus_city_origin")
+    .eq("tenant_id", tenantId)
+    .eq("id", serviceId)
+    .maybeSingle();
+  const svc = service as { date: string | null; direction: "arrival" | "departure" | null; pax: number | null; bus_city_origin: string | null } | null;
+  if (!svc) return { ok: true, allocated: false, serviceId, reason: "Servizio non trovato" };
+  if (!svc.date || !svc.direction || !svc.pax || svc.pax <= 0) return { ok: true, allocated: false, serviceId, reason: "Dati bus incompleti" };
+
+  const { data: unit } = await admin.from("tenant_bus_units").select("id, bus_line_id, label, capacity").eq("tenant_id", tenantId).eq("id", busUnitId).maybeSingle();
+  const busUnit = unit as { id: string; bus_line_id: string; label: string; capacity: number } | null;
+  if (!busUnit) return { ok: true, allocated: false, serviceId, reason: "Bus non trovato" };
+  if (busUnit.capacity < svc.pax) return { ok: true, allocated: false, serviceId, reason: "Capacità del bus riservato insufficiente" };
+
+  const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, svc.bus_city_origin ?? "", svc.direction);
+  if (!canonical) return { ok: true, allocated: false, serviceId, reason: `Fermata non risolta per ${svc.bus_city_origin ?? "N/D"}` };
+
+  const { data: stopRow } = await admin.from("tenant_bus_line_stops").select("stop_name").eq("tenant_id", tenantId).eq("id", canonical.stopId).maybeSingle();
+  const stopName = (stopRow as { stop_name: string } | null)?.stop_name ?? svc.bus_city_origin ?? "Fermata";
+
+  const allocRpc = await admin.rpc("allocate_bus_service", {
+    p_tenant_id: tenantId,
+    p_service_id: serviceId,
+    p_bus_line_id: busUnit.bus_line_id,
+    p_bus_unit_id: busUnit.id,
+    p_stop_id: canonical.stopId,
+    p_stop_name: stopName,
+    p_direction: svc.direction,
+    p_pax_assigned: svc.pax,
+    p_notes: null,
+    p_created_by_user_id: userId,
+  });
+  if (allocRpc.error) return { ok: true, allocated: false, serviceId, reason: allocRpc.error.message };
+  return { ok: true, allocated: true, serviceId, busUnitId: busUnit.id, busLabel: busUnit.label, stopId: canonical.stopId, stopName, pax: svc.pax };
 }

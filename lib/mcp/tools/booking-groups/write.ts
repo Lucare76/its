@@ -186,11 +186,12 @@ registerTool({
   async handler(context, input) {
     try {
       const payload = consumeToken(context, input.confirmationToken, "add_booking_group_passengers");
-      const a = payload.args as { booking_group_stop_id: string; passengers: PassengerRow[] };
+      const a = payload.args as { booking_group_stop_id: string; passengers: PassengerRow[]; service_date?: string | null };
       const res = await addBookingGroupPassengers(context.admin, actorOf(context), {
         bookingGroupId: payload.groupId as string,
         bookingGroupStopId: a.booking_group_stop_id,
         passengers: a.passengers,
+        serviceDate: a.service_date ?? undefined,
       });
       // 404 gruppo / 422 data mancante / 400 hotel di altro tenant → lo stato
       // non è quello approvato in preview: forza una nuova preview.

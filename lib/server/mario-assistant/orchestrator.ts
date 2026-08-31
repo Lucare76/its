@@ -46,9 +46,11 @@ import {
   mentionsPhysicalBus,
   BLOCKING_PREVIEW_WARNINGS,
   extractMarioDraftSlotsFromMessage,
+  extractMarioStopSlotsFromMessage,
   sanitizeExpectedPax,
   resolveBusModeAmbiguity,
   type MarioOperationKey,
+  type MarioStopSlot,
 } from "./operation-policy";
 import {
   getMarioSession,
@@ -65,6 +67,17 @@ import {
   type MarioDraftOperation,
   type MarioDraftSlots,
 } from "./session-context";
+// FASE A.5.1 §1/§19/§20 — idempotenza gruppo + resume da DB: letture dirette
+// (non tool MCP, nessun equivalente esposto all'LLM) sulla stessa fonte di
+// verità usata da inspectOperationalBusGroupState/findBookingGroups altrove.
+import {
+  findBookingGroups,
+  inspectOperationalBusGroupState,
+  findAvailableBusesForGroup,
+  normalizeCityKey,
+  type OperationalBusGroupState,
+  type AvailableBus,
+} from "@/lib/server/booking-groups-service";
 
 export type MarioAssistantResult = {
   intent: string;
@@ -502,6 +515,661 @@ function bgActionsIfRelevant(toolName: string): Array<{ label: string; href: str
   return toolName.includes("booking_group") ? BG_ACTIONS : [];
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// FASE A.5 — workflow operativo bus: dopo la creazione di un gruppo bus
+// (create_bus_group / create_exclusive_bus_group) CON un'origine nota, il
+// draft non viene azzerato: avanza deterministicamente per fermata andata ->
+// servizio andata -> [fermata ritorno -> servizio ritorno, se c'è returnDate]
+// -> operativizzazione. Ogni step resta preview -> "Confermi?" -> write (§20,
+// nessun bypass della conferma): la catena riusa ESATTAMENTE gli stessi tool
+// MCP/policy già esposti per add_booking_group_stop/passengers/
+// operationalize_group, mai una seconda business rule (§6/§28 — zero
+// chiamate LLM in ogni step, gli slot sono tutti già noti).
+// "Fammi un gruppo Juventus da 50" (nessuna origine) resta SOLO il
+// contenitore commerciale: isOperationalBusGroupDraft la esclude (§31).
+// ═══════════════════════════════════════════════════════════════════════
+
+// FASE A.5.2 §1 — modello fermata: un array di stop sostituisce il singolo
+// `origin`. Compatibilità totale: `origin` singolo si normalizza SEMPRE in
+// `stops = [{ city: origin, expectedPax: totale, direction: "arrival" }]`
+// (stesso comportamento di prima per La Marra/Rimini — vedi normalizeStops).
+function normalizeStops(collected: MarioDraftSlots): MarioStopSlot[] {
+  const raw = collected.stops;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return (raw as unknown as MarioStopSlot[]).map((s) => ({
+      city: s.city,
+      pickupPoint: s.pickupPoint ?? null,
+      expectedPax: s.expectedPax,
+      direction: s.direction ?? "arrival",
+    }));
+  }
+  if (typeof collected.origin === "string" && collected.origin.trim()) {
+    return [
+      {
+        city: collected.origin.trim(),
+        pickupPoint: (collected.pickupPoint as string | undefined) ?? null,
+        expectedPax: collected.expectedPax as number,
+        direction: "arrival",
+      },
+    ];
+  }
+  return [];
+}
+
+/** FASE A.5.2 §3 — somma pax fermate vs totale gruppo. `null` se non c'è
+ *  nulla da validare (nessuna fermata ancora nota) o se la somma torna. */
+function validateStopsPaxSum(merged: MarioDraftSlots): MarioAssistantResult | null {
+  const stops = normalizeStops(merged);
+  if (stops.length === 0) return null;
+  const totalPax = typeof merged.expectedPax === "number" ? merged.expectedPax : undefined;
+  if (totalPax === undefined) return null;
+  const sum = stops.reduce((acc, s) => acc + (Number.isFinite(s.expectedPax) ? s.expectedPax : 0), 0);
+  if (sum === totalPax) return null;
+  if (sum < totalPax) {
+    return {
+      intent: "mario_llm_clarification",
+      answer: `Le fermate indicate sommano ${sum} pax su ${totalPax} totali del gruppo. Dove salgono gli altri ${totalPax - sum} pax?`,
+      actions: [],
+    };
+  }
+  return {
+    intent: "mario_llm_clarification",
+    answer: `Le fermate sommano ${sum} pax ma il gruppo è da ${totalPax}.`,
+    actions: [],
+  };
+}
+
+// FASE A.5.2 §1/§7 — stage di catena parametrizzati (indice fermata /
+// direzione / indice data di prenotazione bus), codificati come stringa per
+// restare compatibili con la persistenza JSON di `MarioDraftSlots`
+// (`_chainStage`/`_chainRemaining`, invariati come shape — solo il contenuto
+// delle stringhe cambia formato).
+type ChainStage =
+  | { kind: "stop"; direction: "arrival" | "departure"; index: number }
+  | { kind: "passengers"; direction: "arrival" | "departure"; index: number }
+  | { kind: "reserve_bus"; dateIndex: 0 | 1 }
+  | { kind: "operationalize" };
+
+function encodeStage(s: ChainStage): string {
+  if (s.kind === "operationalize") return "operationalize";
+  if (s.kind === "reserve_bus") return `reserve_bus:${s.dateIndex}`;
+  return `${s.kind}:${s.direction}:${s.index}`;
+}
+function decodeStage(s: string): ChainStage {
+  if (s === "operationalize") return { kind: "operationalize" };
+  const parts = s.split(":");
+  if (parts[0] === "reserve_bus") return { kind: "reserve_bus", dateIndex: Number(parts[1]) === 1 ? 1 : 0 };
+  return { kind: parts[0] as "stop" | "passengers", direction: parts[1] as "arrival" | "departure", index: Number(parts[2]) };
+}
+
+/** Marcatore di `draftOperation.type` per il resto della catena (dopo la
+ *  creazione del gruppo): `type` non è più una MarioOperationKey pura perché
+ *  la catena può attraversare più operazioni diverse in sequenza — lo stage
+ *  corrente/i restanti vivono in `collected._chainStage`/`_chainRemaining`. */
+const OPERATIONAL_CHAIN_MARKER = "operational_bus_group_chain";
+
+function buildOperationalChainPlan(collected: MarioDraftSlots): ChainStage[] {
+  const stops = normalizeStops(collected);
+  const stages: ChainStage[] = [];
+  stops.forEach((_, i) => {
+    stages.push({ kind: "stop", direction: "arrival", index: i });
+    stages.push({ kind: "passengers", direction: "arrival", index: i });
+  });
+  const hasReturn = typeof collected.returnDate === "string" && collected.returnDate.trim().length > 0;
+  if (hasReturn) {
+    // FASE A.5.2 §5 — il ritorno riusa la STESSA distribuzione città/pax
+    // dell'andata (nessuna distribuzione di ritorno diversa gestita qui).
+    stops.forEach((_, i) => {
+      stages.push({ kind: "stop", direction: "departure", index: i });
+      stages.push({ kind: "passengers", direction: "departure", index: i });
+    });
+  }
+  if (collected.kind === "bus_exclusive") {
+    // FASE A.5.2 §7/§8 — bus esclusivo: una reservation per ogni data
+    // operativa nota (andata sempre, ritorno solo se presente).
+    stages.push({ kind: "reserve_bus", dateIndex: 0 });
+    if (hasReturn) stages.push({ kind: "reserve_bus", dateIndex: 1 });
+  }
+  stages.push({ kind: "operationalize" });
+  return stages;
+}
+
+/** §31 — solo un gruppo bus OPERATIVO (kind bus_group/bus_exclusive) CON
+ *  un'origine o almeno una fermata nota innesca la catena oltre alla sola
+ *  creazione (FASE A.5.2 §1 — `stops` è l'estensione di `origin`). */
+function isOperationalBusGroupDraft(draft: MarioDraftOperation | null): boolean {
+  if (!draft) return false;
+  if (draft.type !== "create_bus_group" && draft.type !== "create_exclusive_bus_group") return false;
+  const hasOrigin = typeof draft.collected.origin === "string" && draft.collected.origin.trim().length > 0;
+  const hasStops = Array.isArray(draft.collected.stops) && (draft.collected.stops as unknown[]).length > 0;
+  return hasOrigin || hasStops;
+}
+
+function chainStageLabel(stage: ChainStage, collected: MarioDraftSlots): string {
+  if (stage.kind === "operationalize") return "l'operativizzazione dei servizi";
+  if (stage.kind === "reserve_bus") return stage.dateIndex === 0 ? "la prenotazione del bus per l'andata" : "la prenotazione del bus per il ritorno";
+  const stops = normalizeStops(collected);
+  const city = stops[stage.index]?.city ?? "la fermata";
+  const dirLabel = stage.direction === "arrival" ? "andata" : "ritorno";
+  return stage.kind === "stop" ? `la fermata di ${dirLabel} (${city})` : `i pax di ${dirLabel} a ${city}`;
+}
+
+/** §J/§K/§L — costruisce operation+slot per lo stage indicato riusando le
+ *  STESSE MarioOperationKey/policy di add_booking_group_stop/passengers/
+ *  operationalize_group/reserve_bus_for_group: nessuna business rule nuova,
+ *  solo composizione deterministica di dati già raccolti (mai testo libero,
+ *  mai LLM). Un nominativo aggregato ("Gruppo <nome>", pax=pax dello STOP,
+ *  FASE A.5.2 §4 — non il totale del gruppo) evita di inventare N nominativi
+ *  fittizi (§12/§J).
+ */
+function buildChainStepInput(stage: ChainStage, collected: MarioDraftSlots): { operation: MarioOperationKey; slots: MarioDraftSlots } {
+  const bookingGroupId = collected.bookingGroupId as string;
+
+  if (stage.kind === "operationalize") {
+    return { operation: "operationalize_group", slots: { bookingGroupId } };
+  }
+
+  if (stage.kind === "reserve_bus") {
+    const dateField = stage.dateIndex === 0 ? "serviceDate" : "returnDate";
+    const busField = stage.dateIndex === 0 ? "reserveBusUnitId0" : "reserveBusUnitId1";
+    return {
+      operation: "reserve_bus_for_group",
+      slots: {
+        bookingGroupId,
+        busUnitId: collected[busField] as string,
+        serviceDate: collected[dateField] as string,
+        reservedPax: collected.expectedPax as number,
+        exclusive: true,
+      },
+    };
+  }
+
+  const stops = normalizeStops(collected);
+  const stop = stops[stage.index]!;
+  const groupName = (collected.name as string | undefined) ?? "Gruppo";
+
+  if (stage.kind === "stop") {
+    return {
+      operation: "add_booking_group_stop",
+      slots: {
+        bookingGroupId,
+        city: stop.city,
+        pickupPoint: stop.pickupPoint ?? undefined,
+        expectedPax: stop.expectedPax,
+        direction: stage.direction,
+      },
+    };
+  }
+
+  const idsField = stage.direction === "arrival" ? "outboundStopIds" : "returnStopIds";
+  const ids = ((collected[idsField] as unknown as string[] | undefined) ?? []) as string[];
+  const stopId = ids[stage.index];
+  const slots: MarioDraftSlots = {
+    bookingGroupId,
+    bookingGroupStopId: stopId,
+    // FASE A.5.2 §4 — pax dello STOP corrente, mai il totale del gruppo.
+    passengers: [{ customerName: `Gruppo ${groupName}`, pax: stop.expectedPax }] as unknown as unknown[],
+  };
+  if (stage.direction === "departure" && typeof collected.returnDate === "string") {
+    slots.serviceDate = collected.returnDate;
+  }
+  return { operation: "add_booking_group_passengers", slots };
+}
+
+/** Esegue la preview dello stage indicato (zero LLM, §28) e salva il nuovo
+ *  pendingConfirmation + draft di catena. §M — per `operationalize`, se la
+ *  readiness live risulta 0 servizi pronti, NON propone "Confermi?" su un
+ *  no-op: riporta cosa manca e chiude la catena (il gruppo resta ripercorribile
+ *  da Gruppi prenotazione / da un comando Mario successivo, §22).
+ *
+ *  FASE A.5.2 §7 — se lo stage è `reserve_bus` e il bus da usare non è ancora
+ *  noto (`collected.reserveBusUnitId{0,1}` assente), NON si esegue nessuna
+ *  preview: si delega a `runReserveBusSelectStep`, che elenca i mezzi
+ *  disponibili (mai una scelta arbitraria di Mario, §7.3/§7.4).
+ */
+async function runOperationalChainStep(
+  context: McpContext,
+  stage: ChainStage,
+  collected: MarioDraftSlots,
+  remaining: ChainStage[],
+): Promise<MarioAssistantResult> {
+  if (stage.kind === "reserve_bus") {
+    const busField = stage.dateIndex === 0 ? "reserveBusUnitId0" : "reserveBusUnitId1";
+    if (!collected[busField]) {
+      return runReserveBusSelectStep(context, stage, collected, remaining);
+    }
+  }
+
+  const { operation, slots } = buildChainStepInput(stage, collected);
+  const evalR = evaluateMarioOperationPolicy({ operation, collected: slots as Record<string, unknown> });
+  if (!evalR.readyForPreview) {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return {
+      intent: "mario_operational_chain_error",
+      answer: `Gruppo creato, ma non riesco a proseguire con ${chainStageLabel(stage, collected)}: mancano ${evalR.missingRequired.join(", ") || "dei dati"}. Puoi completarlo da Gruppi prenotazione.`,
+      actions: BG_ACTIONS,
+    };
+  }
+
+  const previewToolName = MARIO_OPERATION_POLICIES[operation].mcpTool;
+  const tool = getTool(previewToolName);
+  const failMessage = `Gruppo creato, ma non riesco a preparare ${chainStageLabel(stage, collected)} adesso. Puoi completarlo da Gruppi prenotazione.`;
+  if (!tool) {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return { intent: "mario_operational_chain_error", answer: failMessage, actions: BG_ACTIONS };
+  }
+
+  const args = buildMcpArguments(operation, slots as Record<string, unknown>);
+  const raw = await runTool(context, tool, args);
+  if (!isMcpToolContentResult(raw) || raw.isError) {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return { intent: "mario_operational_chain_error", answer: failMessage, actions: BG_ACTIONS };
+  }
+  let output: Record<string, unknown> = {};
+  try {
+    output = raw.content[0]?.text ? (JSON.parse(raw.content[0]!.text!) as Record<string, unknown>) : {};
+  } catch {
+    output = {};
+  }
+
+  if (operation === "operationalize_group" && Number(output.services_ready ?? 0) === 0) {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    const blockedSvc = (output.services as Array<{ ready?: boolean; already_operational?: boolean; missing_fields?: string[] }> | undefined) ?? [];
+    const missing = new Set<string>();
+    for (const s of blockedSvc) if (!s.ready && !s.already_operational) (s.missing_fields ?? []).forEach((f) => missing.add(f));
+    const missingText = missing.size ? ` Mancano: ${[...missing].join(", ")}.` : "";
+    return {
+      intent: "mario_operational_chain_blocked",
+      answer: `Ho preparato andata${remaining.length || collected.returnDate ? " e ritorno" : ""} del gruppo, ma nessun servizio risulta pronto per l'operativizzazione.${missingText} Puoi completarlo da Gruppi prenotazione.`,
+      actions: BG_ACTIONS,
+      data: output,
+    };
+  }
+
+  const token = typeof output.confirmationToken === "string" ? output.confirmationToken : null;
+  if (!token) {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return { intent: "mario_operational_chain_error", answer: failMessage, actions: BG_ACTIONS };
+  }
+  const executeTool = PREVIEW_TO_EXECUTE_TOOL[previewToolName] ?? previewToolName;
+
+  await updateMarioSession(context.tenantId, context.userId, {
+    ...deriveContextFromToolOutput(previewToolName, output),
+    draftOperation: {
+      type: OPERATIONAL_CHAIN_MARKER,
+      collected: { ...collected, _chainStage: encodeStage(stage), _chainRemaining: remaining.map(encodeStage) as unknown as unknown[] },
+      missing: [],
+      updatedAt: Date.now(),
+    },
+    pendingConfirmation: { toolName: executeTool, confirmationToken: token, op: previewToolName, createdAt: Date.now() },
+  });
+
+  return { intent: "mario_operational_chain_pending", answer: buildConfirmationPrompt(previewToolName, output), actions: bgActionsIfRelevant(previewToolName) };
+}
+
+/**
+ * FASE A.5.2 §7 — step "elenco/scelta bus" per una reservation esclusiva:
+ * MAI un preview/token qui (non c'è ancora un bus scelto). Legge i mezzi
+ * compatibili via `findAvailableBusesForGroup` (stessa fonte di verità READ
+ * usata altrove, §7.1) per la data corrente e — se è la PRIMA delle due date
+ * (§8) — anche per l'eventuale data di ritorno, per proporre UN bus valido
+ * per entrambe quando possibile. Se resta un solo candidato compatibile lo
+ * propone MA chiede comunque conferma esplicita (richiamando
+ * `runOperationalChainStep`, che a quel punto trova il bus già assegnato e
+ * procede con la preview normale — mai un bypass della conferma, §7.6). Se
+ * restano più candidati, salva lo stato di attesa e chiede quale usare (mai
+ * una scelta arbitraria, §7.3/§7.4): la risposta dell'utente è risolta da
+ * `resolveReserveBusSelection`.
+ */
+async function runReserveBusSelectStep(
+  context: McpContext,
+  stage: Extract<ChainStage, { kind: "reserve_bus" }>,
+  collected: MarioDraftSlots,
+  remaining: ChainStage[],
+): Promise<MarioAssistantResult> {
+  const expectedPax = collected.expectedPax as number;
+  const serviceDate = collected.serviceDate as string;
+  const returnDate = typeof collected.returnDate === "string" ? collected.returnDate : undefined;
+  const targetDate = stage.dateIndex === 0 ? serviceDate : (returnDate as string);
+  const groupName = (collected.name as string | undefined) ?? "il gruppo";
+  const dateLabel = formatMarioDateForUser(targetDate) ?? targetDate;
+
+  let candidates: AvailableBus[];
+  try {
+    candidates = await findAvailableBusesForGroup(context.admin, context.tenantId, { serviceDate: targetDate, requiredCapacity: expectedPax });
+  } catch {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return { intent: "mario_operational_chain_error", answer: `Gruppo pronto, ma non riesco a verificare i bus disponibili per il ${dateLabel}. Puoi completare da Gruppi prenotazione.`, actions: BG_ACTIONS };
+  }
+  if (candidates.length === 0) {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return {
+      intent: "mario_operational_chain_blocked",
+      answer: `Nessun bus con capienza sufficiente (${expectedPax} pax) risulta disponibile per il ${dateLabel}. Puoi verificare da Linea Bus / Gruppi prenotazione.`,
+      actions: BG_ACTIONS,
+    };
+  }
+
+  // FASE A.5.2 §8 — alla prima data, se c'è anche un ritorno, preferisci un
+  // bus disponibile su ENTRAMBE le date.
+  let chosenSet = candidates;
+  let coversBothDates = false;
+  if (stage.dateIndex === 0 && returnDate) {
+    try {
+      const returnCandidates = await findAvailableBusesForGroup(context.admin, context.tenantId, { serviceDate: returnDate, requiredCapacity: expectedPax });
+      const returnIds = new Set(returnCandidates.map((b) => b.id));
+      const both = candidates.filter((b) => returnIds.has(b.id));
+      if (both.length > 0) {
+        chosenSet = both;
+        coversBothDates = true;
+      }
+    } catch {
+      // §8 — se la verifica sulla seconda data fallisce, si procede solo
+      // sulla data corrente: la seconda resta un passo separato più avanti.
+    }
+  }
+
+  if (chosenSet.length === 1) {
+    const bus = chosenSet[0]!;
+    const updated: MarioDraftSlots = { ...collected };
+    (updated as Record<string, unknown>)[stage.dateIndex === 0 ? "reserveBusUnitId0" : "reserveBusUnitId1"] = bus.id;
+    if (coversBothDates) (updated as Record<string, unknown>).reserveBusUnitId1 = bus.id;
+    return runOperationalChainStep(context, stage, updated, remaining);
+  }
+
+  // §7.4 — più di un candidato compatibile: Mario NON sceglie, chiede.
+  const label = coversBothDates
+    ? `andata ${formatMarioDateForUser(serviceDate) ?? serviceDate} e ritorno ${formatMarioDateForUser(returnDate!) ?? returnDate}`
+    : `il ${dateLabel}`;
+  await updateMarioSession(context.tenantId, context.userId, {
+    draftOperation: {
+      type: OPERATIONAL_CHAIN_MARKER,
+      collected: {
+        ...collected,
+        _chainStage: encodeStage(stage),
+        _chainRemaining: remaining.map(encodeStage) as unknown as unknown[],
+        _reserveBusCandidates: chosenSet.map((b) => ({ id: b.id, label: b.label, capacity: b.capacity })) as unknown as unknown[],
+        _reserveBusCoversBoth: coversBothDates,
+      },
+      missing: [],
+      updatedAt: Date.now(),
+    },
+  });
+  const list = chosenSet.map((b) => `${b.label} (${b.capacity} posti)`).join(", ");
+  return {
+    intent: "mario_operational_chain_pending_selection",
+    answer: `Per ${label} sono disponibili questi bus per il gruppo «${groupName}» (${expectedPax} pax): ${list}. Quale devo usare?`,
+    actions: BG_ACTIONS,
+  };
+}
+
+/**
+ * FASE A.5.2 §7 — risolve la risposta dell'utente a "Quale bus devo usare?"
+ * (turno successivo, draft già in attesa di scelta): match deterministico sul
+ * nome/etichetta del bus o su un numero che compare in un solo candidato — MAI
+ * una scelta arbitraria se il messaggio non identifica univocamente un solo
+ * candidato (si richiede di ripetere la scelta tra le opzioni note).
+ */
+async function resolveReserveBusSelection(context: McpContext, message: string, collected: MarioDraftSlots): Promise<MarioAssistantResult> {
+  const candidates = ((collected._reserveBusCandidates as unknown[] | undefined) ?? []) as Array<{ id: string; label: string; capacity: number }>;
+  const stage = decodeStage(collected._chainStage as string) as Extract<ChainStage, { kind: "reserve_bus" }>;
+  const remaining = ((collected._chainRemaining as unknown[] | undefined) ?? []).map((s) => decodeStage(s as string));
+  const coversBoth = Boolean(collected._reserveBusCoversBoth);
+
+  const norm = message.trim().toLowerCase();
+  const matches = candidates.filter((c) => {
+    const label = c.label.toLowerCase();
+    if (norm.includes(label)) return true;
+    const num = label.match(/\d+/)?.[0];
+    return Boolean(num) && new RegExp(`(?<!\\d)${num}(?!\\d)`).test(norm);
+  });
+
+  if (matches.length !== 1) {
+    return {
+      intent: "mario_llm_clarification",
+      answer: `Non ho capito quale bus scegliere. Dimmi il nome esatto tra: ${candidates.map((c) => c.label).join(", ")}.`,
+      actions: BG_ACTIONS,
+    };
+  }
+
+  const bus = matches[0]!;
+  const updated: MarioDraftSlots = { ...collected };
+  if (stage.dateIndex === 0) {
+    (updated as Record<string, unknown>).reserveBusUnitId0 = bus.id;
+    if (coversBoth) (updated as Record<string, unknown>).reserveBusUnitId1 = bus.id;
+  } else {
+    (updated as Record<string, unknown>).reserveBusUnitId1 = bus.id;
+  }
+  delete (updated as Record<string, unknown>)._reserveBusCandidates;
+  delete (updated as Record<string, unknown>)._reserveBusCoversBoth;
+  return runOperationalChainStep(context, stage, updated, remaining);
+}
+
+/**
+ * FASE A.5.3 §2/§3 — confronta le fermate ATTESE (dal draft/messaggio
+ * corrente, o dal DB se il draft non le conosce più — mai indovinate) con lo
+ * stato REALE del DB (`state`, fonte di verità) e calcola l'elenco COMPLETO
+ * degli step ancora mancanti — non solo il primo indice (limite residuo
+ * A.5.2 chiuso qui). Per ogni fermata attesa, andata e — se `returnDate` è
+ * presente — ritorno:
+ *  - fermata già in DB (stessa città, §2) → riusata (id noto), MAI un secondo
+ *    `add_booking_group_stop` a meno che le manchi ancora il service;
+ *  - fermata assente → creata (stage `stop` + `passengers`);
+ *  - fermata presente ma senza service → creato SOLO il service mancante.
+ * Se non c'è alcuna fermata attesa nota (né nel draft né nel DB) si chiede
+ * chiarimento (§4) invece di inventare una distribuzione.
+ */
+type ResumePlanResult =
+  | { kind: "ready"; stages: ChainStage[]; collected: MarioDraftSlots }
+  | { kind: "need_clarification"; message: string };
+
+function computeMultiStopResumePlan(state: OperationalBusGroupState, collected: MarioDraftSlots): ResumePlanResult {
+  const groupName = (collected.name as string | undefined) ?? state.group?.name ?? "il gruppo";
+  const hasReturn = typeof collected.returnDate === "string" && collected.returnDate.trim().length > 0;
+
+  let expectedStops = normalizeStops(collected);
+  if (expectedStops.length === 0) {
+    if (state.arrivalStops.length > 0) {
+      // §4 — Redis perso ma il DB conosce già le fermate: si ricostruiscono
+      // da lì, mai indovinate da zero.
+      expectedStops = state.arrivalStops.map((s) => ({
+        city: s.city,
+        pickupPoint: s.pickup_point,
+        expectedPax: s.expected_pax,
+        direction: "arrival" as const,
+      }));
+    } else {
+      return {
+        kind: "need_clarification",
+        message: `Il gruppo «${groupName}» esiste ma non ho più il contesto delle fermate (sessione scaduta) e non ne risulta ancora nessuna registrata. Ripetimi la distribuzione (es. "20 Tivoli e 30 Guidonia") per proseguire.`,
+      };
+    }
+  }
+
+  const outboundStopIds: Array<string | undefined> = new Array(expectedStops.length).fill(undefined);
+  const returnStopIds: Array<string | undefined> = new Array(expectedStops.length).fill(undefined);
+  const arrivalMissingServiceIds = new Set(state.arrivalStopsMissingService.map((s) => s.id));
+  const departureMissingServiceIds = new Set(state.departureStopsMissingService.map((s) => s.id));
+  const stages: ChainStage[] = [];
+
+  expectedStops.forEach((stop, i) => {
+    const key = normalizeCityKey(stop.city);
+    const dbStop = state.arrivalStops.find((s) => normalizeCityKey(s.city) === key);
+    if (dbStop) {
+      outboundStopIds[i] = dbStop.id;
+      if (arrivalMissingServiceIds.has(dbStop.id)) stages.push({ kind: "passengers", direction: "arrival", index: i });
+    } else {
+      stages.push({ kind: "stop", direction: "arrival", index: i });
+      stages.push({ kind: "passengers", direction: "arrival", index: i });
+    }
+  });
+
+  if (hasReturn) {
+    expectedStops.forEach((stop, i) => {
+      const key = normalizeCityKey(stop.city);
+      const dbStop = state.departureStops.find((s) => normalizeCityKey(s.city) === key);
+      if (dbStop) {
+        returnStopIds[i] = dbStop.id;
+        if (departureMissingServiceIds.has(dbStop.id)) stages.push({ kind: "passengers", direction: "departure", index: i });
+      } else {
+        stages.push({ kind: "stop", direction: "departure", index: i });
+        stages.push({ kind: "passengers", direction: "departure", index: i });
+      }
+    });
+  }
+
+  const isExclusive = collected.kind === "bus_exclusive" || state.group?.kind === "bus_exclusive";
+  if (isExclusive) {
+    const svcDate = collected.serviceDate as string | undefined;
+    const retDate = hasReturn ? (collected.returnDate as string) : undefined;
+    if (svcDate && !state.reservations.some((r) => r.service_date === svcDate)) stages.push({ kind: "reserve_bus", dateIndex: 0 });
+    if (retDate && !state.reservations.some((r) => r.service_date === retDate)) stages.push({ kind: "reserve_bus", dateIndex: 1 });
+  }
+
+  stages.push({ kind: "operationalize" });
+
+  const finalCollected: MarioDraftSlots = {
+    ...collected,
+    stops: expectedStops as unknown as unknown[],
+    outboundStopIds: outboundStopIds as unknown as unknown[],
+    returnStopIds: returnStopIds as unknown as unknown[],
+  };
+  return { kind: "ready", stages, collected: finalCollected };
+}
+
+/**
+ * FASE A.5.1 §1/§19/§20 — riprende la catena da uno stato letto DAL DB
+ * (`inspectOperationalBusGroupState`, fonte di verità), non dalla sessione:
+ * copre sia il riuso di un gruppo già esistente (comando ripetuto, §1) sia il
+ * resume dopo scadenza Redis (§19) — stesso percorso deterministico, mai un
+ * secondo insert. FASE A.5.2 §7/§10 — `reserve_bus` non è più un vicolo
+ * cieco: riprende la catena reale (elenco/scelta bus) invece di rimandare
+ * l'utente alla UI. FASE A.5.3 §2/§3 — gli step "add_outbound_*"/
+ * "add_return_*" usano SEMPRE il piano multi-stop completo
+ * (`computeMultiStopResumePlan`), mai un singolo indice hardcoded: una
+ * ripresa a metà di un gruppo con più fermate (una creata, l'altra no)
+ * crea solo ciò che manca, in qualunque ordine di completamento si trovi.
+ */
+async function resumeOperationalChainFromState(
+  context: McpContext,
+  state: OperationalBusGroupState,
+  collected: MarioDraftSlots,
+): Promise<MarioAssistantResult> {
+  const groupName = (collected.name as string | undefined) ?? state.group?.name ?? "il gruppo";
+
+  switch (state.nextStep) {
+    case "add_outbound_stop":
+    case "add_outbound_service":
+    case "add_return_stop":
+    case "add_return_service": {
+      const plan = computeMultiStopResumePlan(state, collected);
+      if (plan.kind === "need_clarification") {
+        await setMarioDraftOperation(context.tenantId, context.userId, { type: "operational_bus_group_chain", collected, missing: [] });
+        return { intent: "mario_llm_clarification", answer: plan.message, actions: BG_ACTIONS };
+      }
+      const [first, ...rest] = plan.stages;
+      if (!first) {
+        // Tutte le fermate attese risultano già complete (caso limite: lo
+        // stato DB era già avanzato oltre quanto suggeriva `nextStep`) →
+        // operativizzazione diretta, mai un vicolo cieco.
+        return runOperationalChainStep(context, { kind: "operationalize" }, plan.collected, []);
+      }
+      return runOperationalChainStep(context, first, plan.collected, rest);
+    }
+    case "reserve_bus": {
+      // FASE A.5.2 §10 — resume su reserve_bus: riprende dalla prenotazione
+      // mezzo (elenco/scelta reale), MAI dalla creazione del gruppo. Le
+      // fermate risultano già tutte complete qui (§3), quindi il piano
+      // multi-stop non produce stage stop/passengers residui.
+      const plan = computeMultiStopResumePlan(state, collected);
+      if (plan.kind === "need_clarification") {
+        // Non dovrebbe accadere (le fermate sono già in DB se si è arrivati
+        // a reserve_bus), ma resta una rete di sicurezza deterministica.
+        await setMarioDraftOperation(context.tenantId, context.userId, { type: "operational_bus_group_chain", collected, missing: [] });
+        return { intent: "mario_llm_clarification", answer: plan.message, actions: BG_ACTIONS };
+      }
+      const [first, ...rest] = plan.stages;
+      return runOperationalChainStep(context, first!, plan.collected, rest);
+    }
+    case "operationalize":
+      return runOperationalChainStep(context, { kind: "operationalize" }, collected, []);
+    case "blocked":
+      await clearMarioDraftOperation(context.tenantId, context.userId);
+      return { intent: "mario_operational_chain_blocked", answer: `Il gruppo «${groupName}» esiste già, ma alcuni servizi risultano bloccati. Puoi verificarli da Gruppi prenotazione.`, actions: BG_ACTIONS };
+    case "completed":
+    default:
+      await clearMarioDraftOperation(context.tenantId, context.userId);
+      return { intent: "mario_operational_chain_reused", answer: `Il gruppo «${groupName}» esiste già e risulta completo. Nessuna nuova operazione necessaria.`, actions: BG_ACTIONS };
+  }
+}
+
+/** §26 — dopo OGNI write confermato, decide se un workflow di catena deve
+ *  proseguire. Ritorna `null` quando il write non fa parte di alcuna catena
+ *  (comportamento invariato: "Fatto. Operazione completata."). */
+async function maybeAdvanceOperationalChain(
+  context: McpContext,
+  executedToolName: string,
+  output: Record<string, unknown>,
+): Promise<MarioAssistantResult | null> {
+  const draft = await readMarioDraftOperation(context.tenantId, context.userId);
+
+  if (executedToolName === "its.create_booking_group") {
+    if (!isOperationalBusGroupDraft(draft)) return null;
+    const bookingGroupId = typeof output.bookingGroupId === "string" ? output.bookingGroupId : null;
+    if (!bookingGroupId) return null;
+    const collected: MarioDraftSlots = { ...draft!.collected, bookingGroupId };
+    const [first, ...rest] = buildOperationalChainPlan(collected);
+    if (!first) return null;
+    const groupName = (collected.name as string | undefined) ?? "il gruppo";
+    const step = await runOperationalChainStep(context, first, collected, rest);
+    return { ...step, answer: `Gruppo «${groupName}» creato. Ora preparo ${chainStageLabel(first, collected)}. ${step.answer}` };
+  }
+
+  if (!draft || draft.type !== OPERATIONAL_CHAIN_MARKER) return null;
+  const remaining = ((draft.collected._chainRemaining as unknown[] | undefined) ?? []).map((s) => decodeStage(s as string));
+  const currentStageStr = draft.collected._chainStage as string | undefined;
+  const currentStage = currentStageStr ? decodeStage(currentStageStr) : undefined;
+
+  if (executedToolName === "its.add_booking_group_stop") {
+    const stopId = typeof output.bookingGroupStopId === "string" ? output.bookingGroupStopId : null;
+    if (!currentStage || currentStage.kind !== "stop" || !stopId) return null;
+    const idsField = currentStage.direction === "arrival" ? "outboundStopIds" : "returnStopIds";
+    const existingIds = ((draft.collected[idsField] as unknown as string[] | undefined) ?? []).slice();
+    existingIds[currentStage.index] = stopId;
+    const collected: MarioDraftSlots = { ...draft.collected, [idsField]: existingIds as unknown as unknown[] };
+    const [next, ...rest] = remaining;
+    if (!next) return null;
+    return runOperationalChainStep(context, next, collected, rest);
+  }
+
+  if (executedToolName === "its.add_booking_group_passengers" || executedToolName === "its.reserve_booking_group_bus") {
+    const [next, ...rest] = remaining;
+    if (!next) return null;
+    return runOperationalChainStep(context, next, draft.collected, rest);
+  }
+
+  if (executedToolName === "its.operationalize_booking_group") {
+    // §26 — riepilogo finale: workflow concluso, il draft non serve più.
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    const collected = draft.collected;
+    const groupName = (collected.name as string | undefined) ?? "Il gruppo";
+    const outboundLabel = formatMarioDateForUser((collected.serviceDate as string | undefined) ?? null);
+    const returnLabel = formatMarioDateForUser((collected.returnDate as string | undefined) ?? null);
+    const stopsList = normalizeStops(collected);
+    const stopsSummary = stopsList.map((s) => `${s.city} ${s.expectedPax}`).join(", ");
+    const lines = [
+      `Gruppo «${groupName}» caricato correttamente:`,
+      `- andata ${outboundLabel ?? "-"}`,
+      ...(returnLabel ? [`- ritorno ${returnLabel}`] : []),
+      `- ${collected.expectedPax ?? "?"} pax (${stopsSummary || (collected.origin as string | undefined) || "-"})`,
+      "- servizi operativi",
+    ];
+    return { intent: "mario_operational_chain_completed", answer: lines.join("\n"), actions: BG_ACTIONS, data: output };
+  }
+
+  return null;
+}
+
 /** §11/§12 — l'utente ha risposto "sì"/"no" a una conferma in sospeso. Il
  *  token non viene mai ricostruito dal router LLM: resta quello emesso dalla
  *  preview, consumato qui in un solo colpo (§13 — nessun cambio all'HMAC/TTL/
@@ -537,7 +1205,14 @@ async function executeConfirmedWrite(context: McpContext, pending: MarioPendingC
   }
 
   await updateMarioSession(context.tenantId, context.userId, deriveContextFromWriteOutput(pending.toolName, output));
-  // §9 — operazione completata e confermata: il draft non serve più.
+
+  // FASE A.5 §G/§R — un write che fa parte del workflow operativo bus avanza
+  // automaticamente allo step successivo invece di chiudere il turno.
+  const chainResult = await maybeAdvanceOperationalChain(context, pending.toolName, output);
+  if (chainResult) return chainResult;
+
+  // §9 — operazione completata e confermata (nessuna catena in corso): il
+  // draft non serve più.
   await clearMarioDraftOperation(context.tenantId, context.userId);
   return { intent: "mario_llm_confirmed", answer: "Fatto. Operazione completata.", actions: BG_ACTIONS, data: output };
 }
@@ -726,6 +1401,13 @@ async function runDraftDirectPreview(
 /** Turno con draft attivo: prova il fast-path deterministico (§17), altrimenti
  *  passa al router con il draft nel contesto. */
 async function runDraftTurn(context: McpContext, message: string, draft: MarioDraftOperation, now: Date): Promise<MarioAssistantResult> {
+  // FASE A.5.2 §7 — draft in attesa di scelta bus (più candidati compatibili,
+  // §7.4): il messaggio corrente è la risposta a "quale devo usare?", non una
+  // nuova richiesta. Vince su qualunque altra interpretazione del draft.
+  if (draft.type === OPERATIONAL_CHAIN_MARKER && Array.isArray(draft.collected._reserveBusCandidates) && (draft.collected._reserveBusCandidates as unknown[]).length > 0) {
+    return resolveReserveBusSelection(context, message, draft.collected);
+  }
+
   // FIX A.4.7 §3/§4/§5/§8 — un'ambiguità "busMode" aperta sul draft vince
   // sull'interpretazione generica della frase: il contesto locale del draft
   // decide, mai una nuova domanda generica ("vuoi un gruppo o assegnare un
@@ -766,7 +1448,81 @@ async function runDraftTurn(context: McpContext, message: string, draft: MarioDr
 type CreateGateResult =
   | { proceed: false; result: MarioAssistantResult }
   | { proceed: true; operation: MarioOperationKey; mergedSlots: MarioDraftSlots; toolArgs: Record<string, unknown> }
-  | { proceed: "passthrough" };
+  | { proceed: "passthrough" }
+  // FASE A.5.1 §1/§19 — un gruppo NON cancellato con lo stesso nome (+ stessa
+  // data se nota) esiste già: il gate NON esegue una nuova preview_create, il
+  // risultato è già pronto (riuso + reconciliation/resume dal DB).
+  | { proceed: "reuse"; result: MarioAssistantResult };
+
+const GROUP_CREATE_OPERATIONS = new Set<MarioOperationKey>(["create_bus_group", "create_exclusive_bus_group", "create_generic_booking_group"]);
+
+/**
+ * FASE A.5.1 §1/§18/§19/§20 — idempotenza a livello di GRUPPO: prima di
+ * proporre una nuova `preview_create_booking_group`, verifica se esiste già
+ * un gruppo non cancellato con lo stesso nome (+ stessa `service_date` se
+ * nota). Riusa `findBookingGroups` (stessa fonte di verità del tool MCP
+ * `its.find_booking_group`, §18): un solo match → riprende il workflow dal
+ * punto esatto in cui si trova nel DB (mai da Redis/sessione, §19/§20); più
+ * match → chiarimento; nessun match aperto (o solo cancellati) → si procede
+ * a creare normalmente.
+ */
+async function checkGroupIdempotency(
+  context: McpContext,
+  operation: MarioOperationKey,
+  merged: MarioDraftSlots,
+): Promise<{ result: MarioAssistantResult } | null> {
+  if (!GROUP_CREATE_OPERATIONS.has(operation)) return null;
+  const name = typeof merged.name === "string" ? merged.name.trim() : "";
+  if (!name) return null;
+
+  // Difensivo: `context.admin` è sempre un client Supabase reale a runtime;
+  // in ambienti/test dove non lo è (double senza `.from`), l'idempotenza
+  // diventa un no-op invece di far fallire l'intero turno — la creazione
+  // procede come se nessun gruppo esistente fosse stato trovato.
+  let found: Awaited<ReturnType<typeof findBookingGroups>>;
+  try {
+    const serviceDate = typeof merged.serviceDate === "string" ? merged.serviceDate : null;
+    found = await findBookingGroups(context.admin, context.tenantId, { query: name, serviceDate });
+  } catch {
+    return null;
+  }
+  if (found.strategy !== "exact" && found.strategy !== "exact_same_date") return null;
+
+  const nonCancelled = found.matches.filter((m) => m.status !== "cancelled");
+  if (nonCancelled.length === 0) return null; // solo cancellati (o nessuno) → crea normalmente
+
+  if (nonCancelled.length > 1) {
+    await setMarioDraftOperation(context.tenantId, context.userId, { type: operation, collected: merged, missing: [] });
+    return {
+      result: {
+        intent: "mario_llm_clarification",
+        answer: `Ho trovato più gruppi «${name}» già aperti. Quale intendi riprendere? (${nonCancelled.map((m) => `${m.id.slice(0, 8)}…`).join(", ")})`,
+        actions: BG_ACTIONS,
+      },
+    };
+  }
+
+  const bookingGroupId = nonCancelled[0]!.id;
+  const groupName = nonCancelled[0]!.name;
+  const expectReturn = typeof merged.returnDate === "string" && merged.returnDate.trim().length > 0;
+  let state: OperationalBusGroupState;
+  try {
+    state = await inspectOperationalBusGroupState(context.admin, context.tenantId, bookingGroupId, {
+      expectReturn,
+      returnDate: expectReturn ? (merged.returnDate as string) : null,
+    });
+  } catch {
+    return null;
+  }
+  const collected: MarioDraftSlots = { ...merged, name: groupName, bookingGroupId };
+
+  if (operation === "create_generic_booking_group") {
+    await clearMarioDraftOperation(context.tenantId, context.userId);
+    return { result: { intent: "mario_operational_chain_reused", answer: `Il gruppo «${groupName}» esiste già: lo riprendo invece di crearne uno nuovo.`, actions: BG_ACTIONS } };
+  }
+
+  return { result: await resumeOperationalChainFromState(context, state, collected) };
+}
 
 /**
  * FASE A.4 §5/§27/§28/§30 — gate deterministico prima di eseguire la preview di
@@ -810,7 +1566,18 @@ async function applyCreatePreviewPolicyGate(
   // vince qui: serviceDate = inizio, returnDate = fine (draft-only, §5).
   const explicitDateSlots = parseMarioDraftDateSlots(message, now);
   if (explicitDateSlots) Object.assign(merged, explicitDateSlots);
+  // FASE A.5.2 §2 — più fermate nello stesso messaggio ("20 Tivoli e 30
+  // Guidonia"): vince solo se il parser trova ALMENO due fermate valide
+  // (§2), altrimenti resta il singolo `origin` già gestito sopra.
+  const stopSlots = extractMarioStopSlotsFromMessage(message);
+  if (stopSlots) merged.stops = stopSlots as unknown as unknown[];
   const operation = classifyMarioOperation({ toolName, kind: merged.kind, message });
+  // FASE A.5.2 §7 — `merged.kind` deve riflettere SEMPRE l'operazione risolta
+  // (mai lasciato undefined quando l'operazione è bus_exclusive/bus_group):
+  // la catena operativa usa questo campo per decidere se inserire gli step
+  // di prenotazione bus esclusivo.
+  const forcedKind = MARIO_OPERATION_POLICIES[operation].forcedKind;
+  if (forcedKind) merged.kind = forcedKind;
   const evalR = evaluateMarioOperationPolicy({ operation, collected: merged as Record<string, unknown> });
 
   if (!evalR.readyForPreview) {
@@ -821,6 +1588,22 @@ async function applyCreatePreviewPolicyGate(
     });
     return { proceed: false, result: { intent: "mario_llm_clarification", answer: questionForMissingField(evalR.nextQuestionField), actions: [] } };
   }
+
+  // FASE A.5.2 §3 — somma pax fermate vs totale gruppo: solo se `stops` è
+  // stato popolato (multi-stop reale). Il caso a singola origine normalizza
+  // sempre stops=[{city:origin, expectedPax:totale}] (somma == totale per
+  // costruzione, §1) e quindi non è mai bloccato qui.
+  const stopsSumIssue = validateStopsPaxSum(merged);
+  if (stopsSumIssue) {
+    await setMarioDraftOperation(context.tenantId, context.userId, { type: operation, collected: merged, missing: [] });
+    return { proceed: false, result: stopsSumIssue };
+  }
+
+  // FASE A.5.1 §1 — idempotenza gruppo: prima di creare, verifica se esiste
+  // già (stesso nome + stessa data se nota). Se sì, il gate si ferma qui:
+  // nessuna preview_create eseguita, il turno riprende dal DB.
+  const reuse = await checkGroupIdempotency(context, operation, merged);
+  if (reuse) return { proceed: "reuse", result: reuse.result };
 
   return { proceed: true, operation, mergedSlots: merged, toolArgs: buildMcpArguments(operation, merged as Record<string, unknown>) };
 }
@@ -1071,6 +1854,7 @@ async function runMarioLlmFlow(
     // illegali come `origin` — §28/§33).
     const gate = await applyCreatePreviewPolicyGate(context, toolName, rawArguments, message, now);
     if (gate.proceed === false) return gate.result;
+    if (gate.proceed === "reuse") return gate.result;
     const gateCreate = gate.proceed === true ? gate : null;
     const safeArguments = gateCreate ? gateCreate.toolArgs : rawArguments;
 
