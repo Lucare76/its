@@ -367,7 +367,9 @@ export const BLOCKING_PREVIEW_WARNINGS: ReadonlySet<string> = new Set([
  * business rule ("serve la data") resta nel catalogo; qui c'è solo il testo.
  */
 const MARIO_FIELD_QUESTIONS: Record<string, string> = {
-  serviceDate: "Per quale data?",
+  // FIX A.4.4 §1/§11 — mai il formato interno YYYY-MM-DD mostrato all'utente:
+  // solo un esempio nel formato utente DD-MM-YYYY.
+  serviceDate: "Per quale data? (es. 13-09-2026)",
   name: "Come si chiama il gruppo?",
   expectedPax: "Quante persone?",
   city: "Da quale città parte / a quale città si riferisce la fermata?",

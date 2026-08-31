@@ -139,14 +139,15 @@ describe("runMarioAssistant", () => {
     const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
     routeByToolName({
       "its.find_booking_group": { strategy: "exact", ambiguous: true, count: 2, matches: [
-        { id: "gA", name: "Parrocchia Natività", expected_pax: 50, status: "to_complete", service_date_label: "12/09/2026" },
-        { id: "gB", name: "Parrocchia Natività", expected_pax: 40, status: "draft", service_date_label: "05/10/2026" },
+        { id: "gA", name: "Parrocchia Natività", expected_pax: 50, status: "to_complete", service_date: "2026-09-12", service_date_label: "12/09/2026" },
+        { id: "gB", name: "Parrocchia Natività", expected_pax: 40, status: "draft", service_date: "2026-10-05", service_date_label: "05/10/2026" },
       ] },
     });
     const r = await runMarioAssistant(makeContext(), "trova il gruppo prenotazione Parrocchia Natività", new Date());
     expect(r.answer).toMatch(/Quale intendi/i);
-    expect(r.answer).toMatch(/12\/09\/2026/);
-    expect(r.answer).toMatch(/05\/10\/2026/);
+    // FIX A.4.4 §10 — DD-MM-YYYY, mai lo slash del formatter ITS condiviso.
+    expect(r.answer).toMatch(/12-09-2026/);
+    expect(r.answer).toMatch(/05-10-2026/);
   });
 
   it("booking_group_write: indirizza al flusso anteprima→conferma senza esporre token", async () => {

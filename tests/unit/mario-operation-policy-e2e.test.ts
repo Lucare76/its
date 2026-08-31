@@ -79,12 +79,13 @@ describe("§30 TEST BUS SENZA DATA", () => {
 describe("§31 TEST BUS CON DATA", () => {
   it("preview immediata con nome, pax, data", async () => {
     mockRoute.mockResolvedValueOnce(toolCall("its.preview_create_booking_group", { name: "Lucia La Marra", expectedPax: 50, serviceDate: "2026-09-13" }));
-    mockRunTool.mockResolvedValueOnce(ok({ name: "Lucia La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "T1", expiresAt: "2026-09-01T09:03:00Z" }));
+    mockRunTool.mockResolvedValueOnce(ok({ name: "Lucia La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "T1", expiresAt: "2026-09-01T09:03:00Z" }));
     const r = await run("Puoi creare un bus per Lucia La Marra, 50 persone, il 13 settembre?");
     expect(r.intent).toBe("mario_llm_pending_confirmation");
     expect(r.answer).toMatch(/Lucia La Marra/);
     expect(r.answer).toMatch(/50 pax/);
-    expect(r.answer).toMatch(/13\/09\/2026/);
+    // FIX A.4.4 §10 — DD-MM-YYYY, mai lo slash del formatter ITS condiviso.
+    expect(r.answer).toMatch(/13-09-2026/);
     expect(mockRunTool.mock.calls[0]![2]).toMatchObject({ name: "Lucia La Marra", expectedPax: 50, serviceDate: "2026-09-13", kind: "bus_group" });
   });
 });
@@ -104,7 +105,7 @@ describe("§33 TEST ORIGINE", () => {
     mockRoute.mockResolvedValueOnce(
       toolCall("its.preview_create_booking_group", { name: "Lucia La Marra", expectedPax: 50, serviceDate: "2026-09-13", origin: "Rimini" }),
     );
-    mockRunTool.mockResolvedValueOnce(ok({ name: "Lucia La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "T3", expiresAt: "2026-09-01T09:03:00Z" }));
+    mockRunTool.mockResolvedValueOnce(ok({ name: "Lucia La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "T3", expiresAt: "2026-09-01T09:03:00Z" }));
     const r = await run("Bus Lucia La Marra 50 persone, 13 settembre, partenza da Rimini");
     expect(r.intent).toBe("mario_llm_pending_confirmation");
 
@@ -165,9 +166,10 @@ describe("§40 TEST READ CON DRAFT", () => {
     expect(rRead.intent).toBe("operational_brief");
     expect(await readDraft()).not.toBeNull();
 
-    mockRunTool.mockResolvedValueOnce(ok({ name: "La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "TR", expiresAt: "2026-09-01T09:09:00Z" }));
+    mockRunTool.mockResolvedValueOnce(ok({ name: "La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TR", expiresAt: "2026-09-01T09:09:00Z" }));
     const rResume = await run("13 settembre");
     expect(rResume.intent).toBe("mario_llm_pending_confirmation");
-    expect(rResume.answer).toMatch(/13\/09\/2026/);
+    // FIX A.4.4 §10 — DD-MM-YYYY, mai lo slash del formatter ITS condiviso.
+    expect(rResume.answer).toMatch(/13-09-2026/);
   });
 });

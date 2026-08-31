@@ -102,7 +102,9 @@ describe("§11 TEST A — La Marra: chiede solo la data, poi crea", () => {
     expect(r2.intent).toBe("mario_llm_pending_confirmation");
     expect(r2.answer).toMatch(/Lucia La Marra/);
     expect(r2.answer).toMatch(/50 pax/);
-    expect(r2.answer).toMatch(/13\/09\/2026/);
+    // FIX A.4.4 §10/§15 — DD-MM-YYYY, mai lo slash del formatter ITS condiviso.
+    expect(r2.answer).toMatch(/13-09-2026/);
+    expect(r2.answer).not.toMatch(/13\/09\/2026/);
     expect(r2.answer).toMatch(/Confermi\?$/);
     expect(r2.llm).toBeUndefined(); // §17 — nessun costo LLM per il completamento
 
@@ -206,14 +208,16 @@ describe("FIX A.4.2/A.4.3 §10/§3 — clarification SENZA operation su un messa
     // turno 2: solo la data manca -> tryDeterministicDraftFill completa il
     // draft SENZA una seconda chiamata LLM, preview diretta (§3 spec A.4.3).
     mockRunTool.mockResolvedValueOnce(
-      ok({ name: "La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "TOKR", expiresAt: "2026-09-01T09:03:00Z" }),
+      ok({ name: "La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TOKR", expiresAt: "2026-09-01T09:03:00Z" }),
     );
     const r2 = await run("13 settembre");
     expect(mockRoute).toHaveBeenCalledTimes(1); // nessuna seconda chiamata LLM
     expect(r2.intent).toBe("mario_llm_pending_confirmation");
     expect(r2.answer).toMatch(/La Marra/);
     expect(r2.answer).toMatch(/50 pax/);
-    expect(r2.answer).toMatch(/13\/09\/2026/);
+    // FIX A.4.4 §10 — DD-MM-YYYY, mai lo slash del formatter ITS condiviso.
+    expect(r2.answer).toMatch(/13-09-2026/);
+    expect(r2.answer).not.toMatch(/13\/09\/2026/);
     expect(r2.answer).toMatch(/Confermi\?$/);
     expect(r2.llm).toBeUndefined();
   });
@@ -244,6 +248,53 @@ describe("FIX A.4.2 §11 — clarification CON operation: draft salvato, turno 2
   });
 });
 
+describe("FIX A.4.4 §5/§6/§16 — data ESPLICITA nel messaggio vince su un serviceDate allucinato dall'LLM", () => {
+  it("il router propone accidentalmente 2025-01-15 ma il messaggio contiene '13/09/2026' esplicito: vince la data esplicita", async () => {
+    mockRoute.mockResolvedValueOnce(
+      toolCall("its.preview_create_booking_group", {
+        name: "La Marra",
+        expectedPax: 50,
+        serviceDate: "2025-01-15", // allucinazione simulata del router
+      }),
+    );
+    mockRunTool.mockResolvedValueOnce(
+      ok({ name: "La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TOKX", expiresAt: "2026-09-01T09:03:00Z" }),
+    );
+    const r = await run("Creami un bus La Marra da 50 persone per il 13/09/2026");
+    expect(r.intent).toBe("mario_llm_pending_confirmation");
+
+    const args = mockRunTool.mock.calls[0]![2] as Record<string, unknown>;
+    expect(args.serviceDate).toBe("2026-09-13"); // MAI 2025-01-15
+    expect(r.answer).toMatch(/13-09-2026/);
+    expect(r.answer).not.toMatch(/2025-01-15|15-01-2025/);
+  });
+});
+
+describe("FIX A.4.4 §17 — sessione stale: una nuova data esplicita sostituisce SEMPRE quella vecchia nel draft", () => {
+  it("draft con serviceDate stale (2025-01-15), nuovo messaggio '13/09/2026' esplicito → completamento deterministico con 2026-09-13, mai lo stale", async () => {
+    // Draft già completo salvo la data, ma con una data STALE da una sessione
+    // precedente: simula esattamente §17 dello spec (mai riuso di una data vecchia).
+    const { setMarioDraftOperation } = await import("@/lib/server/mario-assistant/session-context");
+    await setMarioDraftOperation("tenant-a", "user-1", {
+      type: "create_bus_group",
+      collected: { name: "La Marra", expectedPax: 50, serviceDate: "2025-01-15" },
+      missing: [],
+    });
+
+    mockRunTool.mockResolvedValueOnce(
+      ok({ name: "La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TOKS", expiresAt: "2026-09-01T09:03:00Z" }),
+    );
+    const r1 = await run("13/09/2026");
+
+    expect(mockRoute).not.toHaveBeenCalled(); // fast-path deterministico, zero LLM
+    expect(r1.intent).toBe("mario_llm_pending_confirmation");
+    const args = mockRunTool.mock.calls[0]![2] as Record<string, unknown>;
+    expect(args.serviceDate).toBe("2026-09-13"); // MAI 2025-01-15 (lo stale)
+    expect(r1.answer).toMatch(/13-09-2026/);
+    expect(r1.answer).not.toMatch(/2025-01-15|15-01-2025/);
+  });
+});
+
 describe("§15 TEST continuità Redis (due istanze)", () => {
   it("istanza A salva il draft, istanza B (modulo ricreato) lo recupera e completa", async () => {
     mockRoute.mockResolvedValueOnce(
@@ -257,11 +308,11 @@ describe("§15 TEST continuità Redis (due istanze)", () => {
     const { runMarioAssistant } = await import("@/lib/server/mario-assistant/orchestrator");
 
     mockRunTool.mockResolvedValueOnce(
-      ok({ name: "La Marra", expected_pax: 50, service_date_label: "13/09/2026", confirmationToken: "TOKB", expiresAt: "2026-09-01T09:03:00Z" }),
+      ok({ name: "La Marra", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TOKB", expiresAt: "2026-09-01T09:03:00Z" }),
     );
     const r = await runMarioAssistant(CTX, "13 settembre", NOW);
     expect(r.intent).toBe("mario_llm_pending_confirmation");
     expect(r.answer).toMatch(/La Marra/);
-    expect(r.answer).toMatch(/13\/09\/2026/);
+    expect(r.answer).toMatch(/13-09-2026/);
   });
 });

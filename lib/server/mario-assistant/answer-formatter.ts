@@ -4,7 +4,13 @@
  * prosa italiana + eventuali action link. Mai un dump JSON nella risposta
  * testuale (il JSON strutturato resta disponibile a parte in `data`).
  */
-import { timeStringToMinutes, type TimeWindow } from "./date-time";
+import { timeStringToMinutes, formatMarioDateForUser, type TimeWindow } from "./date-time";
+
+// FIX A.4.4 §10 — SEMPRE DD-MM-YYYY all'utente: fallback sull'ISO grezzo solo
+// se la data non è nel formato atteso (mai un buco/crash sul testo).
+function userDate(iso: string): string {
+  return formatMarioDateForUser(iso) ?? iso;
+}
 
 export type MarioAction = { label: string; href: string };
 export type MarioAnswer = { answer: string; actions: MarioAction[] };
@@ -62,7 +68,7 @@ export function formatOperationalBriefAnswer(output: OperationalBriefOutput): Ma
   const parts: string[] = [];
 
   parts.push(
-    `Il ${output.date} ci sono ${summary.total_services} servizi (${summary.active_services} in corso, ${summary.upcoming_services} ancora da fare).`
+    `Il ${userDate(output.date)} ci sono ${summary.total_services} servizi (${summary.active_services} in corso, ${summary.upcoming_services} ancora da fare).`
   );
 
   const problemCount = critical_items.length + warnings.length;
@@ -169,7 +175,7 @@ export function formatUnassignedAnswer(output: UnassignedServicesOutput): MarioA
   }
 
   if (output.count === 0) {
-    return { answer: `Nessun servizio senza autista per il ${output.date}.`, actions: [] };
+    return { answer: `Nessun servizio senza autista per il ${userDate(output.date)}.`, actions: [] };
   }
 
   const lines = output.services.map((s) => {
@@ -183,7 +189,7 @@ export function formatUnassignedAnswer(output: UnassignedServicesOutput): MarioA
   const actions: MarioAction[] = output.services.map((s) => ({ label: "Apri servizio", href: `/services/${s.id}/edit` }));
 
   return {
-    answer: [`${output.count} servizi senza autista per il ${output.date}:`, ...lines].join("\n"),
+    answer: [`${output.count} servizi senza autista per il ${userDate(output.date)}:`, ...lines].join("\n"),
     actions,
   };
 }
@@ -224,7 +230,7 @@ export type AssignmentPlanOutput = {
 export function formatAssignmentPlanAnswer(output: AssignmentPlanOutput): MarioAnswer {
   if (!output.plan) {
     return {
-      answer: `Non ho ancora un piano di assegnazione per il ${output.date}. Genera prima il piano dalla pagina Assegnazione Intelligente.`,
+      answer: `Non ho ancora un piano di assegnazione per il ${userDate(output.date)}. Genera prima il piano dalla pagina Assegnazione Intelligente.`,
       actions: [{ label: "Apri Assegnazione Intelligente", href: "/piano-giorno/assegnazione-intelligente" }],
     };
   }
@@ -232,7 +238,7 @@ export function formatAssignmentPlanAnswer(output: AssignmentPlanOutput): MarioA
   const { plan } = output;
   const exceptions = plan.review_count + plan.unresolved_count;
   const parts = [
-    `Piano del ${output.date}: ${plan.services_count} servizi analizzati, ${plan.auto_safe_count} risolti automaticamente.`,
+    `Piano del ${userDate(output.date)}: ${plan.services_count} servizi analizzati, ${plan.auto_safe_count} risolti automaticamente.`,
   ];
   if (exceptions === 0) {
     parts.push("Nessuna eccezione da gestire.");
@@ -250,10 +256,10 @@ export type AssignmentExceptionsOutput = { date: string; review_count: number; u
 export function formatAssignmentExceptionsAnswer(output: AssignmentExceptionsOutput): MarioAnswer {
   const total = output.review_count + output.unresolved_count;
   if (total === 0) {
-    return { answer: `Nessuna eccezione nel piano del ${output.date}.`, actions: [] };
+    return { answer: `Nessuna eccezione nel piano del ${userDate(output.date)}.`, actions: [] };
   }
   return {
-    answer: `${total} eccezioni nel piano del ${output.date}: ${output.review_count} da verificare, ${output.unresolved_count} da risolvere.`,
+    answer: `${total} eccezioni nel piano del ${userDate(output.date)}: ${output.review_count} da verificare, ${output.unresolved_count} da risolvere.`,
     actions: [{ label: "Apri Assegnazione Intelligente", href: "/piano-giorno/assegnazione-intelligente" }],
   };
 }
@@ -261,12 +267,12 @@ export function formatAssignmentExceptionsAnswer(output: AssignmentExceptionsOut
 export function formatDriverAvailabilityAnswer(output: DriverAvailabilityOutput, timeWindow?: TimeWindow): MarioAnswer {
   const activeDrivers = output.drivers.filter((d) => d.active && !d.access_suspended);
   if (activeDrivers.length === 0) {
-    return { answer: `Nessun autista attivo disponibile per il ${output.date}.`, actions: [] };
+    return { answer: `Nessun autista attivo disponibile per il ${userDate(output.date)}.`, actions: [] };
   }
 
   if (!timeWindow) {
     const lines = activeDrivers.map((d) => `• ${d.full_name}: ${d.assigned_services.length} servizi assegnati`);
-    return { answer: [`Autisti attivi per il ${output.date}:`, ...lines].join("\n"), actions: [] };
+    return { answer: [`Autisti attivi per il ${userDate(output.date)}:`, ...lines].join("\n"), actions: [] };
   }
 
   const free = activeDrivers.filter((d) => !isBusyInWindow(d, timeWindow));

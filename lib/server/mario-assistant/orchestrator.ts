@@ -35,7 +35,7 @@ import { buildMarioToolCatalog } from "./tool-catalog";
 import { routeMarioWithLlm, type MarioRouterStepResult } from "./llm-router";
 import { logMarioLlmRoute, logMarioDraftPersistence } from "./telemetry";
 import { calcMarioLlmCost } from "./pricing";
-import { parseMarioSlotDate } from "./date-time";
+import { parseMarioSlotDate, formatMarioDateForUser } from "./date-time";
 import { BOOKING_GROUP_KINDS } from "@/lib/booking-groups";
 import {
   MARIO_OPERATION_POLICIES,
@@ -138,7 +138,7 @@ async function callTool(
 
 const BG_ACTIONS = [{ label: "Apri Gruppi prenotazione", href: "/booking-groups" }];
 
-type BgMatch = { id: string; name: string; expected_pax: number; status: string; service_date_label: string | null };
+type BgMatch = { id: string; name: string; expected_pax: number; status: string; service_date: string | null; service_date_label: string | null };
 
 async function resolveSingleBookingGroup(
   context: McpContext,
@@ -162,7 +162,13 @@ async function resolveSingleBookingGroup(
 
 function listGroupsText(matches: BgMatch[]): string {
   return matches
-    .map((m) => `• ${m.name} — ${m.expected_pax} pax, stato ${m.status}${m.service_date_label ? `, ${m.service_date_label}` : ""}`)
+    .map((m) => {
+      // FIX A.4.4 §10 — sempre DD-MM-YYYY all'utente, mai lo slash del
+      // formatter ITS condiviso (fmtDateIt): Mario usa la propria data
+      // canonica ISO (`service_date`) e la propria formattazione.
+      const dateLabel = formatMarioDateForUser(m.service_date);
+      return `• ${m.name} — ${m.expected_pax} pax, stato ${m.status}${dateLabel ? `, ${dateLabel}` : ""}`;
+    })
     .join("\n");
 }
 
@@ -225,7 +231,7 @@ async function runBookingGroupIntent(
     const g = matches[0]!;
     return {
       intent: detected.intent,
-      answer: `Gruppo «${g.name}»: ${g.expected_pax} pax previsti, stato ${g.status}${g.service_date_label ? `, data ${g.service_date_label}` : ""}.`,
+      answer: `Gruppo «${g.name}»: ${g.expected_pax} pax previsti, stato ${g.status}${formatMarioDateForUser(g.service_date) ? `, data ${formatMarioDateForUser(g.service_date)}` : ""}.`,
       actions: BG_ACTIONS,
       data: res,
     };
@@ -360,14 +366,20 @@ function detectConfirmationReply(message: string): "yes" | "no" | "unclear" {
  *  minima (MAI un dump dei dati, MAI il token) seguita da "Confermi?". */
 function buildConfirmationPrompt(toolName: string, output: Record<string, unknown>): string {
   switch (toolName) {
-    case "its.preview_create_booking_group":
-      return `Creo il gruppo «${output.name}» (${output.expected_pax} pax previsti${output.service_date_label ? `, ${output.service_date_label}` : ""}). Confermi?`;
+    case "its.preview_create_booking_group": {
+      // FIX A.4.4 §10 — DD-MM-YYYY dalla data canonica ISO, mai lo slash di
+      // `service_date_label` (formatter ITS condiviso, non Mario-specifico).
+      const dateLabel = formatMarioDateForUser(output.service_date as string | null | undefined);
+      return `Creo il gruppo «${output.name}» (${output.expected_pax} pax previsti${dateLabel ? `, ${dateLabel}` : ""}). Confermi?`;
+    }
     case "its.preview_add_booking_group_stop":
       return `Aggiungo la fermata ${output.city}${output.pickup_point ? ` — ${output.pickup_point}` : ""} (${output.expected_pax} pax) al gruppo «${output.group_name}». Confermi?`;
     case "its.preview_add_booking_group_passengers":
       return `Aggiungo ${output.passenger_count} nominativi (${output.total_pax} pax) al gruppo «${output.group_name}». Confermi?`;
-    case "its.preview_reserve_booking_group_bus":
-      return `Riservo ${output.bus_unit_label ?? "il bus"} per il gruppo «${output.group_name}» (${output.reserved_pax} pax${output.service_date_label ? `, ${output.service_date_label}` : ""}). Confermi?`;
+    case "its.preview_reserve_booking_group_bus": {
+      const dateLabel = formatMarioDateForUser(output.service_date as string | null | undefined);
+      return `Riservo ${output.bus_unit_label ?? "il bus"} per il gruppo «${output.group_name}» (${output.reserved_pax} pax${dateLabel ? `, ${dateLabel}` : ""}). Confermi?`;
+    }
     case "its.preview_update_booking_group_ferry":
       return `Aggiorno il traghetto del gruppo «${output.group_name}» (${(output.changes as unknown[] | undefined)?.length ?? 0} campi). Confermi?`;
     case "its.preview_booking_group_operationalization":
@@ -732,6 +744,7 @@ async function applyCreatePreviewPolicyGate(
   toolName: string,
   args: Record<string, unknown>,
   message: string,
+  now: Date,
 ): Promise<CreateGateResult> {
   if (toolName !== "its.preview_create_booking_group") return { proceed: "passthrough" };
 
@@ -751,6 +764,13 @@ async function applyCreatePreviewPolicyGate(
 
   const existingDraft = await readMarioDraftOperation(context.tenantId, context.userId);
   const merged: MarioDraftSlots = { ...(existingDraft?.collected ?? {}), ...slotsFromCreateArgs(args) };
+  // FIX A.4.4 §5/§6/§16/§17 — una data ESPLICITA nel messaggio corrente vince
+  // SEMPRE: sul draft esistente (possibile sessione stale) e su un
+  // `serviceDate` proposto dal router LLM (arguments.serviceDate) — mai il
+  // contrario. Seconda rete di sicurezza deterministica anche se l'LLM ha
+  // comunque tentato di reinterpretare/allucinare la data.
+  const explicitDate = parseMarioSlotDate(message, now);
+  if (explicitDate) merged.serviceDate = explicitDate;
   const operation = classifyMarioOperation({ toolName, kind: merged.kind, message });
   const evalR = evaluateMarioOperationPolicy({ operation, collected: merged as Record<string, unknown> });
 
@@ -861,6 +881,12 @@ async function runMarioLlmFlow(
         // deciso dal modello: si ricalcola con la policy deterministica dopo il
         // merge (l'LLM estrae slot, la policy decide cosa è obbligatorio).
         const merged = { ...(existing?.collected ?? {}), ...pruneUndefined(op.collected) };
+        // FIX A.4.4 §5/§6/§16 — una data ESPLICITA nel messaggio corrente vince
+        // SEMPRE sul `serviceDate` proposto dall'LLM (`op.collected`) e su
+        // quello già nel draft: mai fidarsi ciecamente dell'interpretazione
+        // del modello quando il dato è deterministicamente ricavabile.
+        const explicitDate = parseMarioSlotDate(message, now);
+        if (explicitDate) merged.serviceDate = explicitDate;
         const operation = classifyMarioOperation({ rawType: op.type, kind: merged.kind, message });
         const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
         await setMarioDraftOperation(context.tenantId, context.userId, {
@@ -888,7 +914,11 @@ async function runMarioLlmFlow(
         const operation = classifyMarioOperation({ rawType: existing?.type, kind: existingCollected.kind, message });
         const extractedSlots = extractMarioDraftSlotsFromMessage(message, operation);
         const recoveredName = existingCollected.name ? undefined : extractBookingGroupQuery(message);
-        const recoveredDate = existingCollected.serviceDate ? undefined : parseMarioSlotDate(message, now);
+        // FIX A.4.4 §6/§17 — una data ESPLICITA nel messaggio corrente
+        // sostituisce SEMPRE quella già nel draft (anche se presente e magari
+        // stale da un turno precedente): mai riusare una data vecchia quando
+        // l'utente ne ha appena fornita una nuova e inequivocabile.
+        const recoveredDate = parseMarioSlotDate(message, now);
         const merged: MarioDraftSlots = {
           ...existingCollected,
           ...(recoveredName ? { name: recoveredName } : {}),
@@ -944,10 +974,19 @@ async function runMarioLlmFlow(
     // non si esegue la preview — si salva il draft e si chiede SOLO quello.
     // Se pronta, gli arguments passano dal builder deterministico (mai campi
     // illegali come `origin` — §28/§33).
-    const gate = await applyCreatePreviewPolicyGate(context, toolName, rawArguments, message);
+    const gate = await applyCreatePreviewPolicyGate(context, toolName, rawArguments, message, now);
     if (gate.proceed === false) return gate.result;
     const gateCreate = gate.proceed === true ? gate : null;
     const safeArguments = gateCreate ? gateCreate.toolArgs : rawArguments;
+
+    // FIX A.4.4 §8 — safety check PRIMA della preview: gli arguments inviati
+    // devono avere la stessa data canonica del draft che li ha generati (per
+    // costruzione lo sono sempre, ma è una rete di sicurezza a costo zero
+    // contro una futura divergenza). Nessun dato cliente nel log.
+    if (gateCreate && gateCreate.mergedSlots.serviceDate && gateCreate.toolArgs.serviceDate !== gateCreate.mergedSlots.serviceDate) {
+      console.info(JSON.stringify({ scope: "mario_date_consistency", date_consistency_mismatch: true, stage: "pre_preview" }));
+      return { intent: "mario_llm_clarification", answer: "Ho riscontrato un'incoerenza sulla data: puoi ripetermela?", actions: [] };
+    }
 
     const raw = await runTool(context, tool, safeArguments);
     if (!isMcpToolContentResult(raw) || raw.isError) {
@@ -960,6 +999,19 @@ async function runMarioLlmFlow(
       output = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     } catch {
       return staticFallbackAnswer(context, detected);
+    }
+
+    // FIX A.4.4 §9 — "trust but verify": se la preview di creazione gruppo
+    // torna una service_date diversa da quella inviata negli arguments, NON
+    // si mostra "Confermi?" su una data che è cambiata sotto silenzio.
+    if (
+      toolName === "its.preview_create_booking_group" &&
+      typeof safeArguments.serviceDate === "string" &&
+      typeof output.service_date === "string" &&
+      output.service_date !== safeArguments.serviceDate
+    ) {
+      console.info(JSON.stringify({ scope: "mario_date_consistency", date_consistency_mismatch: true, stage: "post_preview" }));
+      return { intent: "mario_llm_clarification", answer: "Ho riscontrato un'incoerenza sulla data proposta: puoi confermarmi di nuovo per quale giorno?", actions: [] };
     }
 
     const token = typeof output.confirmationToken === "string" ? output.confirmationToken : null;

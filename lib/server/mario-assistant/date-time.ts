@@ -57,10 +57,45 @@ export function parseMarioSlotDate(text: string, now: Date): string | undefined 
     return romeDateKey(new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000));
   }
 
+  // FIX A.4.4 §3/§4 — data ESPLICITA completa (DD/MM/YYYY o DD-MM-YYYY): PRIMA
+  // del pattern "DD/MM" senza anno sotto, perché quel pattern falliva
+  // silenziosamente su un anno a 4 cifre (root cause del bug live: il
+  // messaggio finiva reinterpretato dall'LLM, che ha "inventato" una data).
+  // L'anno è LETTERALE: mai la regola "prossima occorrenza" (quella si
+  // applica SOLO quando l'anno non è specificato, sotto). Validazione
+  // calendario reale (mai un 31 febbraio silenziosamente normalizzato da JS).
+  const full = /\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/.exec(t);
+  if (full) {
+    const day = Number(full[1]);
+    const month = Number(full[2]);
+    const year = Number(full[3]);
+    if (isValidCalendarDate(year, month, day)) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+    // Pattern riconosciuto ma calendario impossibile (es. 31/02/2026): non è
+    // un'altra data plausibile, è un errore utente — nessun fallback silenzioso,
+    // si esce con undefined (il chiamante chiede di nuovo, mai un dato inventato).
+    return undefined;
+  }
+
   const todayKey = romeDateKey(now);
   const currentYear = Number(todayKey.slice(0, 4));
 
-  // giorno + mese (nome o numerico "13/09")
+  // FIX A.4.4 §14 — "13 settembre 2026": mese per nome CON anno esplicito.
+  // Stesso principio del pattern numerico sopra: l'anno è letterale, mai la
+  // regola "prossima occorrenza" (quella si applica solo se l'anno manca).
+  const dmy = /\b(\d{1,2})\s+(?:di\s+)?(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|sett|ottobre|novembre|dicembre)\s+(\d{4})\b/.exec(t);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = MONTHS_IT[dmy[2]!]!;
+    const year = Number(dmy[3]);
+    if (isValidCalendarDate(year, month, day)) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+    return undefined;
+  }
+
+  // giorno + mese (nome o numerico "13/09"), SENZA anno → "prossima occorrenza".
   const dm =
     /\b(\d{1,2})\s+(?:di\s+)?(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|sett|ottobre|novembre|dicembre)\b/.exec(t) ??
     /\b(\d{1,2})[/-](\d{1,2})(?![/-]?\d)\b/.exec(t);
@@ -134,6 +169,34 @@ export function parseTimeWindow(text: string): TimeWindow | undefined {
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+/** FIX A.4.4 §4 — vero se {year,month,day} è una data di calendario REALE
+ *  (rifiuta 31 febbraio, 29 febbraio in anno non bisestile, giorno 0/32…),
+ *  mai la normalizzazione silenziosa di `new Date()` (che farebbe "31 feb" ->
+ *  "3 mar"). `Date.UTC` con componenti fuori range trabocca sul mese/giorno
+ *  successivo: qui lo si rileva confrontando i componenti tornati indietro. */
+function isValidCalendarDate(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (month < 1 || month > 12 || day < 1 || day > 31 || year < 1000 || year > 9999) return false;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+}
+
+/**
+ * FIX A.4.4 §1/§2/§10 — CONTRATTO DATE Mario: internamente/DB/MCP sempre
+ * "YYYY-MM-DD", ma l'utente vede SEMPRE "DD-MM-YYYY" (mai lo YYYY-MM-DD
+ * interno, mai lo slash "DD/MM/YYYY" usato da altri formatter ITS non-Mario,
+ * es. `fmtDateIt` in lib/mcp/tools/booking-groups/read.ts — quello resta
+ * invariato per gli altri consumatori, Mario applica SEMPRE questa funzione
+ * prima di mostrare una data all'utente). `null`/`undefined`/ISO non valido
+ * -> null (mai un testo troncato o parzialmente sbagliato).
+ */
+export function formatMarioDateForUser(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return null;
+  return `${m[3]}-${m[2]}-${m[1]}`;
 }
 
 /** "HH:MM[:SS]" -> minuti dalla mezzanotte, o null se il formato non e' valido. */

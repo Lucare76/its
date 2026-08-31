@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMarioSlotDate } from "@/lib/server/mario-assistant/date-time";
+import { parseMarioSlotDate, formatMarioDateForUser } from "@/lib/server/mario-assistant/date-time";
 
 // now fissato a martedì 1 settembre 2026 (Europe/Rome)
 const NOW = new Date("2026-09-01T09:00:00Z");
@@ -44,5 +44,57 @@ describe("parseMarioSlotDate — FASE A.3 §5", () => {
   it("testo senza data → undefined", () => {
     expect(parseMarioSlotDate("anzi 45", NOW)).toBeUndefined();
     expect(parseMarioSlotDate("La Marra", NOW)).toBeUndefined();
+  });
+});
+
+describe("FIX A.4.4 §3/§4/§13/§14 — data ESPLICITA completa (root cause bug live)", () => {
+  it("'13/09/2026' e '13-09-2026' → 2026-09-13, anno LETTERALE (mai 'prossima occorrenza')", () => {
+    expect(parseMarioSlotDate("13/09/2026", NOW)).toBe("2026-09-13");
+    expect(parseMarioSlotDate("13-09-2026", NOW)).toBe("2026-09-13");
+  });
+
+  it("anno esplicito nel PASSATO resta quell'anno: mai spostato in avanti", () => {
+    // NOW = 1 settembre 2026: "13/09/2025" è nel passato, ma l'anno è esplicito
+    // e va rispettato letteralmente — mai la regola "prossima occorrenza".
+    expect(parseMarioSlotDate("13/09/2025", NOW)).toBe("2025-09-13");
+  });
+
+  it("'13 settembre 2026' (mese per nome + anno esplicito) → 2026-09-13", () => {
+    expect(parseMarioSlotDate("13 settembre 2026", NOW)).toBe("2026-09-13");
+  });
+
+  it("§4 validazione calendario reale: rifiuta date impossibili, mai una normalizzazione JS silenziosa", () => {
+    expect(parseMarioSlotDate("31-02-2026", NOW)).toBeUndefined();
+    expect(parseMarioSlotDate("32-01-2026", NOW)).toBeUndefined();
+    expect(parseMarioSlotDate("00-09-2026", NOW)).toBeUndefined();
+    expect(parseMarioSlotDate("29-02-2025", NOW)).toBeUndefined(); // 2025 non bisestile
+  });
+
+  it("§4 accetta 29 febbraio in anno bisestile", () => {
+    expect(parseMarioSlotDate("29-02-2028", NOW)).toBe("2028-02-29");
+  });
+
+  it("messaggio reale del bug live: 'Possiamo caricare un bus...' poi '13/09/2026'", () => {
+    expect(
+      parseMarioSlotDate("Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?", NOW),
+    ).toBeUndefined(); // nessuna data nel turno 1, corretto
+    expect(parseMarioSlotDate("13/09/2026", NOW)).toBe("2026-09-13"); // turno 2: MAI 2025-01-15
+  });
+});
+
+describe("FIX A.4.4 §2/§10/§15 — formatMarioDateForUser: SEMPRE DD-MM-YYYY, mai slash", () => {
+  it("2026-09-13 → 13-09-2026", () => {
+    expect(formatMarioDateForUser("2026-09-13")).toBe("13-09-2026");
+  });
+  it("2025-01-15 → 15-01-2025", () => {
+    expect(formatMarioDateForUser("2025-01-15")).toBe("15-01-2025");
+  });
+  it("mai lo slash nell'output", () => {
+    expect(formatMarioDateForUser("2026-09-13")).not.toContain("/");
+  });
+  it("null/undefined/non-ISO → null (mai un crash o un testo troncato)", () => {
+    expect(formatMarioDateForUser(null)).toBeNull();
+    expect(formatMarioDateForUser(undefined)).toBeNull();
+    expect(formatMarioDateForUser("non una data")).toBeNull();
   });
 });
