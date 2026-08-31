@@ -72,6 +72,11 @@ export type MarioDraftOperation = {
   type: string;
   collected: MarioDraftSlots;
   missing: string[];
+  /** FIX A.4.7 §2 — ambiguità RESIDUE non ancora risolte, come CODICI corti
+   *  (es. "busMode"), MAI la frase libera del modello. Un turno successivo
+   *  che risolve deterministicamente l'ambiguità (§3/§4/§8) la rimuove da
+   *  qui SENZA richiedere una nuova chiamata LLM e SENZA perdere `collected`. */
+  ambiguities?: string[];
   updatedAt: number;
 };
 
@@ -92,6 +97,7 @@ export type MarioDraftSummary = {
   type: string;
   collected: MarioDraftSlots;
   missing: string[];
+  ambiguities?: string[];
 };
 
 /** Vista MINIMA sicura del contesto per il router LLM (§10): nessun token,
@@ -449,7 +455,12 @@ export function toMarioSessionSummary(ctx: MarioSessionContext): MarioSessionSum
     lastIntent: ctx.lastIntent,
     pendingConfirmationOp: ctx.pendingConfirmation?.op,
     draftOperation: ctx.draftOperation
-      ? { type: ctx.draftOperation.type, collected: ctx.draftOperation.collected, missing: ctx.draftOperation.missing }
+      ? {
+          type: ctx.draftOperation.type,
+          collected: ctx.draftOperation.collected,
+          missing: ctx.draftOperation.missing,
+          ...(ctx.draftOperation.ambiguities?.length ? { ambiguities: ctx.draftOperation.ambiguities } : {}),
+        }
       : undefined,
   };
 }

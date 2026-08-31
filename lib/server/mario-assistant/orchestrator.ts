@@ -33,7 +33,7 @@ import {
 import { isMarioLlmEnabled, isMarioLlmShadowMode, getMarioLlmModel } from "./llm-client";
 import { buildMarioToolCatalog } from "./tool-catalog";
 import { routeMarioWithLlm, type MarioRouterStepResult } from "./llm-router";
-import { logMarioLlmRoute, logMarioDraftPersistence } from "./telemetry";
+import { logMarioLlmRoute, logMarioDraftPersistence, logMarioAmbiguityResolution } from "./telemetry";
 import { calcMarioLlmCost } from "./pricing";
 import { parseMarioDraftDateSlots, formatMarioDateForUser } from "./date-time";
 import { BOOKING_GROUP_KINDS } from "@/lib/booking-groups";
@@ -47,6 +47,7 @@ import {
   BLOCKING_PREVIEW_WARNINGS,
   extractMarioDraftSlotsFromMessage,
   sanitizeExpectedPax,
+  resolveBusModeAmbiguity,
   type MarioOperationKey,
 } from "./operation-policy";
 import {
@@ -725,6 +726,38 @@ async function runDraftDirectPreview(
 /** Turno con draft attivo: prova il fast-path deterministico (§17), altrimenti
  *  passa al router con il draft nel contesto. */
 async function runDraftTurn(context: McpContext, message: string, draft: MarioDraftOperation, now: Date): Promise<MarioAssistantResult> {
+  // FIX A.4.7 §3/§4/§5/§8 — un'ambiguità "busMode" aperta sul draft vince
+  // sull'interpretazione generica della frase: il contesto locale del draft
+  // decide, mai una nuova domanda generica ("vuoi un gruppo o assegnare un
+  // mezzo?") su un dubbio già risolto dal turno precedente. Zero chiamate LLM
+  // se la risposta è deterministicamente univoca (§8, cost control).
+  if (draft.ambiguities?.includes("busMode")) {
+    const resolution = resolveBusModeAmbiguity(message);
+    if (resolution) {
+      const resolvedOperation: MarioOperationKey = resolution === "exclusive" ? "create_exclusive_bus_group" : "create_bus_group";
+      logMarioAmbiguityResolution({
+        tenantId: context.tenantId,
+        userId: context.userId,
+        ambiguityPresent: true,
+        ambiguityResolved: true,
+        ambiguityCode: "busMode",
+      });
+      const evalR = evaluateMarioOperationPolicy({ operation: resolvedOperation, collected: draft.collected });
+      if (evalR.readyForPreview) {
+        return runDraftDirectPreview(context, resolvedOperation, draft.collected); // §9 — zero LLM, preview immediata
+      }
+      // §7 — merge priority: tutti gli slot già raccolti restano intatti,
+      // solo `type`/`ambiguities` cambiano.
+      await setMarioDraftOperation(context.tenantId, context.userId, {
+        type: resolvedOperation,
+        collected: draft.collected,
+        missing: evalR.missingRequired,
+        ambiguities: [],
+      });
+      return { intent: "mario_llm_clarification", answer: questionForMissingField(evalR.nextQuestionField), actions: [] }; // zero LLM
+    }
+  }
+
   const fast = tryDeterministicDraftFill(draft, message, now);
   if (fast) return runDraftDirectPreview(context, fast.operation, fast.slots); // nessuna chiamata LLM
   return runLlmTurn(context, message, { intent: "booking_group_write", params: {} }, now);
@@ -818,7 +851,14 @@ function paxOverbookedQuestion(toolName: string, output: Record<string, unknown>
 function isOperativeClarificationContext(message: string, existingDraft: MarioDraftOperation | null, detected: MarioIntentResult): boolean {
   if (existingDraft) return true;
   if (detected.intent === "booking_group_write") return true;
-  return classifyMarioOperation({ message }) !== "create_generic_booking_group";
+  if (classifyMarioOperation({ message }) !== "create_generic_booking_group") return true;
+  // FIX A.4.7 — root cause: un messaggio può essere chiaramente una richiesta
+  // di creazione (pax + nome/origine/data tutti estraibili) SENZA contenere
+  // "bus"/"pullman"/ecc. ("Caricami La Marra, 50 persone, Rimini, 13-20
+  // settembre"). Segnale forte = pax numerico ESPLICITO più almeno un altro
+  // slot strutturale (nome o origine) — non una singola parola isolata.
+  const strongSignal = extractMarioDraftSlotsFromMessage(message, "create_generic_booking_group");
+  return Boolean(strongSignal.expectedPax) && Boolean(strongSignal.name || strongSignal.origin);
 }
 
 /** Ciclo limitato (§8/§16, MAX_LLM_STEPS passi): il router puo' incatenare
@@ -880,6 +920,7 @@ async function runMarioLlmFlow(
       let draftSavedAfter = false;
       let draftOperationType: string | undefined;
       let draftMissingFields: string[] | undefined;
+      let draftAmbiguities: string[] | undefined;
       let reason: "operation_from_router" | "operation_reconstructed" | "non_operative_clarification";
 
       if (op) {
@@ -957,15 +998,36 @@ async function runMarioLlmFlow(
           ...(!existingCollected.origin && extractedSlots.origin ? { origin: extractedSlots.origin } : {}),
           ...(recoveredDateSlots ?? {}),
         };
-        const evalR = evaluateMarioOperationPolicy({ operation, collected: merged });
+        // FIX A.4.7 §1/§2 — ambiguità "busMode": un intervallo di date
+        // (permanenza multi-giorno, §A.4.5) è di per sé un forte segnale
+        // operativo di trasporto anche quando il messaggio non contiene
+        // letteralmente "bus" (root cause live: "Caricami La Marra, 50
+        // persone, Rimini, 13-20 settembre"). Se non c'è un segnale esplicito
+        // esclusivo/condiviso, si salva comunque il draft COMPLETO con
+        // un'ambiguità aperta invece di perdere tutto in attesa di chiederla.
+        let finalOperation = operation;
+        const busModeSignal = resolveBusModeAmbiguity(message);
+        const hasRange = Boolean(merged.returnDate);
+        let ambiguities: string[] | undefined;
+        if (busModeSignal === "exclusive") {
+          finalOperation = "create_exclusive_bus_group";
+        } else if (busModeSignal === "shared" && finalOperation === "create_exclusive_bus_group") {
+          finalOperation = "create_bus_group";
+        } else if (hasRange && !busModeSignal) {
+          if (finalOperation === "create_generic_booking_group") finalOperation = "create_bus_group";
+          if (finalOperation === "create_bus_group") ambiguities = ["busMode"];
+        }
+        const evalR = evaluateMarioOperationPolicy({ operation: finalOperation, collected: merged });
         await setMarioDraftOperation(context.tenantId, context.userId, {
-          type: operation,
+          type: finalOperation,
           collected: merged,
           missing: evalR.missingRequired,
+          ...(ambiguities ? { ambiguities } : {}),
         });
         draftSavedAfter = true;
-        draftOperationType = operation;
+        draftOperationType = finalOperation;
         draftMissingFields = evalR.missingRequired;
+        draftAmbiguities = ambiguities;
         reason = "operation_reconstructed";
       } else {
         await updateMarioSession(context.tenantId, context.userId, { lastIntent: "mario_llm_clarification" });
@@ -981,6 +1043,8 @@ async function runMarioLlmFlow(
         draftOperationType,
         draftMissingFields,
         reason,
+        ambiguityPresent: Boolean(draftAmbiguities?.length),
+        ambiguityCode: draftAmbiguities?.[0],
       });
 
       return { intent: "mario_llm_clarification", answer: routed.decision.clarification_question, actions: [] };

@@ -172,6 +172,24 @@ const EXCLUSIVE_RE = /\b(esclusiv\w*|dedicat\w*|riservat\w*|solo per (?:il|quest
 // "posti" = capienza mezzo; "pax"/"persone" = dimensione gruppo (NON qui).
 const PHYSICAL_BUS_RE = /(\b\d{1,3}\s*posti\b|\btarga\b|\bcapacità\b|\bcapienza\b|\bmezzo\s*n\.?\s*\d+|\bbus\s*n\.?\s*\d+)/i;
 
+// FIX A.4.7 §3/§4/§10 — risoluzione DETERMINISTICA di una risposta breve che
+// scioglie l'ambiguità "busMode" aperta su un draft (esclusivo vs condiviso).
+// "shared" controllato PRIMA di "exclusive": "non esclusivo" contiene la
+// sottostringa "esclusivo" e matcherebbe erroneamente EXCLUSIVE_RE per primo.
+const BUS_MODE_SHARED_RE = /\b(non\s+esclusiv\w*|normale|commercial\w*|condivis\w*)\b/i;
+
+/**
+ * FIX A.4.7 §3/§4 — data una risposta di disambiguazione ("mezzo dedicato",
+ * "bus esclusivo", "gruppo normale", "non esclusivo"), risolve deterministi-
+ * camente quale variante l'utente intende. `undefined` se non riconoscibile
+ * con certezza (mai una scelta indovinata — il chiamante ricade sull'LLM).
+ */
+export function resolveBusModeAmbiguity(message: string): "exclusive" | "shared" | undefined {
+  if (BUS_MODE_SHARED_RE.test(message)) return "shared";
+  if (EXCLUSIVE_RE.test(message)) return "exclusive";
+  return undefined;
+}
+
 // FIX A.4.3 — estrattori CONSERVATIVI di slot "evidenti" per il fallback
 // deterministico quando il router LLM omette `operation` su una clarification
 // operativa (§A.4.2). Pattern SEMANTICI generali (unità di misura/parole
@@ -213,6 +231,11 @@ function extractCreateGroupNameCandidate(message: string): string | undefined {
   if (sliceEnd <= paxEnd) return undefined;
 
   let candidate = message.slice(paxEnd, sliceEnd);
+  // FIX A.4.7 — la virgola iniziale ("... 50 persone, La Marra" con la virgola
+  // subito dopo "persone") non fa parte del nome. SOLO se c'è davvero una
+  // virgola (mai un semplice spazio iniziale, che serve invariato allo strip
+  // del connettivo finale "con"/"per"/… sotto — vedi regressione test).
+  candidate = candidate.replace(/^\s*,\s*/u, "");
   candidate = candidate.replace(/^\s*(?:persone|pax|passeggeri)\b\s*/iu, "");
   // Clausola data finale residua (es. "... La Marra dal 13 al 20 settembre"
   // quando non c'è "partenza da" a delimitare): tagliata via prima dei
@@ -221,9 +244,54 @@ function extractCreateGroupNameCandidate(message: string): string | undefined {
   candidate = candidate.replace(/\s+(?:con|per|del|della|di)\s*$/iu, "");
   candidate = candidate.replace(/[?.,;!]+$/u, "").trim();
 
+  // Se resta comunque una virgola nel mezzo (es. formato a lista "... , Rimini,
+  // 13-20 settembre"), lo slice pax→origine non è affidabile per questo
+  // formato: si rinuncia, il chiamante prova extractFromCommaSegments.
+  if (candidate.includes(",")) return undefined;
   if (candidate.length < 2 || candidate.length > 80) return undefined;
   if (!/\p{L}/u.test(candidate)) return undefined;
   return candidate;
+}
+
+// FIX A.4.7 — verbi di apertura da rimuovere SOLO dal primo segmento di una
+// lista a virgole (mai un'interpretazione di intento: qui servono solo a
+// isolare cosa segue il verbo, es. "Caricami La Marra" -> "La Marra").
+const LEAD_VERB_RE =
+  /^(?:caricami|carica|creami|crea|preparami|prepara|organizzami|organizza|riservami|riserva|prenotami|prenota|possiamo|puoi|vorrei|voglio)\s+/iu;
+// Segmento che sembra contenere una data/intervallo (cifra o nome di mese):
+// escluso dai candidati nome/origine.
+const DATE_SEGMENT_RE = /\d|gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|sett\b|ottobre|novembre|dicembre|oggi|domani|dopodomani/iu;
+
+/**
+ * FIX A.4.7 — fallback per un formato a LISTA separata da virgole, es.
+ * "Caricami La Marra, 50 persone, Rimini, 13-20 settembre": ogni segmento è
+ * classificato per ESCLUSIONE con i pattern già esistenti (pax/data), MAI
+ * per contenuto specifico. Il primo segmento residuo (verbo iniziale tolto)
+ * diventa candidato `name`, il segmento residuo successivo diventa candidato
+ * `origin`. Nessuna analisi semantica, nessun nome hardcoded.
+ */
+function extractFromCommaSegments(message: string): { name?: string; origin?: string } {
+  const segments = message
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (segments.length < 2) return {};
+
+  let name: string | undefined;
+  let origin: string | undefined;
+
+  for (const seg of segments) {
+    if (PAX_RE.test(seg)) continue;
+    if (DATE_SEGMENT_RE.test(seg)) continue;
+
+    const cleaned = seg.replace(LEAD_VERB_RE, "").trim();
+    if (!cleaned || cleaned.length > 80 || !/\p{L}/u.test(cleaned)) continue;
+
+    if (name === undefined) name = cleaned;
+    else if (origin === undefined) origin = cleaned;
+  }
+
+  return { ...(name ? { name } : {}), ...(origin ? { origin } : {}) };
 }
 
 /**
@@ -264,6 +332,14 @@ export function extractMarioDraftSlotsFromMessage(
   // FIX A.4.5 §2 — nome dalla posizione pax→origin (o pax→fine testo).
   const nameCandidate = extractCreateGroupNameCandidate(message);
   if (nameCandidate) out.name = nameCandidate;
+
+  // FIX A.4.7 — fallback lista a virgole quando il formato non usa "partenza
+  // da" né l'ordine pax→nome ("Caricami La Marra, 50 persone, Rimini, ...").
+  if (!out.name || !out.origin) {
+    const fromList = extractFromCommaSegments(message);
+    if (!out.name && fromList.name) out.name = fromList.name;
+    if (!out.origin && fromList.origin && !mentionsPhysicalBus(message)) out.origin = fromList.origin;
+  }
 
   return out;
 }

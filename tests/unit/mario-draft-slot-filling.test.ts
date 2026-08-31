@@ -192,6 +192,107 @@ describe("§8 reset draft", () => {
   });
 });
 
+describe("FIX A.4.7 §9 — TEST LIVE ESATTO: ambiguità busMode preserva tutto lo stato operativo", () => {
+  it("turno 1 salva il draft COMPLETO con ambiguità aperta, turno 2 'MEZZO DEDICATO' risolve senza perdere nulla", async () => {
+    // Turno 1: nessuna parola "bus" nel messaggio (root cause A.4.7), ma
+    // segnali forti (pax + nome + origine + range) rendono la clarification
+    // comunque operativa. Il router risponde con una clarification SENZA
+    // operation (come nel bug live).
+    mockRoute.mockResolvedValueOnce(clarification("È un bus esclusivo o un raggruppamento commerciale?"));
+    const r1 = await run("CARICAMI LA MARRA, 50 PERSONE, RIMINI, 13-20 SETTEMBRE");
+    expect(r1.intent).toBe("mario_llm_clarification");
+
+    const d1 = await readDraft();
+    expect(d1).not.toBeNull();
+    expect(d1?.type).toBe("create_bus_group"); // placeholder neutro, richiesti identici per le due varianti
+    expect(d1?.collected).toMatchObject({
+      name: "LA MARRA",
+      expectedPax: 50,
+      origin: "RIMINI",
+      serviceDate: "2026-09-13",
+      returnDate: "2026-09-20",
+    });
+    expect(d1?.missing).toEqual([]); // tutti i campi obbligatori sono già presenti
+    expect(d1?.ambiguities).toEqual(["busMode"]);
+
+    // Turno 2: "MEZZO DEDICATO" risolve l'ambiguità busMode SENZA una nuova
+    // chiamata LLM e SENZA perdere nome/pax/origine/date già raccolti.
+    mockRunTool.mockResolvedValueOnce(
+      ok({ name: "LA MARRA", expected_pax: 50, service_date: "2026-09-13", service_date_label: "13/09/2026", confirmationToken: "TOKAMB", expiresAt: "2026-09-01T09:03:00Z" }),
+    );
+    const r2 = await run("MEZZO DEDICATO");
+
+    expect(mockRoute).toHaveBeenCalledTimes(1); // zero chiamate LLM al turno 2
+    expect(r2.intent).toBe("mario_llm_pending_confirmation"); // preview immediata
+    expect(r2.answer).toMatch(/LA MARRA/i);
+    expect(r2.answer).toMatch(/50 pax/);
+    expect(r2.answer).not.toMatch(/come si chiama|quante persone|quale data/i); // MAI richiesta nome/pax/data
+
+    const args = mockRunTool.mock.calls[0]![2] as Record<string, unknown>;
+    expect(args).toMatchObject({ name: "LA MARRA", expectedPax: 50, serviceDate: "2026-09-13", kind: "bus_exclusive" });
+
+    const d2 = await readDraft();
+    expect(d2?.type).toBe("create_exclusive_bus_group");
+    expect(d2?.collected).toMatchObject({ name: "LA MARRA", expectedPax: 50, origin: "RIMINI", returnDate: "2026-09-20" });
+  });
+});
+
+describe("FIX A.4.7 §10 — varianti disambiguazione (draft attivo, zero LLM)", () => {
+  async function setupAmbiguousDraft() {
+    const { setMarioDraftOperation } = await import("@/lib/server/mario-assistant/session-context");
+    await setMarioDraftOperation("tenant-a", "user-1", {
+      type: "create_bus_group",
+      collected: { name: "La Marra", expectedPax: 50, origin: "Rimini", serviceDate: "2026-09-13", returnDate: "2026-09-20" },
+      missing: [],
+      ambiguities: ["busMode"],
+    });
+  }
+
+  it("'bus esclusivo' -> create_exclusive_bus_group, preview diretta", async () => {
+    await setupAmbiguousDraft();
+    mockRunTool.mockResolvedValueOnce(ok({ name: "La Marra", expected_pax: 50, confirmationToken: "T1", expiresAt: "2026-09-01T09:03:00Z" }));
+    const r = await run("bus esclusivo");
+    expect(mockRoute).not.toHaveBeenCalled();
+    expect(r.intent).toBe("mario_llm_pending_confirmation");
+    expect((await readDraft())?.type).toBe("create_exclusive_bus_group");
+  });
+
+  it("'gruppo normale' -> create_bus_group, preview diretta", async () => {
+    await setupAmbiguousDraft();
+    mockRunTool.mockResolvedValueOnce(ok({ name: "La Marra", expected_pax: 50, confirmationToken: "T2", expiresAt: "2026-09-01T09:03:00Z" }));
+    const r = await run("gruppo normale");
+    expect(mockRoute).not.toHaveBeenCalled();
+    expect(r.intent).toBe("mario_llm_pending_confirmation");
+    expect((await readDraft())?.type).toBe("create_bus_group");
+  });
+
+  it("'non esclusivo' -> create_bus_group (mai confuso con exclusive)", async () => {
+    await setupAmbiguousDraft();
+    mockRunTool.mockResolvedValueOnce(ok({ name: "La Marra", expected_pax: 50, confirmationToken: "T3", expiresAt: "2026-09-01T09:03:00Z" }));
+    const r = await run("non esclusivo");
+    expect(mockRoute).not.toHaveBeenCalled();
+    expect(r.intent).toBe("mario_llm_pending_confirmation");
+    expect((await readDraft())?.type).toBe("create_bus_group");
+  });
+});
+
+describe("FIX A.4.7 §11 — nessun contesto: 'mezzo dedicato' da solo non inventa un gruppo", () => {
+  it("nuova sessione, nessun draft -> clarification ammessa, nessun campo inventato (nome/pax mai fabbricati dal nulla)", async () => {
+    mockRoute.mockResolvedValueOnce(clarification("Vuoi creare un nuovo gruppo con bus esclusivo, oppure assegnare un mezzo a un servizio esistente?"));
+    const r = await run("mezzo dedicato");
+    expect(r.intent).toBe("mario_llm_clarification");
+    expect(r.intent).not.toBe("mario_llm_pending_confirmation");
+    const d = await readDraft();
+    // "dedicato" attiva la classificazione esclusiva (già A.4.2), ma senza
+    // pax/nome/origine nel messaggio nessun dato viene inventato: il draft
+    // (se presente) resta senza collected fabbricato, tutto ancora "missing".
+    if (d) {
+      expect(d.collected.name).toBeUndefined();
+      expect(d.collected.expectedPax).toBeUndefined();
+    }
+  });
+});
+
 describe("FIX A.4.2/A.4.3 §10/§3 — clarification SENZA operation su un messaggio operativo (bug live)", () => {
   it("'Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?' -> draft con name+expectedPax+origin, turno 2 preview diretta senza LLM", async () => {
     mockRoute.mockResolvedValueOnce(clarification("Per quale data?")); // nessun `operation`, come nel bug live

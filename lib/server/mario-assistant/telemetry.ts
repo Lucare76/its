@@ -110,6 +110,10 @@ export type MarioDraftTelemetryInput = {
   /** NOMI dei campi ancora mancanti (es. "expectedPax"), mai i valori. */
   draftMissingFields?: string[];
   reason: "operation_from_router" | "operation_reconstructed" | "non_operative_clarification";
+  /** FIX A.4.7 §12 — true se il draft salvato porta un'ambiguità aperta. */
+  ambiguityPresent?: boolean;
+  /** Codice dell'ambiguità (es. "busMode"), MAI la domanda/risposta testuale. */
+  ambiguityCode?: string;
 };
 
 export function logMarioDraftPersistence(input: MarioDraftTelemetryInput): void {
@@ -125,6 +129,35 @@ export function logMarioDraftPersistence(input: MarioDraftTelemetryInput): void 
       draft_operation_type: input.draftOperationType ?? null,
       draft_missing_fields: input.draftMissingFields ?? null,
       reason: input.reason,
+      ambiguity_present: input.ambiguityPresent ?? false,
+      ambiguity_code: input.ambiguityCode ?? null,
+    }),
+  );
+}
+
+/**
+ * FIX A.4.7 §8/§12 — telemetria SAFE per un turno che risolve (o tenta di
+ * risolvere) un'ambiguità di draft deterministicamente: mai il testo della
+ * domanda/risposta, solo booleani e il codice ambiguità.
+ */
+export type MarioAmbiguityResolutionInput = {
+  tenantId: string;
+  userId: string;
+  ambiguityPresent: boolean;
+  ambiguityResolved: boolean;
+  ambiguityCode: string;
+};
+
+export function logMarioAmbiguityResolution(input: MarioAmbiguityResolutionInput): void {
+  console.info(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "mario_ambiguity_resolution",
+      tenant_id: input.tenantId,
+      user_id: input.userId,
+      ambiguity_present: input.ambiguityPresent,
+      ambiguity_resolved: input.ambiguityResolved,
+      ambiguity_code: input.ambiguityCode,
     }),
   );
 }

@@ -9,6 +9,7 @@ import {
   BLOCKING_PREVIEW_WARNINGS,
   extractMarioDraftSlotsFromMessage,
   sanitizeExpectedPax,
+  resolveBusModeAmbiguity,
 } from "@/lib/server/mario-assistant/operation-policy";
 
 describe("FIX A.4.3 — extractMarioDraftSlotsFromMessage", () => {
@@ -100,6 +101,42 @@ describe("FIX A.4.5 §3 — sanitizeExpectedPax", () => {
     expect(sanitizeExpectedPax(50.5)).toBeUndefined();
     expect(sanitizeExpectedPax(2001)).toBeUndefined();
     expect(sanitizeExpectedPax(undefined)).toBeUndefined();
+  });
+});
+
+describe("FIX A.4.7 §10 — resolveBusModeAmbiguity", () => {
+  it("'bus esclusivo' -> exclusive", () => {
+    expect(resolveBusModeAmbiguity("bus esclusivo")).toBe("exclusive");
+  });
+  it("'dedicato' -> exclusive", () => {
+    expect(resolveBusModeAmbiguity("dedicato")).toBe("exclusive");
+  });
+  it("'mezzo dedicato' -> exclusive", () => {
+    expect(resolveBusModeAmbiguity("mezzo dedicato")).toBe("exclusive");
+  });
+  it("'gruppo normale' -> shared", () => {
+    expect(resolveBusModeAmbiguity("gruppo normale")).toBe("shared");
+  });
+  it("'non esclusivo' -> shared (mai confuso con 'esclusivo')", () => {
+    expect(resolveBusModeAmbiguity("non esclusivo")).toBe("shared");
+  });
+  it("frase non interpretabile -> undefined", () => {
+    expect(resolveBusModeAmbiguity("boh non saprei")).toBeUndefined();
+  });
+});
+
+describe("FIX A.4.7 — nome/origine da formato a lista con virgole (bug live)", () => {
+  it("'CARICAMI LA MARRA, 50 PERSONE, RIMINI, 13-20 SETTEMBRE' -> name+origin senza 'partenza da'", () => {
+    const r = extractMarioDraftSlotsFromMessage("CARICAMI LA MARRA, 50 PERSONE, RIMINI, 13-20 SETTEMBRE", "create_generic_booking_group");
+    expect(r.name).toBe("LA MARRA");
+    expect(r.origin).toBe("RIMINI");
+    expect(r.expectedPax).toBe(50);
+  });
+
+  it("senza virgole, l'estrattore posizionale resta invariato (nessuna regressione)", () => {
+    const r = extractMarioDraftSlotsFromMessage("Creami bus per 50 persone Juventus con partenza da Roma", "create_bus_group");
+    expect(r.name).toBe("Juventus");
+    expect(r.origin).toBe("Roma");
   });
 });
 
