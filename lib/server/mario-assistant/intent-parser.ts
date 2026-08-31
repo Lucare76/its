@@ -45,6 +45,13 @@ const BOOKING_GROUP_INSPECT_RE =
   /\b(pront[oi]|cosa manca|che cosa manca|manca(no)? qualcosa|operativizzabil\w*|verifica (i )?servizi|avanzament\w*|completezza|è completo|quanti pax mancano)\b/;
 const BOOKING_GROUP_DETAIL_RE =
   /\b(dettagli\w*|com'?è messo|situazione del gruppo|quadro pax|pax del gruppo|riepilog\w*|fermate del gruppo|passeggeri del gruppo)\b/;
+// FIX A.4.1 — solo un segnale READ esplicito autorizza booking_group_find. La
+// sola presenza di un nome gruppo estratto (`query`) NON è più sufficiente:
+// altrimenti una scrittura in linguaggio naturale non riconosciuta (es.
+// "possiamo caricare un bus ... gruppo La Marra?") veniva rubata dal parser
+// deterministico invece di passare all'LLM router (§A.4.1).
+const BOOKING_GROUP_FIND_READ_RE =
+  /\b(trova|cerc\w*|mostrami|fammi vedere|quale|quali|elenco|lista|esiste|dammi i dettagli)\b|c['’]è/;
 
 /** Estrae un nome/frase di ricerca gruppo dal testo, best-effort. Ritorna
  *  undefined se non c'è nulla di utile: l'orchestratore chiederà chiarimenti,
@@ -72,9 +79,14 @@ export function detectMarioIntent(rawText: string, now: Date = new Date()): Mari
     if (BOOKING_GROUP_INSPECT_RE.test(text)) return { intent: "booking_group_inspect", params: base };
     if (BOOKING_GROUP_WRITE_RE.test(text)) return { intent: "booking_group_write", params: base };
     if (BOOKING_GROUP_DETAIL_RE.test(text)) return { intent: "booking_group_detail", params: base };
-    if (/\b(trova|cerca|cerc\w*|quale|quali|elenco|lista|mostrami|fammi vedere)\b/.test(text) || query) {
-      return { intent: "booking_group_find", params: base };
-    }
+    if (BOOKING_GROUP_FIND_READ_RE.test(text)) return { intent: "booking_group_find", params: base };
+    // FIX A.4.1 — contesto gruppo presente ma nessun segnale READ/WRITE certo:
+    // un verbo di modifica generico resta write_unsupported (rifiuto esplicito,
+    // §80 sotto), qualunque altro linguaggio naturale non riconosciuto passa
+    // all'LLM router via "unsupported" — MAI dedotto a booking_group_find solo
+    // perché è stato estratto un nome di gruppo (§2 fix spec).
+    if (WRITE_VERB_RE.test(text)) return { intent: "write_unsupported", params: {} };
+    return { intent: "unsupported", params: {} };
   }
 
   if (WRITE_VERB_RE.test(text)) {

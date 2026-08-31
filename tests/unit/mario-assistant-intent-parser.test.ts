@@ -153,6 +153,48 @@ describe("FASE 3 — intent gruppi prenotazione (§22)", () => {
   it("una domanda non-gruppo non è dirottata sugli intent gruppo", () => {
     expect(detectMarioIntent("come siamo messi oggi", NOW).intent).toBe("operational_brief");
   });
+
+  // FIX A.4.1 — bug reale: una scrittura in linguaggio naturale con nome
+  // gruppo estraibile ma nessun verbo READ/WRITE riconosciuto NON deve essere
+  // rubata da booking_group_find.
+  it("'Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?' -> unsupported, mai booking_group_find", () => {
+    const r = detectMarioIntent("Possiamo caricare un bus di 50 persone con partenza da Rimini gruppo La Marra?", NOW);
+    expect(r.intent).not.toBe("booking_group_find");
+    expect(r.intent).toBe("unsupported");
+  });
+
+  it("'Gruppo La Marra' nominale ambigua -> unsupported, non FIND per la sola presenza del nome", () => {
+    expect(detectMarioIntent("Gruppo La Marra", NOW).intent).toBe("unsupported");
+  });
+
+  it("'Mostrami il gruppo La Marra' -> booking_group_find (segnale READ esplicito)", () => {
+    const r = detectMarioIntent("Mostrami il gruppo La Marra", NOW);
+    expect(r.intent).toBe("booking_group_find");
+    expect(r.params).toMatchObject({ query: expect.stringMatching(/la marra/i) });
+  });
+
+  it("'Cerca il gruppo La Marra' -> booking_group_find", () => {
+    expect(detectMarioIntent("Cerca il gruppo La Marra", NOW).intent).toBe("booking_group_find");
+  });
+
+  it("'Qual è la situazione del gruppo La Marra?' -> booking_group_detail", () => {
+    expect(detectMarioIntent("Qual è la situazione del gruppo La Marra?", NOW).intent).toBe("booking_group_detail");
+  });
+
+  it("'Il gruppo La Marra è pronto?' -> booking_group_inspect", () => {
+    expect(detectMarioIntent("Il gruppo La Marra è pronto?", NOW).intent).toBe("booking_group_inspect");
+  });
+
+  it.each([
+    "Caricami un bus per La Marra da 50 persone",
+    "Preparami un bus La Marra da 50 pax",
+    "Organizzami il gruppo La Marra per 50 persone",
+    "Mi serve un bus per La Marra",
+    "Possiamo mettere 20 persone a Tivoli nel gruppo La Marra?",
+    "Inserisci 30 persone nel gruppo La Marra",
+  ])("write naturale non riconosciuta '%s' -> mai booking_group_find", (msg) => {
+    expect(detectMarioIntent(msg, NOW).intent).not.toBe("booking_group_find");
+  });
 });
 
 describe("parseTimeWindow (spec TEST MINIMI — Date/time)", () => {
