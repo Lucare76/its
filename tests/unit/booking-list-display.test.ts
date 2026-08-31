@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bookingListTransportTimes } from "@/lib/booking-list-display";
+import { bookingListTransportTimes, hasRealDepartureLeg } from "@/lib/booking-list-display";
 
 describe("bookingListTransportTimes", () => {
   it("prenotazione importata via IMAP+Claude (fix inbox-approve): la card mostra gli stessi dati del flusso manuale", () => {
@@ -107,6 +107,106 @@ describe("bookingListTransportTimes", () => {
         returnDate: "06/09/2026",
         returnTime: "13:20",
       });
+    });
+  });
+
+  describe("hasRealDepartureLeg / riga combinata arrivo+partenza (fix: caso MATTIOLI 26/010806, senza regredire BIRAGO)", () => {
+    it("1. MATTIOLI — record combinato: direction='arrival' ma con dato treno di partenza strutturato reale -> mostra la partenza, non nasconde più nulla", () => {
+      const service = {
+        booking_service_kind: "transfer_train_hotel" as const,
+        direction: "arrival" as const,
+        arrival_date: "2026-09-01",
+        train_arrival_number: "ITA 8903",
+        train_arrival_time: "12:48",
+        arrival_time: "12:48",
+        departure_date: "2026-09-07",
+        departure_time: "13:25",
+        train_departure_number: "ITA 8918",
+        train_departure_time: "13:25",
+      };
+      expect(hasRealDepartureLeg(service)).toBe(true);
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({
+        outwardDate: "01/09/2026",
+        outwardTime: "12:48",
+        outwardCompany: "ITA 8903",
+        returnDate: "07/09/2026",
+        returnTime: "13:25",
+        returnCompany: "ITA 8918",
+      });
+      expect(result?.returnTime).not.toBeNull();
+      expect(result?.returnDate).not.toBeNull();
+    });
+
+    it("2. BIRAGO / arrival-only reale: nessun dato di partenza -> comportamento invariato, partenza nascosta", () => {
+      const service = {
+        booking_service_kind: "transfer_train_hotel" as const,
+        direction: "arrival" as const,
+        arrival_date: "2026-08-27",
+        arrival_time: "10:00",
+        departure_date: null,
+        departure_time: null,
+        train_departure_number: null,
+        train_departure_time: null,
+      };
+      expect(hasRealDepartureLeg(service)).toBe(false);
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({ returnDate: null, returnTime: null });
+    });
+
+    it("2b. BIRAGO storico (regressione reale già coperta sopra): departure_date/departure_time residui GENERICI, senza dato treno strutturato -> resta nascosto", () => {
+      // Stessa forma della prenotazione BIRAGO reale (vedi describe precedente,
+      // "direction gate"): qui il punto è che departure_date/departure_time da
+      // soli (senza train_departure_number/time) NON bastano a far scattare
+      // hasRealDepartureLeg — altrimenti questo test e quello storico sopra
+      // andrebbero in conflitto.
+      const service = {
+        booking_service_kind: "transfer_airport_hotel" as const,
+        direction: "arrival" as const,
+        arrival_date: "2026-08-27",
+        arrival_time: "10:00",
+        departure_date: "2026-08-26",
+        departure_time: "18:00",
+      };
+      expect(hasRealDepartureLeg(service)).toBe(false);
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({ returnDate: null, returnTime: null });
+    });
+
+    it("3. departure puro: direction='departure' -> partenza mostrata come prima (comportamento non toccato da questo fix)", () => {
+      const service = {
+        booking_service_kind: "transfer_train_hotel" as const,
+        direction: "departure" as const,
+        date: "2026-09-07",
+        time: "13:25",
+        departure_date: "2026-09-07",
+        departure_time: "13:25",
+        train_departure_number: "ITA 8918",
+        train_departure_time: "13:25",
+      };
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({
+        returnDate: "07/09/2026",
+        returnTime: "13:25",
+        returnCompany: "ITA 8918",
+      });
+    });
+
+    it("4. record sporco: transport_code combinato presente ma nessun departure_date/dato treno strutturato -> NON mostra partenza solo per il transport_code", () => {
+      const service = {
+        booking_service_kind: "transfer_train_hotel" as const,
+        direction: "arrival" as const,
+        arrival_date: "2026-09-01",
+        arrival_time: "12:48",
+        transport_code: "ITA 8903 / ITA 8918",
+        departure_date: null,
+        departure_time: null,
+        train_departure_number: null,
+        train_departure_time: null,
+      };
+      expect(hasRealDepartureLeg(service)).toBe(false);
+      const result = bookingListTransportTimes(service);
+      expect(result).toMatchObject({ returnDate: null, returnTime: null });
     });
   });
 

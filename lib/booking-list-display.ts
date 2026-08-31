@@ -2,7 +2,7 @@ import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_time" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_number" | "train_arrival_time" | "train_departure_number" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction"
 >> & {
   pickup_time?: string | null;
   bus_outward_pickup_point?: string | null;
@@ -36,6 +36,23 @@ export type BookingListTransportTimes = {
   returnDeparturePort?: string | null;
   outwardPickupPoint?: string | null;
 };
+
+// Distingue una riga combinata (arrivo + partenza REALI sulla stessa riga,
+// caso MATTIOLI 26/010806: import treno che valorizza sia arrival_* che
+// departure_*/train_departure_* in un'unica riga direction='arrival') da una
+// riga arrival-only con residui "fantasma" in departure_date/departure_time
+// (bug BIRAGO: il form "Solo partenza" copiava lì i default invece di
+// svuotarli — vedi describe "direction gate" più sotto nei test).
+// Il segnale forte è SOLO il dato treno strutturato (train_departure_number
+// / train_departure_time): sono valorizzati esclusivamente da un vero import
+// di andata/ritorno, mai dal bug dei default residui, a differenza del
+// generico departure_time/departure_date che invece BIRAGO dimostra non
+// essere affidabile da solo. transport_code combinato NON basta (può
+// contenere testo sporco, vedi audit "mai una compagnia inventata").
+export function hasRealDepartureLeg(service: BookingListService): boolean {
+  if (!cleanDate(service.departure_date)) return false;
+  return Boolean(service.train_departure_time) || Boolean(service.train_departure_number);
+}
 
 export function bookingListTransportTimes(service: BookingListService): BookingListTransportTimes | null {
   const kind = service.booking_service_kind;
@@ -115,15 +132,20 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     : isBusLine
       ? (service.bus_city_origin ? `Partenza da ${service.bus_city_origin}` : "Partenza bus")
       : "Arrivo treno";
-  // Un servizio a riga singola rappresenta UNA gamba (direction 'arrival' o
-  // 'departure'): se direction='departure' non deve mai mostrare una sezione
-  // "andata", anche se arrival_date/arrival_time contengono valori residui
-  // (es. bug form "Solo partenza" che copiava li' i default — vedi
-  // app/(app)/services/new/page.tsx). Simmetrico per direction='arrival'.
+  // Un servizio a riga singola rappresenta di norma UNA gamba (direction
+  // 'arrival' o 'departure'): se direction='departure' non deve mai mostrare
+  // una sezione "andata", anche se arrival_date/arrival_time contengono
+  // valori residui (es. bug form "Solo partenza" che copiava li' i default —
+  // vedi app/(app)/services/new/page.tsx). Simmetrico per direction='arrival'
+  // — ECCETTO quando la riga porta anche un dato di partenza REALE (riga
+  // combinata andata+ritorno, caso MATTIOLI 26/010806/26/140508): in quel
+  // caso nascondere il ritorno cancellerebbe dati veri. hasRealDepartureLeg
+  // richiede il dato strutturato treno, quindi il residuo BIRAGO (solo
+  // departure_date/departure_time generici) resta nascosto come prima.
   // direction assente (dati storici/test) -> nessun filtro, comportamento
   // invariato.
   const hideOutward = service.direction === "departure";
-  const hideReturn = service.direction === "arrival";
+  const hideReturn = service.direction === "arrival" && !hasRealDepartureLeg(service);
   return {
     serviceLabel: `${isAirport ? "Trasferimento aeroporto - hotel" : isBusLine ? "Linea Bus" : "Trasferimento stazione - hotel"}${suffix}`,
     outwardLabel,
@@ -131,10 +153,12 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     outwardTime: hideOutward ? null : outwardTime,
     outwardArrivalTime: hideOutward ? null : isBusLine && outwardArrivalTime === outwardTime ? null : outwardArrivalTime,
     outwardPickupPoint: hideOutward ? null : isBusLine ? service.bus_outward_pickup_point ?? null : null,
+    outwardCompany: hideOutward ? null : isStation ? service.train_arrival_number ?? null : null,
     returnLabel: isAirport ? "Partenza volo" : isBusLine ? "Partenza bus" : "Partenza treno",
     returnDate: hideReturn ? null : cleanDate(service.departure_date),
     returnTime: hideReturn ? null : cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
     returnPickupTime: hideReturn ? null : cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),
+    returnCompany: hideReturn ? null : isStation ? service.train_departure_number ?? null : null,
   };
 }
 
