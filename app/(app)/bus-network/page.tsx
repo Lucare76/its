@@ -109,7 +109,11 @@ function isStopPlaceholderName(alloc: Pick<AllocationDetail, "customer_name" | "
   const stopCity = normalizeDisplayToken(alloc.stop_city);
   const pickupNote = normalizeDisplayToken(alloc.stop_pickup_note);
   const fullStop = stopCity && pickupNote ? `${stopCity} - ${pickupNote}` : "";
-  return customer === stopName || Boolean(fullStop && customer === fullStop);
+  const fullStopFromName = stopCity && stopName ? `${stopCity} - ${stopName}` : "";
+  return customer === stopName
+    || Boolean(fullStop && customer === fullStop)
+    || Boolean(fullStopFromName && customer === fullStopFromName)
+    || Boolean(stopCity && stopName && customer.startsWith(`${stopCity} - `) && customer.includes(stopName));
 }
 
 function exclusiveAllocationDisplayName(unit: BusUnit, alloc: AllocationDetail): string | null {
@@ -2540,6 +2544,7 @@ export default function BusNetworkPage() {
                   const isLow = remainingSeats <= unit.low_seat_threshold && remainingSeats > 0;
                   const isFull = remainingSeats <= 0;
                   const isClosed = unit.status === "closed" || unit.status === "completed";
+                  const displayTag = unit.tag ?? (selectedLine?.code === "GRUPPI_ESCLUSIVI" || selectedLine?.family_code === "GRUPPI_ESCLUSIVI" ? "esclusivo" : null);
 
                   // Group by stop in correct order, within each stop ordina per orario di partenza
                   const stopGroups = activeStops.map((stop) => ({
@@ -2633,7 +2638,7 @@ export default function BusNetworkPage() {
                             )}
                             {/* Tag selector */}
                             <select
-                              value={unit.tag ?? ""}
+                              value={displayTag ?? ""}
                               onClick={(e) => e.stopPropagation()}
                               onChange={async (e) => {
                                 e.stopPropagation();
@@ -2641,9 +2646,9 @@ export default function BusNetworkPage() {
                                 await post("update_tag", { unit_id: unit.id, tag: newTag });
                               }}
                               className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase cursor-pointer border-0 outline-none appearance-none ${
-                                unit.tag === "esclusivo"
+                                displayTag === "esclusivo"
                                   ? selectedLineFerryConfig ? "bg-white/25 text-white" : "bg-yellow-100 text-yellow-700"
-                                  : unit.tag === "gruppi"
+                                  : displayTag === "gruppi"
                                   ? selectedLineFerryConfig ? "bg-white/25 text-white" : "bg-blue-100 text-blue-700"
                                   : selectedLineFerryConfig ? "bg-white/10 text-white/60" : "bg-slate-100 text-slate-400"
                               }`}
@@ -2727,7 +2732,7 @@ export default function BusNetworkPage() {
                           );
                         })()}
                         {/* Campo nome gruppo/cliente — visibile solo se tag gruppi o esclusivo */}
-                        {(unit.tag === "gruppi" || unit.tag === "esclusivo") && !unit.group_name && (
+                        {(displayTag === "gruppi" || displayTag === "esclusivo") && !unit.group_name && (
                           <div className="mt-2">
                             {editGroupNameUnitId === unit.id ? (
                               <input
@@ -2752,7 +2757,7 @@ export default function BusNetworkPage() {
                               >
                                 {unit.group_name
                                   ? <span className={`font-semibold ${selectedLineFerryConfig ? "text-white" : "text-slate-700"}`}>👤 {unit.group_name}</span>
-                                  : <span className="italic opacity-60">👤 {unit.tag === "esclusivo" ? "Nome cliente esclusivo..." : "Nome gruppo..."}</span>}
+                                  : <span className="italic opacity-60">👤 {displayTag === "esclusivo" ? "Nome cliente esclusivo..." : "Nome gruppo..."}</span>}
                               </button>
                             )}
                           </div>
@@ -2793,7 +2798,7 @@ export default function BusNetworkPage() {
                               )}
                             </div>
                             {allocs.map((alloc) => {
-                              const displayName = exclusiveAllocationDisplayName(unit, alloc);
+                              const displayName = exclusiveAllocationDisplayName({ ...unit, tag: displayTag }, alloc);
                               return (
                               <div key={alloc.allocation_id}
                                 draggable
@@ -2948,7 +2953,7 @@ export default function BusNetworkPage() {
                           </div>
                         )),
                         ...ungrouped.map((alloc) => {
-                          const displayName = exclusiveAllocationDisplayName(unit, alloc);
+                          const displayName = exclusiveAllocationDisplayName({ ...unit, tag: displayTag }, alloc);
                           return (
                           <div key={alloc.allocation_id} className="px-3 py-2">
                             <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">📍 {alloc.stop_name}</div>
