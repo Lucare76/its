@@ -57,6 +57,11 @@ const SERVICE_SEARCH_COLUMNS = [
   "notes",
   "linked_service_id",
   "practice_number",
+  // Obiettivo C: necessario per collegare i services trovati via voucher
+  // MTS Globe (agency_bookings.source_booking_key) al relativo agency
+  // booking, sia per il filtro .in("agency_booking_id", ...) sia per
+  // esporlo in risposta.
+  "agency_booking_id",
   "created_at",
 ].join(", ");
 
@@ -64,6 +69,20 @@ type SearchServiceRow = Partial<Service> & {
   id: string;
   created_at?: string | null;
   hotel_name?: string | null;
+  agency_booking_id?: string | null;
+  // Obiettivo C: annotazione effimera in-memory, mai persistita — valorizzata
+  // solo quando il service è stato trovato tramite match sul Voucher No MTS
+  // Globe (agency_bookings.source_booking_key), per farlo sopravvivere al
+  // re-filtro testuale di matchesBookingSearch senza duplicare il voucher
+  // in una colonna services.
+  voucher_no?: string | null;
+};
+
+type AgencyBookingMatchRow = { id: string; source_booking_key: string };
+type AgencyBookingQueryResult = { data: AgencyBookingMatchRow[] | null; error: { message: string } | null };
+type AgencyBookingQueryBuilder = PromiseLike<AgencyBookingQueryResult> & {
+  ilike(column: string, pattern: string): AgencyBookingQueryBuilder;
+  eq(column: string, value: string): AgencyBookingQueryBuilder;
 };
 
 type CancellationLogRow = {
@@ -323,6 +342,49 @@ async function loadLookupMatches(
   };
 }
 
+// Obiettivo C: il Voucher No MTS Globe non vive in services.practice_number,
+// ma in agency_bookings.source_booking_key = "mts_globe:<voucherNo>". Cerca
+// SOLO in questa colonna (mai in source_payload JSONB, non serve), sempre
+// scoped al tenant. Preferisce l'exact match "mts_globe:<q>" e il prefix
+// "mts_globe:<q>%"; il partial "%<q>%" è un fallback controllato (solo per
+// query di almeno 4 caratteri, come i needle telefono in booking-search.ts)
+// per non generare scan troppo ampi su query cortissime.
+async function queryVoucherMatches(
+  admin: SearchAdminClient,
+  tenantId: string,
+  q: string
+): Promise<AgencyBookingMatchRow[]> {
+  if (!q) return [];
+  const exactKey = `mts_globe:${q}`;
+  const prefixPattern = `mts_globe:${q}%`;
+  const partialPattern = q.length >= 4 ? `%${q}%` : null;
+
+  const baseQuery = () =>
+    admin
+      .from("agency_bookings")
+      .select("id, source_booking_key")
+      .eq("tenant_id", tenantId)
+      .eq("source", "mts_globe")
+      .limit(50) as unknown as AgencyBookingQueryBuilder;
+
+  const batches: Array<PromiseLike<AgencyBookingQueryResult>> = [
+    baseQuery().eq("source_booking_key", exactKey),
+    baseQuery().ilike("source_booking_key", prefixPattern),
+  ];
+  if (partialPattern) batches.push(baseQuery().ilike("source_booking_key", partialPattern));
+
+  const results = await Promise.all(batches);
+  const error = results.find((result) => result.error)?.error ?? null;
+  if (error) throw new Error(error.message);
+  const byId = new Map<string, AgencyBookingMatchRow>();
+  for (const result of results) {
+    for (const row of result.data ?? []) {
+      if (row?.id && !byId.has(row.id)) byId.set(row.id, row);
+    }
+  }
+  return [...byId.values()];
+}
+
 async function querySearchCandidates(
   admin: SearchAdminClient,
   tenantId: string,
@@ -332,6 +394,7 @@ async function querySearchCandidates(
     limit: number;
     matchedHotelIds: string[];
     matchedAgencyIds: string[];
+    matchedAgencyBookingIds: string[];
   }
 ): Promise<SearchServiceRow[]> {
   const perQueryLimit = Math.min(Math.max(input.limit * 8, 160), 500);
@@ -367,6 +430,11 @@ async function querySearchCandidates(
       "bus_city_origin",
       "meeting_point",
       "pickup_hotel",
+      // Obiettivo B: practice_number è text (verificato via
+      // information_schema.columns), quindi va cercato con lo stesso pattern
+      // ILIKE degli altri campi testuali — nessun cast/confronto numerico
+      // necessario.
+      "practice_number",
     ];
     if (canUsePostgrestOr(input.q)) {
       run((query) => query.or(textFields.map((field) => `${field}.ilike.${pattern}`).join(",")));
@@ -402,6 +470,9 @@ async function querySearchCandidates(
     }
     if (input.matchedHotelIds.length) run((query) => query.in("hotel_id", input.matchedHotelIds));
     if (input.matchedAgencyIds.length) run((query) => query.in("agency_id", input.matchedAgencyIds));
+    // Obiettivo C: services collegati agli agency_bookings MTS Globe trovati
+    // via Voucher No (queryVoucherMatches), tramite services.agency_booking_id.
+    if (input.matchedAgencyBookingIds.length) run((query) => query.in("agency_booking_id", input.matchedAgencyBookingIds));
     if (isPrivateNeedle(input.q)) {
       run((query) => query.is("agency_id", null).is("billing_party_name", null));
       run((query) => query.ilike("billing_party_name", "%privato%"));
@@ -453,13 +524,20 @@ export async function GET(req: NextRequest) {
 
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
-    const { matchedHotels, matchedAgencies } = await loadLookupMatches(auth.admin, tenantId, q, agency);
+    const [{ matchedHotels, matchedAgencies }, matchedAgencyBookings] = await Promise.all([
+      loadLookupMatches(auth.admin, tenantId, q, agency),
+      queryVoucherMatches(auth.admin, tenantId, q),
+    ]);
+    const voucherByAgencyBookingId = new Map(
+      matchedAgencyBookings.map((booking) => [booking.id, booking.source_booking_key.replace(/^mts_globe:/, "")])
+    );
     const candidateServices = await querySearchCandidates(auth.admin, tenantId, {
       q,
       agency,
       limit,
       matchedHotelIds: matchedHotels.map((hotel) => hotel.id),
       matchedAgencyIds: matchedAgencies.map((agencyRow) => agencyRow.id),
+      matchedAgencyBookingIds: matchedAgencyBookings.map((booking) => booking.id),
     });
 
     const linkedServices = await loadRowsByIds(
@@ -549,6 +627,10 @@ export async function GET(req: NextRequest) {
       .map((service) => ({
         ...service,
         hotel_name: service.hotel_id ? hotelNameById.get(service.hotel_id) ?? null : null,
+        // Obiettivo C: annotazione in-memory (mai scritta su services) così
+        // matchesBookingSearch (lib/booking-search.ts) trova il voucher nel
+        // testo cercabile anche se nessun campo services lo contiene.
+        voucher_no: service.agency_booking_id ? voucherByAgencyBookingId.get(service.agency_booking_id) ?? null : null,
       }));
 
     const results = collapseLinkedBookingPairs(
@@ -684,6 +766,7 @@ export async function GET(req: NextRequest) {
           notes: r.notes ?? null,
           linked_service_id: r.linked_service_id ?? null,
           practice_number: r.practice_number ?? null,
+          agency_booking_id: r.agency_booking_id ?? null,
           outbound_ferry_departure_time: ferryPickupRule?.departureTime ?? arrivalLeg.time ?? null,
           outbound_ferry_arrival_time: isBus
             ? busArrivalTime

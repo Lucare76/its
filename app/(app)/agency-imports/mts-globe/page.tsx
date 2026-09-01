@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -117,6 +118,8 @@ async function readRowsFromFile(file: File): Promise<Array<Record<string, unknow
 }
 
 export default function MtsGlobeImportPage() {
+  const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [rawRows, setRawRows] = useState<Array<Record<string, unknown>>>([]);
   const [preview, setPreview] = useState<MtsGlobePreviewResult | null>(null);
@@ -292,13 +295,33 @@ export default function MtsGlobeImportPage() {
         return;
       }
       setConfirmResult(data as ConfirmResult);
-      // Rileggi la preview dopo il confirm: le pratiche appena create risultano DUPLICATE.
-      await runPreview(rawRows, hotelCorrections, timeCorrections, groupTimeCorrections);
+      // Obiettivo A: niente rilancio automatico della preview. Rifarla subito
+      // mostrerebbe tutte le pratiche appena importate come "Duplicato",
+      // tecnicamente corretto ma percepito come un errore dall'operatore.
+      // Lo stato finale (sezione 5) resta l'unica vista finché l'operatore
+      // non chiede esplicitamente "Nuova preview".
+      setPreview(null);
+      setApplyFeedback(null);
+      setEverHadIntermedioGroups(false);
     } catch (error) {
       setMessage(`Errore di rete durante il confirm: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setConfirmLoading(false);
     }
+  }
+
+  function resetForNewFile() {
+    setFileName(null);
+    setRawRows([]);
+    setPreview(null);
+    setConfirmResult(null);
+    setHotelCorrections({});
+    setTimeCorrections({});
+    setGroupTimeCorrections({});
+    setMessage(null);
+    setApplyFeedback(null);
+    setEverHadIntermedioGroups(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   const summary = preview?.summary ?? null;
@@ -317,7 +340,7 @@ export default function MtsGlobeImportPage() {
 
       <SectionCard title="1. Carica file" subtitle="Excel esportato da MTS Globe (booking-item-list).">
         <div className="flex flex-wrap items-center gap-3">
-          <input type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="input-saas" onChange={(event) => void handleFile(event)} />
           {fileName ? <span className="text-sm text-muted">{fileName} — {rawRows.length} righe lette</span> : null}
           {previewLoading ? <span className="text-sm text-muted">Analisi in corso…</span> : null}
         </div>
@@ -446,13 +469,22 @@ export default function MtsGlobeImportPage() {
       ) : null}
 
       {confirmResult ? (
-        <SectionCard title="5. Risultato import">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <SummaryTile label="Pratiche importate" value={confirmResult.importedBookingCount} tone="emerald" />
-            <SummaryTile label="Servizi creati" value={confirmResult.importedServiceCount} tone="emerald" />
-            <SummaryTile label="Duplicate saltate" value={confirmResult.skippedDuplicateCount} tone="slate" />
-            <SummaryTile label="Fallite" value={confirmResult.failedBookings.length} tone="rose" />
-          </div>
+        <SectionCard title={confirmResult.failedBookings.length > 0 ? "5. Import parziale" : "5. Import completato"}>
+          <p
+            className={`mb-3 rounded-md px-3 py-2 text-sm font-medium ${
+              confirmResult.failedBookings.length > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
+            }`}
+          >
+            {confirmResult.failedBookings.length > 0
+              ? `⚠️ Import parziale: ${confirmResult.failedBookings.length} pratica/e non importata/e, vedi dettaglio sotto.`
+              : "✅ Import completato"}
+          </p>
+          <ul className="space-y-1 text-sm text-text">
+            <li>Prenotazioni caricate: <strong>{confirmResult.importedBookingCount}</strong></li>
+            <li>Servizi creati: <strong>{confirmResult.importedServiceCount}</strong></li>
+            <li>Duplicate saltate: <strong>{confirmResult.skippedDuplicateCount}</strong></li>
+            <li>Errori: <strong>{confirmResult.failedBookings.length}</strong></li>
+          </ul>
           {confirmResult.failedBookings.length > 0 ? (
             <ul className="mt-3 space-y-1 text-sm text-rose-700">
               {confirmResult.failedBookings.map((f) => (
@@ -460,6 +492,17 @@ export default function MtsGlobeImportPage() {
               ))}
             </ul>
           ) : null}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" className="btn-saas-primary" onClick={resetForNewFile}>
+              Carica un altro file
+            </button>
+            <button type="button" className="btn-saas-secondary" onClick={() => router.push("/agency/bookings")}>
+              Vai alle prenotazioni
+            </button>
+            <button type="button" className="btn-saas-secondary" onClick={() => void reapplyCorrections()} disabled={previewLoading}>
+              {previewLoading ? "Caricamento…" : "Nuova preview"}
+            </button>
+          </div>
         </SectionCard>
       ) : null}
     </div>
