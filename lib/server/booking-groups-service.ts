@@ -759,7 +759,43 @@ export async function patchBookingGroup(
     .select("*")
     .single();
   if (error) return err(500, error.message);
-  return ok({ group: data as BookingGroup });
+  const group = data as BookingGroup;
+
+  // Propagazione a services draft/needs_review generati dal gruppo (mai a
+  // services gia' operativi: is_draft=false resta invariato, coerente con
+  // "essere conservativi sugli operativi" — le viste operative devono
+  // eventualmente usare fallback in lettura per quelli). Solo se
+  // service_date/return_date/hotel_id sono STATI TOCCATI da questo patch
+  // (mai una query extra sui patch che non li riguardano, es. solo note).
+  const touchesDates = fields.service_date !== undefined || fields.return_date !== undefined;
+  const touchesHotel = fields.hotel_id !== undefined;
+  if (touchesDates || touchesHotel) {
+    const { data: draftServices } = await admin
+      .from("services")
+      .select("id, direction, date, hotel_id")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", id)
+      .eq("is_draft", true);
+    for (const svc of (draftServices ?? []) as Array<{ id: string; direction: string | null; date: string | null; hotel_id: string | null }>) {
+      const svcPatch: Record<string, unknown> = {};
+      if (touchesDates) {
+        // Stessa regola gia' usata in UI (GroupDetail/StopsSection) per
+        // scegliere la data di un service in base alla direzione: partenza
+        // -> return_date (con fallback su service_date se assente),
+        // arrivo -> service_date. Non azzera mai una data esistente.
+        const nextDate = svc.direction === "departure" ? (group.return_date ?? group.service_date) : group.service_date;
+        if (nextDate && nextDate !== svc.date) svcPatch.date = nextDate;
+      }
+      // Mai sovrascrivere un hotel gia' impostato sul singolo passeggero
+      // (manuale o gia' propagato): solo riempie il vuoto.
+      if (touchesHotel && !svc.hotel_id && group.hotel_id) svcPatch.hotel_id = group.hotel_id;
+      if (Object.keys(svcPatch).length > 0) {
+        await admin.from("services").update(svcPatch).eq("tenant_id", tenantId).eq("id", svc.id);
+      }
+    }
+  }
+
+  return ok({ group });
 }
 
 export async function updateBookingGroupFerry(

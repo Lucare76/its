@@ -62,6 +62,10 @@ const SERVICE_SEARCH_COLUMNS = [
   // booking, sia per il filtro .in("agency_booking_id", ...) sia per
   // esporlo in risposta.
   "agency_booking_id",
+  // Fix B (booking groups): serve sia per far passare i draft di gruppo dal
+  // filtro is_draft sotto, sia per risolvere/esporre il nome del gruppo
+  // (badge "Gruppo" in risposta).
+  "booking_group_id",
   "created_at",
 ].join(", ");
 
@@ -70,6 +74,10 @@ type SearchServiceRow = Partial<Service> & {
   created_at?: string | null;
   hotel_name?: string | null;
   agency_booking_id?: string | null;
+  booking_group_id?: string | null;
+  // Fix B: nome del gruppo risolto lato route (join su booking_groups),
+  // mai testo libero — solo per il badge "Gruppo" in risposta.
+  booking_group_name?: string | null;
   // Obiettivo C: annotazione effimera in-memory, mai persistita — valorizzata
   // solo quando il service è stato trovato tramite match sul Voucher No MTS
   // Globe (agency_bookings.source_booking_key), per farlo sopravvivere al
@@ -493,7 +501,13 @@ async function querySearchCandidates(
   const error = results.find((result) => result.error)?.error ?? null;
   if (error) throw new Error(error.message);
   return mergeSearchRows(results.map((result) => (result.data ?? []) as SearchServiceRow[]))
-    .filter((service) => service.is_draft !== true);
+    // Fix B: i passeggeri creati da Booking Groups nascono is_draft=true/
+    // status='needs_review' finche' non vengono operativizzati (vedi
+    // lib/server/booking-groups-service.ts) — sono prenotazioni reali e
+    // gestite attivamente, non "rumore" come i draft da parsing email non
+    // ancora revisionati (che restano esclusi). Un service con
+    // booking_group_id passa quindi il filtro anche da draft.
+    .filter((service) => service.is_draft !== true || Boolean(service.booking_group_id));
 }
 
 async function loadRowsByIds(
@@ -554,14 +568,21 @@ export async function GET(req: NextRequest) {
       ...matchedAgencies.map((agencyRow) => agencyRow.id),
       ...serviceRows.map((service) => String(service.agency_id ?? "")).filter(Boolean),
     ]));
+    // Fix B: gruppi prenotazione dei services trovati, per il badge "Gruppo".
+    const bookingGroupIds = Array.from(new Set(
+      serviceRows.map((service) => String(service.booking_group_id ?? "")).filter(Boolean)
+    ));
     const serviceIds = Array.from(new Set(serviceRows.map((service) => service.id).filter(Boolean)));
 
-    const [hotelsResult, agenciesResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult, cancellationLogsResult] = await Promise.all([
+    const [hotelsResult, agenciesResult, bookingGroupsResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult, cancellationLogsResult] = await Promise.all([
       hotelIds.length
         ? auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).in("id", hotelIds)
         : Promise.resolve({ data: [], error: null }),
       agencyIds.length
         ? auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId).in("id", agencyIds)
+        : Promise.resolve({ data: [], error: null }),
+      bookingGroupIds.length
+        ? auth.admin.from("booking_groups").select("id,name").eq("tenant_id", tenantId).in("id", bookingGroupIds)
         : Promise.resolve({ data: [], error: null }),
       auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
       // Usato solo per arrivalLeg (vedi sotto) -> solo regole ARRIVO (to_ischia), mai PARTENZA.
@@ -600,12 +621,13 @@ export async function GET(req: NextRequest) {
         : Promise.resolve({ data: [], error: null }),
     ]);
 
-    const error = hotelsResult.error ?? agenciesResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? busAllocationsResult.error ?? busFerryConfigsResult.error ?? busStopsResult.error ?? busLinesResult.error ?? hotelPickupTimesResult.error ?? cancellationLogsResult.error ?? null;
+    const error = hotelsResult.error ?? agenciesResult.error ?? bookingGroupsResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? busAllocationsResult.error ?? busFerryConfigsResult.error ?? busStopsResult.error ?? busLinesResult.error ?? hotelPickupTimesResult.error ?? cancellationLogsResult.error ?? null;
     if (error) throw new Error(error.message);
 
     const hotelNameById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
     const hotelZoneById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; zone?: string | null }) => [hotel.id, hotel.zone ?? null]));
     const agencyNameById = new Map([...(matchedAgencies ?? []), ...(agenciesResult.data ?? [])].map((item: { id: string; name: string }) => [item.id, item.name]));
+    const bookingGroupNameById = new Map((bookingGroupsResult.data ?? []).map((group: { id: string; name: string }) => [group.id, group.name]));
     const busAllocationsByServiceId = new Map<string, BusAllocationDetailRow[]>();
     for (const allocation of (busAllocationsResult.data ?? []) as BusAllocationDetailRow[]) {
       const rows = busAllocationsByServiceId.get(allocation.service_id) ?? [];
@@ -767,6 +789,8 @@ export async function GET(req: NextRequest) {
           linked_service_id: r.linked_service_id ?? null,
           practice_number: r.practice_number ?? null,
           agency_booking_id: r.agency_booking_id ?? null,
+          booking_group_id: r.booking_group_id ?? null,
+          booking_group_name: r.booking_group_id ? bookingGroupNameById.get(r.booking_group_id) ?? null : null,
           outbound_ferry_departure_time: ferryPickupRule?.departureTime ?? arrivalLeg.time ?? null,
           outbound_ferry_arrival_time: isBus
             ? busArrivalTime

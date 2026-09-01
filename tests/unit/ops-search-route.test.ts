@@ -101,6 +101,7 @@ function createFakeAdmin(seed: Partial<Record<string, Row[]>> = {}) {
     hotels: [],
     agencies: [],
     agency_bookings: [],
+    booking_groups: [],
     ferry_schedules: [],
     ferry_pickup_rules: [],
     ...seed,
@@ -608,6 +609,48 @@ describe("GET /api/ops/search — Obiettivo C: ricerca per Voucher No MTS Globe"
     expect(byPhone.results.map((r: Row) => r.id)).toEqual(["s-phone"]);
     const byHotel = await (await callGet("?q=Ischia Palace")).json();
     expect(byHotel.results.map((r: Row) => r.id)).toEqual(["s-hotel"]);
+  });
+});
+
+describe("GET /api/ops/search — Fix B: visibilità services di Booking Groups", () => {
+  it("service draft di un booking group (is_draft=true, needs_review) compare nei risultati con badge gruppo", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-1", tenant_id: TENANT_A, name: "Gruppo GIACOMONI" }],
+      services: [
+        service("s1", TENANT_A, { customer_name: "Bernardi Luisa", is_draft: true, status: "needs_review", booking_group_id: "bg-1" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Bernardi")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].booking_group_id).toBe("bg-1");
+    expect(body.results[0].booking_group_name).toBe("Gruppo GIACOMONI");
+  });
+
+  it("un draft SENZA booking_group_id resta escluso (nessuna regressione sul filtro is_draft originale)", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("s1", TENANT_A, { customer_name: "Bozza Inbound", is_draft: true, status: "needs_review", booking_group_id: null }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Bozza")).json();
+    expect(body.results).toEqual([]);
+  });
+
+  it("isolamento tenant: un service di gruppo di un altro tenant non compare", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-a", tenant_id: TENANT_A, name: "Gruppo A" }, { id: "bg-b", tenant_id: TENANT_B, name: "Gruppo B" }],
+      services: [
+        service("s-a", TENANT_A, { customer_name: "Stesso Nome", is_draft: true, status: "needs_review", booking_group_id: "bg-a" }),
+        service("s-b", TENANT_B, { customer_name: "Stesso Nome", is_draft: true, status: "needs_review", booking_group_id: "bg-b" }),
+      ],
+    });
+    authorizeAs(fake.admin, TENANT_A);
+    const body = await (await callGet("?q=Stesso Nome")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toContain("s-a");
+    expect(ids).not.toContain("s-b");
   });
 });
 

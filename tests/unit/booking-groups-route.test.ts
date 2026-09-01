@@ -280,6 +280,79 @@ describe("POST create_group / update_group — Hotel / struttura (Obiettivo A)",
   });
 });
 
+describe("POST update_group — Fix A: propagazione date/hotel ai services draft", () => {
+  const DRAFT_ARRIVAL = "d1111111-1111-4111-8111-111111111111";
+  const DRAFT_DEPARTURE = "d2222222-2222-4222-8222-222222222222";
+  const OPERATIONAL_SVC = "d3333333-3333-4333-8333-333333333333";
+
+  it("aggiorna service_date/return_date: date draft aggiornate per direzione, service operativo mai toccato", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, service_date: "2026-09-06", return_date: "2026-09-13" }],
+      services: [
+        { id: DRAFT_ARRIVAL, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: true, direction: "arrival", date: "2026-09-06", hotel_id: null },
+        { id: DRAFT_DEPARTURE, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: true, direction: "departure", date: "2026-09-13", hotel_id: null },
+        { id: OPERATIONAL_SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: false, direction: "arrival", date: "2026-09-06", hotel_id: null },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, service_date: "2026-09-20", return_date: "2026-09-27" }));
+    expect(res.status).toBe(200);
+
+    const svcUpdates = writes.updates.filter((w) => w.table === "services");
+    const arrivalUpd = svcUpdates.find((w) => w.filters.id === DRAFT_ARRIVAL);
+    const departureUpd = svcUpdates.find((w) => w.filters.id === DRAFT_DEPARTURE);
+    expect(arrivalUpd?.payload.date).toBe("2026-09-20");
+    expect(departureUpd?.payload.date).toBe("2026-09-27");
+    expect(svcUpdates.find((w) => w.filters.id === OPERATIONAL_SVC)).toBeUndefined();
+  });
+
+  it("departure senza return_date: usa service_date come fallback (stessa regola della UI)", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, service_date: "2026-09-06", return_date: null }],
+      services: [
+        { id: DRAFT_DEPARTURE, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: true, direction: "departure", date: "2026-09-01", hotel_id: null },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, service_date: "2026-09-20" }));
+    expect(res.status).toBe(200);
+    const upd = writes.updates.find((w) => w.table === "services" && w.filters.id === DRAFT_DEPARTURE);
+    expect(upd?.payload.date).toBe("2026-09-20");
+  });
+
+  it("aggiorna hotel_id del gruppo: draft con hotel_id null viene riempito, draft con hotel_id già impostato resta invariato", async () => {
+    const EXISTING_HOTEL = "eeeeeeee-1111-4eee-8eee-eeeeeeeeeeee";
+    const NEW_GROUP_HOTEL = "ffffffff-1111-4fff-8fff-ffffffffffff";
+    const DRAFT_WITH_HOTEL = "d4444444-4444-4444-8444-444444444444";
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      hotels: [{ id: NEW_GROUP_HOTEL, tenant_id: TENANT }],
+      services: [
+        { id: DRAFT_ARRIVAL, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: true, direction: "arrival", date: null, hotel_id: null },
+        { id: DRAFT_WITH_HOTEL, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: true, direction: "arrival", date: null, hotel_id: EXISTING_HOTEL },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, hotel_id: NEW_GROUP_HOTEL }));
+    expect(res.status).toBe(200);
+    const svcUpdates = writes.updates.filter((w) => w.table === "services");
+    expect(svcUpdates.find((w) => w.filters.id === DRAFT_ARRIVAL)?.payload.hotel_id).toBe(NEW_GROUP_HOTEL);
+    // Il draft con hotel già impostato non genera nessuna scrittura (non sovrascritto).
+    expect(svcUpdates.find((w) => w.filters.id === DRAFT_WITH_HOTEL)).toBeUndefined();
+  });
+
+  it("patch che non tocca service_date/return_date/hotel_id: nessuna query/scrittura extra sui services", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      services: [{ id: DRAFT_ARRIVAL, tenant_id: TENANT, booking_group_id: GROUP_ID, is_draft: true, direction: "arrival", date: "2026-09-06", hotel_id: null }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, contact_name: "Nuovo referente" }));
+    expect(res.status).toBe(200);
+    expect(writes.updates.filter((w) => w.table === "services")).toHaveLength(0);
+  });
+});
+
 describe("POST add_stop — pianificazione fermata, nessun service/allocazione", () => {
   it("città e punto di carico separati, stop_id null, nessuna tenant_bus_allocation", async () => {
     const { admin, writes } = makeAdmin({ booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }] });

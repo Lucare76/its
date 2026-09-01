@@ -97,7 +97,7 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     auth.admin.from("booking_group_stops").select("id, stop_id, city, pickup_point, direction").eq("tenant_id", tenantId),
     auth.admin
       .from("booking_groups")
-      .select("id, name, kind, status, contact_name, contact_phone, outbound_ferry_company, outbound_departure_port, outbound_ferry_time, outbound_arrival_port, return_ferry_company, return_departure_port, return_ferry_time, return_arrival_port")
+      .select("id, name, kind, status, hotel_id, contact_name, contact_phone, outbound_ferry_company, outbound_departure_port, outbound_ferry_time, outbound_arrival_port, return_ferry_company, return_departure_port, return_ferry_time, return_arrival_port")
       .eq("tenant_id", tenantId),
     date
       ? auth.admin.from("bus_unit_driver_dates").select("*").eq("tenant_id", tenantId).eq("travel_date", date)
@@ -141,6 +141,9 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
   );
   const bookingGroupNameById = new Map(
     ((bookingGroupsResult.data ?? []) as Array<{ id: string; name: string | null }>).map((group) => [group.id, group.name]),
+  );
+  const bookingGroupHotelIdById = new Map(
+    ((bookingGroupsResult.data ?? []) as Array<{ id: string; hotel_id: string | null }>).map((group) => [group.id, group.hotel_id]),
   );
   const bookingGroupContactById = new Map(
     ((bookingGroupsResult.data ?? []) as Array<{ id: string; contact_name: string | null; contact_phone: string | null }>).map((group) => [
@@ -238,6 +241,12 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     const hotelFromNotes = service.notes?.match(/Hotel:\s*([^·|\n]+)/)?.[1]?.trim();
     const bookingGroupContact = service.booking_group_id ? bookingGroupContactById.get(service.booking_group_id) : null;
     const bookingGroupFerry = service.booking_group_id ? bookingGroupFerryById.get(service.booking_group_id) : null;
+    // Fix D: se il service non ha un hotel proprio, mostra l'hotel del
+    // booking group (join reale su hotels, mai testo libero) prima di
+    // ricadere sul parsing delle note e poi su "Hotel N/D". Priorita':
+    // hotel del service > hotel del gruppo > hotel dalle note > N/D.
+    const bookingGroupHotelId = service.booking_group_id ? bookingGroupHotelIdById.get(service.booking_group_id) : null;
+    const bookingGroupHotel = bookingGroupHotelId ? hotelsById.get(bookingGroupHotelId) : null;
     return {
       ...service,
       customer_display_name: getCustomerFullName(service),
@@ -252,8 +261,8 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       booking_group_return_departure_port: bookingGroupFerry?.return_departure_port ?? null,
       booking_group_return_ferry_time: bookingGroupFerry?.return_ferry_time ?? null,
       booking_group_return_arrival_port: bookingGroupFerry?.return_arrival_port ?? null,
-      hotel_name: hotel?.name ?? hotelFromNotes ?? "Hotel N/D",
-      hotel_zone: hotel?.zone ?? null,
+      hotel_name: hotel?.name ?? bookingGroupHotel?.name ?? hotelFromNotes ?? "Hotel N/D",
+      hotel_zone: hotel?.zone ?? bookingGroupHotel?.zone ?? null,
       derived_family_code: identity.family_code,
       derived_family_name: identity.family_name,
       derived_line_code: identity.lineCode,

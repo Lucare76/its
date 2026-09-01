@@ -77,3 +77,83 @@ describe("loadBusNetwork — read-model diretto Linea Bus (§C/§H)", () => {
     expect(busLoad?.remaining_seats).toBe(0);
   });
 });
+
+describe("loadBusNetwork — Fix D: fallback hotel del booking group quando service.hotel_id è null", () => {
+  const GROUP_ID = "bg-giacomoni";
+  const HOTEL_ID = "hotel-adriatico";
+
+  function baseSeed(overrides: Partial<Record<string, Row[]>> = {}): Record<string, Row[]> {
+    return {
+      tenant_bus_lines: [],
+      tenant_bus_line_stops: [],
+      tenant_bus_units: [],
+      tenant_bus_allocations: [],
+      ops_bus_allocation_details: [],
+      tenant_bus_allocation_moves: [],
+      hotels: [{ id: HOTEL_ID, tenant_id: TENANT, name: "Hotel Adriatico", zone: "porto" }],
+      bus_import_pending: [],
+      bus_unit_driver_dates: [],
+      bus_ischia_dist_buses: [],
+      bus_ischia_dist_allocations: [],
+      vehicles: [],
+      driver_profiles: [],
+      bus_line_ferry_config: [],
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, name: "Gruppo GIACOMONI", kind: "bus_exclusive", status: "passengers_defined", hotel_id: HOTEL_ID }],
+      ...overrides,
+    };
+  }
+
+  it("service.hotel_id null + booking_group_id valorizzato → hotel_name usa l'hotel del gruppo, non 'Hotel N/D'", async () => {
+    const auth = {
+      admin: makeAdmin(baseSeed({
+        services: [
+          { id: "svc-1", tenant_id: TENANT, customer_name: "Bernardi Luisa", date: "2026-09-13", time: "05:10", pax: 1, direction: "arrival", hotel_id: null, booking_group_id: GROUP_ID, booking_service_kind: "bus_city_hotel" },
+        ],
+      })),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+
+    const result = await loadBusNetwork(auth);
+    const svc = result.services.find((s: Record<string, unknown>) => s.id === "svc-1") as Record<string, unknown>;
+    expect(svc.hotel_name).toBe("Hotel Adriatico");
+    expect(svc.hotel_name).not.toBe("Hotel N/D");
+  });
+
+  it("service.hotel_id valorizzato ha priorità sull'hotel del gruppo", async () => {
+    const OWN_HOTEL_ID = "hotel-own";
+    const auth = {
+      admin: makeAdmin(baseSeed({
+        hotels: [
+          { id: HOTEL_ID, tenant_id: TENANT, name: "Hotel Adriatico", zone: "porto" },
+          { id: OWN_HOTEL_ID, tenant_id: TENANT, name: "Hotel Proprio", zone: "centro" },
+        ],
+        services: [
+          { id: "svc-2", tenant_id: TENANT, customer_name: "Onori Valdes", date: "2026-09-13", time: "05:10", pax: 1, direction: "arrival", hotel_id: OWN_HOTEL_ID, booking_group_id: GROUP_ID, booking_service_kind: "bus_city_hotel" },
+        ],
+      })),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+
+    const result = await loadBusNetwork(auth);
+    const svc = result.services.find((s: Record<string, unknown>) => s.id === "svc-2") as Record<string, unknown>;
+    expect(svc.hotel_name).toBe("Hotel Proprio");
+  });
+
+  it("nessun booking_group_id e nessun hotel_id → resta 'Hotel N/D' (nessuna regressione)", async () => {
+    const auth = {
+      admin: makeAdmin(baseSeed({
+        services: [
+          { id: "svc-3", tenant_id: TENANT, customer_name: "Cliente Senza Gruppo", date: "2026-09-13", time: "05:10", pax: 1, direction: "arrival", hotel_id: null, booking_group_id: null, booking_service_kind: "bus_city_hotel" },
+        ],
+      })),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+
+    const result = await loadBusNetwork(auth);
+    const svc = result.services.find((s: Record<string, unknown>) => s.id === "svc-3") as Record<string, unknown>;
+    expect(svc.hotel_name).toBe("Hotel N/D");
+  });
+});
