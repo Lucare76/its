@@ -2794,7 +2794,7 @@ export default function BusNetworkPage() {
                           return (
                           <div key={stop.id} className="px-3 py-2">
                             <div className="mb-1 flex items-center justify-between">
-                              <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                              <div className="flex min-w-0 items-start gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
                                 <input
                                   type="checkbox"
                                   checked={allocs.length > 0 && allocs.every((a) => selectedAllocIds.has(a.allocation_id))}
@@ -2811,10 +2811,14 @@ export default function BusNetworkPage() {
                                   className="shrink-0 accent-indigo-600"
                                   title={`Seleziona tutti ${stop.stop_name}`}
                                 />
-                                <span className="text-slate-600">📍 {stopHeader.primary}</span>
-                                {stopHeader.secondary && (
-                                  <span className="min-w-0 truncate font-semibold normal-case tracking-normal text-slate-400">{stopHeader.secondary}</span>
-                                )}
+                                <div className="min-w-0 leading-tight">
+                                  <span className="block text-slate-600">📍 {stopHeader.primary}</span>
+                                  {stopHeader.secondary && (
+                                    <span className="mt-0.5 block whitespace-normal break-words font-semibold normal-case tracking-normal text-slate-500">
+                                      {stopHeader.secondary}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               {stop.pickup_time && (
                                 <span className="ml-2 shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500">
@@ -2824,6 +2828,7 @@ export default function BusNetworkPage() {
                             </div>
                             {allocs.map((alloc) => {
                               const displayName = exclusiveAllocationDisplayName({ ...unit, tag: displayTag }, alloc);
+                              const showPassengerDetails = displayTag !== "esclusivo" || Boolean(displayName);
                               return (
                               <div key={alloc.allocation_id}
                                 draggable
@@ -2842,6 +2847,7 @@ export default function BusNetworkPage() {
                                       {displayName}
                                     </div>
                                   )}
+                                  {showPassengerDetails && (
                                   <div className="flex items-center gap-1">
                                     {editCardHotelId === alloc.allocation_id ? (
                                       <div className="relative w-full" onClick={(e) => e.stopPropagation()}>
@@ -2893,31 +2899,32 @@ export default function BusNetworkPage() {
                                       </span>
                                     )}
                                   </div>
-                                  {editCardPhoneId === alloc.allocation_id ? (
-                                    <input
-                                      autoFocus
-                                      type="text"
-                                      value={editCardPhoneValue}
-                                      onClick={(e) => e.stopPropagation()}
-                                      onChange={(e) => setEditCardPhoneValue(e.target.value)}
-                                      onBlur={async () => {
-                                        if (editCardPhoneValue !== (alloc.customer_phone ?? "")) {
-                                          await post("update_phone", { service_id: alloc.service_id, phone: editCardPhoneValue || null });
-                                        }
-                                        setEditCardPhoneId(null);
-                                      }}
-                                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditCardPhoneId(null); }}
-                                      className="w-full rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                                    />
-                                  ) : (
-                                    <div
-                                      className="cursor-pointer text-xs text-slate-300 hover:text-indigo-500"
-                                      title="Clicca per modificare telefono"
-                                      onClick={(e) => { e.stopPropagation(); setEditCardPhoneId(alloc.allocation_id); setEditCardPhoneValue(alloc.customer_phone ?? ""); }}
-                                    >
-                                      {alloc.customer_phone || <span className="italic">+ telefono</span>}
-                                    </div>
                                   )}
+                                  {showPassengerDetails && (editCardPhoneId === alloc.allocation_id ? (
+                                  <input
+                                    autoFocus
+                                    type="text"
+                                    value={editCardPhoneValue}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => setEditCardPhoneValue(e.target.value)}
+                                    onBlur={async () => {
+                                      if (editCardPhoneValue !== (alloc.customer_phone ?? "")) {
+                                        await post("update_phone", { service_id: alloc.service_id, phone: editCardPhoneValue || null });
+                                      }
+                                      setEditCardPhoneId(null);
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditCardPhoneId(null); }}
+                                    className="w-full rounded border border-indigo-300 bg-indigo-50 px-1 py-0.5 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                  />
+                                  ) : (
+                                  <div
+                                    className="cursor-pointer text-xs text-slate-300 hover:text-indigo-500"
+                                    title="Clicca per modificare telefono"
+                                    onClick={(e) => { e.stopPropagation(); setEditCardPhoneId(alloc.allocation_id); setEditCardPhoneValue(alloc.customer_phone ?? ""); }}
+                                  >
+                                    {alloc.customer_phone || <span className="italic">+ telefono</span>}
+                                  </div>
+                                  ))}
                                 </div>
                                 <div className="flex flex-shrink-0 flex-col items-end gap-1">
                                   {editPaxAllocId === alloc.allocation_id ? (
