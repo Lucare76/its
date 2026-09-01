@@ -259,6 +259,101 @@ describe("POST add_stop — pianificazione fermata, nessun service/allocazione",
   });
 });
 
+describe("POST update_stop — modifica orario/punto di carico senza duplicare tenant_bus_line_stops", () => {
+  const BG_STOP_ID = "66666666-6666-4666-8666-666666666666";
+  const CATALOG_ID_A = "77777777-7777-4777-8777-777777777777";
+  const CATALOG_ID_B = "88888888-8888-4888-8888-888888888888";
+
+  /**
+   * Forza un errore 23505 sulla PRIMA .update() eseguita su `table`
+   * (simula il vincolo unique del DB), poi torna al comportamento normale
+   * del fake builder per tutte le chiamate successive.
+   */
+  function withFirstUpdateError(admin: { from: (t: string) => Record<string, unknown> }, table: string, dbError: { code: string; message: string }) {
+    const originalFrom = admin.from.bind(admin);
+    let triggered = false;
+    admin.from = (t: string) => {
+      const b = originalFrom(t) as Record<string, unknown> & { update: (p: Row) => Record<string, unknown>; then: unknown };
+      if (t !== table) return b;
+      const originalUpdate = b.update.bind(b);
+      b.update = (payload: Row) => {
+        const chain = originalUpdate(payload) as Record<string, unknown> & { then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => unknown };
+        const originalThen = chain.then.bind(chain);
+        chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+          if (!triggered) {
+            triggered = true;
+            return Promise.resolve({ data: null, error: dbError }).then(resolve, reject);
+          }
+          return originalThen(resolve, reject);
+        };
+        return chain;
+      };
+      return b;
+    };
+    return admin;
+  }
+
+  it("modifica orario su fermata già collegata al catalogo → update riuscito, nessun errore unique constraint", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      booking_group_stops: [{ id: BG_STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Barano", pickup_point: "Chiesa di San Rocco", direction: "arrival", stop_id: CATALOG_ID_A }],
+      tenant_bus_line_stops: [{ id: CATALOG_ID_A, tenant_id: TENANT, bus_line_id: BUS_LINE_ID, direction: "arrival", city: "Barano", stop_name: "Barano", pickup_note: "Chiesa di San Rocco", pickup_time: "05:20", active: true }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+
+    const res = await POST(post({
+      action: "update_stop",
+      id: BG_STOP_ID,
+      city: "Barano",
+      pickup_point: "Chiesa di San Rocco",
+      expected_pax: 20,
+      direction: "arrival",
+      pickup_time: "05:35",
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const catalogUpdate = writes.updates.find((w) => w.table === "tenant_bus_line_stops" && w.filters.id === CATALOG_ID_A);
+    expect(catalogUpdate?.payload).toMatchObject({ city: "Barano", stop_name: "Barano", pickup_note: "Chiesa di San Rocco", pickup_time: "05:35" });
+    expect(writes.inserts.filter((w) => w.table === "tenant_bus_line_stops")).toHaveLength(0);
+  });
+
+  it("modifica che collide con una fermata canonica già esistente (23505) → riusa la fermata esistente invece di rompere il salvataggio", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      booking_group_stops: [{ id: BG_STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Vecchia Città", pickup_point: "Vecchio Punto", direction: "arrival", stop_id: CATALOG_ID_A }],
+      tenant_bus_line_stops: [
+        { id: CATALOG_ID_A, tenant_id: TENANT, bus_line_id: BUS_LINE_ID, direction: "arrival", city: "Vecchia Città", stop_name: "Vecchia Città", pickup_note: "Vecchio Punto", pickup_time: "08:00", active: true },
+        { id: CATALOG_ID_B, tenant_id: TENANT, bus_line_id: BUS_LINE_ID, direction: "arrival", city: "Barano", stop_name: "Barano", pickup_note: "Chiesa di San Rocco", pickup_time: "05:20", active: true },
+      ],
+    });
+    withFirstUpdateError(admin, "tenant_bus_line_stops", { code: "23505", message: 'duplicate key value violates unique constraint "tenant_bus_line_stops_line_direction_name_pickup_key"' });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+
+    const res = await POST(post({
+      action: "update_stop",
+      id: BG_STOP_ID,
+      city: "Barano",
+      pickup_point: "Chiesa di San Rocco",
+      expected_pax: 20,
+      direction: "arrival",
+      pickup_time: "05:30",
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.stop.stop_id).toBe(CATALOG_ID_B);
+    const relink = writes.updates.find((w) => w.table === "booking_group_stops" && w.filters.id === BG_STOP_ID && w.payload.stop_id === CATALOG_ID_B);
+    expect(relink).toBeTruthy();
+    // niente nuova riga tenant_bus_line_stops creata: la fermata canonica esistente viene riusata
+    expect(writes.inserts.filter((w) => w.table === "tenant_bus_line_stops")).toHaveLength(0);
+    const timeSync = writes.updates.find((w) => w.table === "tenant_bus_line_stops" && w.filters.id === CATALOG_ID_B && w.payload.pickup_time === "05:30");
+    expect(timeSync).toBeTruthy();
+  });
+});
+
 describe("POST upsert_bus_reservation — esclusiva DATE-SCOPED", () => {
   it("G: riserva unit il 2026-09-12; nessuna riserva implicita altre date; tenant_bus_units NON modificato", async () => {
     const { admin, writes } = makeAdmin({

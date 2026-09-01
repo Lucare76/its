@@ -22,6 +22,7 @@ import {
   createBookingGroup,
   patchBookingGroup,
   addBookingGroupStop,
+  resolveCanonicalBookingGroupStop,
   addBookingGroupPassengers,
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
@@ -376,7 +377,7 @@ export async function POST(request: NextRequest) {
     if (current.stop_id) {
       const catalogPatch = compact({
         city: updatedStop.city,
-        stop_name: updatedStop.pickup_point ?? updatedStop.city,
+        stop_name: updatedStop.city,
         pickup_note: updatedStop.pickup_point,
         pickup_time: pickup_time ?? undefined,
         direction: updatedStop.direction,
@@ -387,7 +388,39 @@ export async function POST(request: NextRequest) {
         .update(catalogPatch)
         .eq("tenant_id", tenantId)
         .eq("id", current.stop_id);
-      if (catalogError) return NextResponse.json({ ok: false, error: catalogError.message }, { status: 500 });
+      if (catalogError) {
+        const isDuplicate = catalogError.code === "23505" || catalogError.message?.includes("tenant_bus_line_stops_line_direction_name_pickup_key");
+        if (!isDuplicate) return NextResponse.json({ ok: false, error: catalogError.message }, { status: 500 });
+        // La combinazione citta/punto di carico coincide gia con un'altra
+        // fermata canonica esistente (es. stesso pickup_point riusato su piu
+        // citta della stessa linea/direzione): riusala invece di rompere il
+        // salvataggio con l'errore DB grezzo.
+        const { data: currentCatalog } = await admin
+          .from("tenant_bus_line_stops")
+          .select("bus_line_id")
+          .eq("tenant_id", tenantId)
+          .eq("id", current.stop_id)
+          .maybeSingle();
+        const busLineId = (currentCatalog as { bus_line_id?: string | null } | null)?.bus_line_id ?? null;
+        const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, updatedStop.city, updatedStop.direction, updatedStop.pickup_point, busLineId);
+        if (!canonical || canonical.stopId === current.stop_id) {
+          return NextResponse.json({ ok: false, error: "Fermata gia presente nel catalogo con questa combinazione citta/punto di carico: modifica citta o punto di carico." }, { status: 409 });
+        }
+        const { error: relinkError } = await admin
+          .from("booking_group_stops")
+          .update({ stop_id: canonical.stopId, updated_at: new Date().toISOString() })
+          .eq("tenant_id", tenantId)
+          .eq("id", id);
+        if (relinkError) return NextResponse.json({ ok: false, error: relinkError.message }, { status: 500 });
+        updatedStop.stop_id = canonical.stopId;
+        if (pickup_time !== undefined && (pickup_time ?? null) !== canonical.pickupTime) {
+          await admin
+            .from("tenant_bus_line_stops")
+            .update({ pickup_time: pickup_time ?? null, updated_at: new Date().toISOString() })
+            .eq("tenant_id", tenantId)
+            .eq("id", canonical.stopId);
+        }
+      }
     }
     const nextDefaultName = updatedStop.pickup_point ? `${updatedStop.city} - ${updatedStop.pickup_point}` : updatedStop.city;
     const { data: linkedServices, error: linkedServicesError } = await admin
