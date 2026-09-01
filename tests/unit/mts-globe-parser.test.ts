@@ -100,6 +100,25 @@ describe("parseMtsGlobeRows", () => {
     expect(result.bookings[0].pax).toBe(4);
   });
 
+  it("Start Date come serial Excel numerico (cella data nativa, non testo) viene interpretata correttamente", () => {
+    // Bug reale osservato su import del file MTS Globe completo dal browser:
+    // XLSX.utils.sheet_to_json(sheet, { defval: "" }) (raw:true di default)
+    // restituisce le celle data come numero, non come "DD.MM.YYYY" — 149/149
+    // righe del file reale fallivano con "Data non valida" prima del fix.
+    // 46264 = 30 agosto 2026 (verificato contro il file reale).
+    const rows = [baseRow({ "Voucher No": "V7", "Start Date": 46264 })];
+    const result = parseMtsGlobeRows(rows);
+    expect(result.errors).toHaveLength(0);
+    expect(result.bookings[0].legs[0].date).toBe("2026-08-30");
+  });
+
+  it("Start Date come stringa DD.MM.YYYY continua a funzionare (compatibilità payload JSON/curl/test esistenti)", () => {
+    const rows = [baseRow({ "Voucher No": "V8", "Start Date": "30.08.2026" })];
+    const result = parseMtsGlobeRows(rows);
+    expect(result.errors).toHaveLength(0);
+    expect(result.bookings[0].legs[0].date).toBe("2026-08-30");
+  });
+
   it("riga con Voucher No mancante va in errore, non genera booking", () => {
     const rows = [baseRow({ "Voucher No": "" })];
     const result = parseMtsGlobeRows(rows);

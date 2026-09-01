@@ -101,7 +101,28 @@ function extractHotelName(cell: string): string | null {
   return name.length > 0 ? name : null;
 }
 
-function parseDate(raw: string): string | null {
+// Converte un serial date Excel (giorni dal 1899-12-30, sistema 1900) in ISO
+// YYYY-MM-DD. Offset di 25569 giorni tra l'epoca Excel e l'epoca Unix
+// (1970-01-01) — formula standard, assorbe gia' il bug storico del 29
+// febbraio 1900 (inesistente ma contato da Excel) senza gestirlo a parte.
+function excelSerialToIsoDate(serial: number): string | null {
+  if (!Number.isFinite(serial) || serial <= 0) return null;
+  const utcMs = Math.round((serial - 25569) * 86400 * 1000);
+  const date = new Date(utcMs);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDate(raw: unknown): string | null {
+  // Il lettore XLSX lato browser (raw:true, default in page.tsx) restituisce
+  // le celle data Excel formattate come data nativa come NUMERO seriale, non
+  // come testo "DD.MM.YYYY" — verificato sul file MTS Globe reale (colonna
+  // "Start Date" sempre numerica). Gestito qui per restare robusti a
+  // entrambi i formati (numero da Excel, stringa da payload JSON/test/CSV)
+  // senza duplicare la logica di parsing altrove.
+  if (typeof raw === "number") {
+    return excelSerialToIsoDate(raw);
+  }
   const match = clean(raw).match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
   if (!match) return null;
   const day = Number(match[1]);
@@ -172,7 +193,11 @@ export function parseMtsGlobeRows(rawRows: Array<Record<string, unknown>>): MtsG
     const rowIndex = index + 2; // riga 1 = header
     const voucherNo = clean(raw["Voucher No"]);
     const serviceBaseCode = clean(raw["Service Base Code"]);
-    const dateRaw = clean(raw["Start Date"]);
+    // Valore grezzo (non "clean()"-ato): parseDate deve vedere se e' un
+    // number (cella data Excel nativa) o una string, per scegliere il ramo
+    // di parsing corretto — clean() lo trasformerebbe sempre in stringa,
+    // rendendo indistinguibile un serial Excel da un testo numerico.
+    const dateRaw = raw["Start Date"];
 
     if (!voucherNo) {
       errors.push({ rowIndex, voucherNo: null, message: "Voucher No mancante: riga non importabile." });
