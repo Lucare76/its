@@ -675,7 +675,17 @@ function EditableStopRow({ stop, onSave }: {
 
   if (!open) {
     return (
-      <button type="button" className="text-[11px] font-semibold text-indigo-600 underline" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="text-[11px] font-semibold text-indigo-600 underline"
+        onClick={() => {
+          setCity(stop.city);
+          setPickup(stop.pickup_point ?? "");
+          setPax(String(stop.expected_pax));
+          setDirection(stop.direction);
+          setOpen(true);
+        }}
+      >
         Modifica città/punto
       </button>
     );

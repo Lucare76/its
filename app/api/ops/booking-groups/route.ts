@@ -374,8 +374,15 @@ export async function POST(request: NextRequest) {
         .eq("id", current.stop_id);
       if (catalogError) return NextResponse.json({ ok: false, error: catalogError.message }, { status: 500 });
     }
-    const previousDefaultName = current.pickup_point ? `${current.city} - ${current.pickup_point}` : current.city;
     const nextDefaultName = updatedStop.pickup_point ? `${updatedStop.city} - ${updatedStop.pickup_point}` : updatedStop.city;
+    const { data: linkedServices, error: linkedServicesError } = await admin
+      .from("services")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_stop_id", id);
+    if (linkedServicesError) return NextResponse.json({ ok: false, error: linkedServicesError.message }, { status: 500 });
+
+    const serviceIds = ((linkedServices ?? []) as Array<{ id: string }>).map((service) => service.id);
     const { error: servicesError } = await admin
       .from("services")
       .update({
@@ -383,9 +390,16 @@ export async function POST(request: NextRequest) {
         customer_name: nextDefaultName,
       })
       .eq("tenant_id", tenantId)
-      .eq("booking_group_stop_id", id)
-      .eq("customer_name", previousDefaultName);
+      .eq("booking_group_stop_id", id);
     if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
+    if (serviceIds.length > 0) {
+      const { error: allocationsError } = await admin
+        .from("tenant_bus_allocations")
+        .update({ stop_name: nextDefaultName })
+        .eq("tenant_id", tenantId)
+        .in("service_id", serviceIds);
+      if (allocationsError) return NextResponse.json({ ok: false, error: allocationsError.message }, { status: 500 });
+    }
     return NextResponse.json({ ok: true, stop: updatedStop });
   }
 
