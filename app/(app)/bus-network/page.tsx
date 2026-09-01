@@ -98,6 +98,15 @@ function busDisplayLabel(unit: Pick<BusUnit, "label" | "group_name">): string {
   return unit.group_name?.trim() || unit.label;
 }
 
+function busStopHeader(stop: Pick<BusStop, "city" | "stop_name" | "pickup_note">): { primary: string; secondary: string | null } {
+  const city = stop.city?.trim();
+  const stopName = stop.stop_name?.trim();
+  const pickup = stop.pickup_note?.trim();
+  const primary = city || stopName || "Fermata";
+  const secondary = pickup || (stopName && normalizeDisplayToken(stopName) !== normalizeDisplayToken(primary) ? stopName : null);
+  return { primary, secondary };
+}
+
 function normalizeDisplayToken(value: string | null | undefined): string {
   return String(value ?? "").trim().toUpperCase().replace(/\s+/g, " ");
 }
@@ -2544,7 +2553,8 @@ export default function BusNetworkPage() {
                   const isLow = remainingSeats <= unit.low_seat_threshold && remainingSeats > 0;
                   const isFull = remainingSeats <= 0;
                   const isClosed = unit.status === "closed" || unit.status === "completed";
-                  const displayTag = unit.tag ?? (selectedLine?.code === "GRUPPI_ESCLUSIVI" || selectedLine?.family_code === "GRUPPI_ESCLUSIVI" ? "esclusivo" : null);
+                  const isExclusiveLine = selectedLine?.code === "GRUPPI_ESCLUSIVI" || selectedLine?.family_code === "GRUPPI_ESCLUSIVI";
+                  const displayTag = isExclusiveLine ? "esclusivo" : unit.tag;
 
                   // Group by stop in correct order, within each stop ordina per orario di partenza
                   const stopGroups = activeStops.map((stop) => ({
@@ -2766,7 +2776,9 @@ export default function BusNetworkPage() {
 
                       {/* Passenger list grouped by stop */}
                       <div className="flex-1 divide-y divide-slate-100 overflow-y-auto bg-slate-50/35" onDragOver={(e) => e.preventDefault()}>
-                        {[...stopGroups.map(({ stop, allocs }) => (
+                        {[...stopGroups.map(({ stop, allocs }) => {
+                          const stopHeader = busStopHeader(stop);
+                          return (
                           <div key={stop.id} className="px-3 py-2">
                             <div className="mb-1 flex items-center justify-between">
                               <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
@@ -2786,9 +2798,9 @@ export default function BusNetworkPage() {
                                   className="shrink-0 accent-indigo-600"
                                   title={`Seleziona tutti ${stop.stop_name}`}
                                 />
-                                📍 {stop.stop_name}
-                                {stop.city && stop.city.toLowerCase() !== stop.stop_name.toLowerCase() && (
-                                  <span className="ml-1 font-normal normal-case text-slate-300">({stop.city})</span>
+                                <span className="text-slate-600">📍 {stopHeader.primary}</span>
+                                {stopHeader.secondary && (
+                                  <span className="min-w-0 truncate font-semibold normal-case tracking-normal text-slate-400">{stopHeader.secondary}</span>
                                 )}
                               </div>
                               {stop.pickup_time && (
@@ -2951,7 +2963,8 @@ export default function BusNetworkPage() {
                               );
                             })}
                           </div>
-                        )),
+                          );
+                        }),
                         ...ungrouped.map((alloc) => {
                           const displayName = exclusiveAllocationDisplayName({ ...unit, tag: displayTag }, alloc);
                           return (
