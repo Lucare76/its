@@ -1076,7 +1076,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     type="button"
                     title={collapsed ? AGENZIE_GROUP.label : undefined}
                     onClick={() => { if (!collapsed) setAgenzieOpen((v) => !v); }}
-                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/70 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-900 ${
                       groupActive
                         ? "bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white"
                         : "text-slate-200 hover:bg-white/10 hover:text-white"
@@ -1106,7 +1106,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     ) : null}
                   </button>
                   {!collapsed && isExpanded && (
-                    <div className="ml-4 mt-0.5 space-y-0.5 border-l-2 border-indigo-100 pl-2">
+                    <div className="ml-[22px] mt-1 space-y-0.5 border-l border-white/10 pl-2.5">
                       {AGENZIE_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
@@ -1116,12 +1116,16 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                             ? pendingAgencyReviewCount : 0;
                         return (
                           <div key={item.href} className="group/fav relative">
+                            {active ? (
+                              <span aria-hidden="true" className="absolute -left-[11px] top-1 bottom-1 w-0.5 rounded-full bg-indigo-400" />
+                            ) : null}
                             <Link href={item.href}
-                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "bg-slate-900 text-white font-semibold" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                              title={item.label}
+                              className={`flex min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/70 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-900 ${
+                                active ? "bg-white/10 font-semibold text-white" : "text-slate-300 hover:bg-white/5 hover:text-white"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
+                              <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
                                 {renderNavIcon(item.icon)}
                               </span>
                               <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -1132,7 +1136,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                             {isFav || favoritesEditMode ? (
                               <button type="button" onClick={() => toggleFavorite(item.href)}
                                 title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
-                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
+                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-400 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
                               >{isFav ? "★" : "☆"}</button>
                             ) : null}
                           </div>

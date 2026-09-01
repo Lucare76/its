@@ -275,6 +275,21 @@ const bulkMoveSchema = z.object({
   reason: z.string().max(500).optional().nullable()
 });
 
+// Fix C — assegnazione a blocco (fermata/gruppo) per bus esclusivi gruppo:
+// stessa fermata/bus/linea per tutti i services della selezione, ognuno con
+// il proprio pax_assigned (di solito il pax del singolo passeggero/service).
+const bulkAllocateSchema = z.object({
+  services: z.array(z.object({
+    service_id: z.string().uuid(),
+    pax_assigned: z.number().int().min(1).max(120),
+  })).min(1).max(200),
+  bus_line_id: z.string().uuid(),
+  bus_unit_id: z.string().uuid(),
+  direction: z.enum(["arrival", "departure"]),
+  stop_name: z.string().min(2).max(120),
+  stop_id: z.string().uuid()
+});
+
 const reorderStopsSchema = z.object({
   bus_line_id: z.string().uuid(),
   direction: z.enum(["arrival", "departure"]),
@@ -613,6 +628,85 @@ export async function POST(request: NextRequest) {
         checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)
       ]);
       return NextResponse.json({ ok: true, ...networkPayload, low_seat_alert: allocateAlert });
+    }
+
+    if (action === "allocate_services_bulk") {
+      const parsed = bulkAllocateSchema.parse(body);
+
+      // Stesso guard "bus esclusivo pieno" del path singolo, una sola volta.
+      const { data: targetUnit } = await auth.admin.from("tenant_bus_units")
+        .select("tag").eq("id", parsed.bus_unit_id).eq("tenant_id", tenantId).single();
+      if (targetUnit?.tag === "esclusivo") {
+        return NextResponse.json({ ok: false, error: "Bus esclusivo: non è possibile aggiungere altri passeggeri." }, { status: 400 });
+      }
+
+      const errors: Array<{ service_id: string; message: string }> = [];
+      let bookingGroupNameToApply: string | null = null;
+      for (const item of parsed.services) {
+        try {
+          await validateBusAllocationRequest(auth, {
+            tenantId,
+            serviceId: item.service_id,
+            busLineId: parsed.bus_line_id,
+            busUnitId: parsed.bus_unit_id,
+            stopId: parsed.stop_id,
+            stopName: parsed.stop_name,
+            direction: parsed.direction
+          });
+          const { error } = await auth.admin.rpc("allocate_bus_service", {
+            p_tenant_id: tenantId,
+            p_service_id: item.service_id,
+            p_bus_line_id: parsed.bus_line_id,
+            p_bus_unit_id: parsed.bus_unit_id,
+            p_stop_id: parsed.stop_id,
+            p_stop_name: parsed.stop_name,
+            p_direction: parsed.direction,
+            p_pax_assigned: item.pax_assigned,
+            p_notes: null,
+            p_created_by_user_id: auth.user.id
+          });
+          if (error) {
+            errors.push({ service_id: item.service_id, message: error.message });
+            continue;
+          }
+          if (!bookingGroupNameToApply) {
+            const { data: serviceGroup } = await auth.admin
+              .from("services")
+              .select("booking_group_id, booking_groups(name, kind)")
+              .eq("tenant_id", tenantId)
+              .eq("id", item.service_id)
+              .maybeSingle();
+            const bookingGroup = (serviceGroup as { booking_groups?: { name?: string | null; kind?: string | null } | null } | null)?.booking_groups;
+            if (bookingGroup?.kind === "bus_exclusive" && bookingGroup.name?.trim()) {
+              bookingGroupNameToApply = bookingGroup.name.trim();
+            }
+          }
+        } catch (itemError) {
+          errors.push({ service_id: item.service_id, message: itemError instanceof Error ? itemError.message : "Errore sconosciuto." });
+        }
+      }
+
+      if (errors.length === parsed.services.length) {
+        return NextResponse.json({ ok: false, error: errors[0]?.message ?? "Assegnazione non riuscita." }, { status: 400 });
+      }
+      if (bookingGroupNameToApply) {
+        await auth.admin
+          .from("tenant_bus_units")
+          .update({ group_name: bookingGroupNameToApply, updated_at: new Date().toISOString() })
+          .eq("tenant_id", tenantId)
+          .eq("id", parsed.bus_unit_id);
+      }
+      const [networkPayload, allocateAlert] = await Promise.all([
+        loadBusNetwork(auth),
+        checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)
+      ]);
+      return NextResponse.json({
+        ok: true,
+        ...networkPayload,
+        low_seat_alert: allocateAlert,
+        assigned_count: parsed.services.length - errors.length,
+        ...(errors.length > 0 ? { partial_errors: errors } : {})
+      });
     }
 
     if (action === "move_allocation") {

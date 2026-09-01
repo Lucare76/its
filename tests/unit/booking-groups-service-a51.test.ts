@@ -19,6 +19,7 @@ import {
   inspectOperationalBusGroupState,
   findAvailableBusesForGroup,
   allocateReservedBookingGroupBusService,
+  suggestBookingGroupCatalogStops,
 } from "@/lib/server/booking-groups-service";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -225,13 +226,84 @@ describe("addBookingGroupPassengers — idempotenza (§3)", () => {
       bus_line_id: BUS_LINE_ID,
       direction: "arrival",
       city: "Barano",
-      stop_name: "Chiesa di San Rocco",
+      stop_name: "Barano",
       pickup_note: "Chiesa di San Rocco",
       pickup_time: "05:20",
       is_manual: true,
       active: true,
     });
     expect(writes.inserts.find((w) => w.table === "booking_group_stops")?.row.stop_id).toBe(catalog?.id);
+  });
+
+  it("fermata gia presente nel catalogo -> riusa stop_id senza insert duplicato", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      tenant_bus_lines: [{ id: BUS_LINE_ID, tenant_id: TENANT, active: true }],
+      tenant_bus_line_stops: [{
+        id: CANONICAL_STOP_ID,
+        tenant_id: TENANT,
+        bus_line_id: BUS_LINE_ID,
+        city: "Formia",
+        stop_name: "Formia",
+        pickup_note: "Stazione",
+        direction: "arrival",
+        active: true,
+        pickup_time: "06:30",
+      }],
+    });
+    const res = await addBookingGroupStop(admin as never, actor, {
+      bookingGroupId: GROUP_ID,
+      city: "Formia",
+      pickup_point: "Stazione",
+      expected_pax: 20,
+      direction: "arrival",
+      create_catalog_stop: true,
+      bus_line_id: BUS_LINE_ID,
+      pickup_time: "06:30",
+    });
+    expect(res.ok).toBe(true);
+    expect(writes.inserts.filter((w) => w.table === "tenant_bus_line_stops")).toHaveLength(0);
+    expect(writes.inserts.find((w) => w.table === "booking_group_stops")?.row.stop_id).toBe(CANONICAL_STOP_ID);
+  });
+
+  it("suggerisce fermate catalogo per citta o punto di carico", async () => {
+    const { admin } = makeAdmin({
+      tenant_bus_line_stops: [
+        {
+          id: CANONICAL_STOP_ID,
+          tenant_id: TENANT,
+          bus_line_id: BUS_LINE_ID,
+          city: "Formia",
+          stop_name: "Formia",
+          pickup_note: "Stazione",
+          direction: "arrival",
+          active: true,
+          pickup_time: "06:30",
+        },
+        {
+          id: "stop-other",
+          tenant_id: TENANT,
+          bus_line_id: BUS_LINE_ID,
+          city: "Cassino",
+          stop_name: "Cassino",
+          pickup_note: "Centro",
+          direction: "arrival",
+          active: true,
+          pickup_time: "07:30",
+        },
+      ],
+    });
+    const suggestions = await suggestBookingGroupCatalogStops(admin as never, TENANT, {
+      city: "for",
+      pickupPoint: "sta",
+      direction: "arrival",
+      busLineId: BUS_LINE_ID,
+    });
+    expect(suggestions[0]).toMatchObject({
+      id: CANONICAL_STOP_ID,
+      label: "Formia - Stazione",
+      pickup_time: "06:30",
+    });
   });
 
   it("fermata gruppo gia esistente + orario catalogo -> aggiorna i services rimasti a 00:00", async () => {

@@ -281,6 +281,7 @@ export const AGENZIE_GROUP: NavMainGroup = {
   icon: "C",
   items: [
     { href: "/agency-requests", label: "Richieste prenotazioni agenzie", icon: "🏨" },
+    { href: "/agency-imports/mts-globe", label: "Import MTS Globe / Sun&Sea", icon: "📥" },
     { href: "/estratto-conto", label: "Estratto conto", icon: "€" },
     { href: "/agency-statement", label: "Contestazioni prezzo", icon: "⚠️" },
     { href: "/libro-mastro", label: "Libro mastro", icon: "📒" },

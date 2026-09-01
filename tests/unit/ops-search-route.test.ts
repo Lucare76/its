@@ -100,6 +100,8 @@ function createFakeAdmin(seed: Partial<Record<string, Row[]>> = {}) {
     services: [],
     hotels: [],
     agencies: [],
+    agency_bookings: [],
+    booking_groups: [],
     ferry_schedules: [],
     ferry_pickup_rules: [],
     ...seed,
@@ -179,6 +181,16 @@ function service(id: string, tenantId: string, overrides: Row = {}): Row {
     notes: null,
     linked_service_id: null,
     created_at: "2026-08-01T09:00:00Z",
+    ...overrides,
+  };
+}
+
+function agencyBooking(id: string, tenantId: string, sourceBookingKey: string, overrides: Row = {}): Row {
+  return {
+    id,
+    tenant_id: tenantId,
+    source: "mts_globe",
+    source_booking_key: sourceBookingKey,
     ...overrides,
   };
 }
@@ -483,6 +495,162 @@ describe("Sprint 3566212 — ranking booking search non regredito dal fix", () =
     const body = await (await callGet("?q=renn")).json();
     const ids = body.results.map((r: Row) => r.id);
     expect(ids.indexOf("name-match")).toBeLessThan(ids.indexOf("secondary"));
+  });
+});
+
+describe("GET /api/ops/search — Obiettivo B: ricerca per practice_number", () => {
+  it("trova la pratica cercando il numero pratica completo", async () => {
+    const fake = createFakeAdmin({
+      services: [service("s1", TENANT_A, { customer_name: "Cliente Pratica", practice_number: "ITS-2026-42" })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=ITS-2026-42")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].practice_number).toBe("ITS-2026-42");
+  });
+
+  it("trova la pratica cercando una parte del numero pratica (ILIKE parziale)", async () => {
+    const fake = createFakeAdmin({
+      services: [service("s1", TENANT_A, { practice_number: "ITS-2026-42" })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=2026-42")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+  });
+
+  it("non rompe la ricerca normale per nome quando practice_number è assente", async () => {
+    const fake = createFakeAdmin({
+      services: [service("s1", TENANT_A, { customer_name: "Mario Rossi", practice_number: null })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Mario")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+  });
+});
+
+describe("GET /api/ops/search — Obiettivo C: ricerca per Voucher No MTS Globe", () => {
+  it("trova il service collegato al voucher tramite agency_bookings.source_booking_key (nessun campo services contiene il voucher)", async () => {
+    const fake = createFakeAdmin({
+      agency_bookings: [agencyBooking("ab-1", TENANT_A, "mts_globe:1548652")],
+      services: [
+        service("s1", TENANT_A, {
+          agency_booking_id: "ab-1",
+          customer_name: "Cliente MTS Globe",
+          practice_number: null,
+        }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=1548652")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].agency_booking_id).toBe("ab-1");
+  });
+
+  it("voucher inesistente: nessun risultato, nessun errore", async () => {
+    const fake = createFakeAdmin({
+      agency_bookings: [agencyBooking("ab-1", TENANT_A, "mts_globe:1548652")],
+      services: [service("s1", TENANT_A, { agency_booking_id: "ab-1" })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=9999999")).json();
+    expect(body.ok).toBe(true);
+    expect(body.results).toEqual([]);
+  });
+
+  it("stesso q che matcha sia practice_number sia voucher: risultato deduplicato per service id, nessun doppione", async () => {
+    const fake = createFakeAdmin({
+      agency_bookings: [agencyBooking("ab-1", TENANT_A, "mts_globe:555555")],
+      services: [
+        service("s1", TENANT_A, {
+          agency_booking_id: "ab-1",
+          practice_number: "555555",
+        }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=555555")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results).toHaveLength(1);
+  });
+
+  it("isolamento tenant: un voucher del tenant B non compare cercando come tenant A, anche con lo stesso source_booking_key", async () => {
+    const fake = createFakeAdmin({
+      agency_bookings: [
+        agencyBooking("ab-a", TENANT_A, "mts_globe:7000001"),
+        agencyBooking("ab-b", TENANT_B, "mts_globe:7000001"),
+      ],
+      services: [
+        service("s-a", TENANT_A, { agency_booking_id: "ab-a" }),
+        service("s-b", TENANT_B, { agency_booking_id: "ab-b" }),
+      ],
+    });
+    authorizeAs(fake.admin, TENANT_A);
+    const body = await (await callGet("?q=7000001")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toContain("s-a");
+    expect(ids).not.toContain("s-b");
+  });
+
+  it("ricerca normale per nome/telefono/hotel resta invariata dopo l'aggiunta della ricerca voucher", async () => {
+    const fake = createFakeAdmin({
+      agency_bookings: [agencyBooking("ab-1", TENANT_A, "mts_globe:1234567")],
+      services: [
+        service("s-name", TENANT_A, { customer_name: "Mario Rossi" }),
+        service("s-phone", TENANT_A, { phone: "3331234567" }),
+        service("s-hotel", TENANT_A, { hotel_id: "hotel-1" }),
+        service("s-voucher", TENANT_A, { agency_booking_id: "ab-1" }),
+      ],
+      hotels: [{ id: "hotel-1", name: "Hotel Ischia Palace", zone: "porto", tenant_id: TENANT_A }],
+    });
+    authorizeAs(fake.admin);
+    const byName = await (await callGet("?q=Mario")).json();
+    expect(byName.results.map((r: Row) => r.id)).toEqual(["s-name"]);
+    const byPhone = await (await callGet("?q=3331234567")).json();
+    expect(byPhone.results.map((r: Row) => r.id)).toEqual(["s-phone"]);
+    const byHotel = await (await callGet("?q=Ischia Palace")).json();
+    expect(byHotel.results.map((r: Row) => r.id)).toEqual(["s-hotel"]);
+  });
+});
+
+describe("GET /api/ops/search — Fix B: visibilità services di Booking Groups", () => {
+  it("service draft di un booking group (is_draft=true, needs_review) compare nei risultati con badge gruppo", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-1", tenant_id: TENANT_A, name: "Gruppo GIACOMONI" }],
+      services: [
+        service("s1", TENANT_A, { customer_name: "Bernardi Luisa", is_draft: true, status: "needs_review", booking_group_id: "bg-1" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Bernardi")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].booking_group_id).toBe("bg-1");
+    expect(body.results[0].booking_group_name).toBe("Gruppo GIACOMONI");
+  });
+
+  it("un draft SENZA booking_group_id resta escluso (nessuna regressione sul filtro is_draft originale)", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("s1", TENANT_A, { customer_name: "Bozza Inbound", is_draft: true, status: "needs_review", booking_group_id: null }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Bozza")).json();
+    expect(body.results).toEqual([]);
+  });
+
+  it("isolamento tenant: un service di gruppo di un altro tenant non compare", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-a", tenant_id: TENANT_A, name: "Gruppo A" }, { id: "bg-b", tenant_id: TENANT_B, name: "Gruppo B" }],
+      services: [
+        service("s-a", TENANT_A, { customer_name: "Stesso Nome", is_draft: true, status: "needs_review", booking_group_id: "bg-a" }),
+        service("s-b", TENANT_B, { customer_name: "Stesso Nome", is_draft: true, status: "needs_review", booking_group_id: "bg-b" }),
+      ],
+    });
+    authorizeAs(fake.admin, TENANT_A);
+    const body = await (await callGet("?q=Stesso Nome")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toContain("s-a");
+    expect(ids).not.toContain("s-b");
   });
 });
 

@@ -34,6 +34,21 @@ type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
 type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_id?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
 type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null; booking_group_id?: string | null; booking_group_kind?: string | null; booking_group_name?: string | null; booking_group_stop_id?: string | null; booking_group_catalog_stop_id?: string | null; booking_group_contact_name?: string | null; booking_group_contact_phone?: string | null; booking_group_outbound_ferry_company?: string | null; booking_group_outbound_departure_port?: string | null; booking_group_outbound_ferry_time?: string | null; booking_group_outbound_arrival_port?: string | null; booking_group_return_ferry_company?: string | null; booking_group_return_departure_port?: string | null; booking_group_return_ferry_time?: string | null; booking_group_return_arrival_port?: string | null };
+// Fix C — riga aggregata "Da assegnare" per una fermata di un booking group
+// bus_exclusive: N passeggeri con lo stesso booking_group_stop_id diventano
+// UNA riga con "Assegna fermata", mai N righe da 1 pax.
+type UnassignedGroupRow = {
+  key: string;
+  bookingGroupId: string;
+  bookingGroupName: string | null;
+  bookingGroupStopId: string | null;
+  catalogStopId: string | null;
+  cityLabel: string;
+  hotelName: string | null;
+  totalPax: number;
+  serviceIds: string[];
+  services: BusService[];
+};
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
 type PendingPassenger = { id: string; bus_line_id: string; direction: "arrival" | "departure"; travel_date: string; passenger_name: string; passenger_phone: string | null; city_original: string; pax: number; notes: string | null; geo_suggested_stop: string | null; created_at: string };
@@ -202,6 +217,13 @@ export default function BusNetworkPage() {
   const [assignStopId, setAssignStopId] = useState("");
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [assignCreatingStop, setAssignCreatingStop] = useState(false);
+
+  // Fix C — assegnazione a blocco per fermata di un gruppo bus esclusivo
+  // (riusa assignLineId/assignUnitId/assignStopId/assignCreatingStop sopra:
+  // solo uno dei due modal, singolo o a blocco, e' aperto alla volta).
+  const [assignGroupSelection, setAssignGroupSelection] = useState<UnassignedGroupRow | null>(null);
+  const [assignGroupModalOpen, setAssignGroupModalOpen] = useState(false);
+  const [assignGroupResult, setAssignGroupResult] = useState<{ assigned: number; errors: number } | null>(null);
 
   // Modifica nome linea
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -406,7 +428,7 @@ export default function BusNetworkPage() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ action, ...data })
     });
-    const body = (await res.json().catch(() => null)) as ({ ok?: boolean; error?: string; low_seat_alert?: { busLabel: string; lineName: string; remainingSeats: number } | null } & Partial<ApiPayload>) | null;
+    const body = (await res.json().catch(() => null)) as ({ ok?: boolean; error?: string; low_seat_alert?: { busLabel: string; lineName: string; remainingSeats: number } | null; assigned_count?: number; partial_errors?: Array<{ service_id: string; message: string }> } & Partial<ApiPayload>) | null;
     setSaving(false);
     if (!res.ok || !body?.ok) { setMessage(body?.error ?? "Errore operazione."); return null; }
     if (body?.low_seat_alert) setLowSeatAlert(body.low_seat_alert);
@@ -565,6 +587,42 @@ export default function BusNetworkPage() {
     ),
     [payload.services, date, direction, selectedLine, allocatedServiceIds, serviceBelongsToLine]
   );
+
+  // Fix C — passeggeri di un gruppo bus_exclusive aggregati per fermata
+  // (booking_group_stop_id): una riga per fermata invece di una per
+  // passeggero. I services senza gruppo (o gruppo non bus_exclusive)
+  // restano nella lista individuale invariata, stesso comportamento di prima.
+  const { unassignedGroupRows, unassignedIndividual } = useMemo(() => {
+    const groups = new Map<string, UnassignedGroupRow>();
+    const individual: BusService[] = [];
+    for (const svc of unassigned) {
+      if (svc.booking_group_kind === "bus_exclusive" && svc.booking_group_id) {
+        const key = svc.booking_group_stop_id ?? `${svc.booking_group_id}:${svc.bus_city_origin ?? ""}`;
+        const existing = groups.get(key);
+        if (existing) {
+          existing.totalPax += svc.pax;
+          existing.serviceIds.push(svc.id);
+          existing.services.push(svc);
+        } else {
+          groups.set(key, {
+            key,
+            bookingGroupId: svc.booking_group_id,
+            bookingGroupName: svc.booking_group_name ?? null,
+            bookingGroupStopId: svc.booking_group_stop_id ?? null,
+            catalogStopId: svc.booking_group_catalog_stop_id ?? null,
+            cityLabel: svc.bus_city_origin?.trim() || "Fermata da definire",
+            hotelName: svc.hotel_name && svc.hotel_name !== "Hotel N/D" ? svc.hotel_name : null,
+            totalPax: svc.pax,
+            serviceIds: [svc.id],
+            services: [svc],
+          });
+        }
+      } else {
+        individual.push(svc);
+      }
+    }
+    return { unassignedGroupRows: Array.from(groups.values()), unassignedIndividual: individual };
+  }, [unassigned]);
 
   // Per-unit loads filtered by date — usa TUTTE le allocazioni (non filtrate per bus selezionato)
   const dateUnitLoads = useMemo(
@@ -743,6 +801,38 @@ export default function BusNetworkPage() {
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignModalOpen(true);
   }, [dateUnitLoads, lineStops, selectedLine]);
+
+  const openAssignGroupModal = useCallback((group: UnassignedGroupRow) => {
+    setAssignGroupSelection(group);
+    setAssignCreatingStop(false);
+    const currentLineId = selectedLine?.id ?? "";
+    setAssignLineId(currentLineId);
+    const firstAvailable = dateUnitLoads.find((u) => u.status !== "closed" && u.status !== "completed" && u.remaining_seats >= group.totalPax)
+      ?? dateUnitLoads.find((u) => u.status !== "closed" && u.status !== "completed")
+      ?? null;
+    setAssignUnitId(firstAvailable?.id ?? "");
+    const suggestedStop = (group.catalogStopId ? lineStops.find((s) => s.id === group.catalogStopId) : null)
+      ?? lineStops.find((s) => s.stop_name === group.cityLabel)
+      ?? lineStops[0] ?? null;
+    setAssignStopId(suggestedStop?.id ?? "");
+    setAssignGroupModalOpen(true);
+  }, [dateUnitLoads, lineStops, selectedLine]);
+
+  const confirmAssignGroup = useCallback(async () => {
+    if (!assignGroupSelection || !assignUnitId || !assignStopId || !assignLineId) return;
+    const stop = payload.stops.find((s) => s.id === assignStopId);
+    if (!stop) return;
+    const result = await post("allocate_services_bulk", {
+      services: assignGroupSelection.services.map((svc) => ({ service_id: svc.id, pax_assigned: svc.pax })),
+      bus_line_id: assignLineId, bus_unit_id: assignUnitId,
+      direction, stop_name: stop.stop_name, stop_id: stop.id,
+    });
+    setAssignGroupModalOpen(false);
+    if (result) {
+      setAssignGroupResult({ assigned: result.assigned_count ?? assignGroupSelection.services.length, errors: result.partial_errors?.length ?? 0 });
+    }
+    setAssignGroupSelection(null);
+  }, [assignGroupSelection, assignUnitId, assignStopId, assignLineId, direction, payload.stops, post]);
 
   const onAssignLineChange = useCallback(async (newLineId: string) => {
     setAssignLineId(newLineId);
@@ -3736,13 +3826,31 @@ export default function BusNetworkPage() {
                 );
               })()}
 
-              {/* Unassigned passengers */}
+              {/* Unassigned passengers — Fix C: gruppi bus_exclusive aggregati
+                  per fermata (1 riga = N passeggeri), il resto invariato */}
               {unassigned.length > 0 && (() => {
                 const totalUnassignedPax = unassigned.reduce((sum, svc) => sum + svc.pax, 0);
+                const rowCount = unassignedGroupRows.length + unassignedIndividual.length;
                 return (
-                <SectionCard title={`👥 Da assegnare — ${selectedLine.name} (${unassigned.length} prenotazioni · ${totalUnassignedPax} pax)`}>
+                <SectionCard title={`👥 Da assegnare — ${selectedLine.name} (${rowCount} prenotazioni · ${totalUnassignedPax} pax)`}>
                   <div className="divide-y divide-slate-100">
-                    {unassigned.map((svc) => (
+                    {unassignedGroupRows.map((group) => (
+                      <div key={group.key} className="flex items-center gap-3 px-1 py-3 bg-indigo-50/40">
+                        <div className="min-w-0 flex-1">
+                          <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold uppercase text-white">Gruppo</span>
+                          <span className="ml-2 font-semibold uppercase text-slate-800">{group.bookingGroupName ?? "Gruppo"}</span>
+                          <span className="ml-2 uppercase text-sm text-slate-500">{group.cityLabel}</span>
+                          {group.hotelName ? <span className="ml-2 uppercase text-sm text-slate-500">· {group.hotelName}</span> : null}
+                          <div className="text-xs text-slate-400">{group.serviceIds.length} passeggeri/nuclei da questa fermata</div>
+                        </div>
+                        <span className="text-sm text-slate-500">{group.totalPax} pax</span>
+                        <button onClick={() => openAssignGroupModal(group)}
+                          className="btn-primary px-4 py-1.5 text-sm">
+                          Assegna fermata →
+                        </button>
+                      </div>
+                    ))}
+                    {unassignedIndividual.map((svc) => (
                       <div key={svc.id} className="flex items-center gap-3 px-1 py-3">
                         <div className="min-w-0 flex-1">
                           <span className="font-semibold uppercase text-slate-800">{svc.customer_display_name}</span>
@@ -4153,6 +4261,89 @@ export default function BusNetworkPage() {
                 {saving ? "Assegnazione..." : "Assegna"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Assegna fermata (a blocco, gruppo bus_exclusive) ── */}
+      {assignGroupModalOpen && assignGroupSelection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Assegna fermata a bus</h2>
+
+            <div className="space-y-1 rounded-xl bg-slate-50 p-4">
+              <div className="text-base font-bold uppercase text-slate-900">{assignGroupSelection.bookingGroupName ?? "Gruppo"}</div>
+              <div className="text-sm text-slate-600">Fermata: <span className="font-medium uppercase">{assignGroupSelection.cityLabel}</span></div>
+              {assignGroupSelection.hotelName ? (
+                <div className="text-sm text-slate-600">Hotel: <span className="font-medium uppercase">{assignGroupSelection.hotelName}</span></div>
+              ) : null}
+              <div className="text-sm text-slate-600">Passeggeri: <span className="font-medium">{assignGroupSelection.serviceIds.length}</span> · Pax: <span className="font-medium">{assignGroupSelection.totalPax}</span></div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Linea:</label>
+              <select value={assignLineId} onChange={(e) => onAssignLineChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {payload.lines.map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Bus:</label>
+              <select value={assignUnitId} onChange={(e) => setAssignUnitId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {assignLineUnits.map((u) => (
+                  <option key={u.id} value={u.id}>{u.label} — {u.remaining_seats} posti liberi</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-700">Fermata di salita:</label>
+              <select value={assignStopId} onChange={(e) => setAssignStopId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {assignLineStops.map((stop) => (
+                  <option key={stop.id} value={stop.id}>{stop.stop_name}{stop.city && stop.city !== stop.stop_name ? ` (${stop.city})` : ""}</option>
+                ))}
+              </select>
+              {assignCreatingStop && (
+                <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                  Creazione fermata in corso...
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-slate-400">Assegna tutti i {assignGroupSelection.serviceIds.length} passeggeri di questa fermata allo stesso bus in un&apos;unica operazione.</p>
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => { setAssignGroupModalOpen(false); setAssignGroupSelection(null); }}
+                className="btn-secondary flex-1 py-2.5">Annulla</button>
+              <button onClick={() => void confirmAssignGroup()}
+                disabled={saving || !assignUnitId || !assignStopId || !assignLineId}
+                className="btn-primary flex-1 py-2.5 disabled:opacity-40">
+                {saving ? "Assegnazione..." : `Assegna ${assignGroupSelection.serviceIds.length} passeggeri`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Esito assegnazione a blocco ── */}
+      {assignGroupResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className={`text-lg font-bold ${assignGroupResult.errors > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+              {assignGroupResult.errors > 0 ? "⚠ Assegnazione parziale" : "✓ Fermata assegnata"}
+            </h2>
+            <p className="text-sm text-slate-600">
+              Assegnati: <span className="font-semibold">{assignGroupResult.assigned}</span> passeggeri
+              {assignGroupResult.errors > 0 && (
+                <> — Falliti: <span className="font-semibold text-amber-600">{assignGroupResult.errors}</span></>
+              )}
+            </p>
+            <button onClick={() => setAssignGroupResult(null)} className="btn-primary w-full py-2.5">Chiudi</button>
           </div>
         </div>
       )}

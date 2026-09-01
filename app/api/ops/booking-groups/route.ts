@@ -22,12 +22,15 @@ import {
   createBookingGroup,
   patchBookingGroup,
   addBookingGroupStop,
+  resolveCanonicalBookingGroupStop,
   addBookingGroupPassengers,
+  removeGroupPassenger,
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
   findAvailableBusesForGroup,
   isSupportedBookingGroupDate,
+  suggestBookingGroupCatalogStops,
   type BgActor,
 } from "@/lib/server/booking-groups-service";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -163,6 +166,13 @@ const unlinkGroupServiceSchema = z.object({
   service_id: z.string().uuid(),
 });
 
+const removeGroupPassengerSchema = z.object({
+  action: z.literal("remove_group_passenger"),
+  booking_group_id: z.string().uuid(),
+  booking_group_stop_id: z.string().uuid(),
+  service_id: z.string().uuid(),
+});
+
 const previewOperationalizeSchema = z.object({
   action: z.literal("preview_operationalize_group"),
   booking_group_id: z.string().uuid(),
@@ -185,6 +195,7 @@ const bodySchema = z.discriminatedUnion("action", [
   createGroupServiceSchema,
   createGroupServicesBatchSchema,
   unlinkGroupServiceSchema,
+  removeGroupPassengerSchema,
   previewOperationalizeSchema,
   operationalizeSchema,
 ]);
@@ -229,6 +240,30 @@ export async function GET(request: NextRequest) {
       .order("name");
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, lines: data ?? [] });
+  }
+
+  if (url.searchParams.get("catalog") === "hotels") {
+    const { data, error } = await admin
+      .from("hotels")
+      .select("id, name")
+      .eq("tenant_id", tenantId)
+      .order("name");
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, hotels: data ?? [] });
+  }
+
+  if (url.searchParams.get("catalog") === "bus_stops") {
+    const directionRaw = url.searchParams.get("direction");
+    const direction = directionRaw === "arrival" || directionRaw === "departure" ? directionRaw : null;
+    const suggestions = await suggestBookingGroupCatalogStops(admin, tenantId, {
+      query: url.searchParams.get("q"),
+      city: url.searchParams.get("city"),
+      pickupPoint: url.searchParams.get("pickup_point"),
+      direction,
+      busLineId: url.searchParams.get("bus_line_id"),
+      limit: 8,
+    });
+    return NextResponse.json({ ok: true, stops: suggestions });
   }
 
   const availableForGroup = url.searchParams.get("available_buses_for_group");
@@ -361,7 +396,7 @@ export async function POST(request: NextRequest) {
     if (current.stop_id) {
       const catalogPatch = compact({
         city: updatedStop.city,
-        stop_name: updatedStop.pickup_point ?? updatedStop.city,
+        stop_name: updatedStop.city,
         pickup_note: updatedStop.pickup_point,
         pickup_time: pickup_time ?? undefined,
         direction: updatedStop.direction,
@@ -372,7 +407,39 @@ export async function POST(request: NextRequest) {
         .update(catalogPatch)
         .eq("tenant_id", tenantId)
         .eq("id", current.stop_id);
-      if (catalogError) return NextResponse.json({ ok: false, error: catalogError.message }, { status: 500 });
+      if (catalogError) {
+        const isDuplicate = catalogError.code === "23505" || catalogError.message?.includes("tenant_bus_line_stops_line_direction_name_pickup_key");
+        if (!isDuplicate) return NextResponse.json({ ok: false, error: catalogError.message }, { status: 500 });
+        // La combinazione citta/punto di carico coincide gia con un'altra
+        // fermata canonica esistente (es. stesso pickup_point riusato su piu
+        // citta della stessa linea/direzione): riusala invece di rompere il
+        // salvataggio con l'errore DB grezzo.
+        const { data: currentCatalog } = await admin
+          .from("tenant_bus_line_stops")
+          .select("bus_line_id")
+          .eq("tenant_id", tenantId)
+          .eq("id", current.stop_id)
+          .maybeSingle();
+        const busLineId = (currentCatalog as { bus_line_id?: string | null } | null)?.bus_line_id ?? null;
+        const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, updatedStop.city, updatedStop.direction, updatedStop.pickup_point, busLineId);
+        if (!canonical || canonical.stopId === current.stop_id) {
+          return NextResponse.json({ ok: false, error: "Fermata gia presente nel catalogo con questa combinazione citta/punto di carico: modifica citta o punto di carico." }, { status: 409 });
+        }
+        const { error: relinkError } = await admin
+          .from("booking_group_stops")
+          .update({ stop_id: canonical.stopId, updated_at: new Date().toISOString() })
+          .eq("tenant_id", tenantId)
+          .eq("id", id);
+        if (relinkError) return NextResponse.json({ ok: false, error: relinkError.message }, { status: 500 });
+        updatedStop.stop_id = canonical.stopId;
+        if (pickup_time !== undefined && (pickup_time ?? null) !== canonical.pickupTime) {
+          await admin
+            .from("tenant_bus_line_stops")
+            .update({ pickup_time: pickup_time ?? null, updated_at: new Date().toISOString() })
+            .eq("tenant_id", tenantId)
+            .eq("id", canonical.stopId);
+        }
+      }
     }
     const nextDefaultName = updatedStop.pickup_point ? `${updatedStop.city} - ${updatedStop.pickup_point}` : updatedStop.city;
     const { data: linkedServices, error: linkedServicesError } = await admin
@@ -488,6 +555,18 @@ export async function POST(request: NextRequest) {
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     auditLog({ event: "booking_group_service_unlinked", tenantId, userId, role: auth.membership.role, serviceId: body.service_id, outcome: "unlinked" });
     return NextResponse.json({ ok: true, unlinked: body.service_id });
+  }
+
+  // ── remove_group_passenger — elimina UN nominativo dalla fermata ───────
+  // Draft/needs_review: hard delete mirato. Gia' operativo: soft-cancel via
+  // la stessa RPC di /api/ops/services/[id]/cancel + scollegamento dal
+  // gruppo. Validazioni (tenant/gruppo/fermata) dentro il service module.
+  if (body.action === "remove_group_passenger") {
+    return toResponse(await removeGroupPassenger(admin, actor, {
+      bookingGroupId: body.booking_group_id,
+      bookingGroupStopId: body.booking_group_stop_id,
+      serviceId: body.service_id,
+    }));
   }
 
   // ── preview_operationalize_group (READ, nessuna scrittura) ────────────

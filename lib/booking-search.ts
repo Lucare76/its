@@ -30,6 +30,11 @@ export interface BookingSearchRecord {
   linked_service_id?: string | null;
   inbound_email_id?: string | null;
   direction?: string | null;
+  practice_number?: string | null;
+  // Voucher No MTS Globe: mai una colonna services, solo un'annotazione
+  // effimera calcolata da app/api/ops/search/route.ts a partire da
+  // agency_bookings.source_booking_key — vedi commento lì per il motivo.
+  voucher_no?: string | null;
 }
 
 export function collapseLinkedBookingPairs<T extends BookingSearchRecord>(records: T[]): T[] {
@@ -129,6 +134,8 @@ export function matchesBookingSearch(
     record.tour_name,
     record.excursion_title,
     record.id,
+    record.practice_number,
+    record.voucher_no,
   ].map((value) => normalizeText(value)).join(" ");
 
   const phoneHaystack = `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "");
