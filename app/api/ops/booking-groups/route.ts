@@ -24,6 +24,7 @@ import {
   addBookingGroupStop,
   resolveCanonicalBookingGroupStop,
   addBookingGroupPassengers,
+  removeGroupPassenger,
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
@@ -165,6 +166,13 @@ const unlinkGroupServiceSchema = z.object({
   service_id: z.string().uuid(),
 });
 
+const removeGroupPassengerSchema = z.object({
+  action: z.literal("remove_group_passenger"),
+  booking_group_id: z.string().uuid(),
+  booking_group_stop_id: z.string().uuid(),
+  service_id: z.string().uuid(),
+});
+
 const previewOperationalizeSchema = z.object({
   action: z.literal("preview_operationalize_group"),
   booking_group_id: z.string().uuid(),
@@ -187,6 +195,7 @@ const bodySchema = z.discriminatedUnion("action", [
   createGroupServiceSchema,
   createGroupServicesBatchSchema,
   unlinkGroupServiceSchema,
+  removeGroupPassengerSchema,
   previewOperationalizeSchema,
   operationalizeSchema,
 ]);
@@ -546,6 +555,18 @@ export async function POST(request: NextRequest) {
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     auditLog({ event: "booking_group_service_unlinked", tenantId, userId, role: auth.membership.role, serviceId: body.service_id, outcome: "unlinked" });
     return NextResponse.json({ ok: true, unlinked: body.service_id });
+  }
+
+  // ── remove_group_passenger — elimina UN nominativo dalla fermata ───────
+  // Draft/needs_review: hard delete mirato. Gia' operativo: soft-cancel via
+  // la stessa RPC di /api/ops/services/[id]/cancel + scollegamento dal
+  // gruppo. Validazioni (tenant/gruppo/fermata) dentro il service module.
+  if (body.action === "remove_group_passenger") {
+    return toResponse(await removeGroupPassenger(admin, actor, {
+      bookingGroupId: body.booking_group_id,
+      bookingGroupStopId: body.booking_group_stop_id,
+      serviceId: body.service_id,
+    }));
   }
 
   // ── preview_operationalize_group (READ, nessuna scrittura) ────────────

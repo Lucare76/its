@@ -366,16 +366,20 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
   onClose: () => void;
 }) {
   const { group, stops, services, bus_reservations, stop_summaries } = detail;
+  // Un service 'cancelled' resta collegato (audit) ma non deve mai contare
+  // come pax pianificato/servito — stessa regola applicata server-side in
+  // loadGroupDetail per stop_summaries.
+  const activeServices = services.filter((s) => s.status !== "cancelled");
   const pax = summarizeBookingGroupPax({
     expectedPax: group.expected_pax,
     stopExpectedPax: stops.map((s) => s.expected_pax),
-    servicePax: services.map((s) => Number(s.pax ?? 0)),
+    servicePax: activeServices.map((s) => Number(s.pax ?? 0)),
   });
   const statusSummary = computeBookingGroupStatusSummary({
     status: group.status,
     expectedPax: group.expected_pax,
     stopExpectedPax: stops.map((s) => s.expected_pax),
-    servicePax: services.map((s) => Number(s.pax ?? 0)),
+    servicePax: activeServices.map((s) => Number(s.pax ?? 0)),
     busReservationCount: bus_reservations.length,
   });
 
@@ -451,6 +455,7 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
           onUpdateStop={(id, patch) => post({ action: "update_stop", id, ...patch })}
           onDeleteStop={(id) => post({ action: "delete_stop", id })}
           onCreateServices={(stopId, passengers, serviceDate) => post({ action: "create_group_services_batch", booking_group_id: group.id, booking_group_stop_id: stopId, service_date: serviceDate, passengers })}
+          onRemovePassenger={(stopId, serviceId) => post({ action: "remove_group_passenger", booking_group_id: group.id, booking_group_stop_id: stopId, service_id: serviceId })}
           arrivalDate={group.service_date}
           returnDate={group.return_date}
           busLines={busLines}
@@ -553,7 +558,7 @@ function GroupEditSection({ group, hotels, onSave }: { group: BookingGroup; hote
   );
 }
 
-function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, arrivalDate, returnDate, busLines, preferExclusiveLine }: {
+function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, onRemovePassenger, arrivalDate, returnDate, busLines, preferExclusiveLine }: {
   stops: BookingGroupStop[];
   stopSummaries: BookingGroupStopPaxSummary[];
   services: Detail["services"];
@@ -561,6 +566,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   onUpdateStop: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null }) => Promise<PostResult>;
   onDeleteStop: (id: string) => Promise<PostResult>;
   onCreateServices: (stopId: string, passengers: Array<{ customer_name: string; pax: number }>, serviceDate: string) => Promise<PostResult>;
+  onRemovePassenger: (stopId: string, serviceId: string) => Promise<PostResult>;
   arrivalDate: string | null;
   returnDate: string | null;
   busLines: BusLineOption[];
@@ -576,6 +582,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   const [busy, setBusy] = useState(false);
   const [stopSuggestions, setStopSuggestions] = useState<BusStopSuggestion[]>([]);
   const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const orderedBusLines = useMemo(() => {
     if (!preferExclusiveLine) return busLines;
     return [...busLines].sort((a, b) => {
@@ -651,7 +658,24 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
               ) : null}
               {linked.length > 0 ? (
                 <ul className="mt-1 list-disc pl-4 text-slate-500">
-                  {linked.map((sv) => <li key={sv.id}>{sv.customer_name} — {sv.pax} pax <span className="text-slate-400">({sv.status})</span></li>)}
+                  {linked.map((sv) => (
+                    <li key={sv.id} className="flex items-center gap-2">
+                      <span>{sv.customer_name} — {sv.pax} pax <span className="text-slate-400">({sv.status})</span></span>
+                      <button
+                        type="button"
+                        disabled={removingId === sv.id}
+                        onClick={async () => {
+                          if (!window.confirm("Vuoi eliminare questo passeggero dalla fermata?")) return;
+                          setRemovingId(sv.id);
+                          await onRemovePassenger(s.id, sv.id);
+                          setRemovingId(null);
+                        }}
+                        className="text-[11px] text-rose-600 underline disabled:opacity-50"
+                      >
+                        {removingId === sv.id ? "Elimino…" : "Elimina"}
+                      </button>
+                    </li>
+                  ))}
                 </ul>
               ) : null}
               <div className="mt-2 flex flex-wrap items-center gap-2">

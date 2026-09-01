@@ -86,7 +86,26 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     return b;
   }
 
-  return { admin: { from: (t: string) => builder(t) } as never, writes };
+  // Stub minimo per admin.rpc("cancel_service_practice", ...) — unico RPC
+  // usato dal dominio booking-groups (removeGroupPassenger, caso operativo).
+  // Riusa lo stesso array `writes.updates` degli altri percorsi .update()
+  // cosi' i test possono asserire in modo uniforme, e riflette l'esito nel
+  // seed cosi' una successiva .select() nello stesso test vede lo stato
+  // aggiornato (stesso comportamento della RPC reale via SECURITY DEFINER).
+  const rpc = async (name: string, params: Row) => {
+    if (name !== "cancel_service_practice") {
+      return { data: null, error: { message: `RPC ${name} non gestita nel fake test` } };
+    }
+    const svc = (seed.services ?? []).find(
+      (r) => r.id === params.p_service_id && r.tenant_id === params.p_tenant_id
+    );
+    if (!svc) return { data: null, error: { message: "Service not found" } };
+    writes.updates.push({ table: "services", filters: { id: svc.id }, payload: { status: "cancelled" } });
+    svc.status = "cancelled";
+    return { data: [{ out_service_id: svc.id, assignments_cleared: 0, bus_allocations_cleared: 0 }], error: null };
+  };
+
+  return { admin: { from: (t: string) => builder(t), rpc } as never, writes };
 }
 
 function authCtx(admin: unknown, role = "operator") {
@@ -624,6 +643,90 @@ describe("POST unlink_group_service — soft unlink (M: nessuna cancellazione)",
   });
 });
 
+describe("POST remove_group_passenger — elimina un nominativo dalla fermata", () => {
+  const SVC = "77777777-7777-4777-8777-777777777777";
+  const SVC2 = "88888888-8888-4888-8888-888888888888";
+  const OTHER_GROUP = "99999999-9999-4999-8999-999999999999";
+  const OTHER_STOP = "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa";
+
+  it("1. draft/needs_review: hard delete mirato, non compare più nel gruppo", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review", customer_name: "Bernardi Luisa", pax: 1 }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json).toMatchObject({ ok: true, removed: true, mode: "deleted" });
+    expect(writes.deletes).toContainEqual({ table: "services", filters: { tenant_id: TENANT, id: SVC } });
+    // Nessuna scrittura RPC/soft-cancel per il caso draft.
+    expect(writes.updates.filter((w) => w.table === "services")).toHaveLength(0);
+  });
+
+  it("2. service di un altro gruppo → 404, nessuna modifica", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: OTHER_GROUP, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    expect(res.status).toBe(404);
+    expect(writes.deletes).toHaveLength(0);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("3. service di un'altra fermata dello stesso gruppo → 404, nessuna modifica", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: OTHER_STOP, is_draft: true, status: "needs_review" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    expect(res.status).toBe(404);
+    expect(writes.deletes).toHaveLength(0);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("4. due passeggeri con lo stesso nome: elimina SOLO il serviceId indicato", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [
+        { id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review", customer_name: "Rossi Mario", pax: 1 },
+        { id: SVC2, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review", customer_name: "Rossi Mario", pax: 1 },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    expect(res.status).toBe(200);
+    expect(writes.deletes).toEqual([{ table: "services", filters: { tenant_id: TENANT, id: SVC } }]);
+  });
+
+  it("5. service operativo (is_draft=false): niente hard delete, soft-cancel via cancel_service_practice + scollegamento dal gruppo", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: false, status: "new", customer_name: "Verdi Anna", pax: 2 }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json).toMatchObject({ ok: true, removed: true, mode: "cancelled" });
+    // Nessun hard delete della riga.
+    expect(writes.deletes.filter((w) => w.table === "services")).toHaveLength(0);
+    const updates = writes.updates.filter((w) => w.table === "services");
+    // Una scritta dalla RPC (status=cancelled) + una dallo scollegamento gruppo/fermata.
+    expect(updates.some((w) => w.payload.status === "cancelled")).toBe(true);
+    expect(updates.some((w) => w.payload.booking_group_id === null && w.payload.booking_group_stop_id === null)).toBe(true);
+  });
+
+  it("6. doppio click / service già rimosso: risposta idempotente, nessun errore", async () => {
+    const { admin, writes } = makeAdmin({ services: [] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json).toMatchObject({ ok: true, removed: false, mode: "already_removed" });
+    expect(writes.deletes).toHaveLength(0);
+    expect(writes.updates).toHaveLength(0);
+  });
+});
+
 describe("GET detail — stop_summaries per fermata (FASE 2)", () => {
   it("G: Tivoli 20 previsti con 16 pax in services → remaining 4; Guidonia 20 con 0 → remaining 20", async () => {
     const { admin } = makeAdmin({
@@ -646,6 +749,28 @@ describe("GET detail — stop_summaries per fermata (FASE 2)", () => {
     const gui = json.stop_summaries.find((s: { stopId: string }) => s.stopId === "gui");
     expect(tiv).toMatchObject({ expectedPax: 20, servicePax: 16, remainingServicePax: 4, overbooked: false });
     expect(gui).toMatchObject({ expectedPax: 20, servicePax: 0, remainingServicePax: 20 });
+  });
+
+  it("6bis (Obiettivo B): un service status='cancelled' non conta nei pax di fermata/gruppo", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, name: "Parrocchia Natività", expected_pax: 50, status: "stops_defined" }],
+      booking_group_stops: [
+        { id: "tiv", tenant_id: TENANT, booking_group_id: GROUP_ID, expected_pax: 20, direction: "arrival", sort_order: 0, city: "Tivoli", pickup_point: "Villa d'Este" },
+      ],
+      booking_group_bus_reservations: [],
+      services: [
+        { id: "s1", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "tiv", pax: 10, status: "new" },
+        { id: "s2", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "tiv", pax: 6, status: "cancelled" },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await GET(get(`?id=${GROUP_ID}`));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    const tiv = json.stop_summaries.find((s: { stopId: string }) => s.stopId === "tiv");
+    // Solo s1 (10 pax) conta: s2 e' cancellato.
+    expect(tiv).toMatchObject({ expectedPax: 20, servicePax: 10, remainingServicePax: 10 });
+    expect(json.summary.pax.servicePax).toBe(10);
   });
 });
 

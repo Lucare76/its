@@ -373,11 +373,17 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
     meeting_point: string | null;
   }>;
 
+  // Un service 'cancelled' resta collegato al gruppo/fermata (audit/storico)
+  // ma non deve mai contare come pax pianificato/servito: altrimenti un
+  // nominativo rimosso via removeGroupPassenger (soft-cancel) continuerebbe
+  // a gonfiare i conteggi.
+  const activeServiceRows = serviceRows.filter((s) => s.status !== "cancelled");
+
   const summary = computeBookingGroupStatusSummary({
     status: (group as BookingGroup).status,
     expectedPax: (group as BookingGroup).expected_pax,
     stopExpectedPax: enrichedStopRows.map((s) => s.expected_pax),
-    servicePax: serviceRows.map((s) => Number(s.pax ?? 0)),
+    servicePax: activeServiceRows.map((s) => Number(s.pax ?? 0)),
     busReservationCount: reservationRows.length,
   });
 
@@ -385,7 +391,7 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
     summarizeStopPax({
       stopId: stop.id,
       expectedPax: stop.expected_pax,
-      servicePax: serviceRows.filter((s) => s.booking_group_stop_id === stop.id).map((s) => Number(s.pax ?? 0)),
+      servicePax: activeServiceRows.filter((s) => s.booking_group_stop_id === stop.id).map((s) => Number(s.pax ?? 0)),
     }),
   );
 
@@ -1174,6 +1180,103 @@ export async function addBookingGroupPassengers(
     status,
     data: { created, failed, created_count: created.length, failed_count: failed.length },
   };
+}
+
+// ─── remove_group_passenger ───────────────────────────────────────────────
+// Elimina UN SOLO passeggero/nominativo (service) da una fermata del gruppo.
+// Draft/pre-operativo (is_draft=true, status='needs_review') -> hard delete
+// mirato: non ancora una prenotazione reale, nessuna allocazione/assignment
+// da pulire. Gia' operativo -> MAI hard delete: riusa la stessa RPC atomica
+// gia' usata da POST /api/ops/services/[id]/cancel (cancel_service_practice,
+// migration 0245: status='cancelled' + assignments + tenant_bus_allocations +
+// bus_ischia_dist_allocations + status_events/ops_audit_events), poi
+// scollega dal gruppo (booking_group_id/booking_group_stop_id = null) cosi'
+// sparisce dalla lista nominativi di loadGroupDetail.
+
+export type RemoveGroupPassengerInput = {
+  bookingGroupId: string;
+  bookingGroupStopId: string;
+  serviceId: string;
+};
+
+export type RemoveGroupPassengerResult = {
+  removed: boolean;
+  mode: "deleted" | "cancelled" | "already_removed";
+  serviceId: string;
+};
+
+export async function removeGroupPassenger(
+  admin: SupabaseClient,
+  actor: BgActor,
+  input: RemoveGroupPassengerInput,
+): Promise<BgResult<RemoveGroupPassengerResult>> {
+  const { tenantId, userId, role } = actor;
+
+  const { data: svc } = await admin
+    .from("services")
+    .select("id, booking_group_id, booking_group_stop_id, is_draft, status, customer_name, pax")
+    .eq("tenant_id", tenantId)
+    .eq("id", input.serviceId)
+    .maybeSingle();
+
+  // Idempotenza: doppio click o gia' rimosso da un'altra richiesta -> non
+  // e' un errore, semplicemente non c'e' piu' nulla da rimuovere.
+  if (!svc) {
+    return ok({ removed: false, mode: "already_removed", serviceId: input.serviceId });
+  }
+  const row = svc as {
+    id: string; booking_group_id: string | null; booking_group_stop_id: string | null;
+    is_draft: boolean | null; status: string | null; customer_name: string | null; pax: number | null;
+  };
+  if (row.booking_group_id !== input.bookingGroupId) {
+    return err(404, "Il passeggero non appartiene a questo gruppo.");
+  }
+  if (row.booking_group_stop_id !== input.bookingGroupStopId) {
+    return err(404, "Il passeggero non appartiene a questa fermata.");
+  }
+
+  const isDraft = row.is_draft === true && row.status === "needs_review";
+
+  if (isDraft) {
+    const { error } = await admin
+      .from("services")
+      .delete()
+      .eq("tenant_id", tenantId)
+      .eq("id", input.serviceId);
+    if (error) return err(500, error.message);
+    auditLog({
+      event: "booking_group_passenger_deleted",
+      tenantId, userId, role,
+      serviceId: input.serviceId, outcome: "deleted",
+      details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, customer_name: row.customer_name, pax: row.pax },
+    });
+    return ok({ removed: true, mode: "deleted", serviceId: input.serviceId });
+  }
+
+  const { error: rpcError } = await admin.rpc("cancel_service_practice", {
+    p_service_id: input.serviceId,
+    p_tenant_id: tenantId,
+    p_scope: "leg",
+    p_reason: "Rimosso dal gruppo prenotazione",
+    p_note: null,
+    p_user_id: userId,
+  });
+  if (rpcError) return err(500, rpcError.message);
+
+  const { error: unlinkError } = await admin
+    .from("services")
+    .update({ booking_group_id: null, booking_group_stop_id: null })
+    .eq("tenant_id", tenantId)
+    .eq("id", input.serviceId);
+  if (unlinkError) return err(500, unlinkError.message);
+
+  auditLog({
+    event: "booking_group_passenger_cancelled",
+    tenantId, userId, role,
+    serviceId: input.serviceId, outcome: "cancelled",
+    details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, customer_name: row.customer_name, pax: row.pax },
+  });
+  return ok({ removed: true, mode: "cancelled", serviceId: input.serviceId });
 }
 
 // ─── reserve bus (upsert_bus_reservation) ────────────────────────────────
