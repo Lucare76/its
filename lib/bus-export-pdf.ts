@@ -172,9 +172,12 @@ function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] 
   const orders = stopOrderMap(stops);
   if (direction === "departure") {
     return [...allocations].sort((a, b) => {
+      const timeA = time5(a.hotel_pickup_time || a.stop_pickup_time);
+      const timeB = time5(b.hotel_pickup_time || b.stop_pickup_time);
+      if (timeA !== timeB) return timeB.localeCompare(timeA);
       const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
       const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
-      if (orderA !== orderB) return orderA - orderB;
+      if (orderA !== orderB) return orderB - orderA;
       const stopA = displayStopName(a).toUpperCase();
       const stopB = displayStopName(b).toUpperCase();
       if (stopA !== stopB) return stopA.localeCompare(stopB, "it");
@@ -185,12 +188,12 @@ function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] 
     });
   }
   return [...allocations].sort((a, b) => {
-    const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
-    const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
-    if (orderA !== orderB) return orderA - orderB;
     const timeA = time5(a.stop_pickup_time || a.hotel_pickup_time);
     const timeB = time5(b.stop_pickup_time || b.hotel_pickup_time);
     if (timeA !== timeB) return timeA.localeCompare(timeB);
+    const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
+    const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
+    if (orderA !== orderB) return orderA - orderB;
     return a.customer_name.localeCompare(b.customer_name, "it");
   });
 }

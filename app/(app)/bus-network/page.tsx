@@ -526,8 +526,18 @@ export default function BusNetworkPage() {
   }, [dateAllocations]);
 
   const activeStops = useMemo(
-    () => lineStops.filter((s) => activeStopIds.has(s.id) || activeStopNames.has(s.stop_name)),
-    [lineStops, activeStopIds, activeStopNames]
+    () => {
+      const filtered = lineStops.filter((s) => activeStopIds.has(s.id) || activeStopNames.has(s.stop_name));
+      const isExclusiveLine = selectedLine?.code === "GRUPPI_ESCLUSIVI" || selectedLine?.family_code === "GRUPPI_ESCLUSIVI";
+      if (!isExclusiveLine) return filtered;
+      return [...filtered].sort((a, b) => {
+        const timeA = a.pickup_time || "99:99";
+        const timeB = b.pickup_time || "99:99";
+        if (timeA !== timeB) return direction === "departure" ? timeB.localeCompare(timeA) : timeA.localeCompare(timeB);
+        return direction === "departure" ? b.stop_order - a.stop_order : a.stop_order - b.stop_order;
+      });
+    },
+    [lineStops, activeStopIds, activeStopNames, selectedLine, direction]
   );
 
   // Unassigned services for this date + direction + line family
@@ -2184,9 +2194,12 @@ export default function BusNetworkPage() {
 
               {/* Route strip */}
               {activeTab === "bus" && (() => {
-                const stopsWithPax = lineStops.map(stop => {
+                const isExclusiveLine = selectedLine?.code === "GRUPPI_ESCLUSIVI" || selectedLine?.family_code === "GRUPPI_ESCLUSIVI";
+                if (isExclusiveLine && !selectedBusUnitId) return null;
+                const routeStops = isExclusiveLine ? activeStops : lineStops;
+                const stopsWithPax = routeStops.map(stop => {
                   const allocatedPax = dateAllocations
-                    .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
+                    .filter((a) => (a.stop_id && a.stop_id === stop.id) || a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
                     .reduce((sum, a) => sum + a.pax_assigned, 0);
                   const sn = stop.stop_name.toLowerCase().trim();
                   const sc = (stop.city ?? "").toLowerCase().trim();
@@ -2212,7 +2225,7 @@ export default function BusNetworkPage() {
                         <span>
                           <span className="block text-base font-black text-slate-900">Fermate e percorso</span>
                           <span className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                            {hideEmptyStops ? `${stopsWithPaxCount} / ${lineStops.length} fermate visibili` : `${lineStops.length} fermate`}
+                            {hideEmptyStops ? `${stopsWithPaxCount} / ${routeStops.length} fermate visibili` : `${routeStops.length} fermate`}
                           </span>
                         </span>
                         <span className="text-slate-300">{showRouteStrip ? "▲" : "▼"}</span>
@@ -2284,7 +2297,7 @@ export default function BusNetworkPage() {
                           })}
                           {visibleStops.length === 0 && (
                             <div className="py-2 text-xs italic text-slate-300">
-                              {lineStops.length === 0 ? "Nessuna fermata. Usa \"Gestisci fermate\" per aggiungerne." : "Nessuna fermata con passeggeri per questa data."}
+                              {routeStops.length === 0 ? "Nessuna fermata. Usa \"Gestisci fermate\" per aggiungerne." : "Nessuna fermata con passeggeri per questa data."}
                             </div>
                           )}
                         </div>
