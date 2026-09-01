@@ -267,6 +267,22 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
   ]);
 
   const stopRows = (stops ?? []) as BookingGroupStop[];
+  const stopIds = Array.from(new Set(stopRows.map((stop) => stop.stop_id).filter(Boolean) as string[]));
+  const { data: catalogStops } = stopIds.length > 0
+    ? await admin
+      .from("tenant_bus_line_stops")
+      .select("id, pickup_time")
+      .eq("tenant_id", tenantId)
+      .in("id", stopIds)
+    : { data: [] as Array<{ id: string; pickup_time: string | null }> };
+  const catalogTimeByStopId = new Map(
+    ((catalogStops ?? []) as Array<{ id: string; pickup_time: string | null }>)
+      .map((stop) => [stop.id, stop.pickup_time] as const),
+  );
+  const enrichedStopRows = stopRows.map((stop) => ({
+    ...stop,
+    catalog_pickup_time: stop.stop_id ? catalogTimeByStopId.get(stop.stop_id) ?? null : null,
+  }));
   const reservationRows = (reservations ?? []) as BookingGroupBusReservation[];
   const serviceRows = (services ?? []) as Array<{
     id: string;
@@ -284,12 +300,12 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
   const summary = computeBookingGroupStatusSummary({
     status: (group as BookingGroup).status,
     expectedPax: (group as BookingGroup).expected_pax,
-    stopExpectedPax: stopRows.map((s) => s.expected_pax),
+    stopExpectedPax: enrichedStopRows.map((s) => s.expected_pax),
     servicePax: serviceRows.map((s) => Number(s.pax ?? 0)),
     busReservationCount: reservationRows.length,
   });
 
-  const stop_summaries = stopRows.map((stop) =>
+  const stop_summaries = enrichedStopRows.map((stop) =>
     summarizeStopPax({
       stopId: stop.id,
       expectedPax: stop.expected_pax,
@@ -299,7 +315,7 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
 
   return {
     group: group as BookingGroup,
-    stops: stopRows,
+    stops: enrichedStopRows,
     bus_reservations: reservationRows,
     services: serviceRows,
     summary,

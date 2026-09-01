@@ -480,6 +480,12 @@ export default function BusNetworkPage() {
   );
 
   // Stops WITH passengers today, ordered correctly
+  const activeStopIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const a of dateAllocations) if (a.stop_id) ids.add(a.stop_id);
+    return ids;
+  }, [dateAllocations]);
+
   const activeStopNames = useMemo(() => {
     const names = new Set<string>();
     for (const a of dateAllocations) names.add(a.stop_name);
@@ -487,8 +493,8 @@ export default function BusNetworkPage() {
   }, [dateAllocations]);
 
   const activeStops = useMemo(
-    () => lineStops.filter((s) => activeStopNames.has(s.stop_name)),
-    [lineStops, activeStopNames]
+    () => lineStops.filter((s) => activeStopIds.has(s.id) || activeStopNames.has(s.stop_name)),
+    [lineStops, activeStopIds, activeStopNames]
   );
 
   // Unassigned services for this date + direction + line family
@@ -2519,13 +2525,13 @@ export default function BusNetworkPage() {
                   const stopGroups = activeStops.map((stop) => ({
                     stop,
                     allocs: cardAllocs
-                      .filter((a) => a.stop_name === stop.stop_name)
+                      .filter((a) => (a.stop_id && a.stop_id === stop.id) || a.stop_name === stop.stop_name)
                       .sort((a, b) => (a.service_time ?? "99:99").localeCompare(b.service_time ?? "99:99"))
                   })).filter((g) => g.allocs.length > 0);
 
                   // Allocations at stops not in the active list
                   const ungrouped = cardAllocs.filter(
-                    (a) => !activeStops.some((s) => s.stop_name === a.stop_name)
+                    (a) => !activeStops.some((s) => (a.stop_id && a.stop_id === s.id) || s.stop_name === a.stop_name)
                   );
 
                   const isSelected = selectedBusUnitId === unit.id;
@@ -2568,7 +2574,10 @@ export default function BusNetworkPage() {
                           ) : (
                             <div className="min-w-0">
                               {unit.group_name ? (
-                                <div className={`truncate text-base font-bold uppercase tracking-wide ${selectedLineFerryConfig ? "text-white" : "text-slate-900"}`}>
+                                <div
+                                  className={`break-words text-base font-bold uppercase leading-tight tracking-wide ${selectedLineFerryConfig ? "text-white" : "text-slate-900"}`}
+                                  title={unit.group_name}
+                                >
                                   {unit.group_name}
                                 </div>
                               ) : null}

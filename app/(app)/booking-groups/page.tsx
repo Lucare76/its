@@ -669,7 +669,7 @@ function EditableStopRow({ stop, onSave }: {
   const [pickup, setPickup] = useState(stop.pickup_point ?? "");
   const [pax, setPax] = useState(String(stop.expected_pax));
   const [direction, setDirection] = useState(stop.direction);
-  const [pickupTime, setPickupTime] = useState("");
+  const [pickupTime, setPickupTime] = useState(stop.catalog_pickup_time?.slice(0, 5) ?? "");
   const [busy, setBusy] = useState(false);
   const canSave = city.trim().length > 0 && Number(pax) > 0;
 
@@ -683,6 +683,7 @@ function EditableStopRow({ stop, onSave }: {
           setPickup(stop.pickup_point ?? "");
           setPax(String(stop.expected_pax));
           setDirection(stop.direction);
+          setPickupTime(stop.catalog_pickup_time?.slice(0, 5) ?? "");
           setOpen(true);
         }}
       >
@@ -726,7 +727,7 @@ function EditableStopRow({ stop, onSave }: {
         <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setOpen(false)}>annulla</button>
       </div>
       <p className="mt-1 text-[11px] text-slate-500">
-        Se la fermata e collegata al catalogo, aggiorno anche la fermata della Linea Bus.
+        Se la fermata e collegata al catalogo, aggiorno anche la fermata e l&apos;orario della Linea Bus.
       </p>
     </div>
   );

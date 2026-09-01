@@ -82,6 +82,7 @@ export interface BookingGroupStop {
   pickup_point: string | null;
   expected_pax: number;
   stop_id: string | null;
+  catalog_pickup_time?: string | null;
   direction: BookingGroupDirection;
   sort_order: number;
   notes: string | null;
