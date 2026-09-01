@@ -377,6 +377,7 @@ function GroupDetail({ detail, busLines, onChange, onMessage, onError, onClose }
         {/* Fermate */}
         <StopsSection stops={stops} stopSummaries={stop_summaries} services={services}
           onAddStop={(s) => post({ action: "add_stop", booking_group_id: group.id, ...s })}
+          onUpdateStop={(id, patch) => post({ action: "update_stop", id, ...patch })}
           onDeleteStop={(id) => post({ action: "delete_stop", id })}
           onCreateServices={(stopId, passengers, serviceDate) => post({ action: "create_group_services_batch", booking_group_id: group.id, booking_group_stop_id: stopId, service_date: serviceDate, passengers })}
           arrivalDate={group.service_date}
@@ -476,11 +477,12 @@ function GroupEditSection({ group, onSave }: { group: BookingGroup; onSave: (pat
   );
 }
 
-function StopsSection({ stops, stopSummaries, services, onAddStop, onDeleteStop, onCreateServices, arrivalDate, returnDate, busLines, preferExclusiveLine }: {
+function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, arrivalDate, returnDate, busLines, preferExclusiveLine }: {
   stops: BookingGroupStop[];
   stopSummaries: BookingGroupStopPaxSummary[];
   services: Detail["services"];
   onAddStop: (s: { city: string; pickup_point: string | null; expected_pax: number; direction: string; notes: string | null; create_catalog_stop?: boolean; bus_line_id?: string | null; pickup_time?: string | null }) => Promise<PostResult>;
+  onUpdateStop: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null }) => Promise<PostResult>;
   onDeleteStop: (id: string) => Promise<PostResult>;
   onCreateServices: (stopId: string, passengers: Array<{ customer_name: string; pax: number }>, serviceDate: string) => Promise<PostResult>;
   arrivalDate: string | null;
@@ -532,6 +534,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onDeleteStop,
                 </ul>
               ) : null}
               <div className="mt-2 flex flex-wrap items-center gap-2">
+                <EditableStopRow stop={s} onSave={onUpdateStop} />
                 {!s.stop_id ? (
                   <StopCatalogLinker stop={s} busLines={orderedBusLines} defaultBusLineId={effectiveBusLineId} onLink={onAddStop} />
                 ) : null}
@@ -653,6 +656,68 @@ function StopCatalogLinker({ stop, busLines, defaultBusLineId, onLink }: {
         </button>
         <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setOpen(false)}>chiudi</button>
       </div>
+    </div>
+  );
+}
+
+function EditableStopRow({ stop, onSave }: {
+  stop: BookingGroupStop;
+  onSave: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null }) => Promise<PostResult>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [city, setCity] = useState(stop.city);
+  const [pickup, setPickup] = useState(stop.pickup_point ?? "");
+  const [pax, setPax] = useState(String(stop.expected_pax));
+  const [direction, setDirection] = useState(stop.direction);
+  const [pickupTime, setPickupTime] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canSave = city.trim().length > 0 && Number(pax) > 0;
+
+  if (!open) {
+    return (
+      <button type="button" className="text-[11px] font-semibold text-indigo-600 underline" onClick={() => setOpen(true)}>
+        Modifica città/punto
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full rounded-lg border border-indigo-100 bg-indigo-50/60 p-2">
+      <div className="grid gap-2 md:grid-cols-[1fr_1.4fr_90px_110px_110px]">
+        <input className="input-saas text-xs" placeholder="Citta / localita" value={city} onChange={(e) => setCity(e.target.value)} />
+        <input className="input-saas text-xs" placeholder="Punto di carico" value={pickup} onChange={(e) => setPickup(e.target.value)} />
+        <input className="input-saas text-xs" type="number" min={1} max={500} value={pax} onChange={(e) => setPax(e.target.value)} />
+        <select className="input-saas text-xs" value={direction} onChange={(e) => setDirection(e.target.value as "arrival" | "departure")}>
+          <option value="arrival">arrivo</option>
+          <option value="departure">partenza</option>
+        </select>
+        <input className="input-saas text-xs" type="time" value={pickupTime} onChange={(e) => setPickupTime(e.target.value)} />
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="rounded bg-indigo-700 px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
+          disabled={busy || !canSave}
+          onClick={async () => {
+            setBusy(true);
+            const result = await onSave(stop.id, {
+              city: city.trim(),
+              pickup_point: pickup.trim() || null,
+              expected_pax: Number(pax),
+              direction,
+              pickup_time: pickupTime || null,
+            });
+            setBusy(false);
+            if (result) setOpen(false);
+          }}
+        >
+          {busy ? "Salvo..." : "Salva modifica"}
+        </button>
+        <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setOpen(false)}>annulla</button>
+      </div>
+      <p className="mt-1 text-[11px] text-slate-500">
+        Se la fermata e collegata al catalogo, aggiorno anche la fermata della Linea Bus.
+      </p>
     </div>
   );
 }

@@ -112,6 +112,7 @@ const updateStopSchema = z.object({
   stop_id: z.string().uuid().nullable().optional(),
   direction: z.enum(["arrival", "departure"]).optional(),
   sort_order: z.number().int().min(0).max(9999).optional(),
+  pickup_time: clock.nullable().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
 });
 
@@ -337,7 +338,7 @@ export async function POST(request: NextRequest) {
   if (body.action === "update_stop") {
     const { data: current } = await admin
       .from("booking_group_stops")
-      .select("id")
+      .select("id, city, pickup_point, stop_id")
       .eq("tenant_id", tenantId)
       .eq("id", body.id)
       .maybeSingle();
@@ -345,7 +346,7 @@ export async function POST(request: NextRequest) {
     if (body.stop_id && !(await tenantRowExists(admin, "tenant_bus_line_stops", tenantId, body.stop_id))) {
       return NextResponse.json({ ok: false, error: "Fermata catalogo non valida per il tenant." }, { status: 400 });
     }
-    const { action: _action, id, ...rest } = body;
+    const { action: _action, id, pickup_time, ...rest } = body;
     void _action;
     const patch = compact({ ...rest, updated_at: new Date().toISOString() });
     const { data, error } = await admin
@@ -356,7 +357,37 @@ export async function POST(request: NextRequest) {
       .select("*")
       .single();
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-    return NextResponse.json({ ok: true, stop: data as BookingGroupStop });
+    const updatedStop = data as BookingGroupStop;
+    if (current.stop_id) {
+      const catalogPatch = compact({
+        city: updatedStop.city,
+        stop_name: updatedStop.pickup_point ?? updatedStop.city,
+        pickup_note: updatedStop.pickup_point,
+        pickup_time: pickup_time ?? undefined,
+        direction: updatedStop.direction,
+        updated_at: new Date().toISOString(),
+      });
+      const { error: catalogError } = await admin
+        .from("tenant_bus_line_stops")
+        .update(catalogPatch)
+        .eq("tenant_id", tenantId)
+        .eq("id", current.stop_id);
+      if (catalogError) return NextResponse.json({ ok: false, error: catalogError.message }, { status: 500 });
+    }
+    const previousDefaultName = current.pickup_point ? `${current.city} - ${current.pickup_point}` : current.city;
+    const nextDefaultName = updatedStop.pickup_point ? `${updatedStop.city} - ${updatedStop.pickup_point}` : updatedStop.city;
+    const { error: servicesError } = await admin
+      .from("services")
+      .update({
+        bus_city_origin: updatedStop.city,
+        customer_name: nextDefaultName,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_stop_id", id)
+      .eq("customer_name", previousDefaultName);
+    if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
+    return NextResponse.json({ ok: true, stop: updatedStop });
   }
 
   // ── delete_stop ───────────────────────────────────────────────────────
