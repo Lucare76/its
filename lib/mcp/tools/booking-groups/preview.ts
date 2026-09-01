@@ -94,6 +94,8 @@ registerTool({
     service_date_label: z.string().nullable(),
     return_date: z.string().nullable(),
     return_date_label: z.string().nullable(),
+    hotel_id: z.string().nullable(),
+    hotel_name: z.string().nullable(),
     ferry: z.record(z.string(), z.unknown()).nullable(),
     ...tokenFields,
   }),
@@ -103,8 +105,19 @@ registerTool({
       if (input.agencyId && !(await tenantRowExists(context.admin, "agencies", context.tenantId, input.agencyId))) {
         throw new McpError("MCP_INVALID_INPUT", "Agenzia non valida per il tenant.");
       }
-      if (input.hotelId && !(await tenantRowExists(context.admin, "hotels", context.tenantId, input.hotelId))) {
-        throw new McpError("MCP_INVALID_INPUT", "Hotel non valido per il tenant.");
+      // Risoluzione SOLO su hotelId gia' valido (uuid esistente per il
+      // tenant): mai un match automatico per nome, mai una struttura
+      // inventata — coerente col limite dichiarato per questo tool.
+      let hotelName: string | null = null;
+      if (input.hotelId) {
+        const { data: hotelRow } = await context.admin
+          .from("hotels")
+          .select("name")
+          .eq("tenant_id", context.tenantId)
+          .eq("id", input.hotelId)
+          .maybeSingle();
+        if (!hotelRow) throw new McpError("MCP_INVALID_INPUT", "Hotel non valido per il tenant.");
+        hotelName = (hotelRow as { name: string }).name;
       }
       const serviceDate = input.serviceDate ?? null;
       const returnDate = input.returnDate ?? null;
@@ -146,6 +159,8 @@ registerTool({
         service_date_label: fmtDateIt(serviceDate),
         return_date: returnDate,
         return_date_label: fmtDateIt(returnDate),
+        hotel_id: input.hotelId ?? null,
+        hotel_name: hotelName,
         ferry: input.ferry ? (input.ferry as Record<string, unknown>) : null,
         confirmationToken: generated.token,
         expiresAt: generated.expiresAt,

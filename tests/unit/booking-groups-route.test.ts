@@ -22,6 +22,7 @@ const BUS_UNIT_ID = "22222222-2222-4222-8222-222222222222";
 const AGENCY_ID = "33333333-3333-4333-8333-333333333333";
 const STOP_ID = "44444444-4444-4444-8444-444444444444";
 const BUS_LINE_ID = "55555555-5555-4555-8555-555555555555";
+const HOTEL_ID = "66666666-6666-4666-8666-666666666666";
 
 type Row = Record<string, unknown>;
 
@@ -167,6 +168,96 @@ describe("POST create_group — gruppo incompleto (scenario Parrocchia Natività
     const row = writes.inserts.find((w) => w.table === "booking_groups")!.row;
     expect(row).toMatchObject({ outbound_ferry_company: "MEDMAR", outbound_ferry_time: "10:35", outbound_expected_arrival_time: "12:05" });
     expect([...writes.inserts, ...writes.updates, ...writes.upserts].some((w) => (w as { table: string }).table === "bus_line_ferry_config")).toBe(false);
+  });
+});
+
+describe("POST create_group / update_group — Hotel / struttura (Obiettivo A)", () => {
+  it("1. crea gruppo senza hotel: ok, nessun hotel_id inviato al DB", async () => {
+    const { admin, writes } = makeAdmin();
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "create_group", name: "Senza hotel", expected_pax: 10 }));
+    expect(res.status).toBe(200);
+    const row = writes.inserts.find((w) => w.table === "booking_groups")!.row;
+    expect(row.hotel_id).toBeUndefined();
+  });
+
+  it("2. crea gruppo con hotel valido: ok, hotel_id salvato", async () => {
+    const { admin, writes } = makeAdmin({ hotels: [{ id: HOTEL_ID, tenant_id: TENANT, name: "Hotel Bellavista" }] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "create_group", name: "Con hotel", expected_pax: 10, hotel_id: HOTEL_ID }));
+    expect(res.status).toBe(200);
+    const row = writes.inserts.find((w) => w.table === "booking_groups")!.row;
+    expect(row.hotel_id).toBe(HOTEL_ID);
+  });
+
+  it("3. aggiorna hotel di un gruppo esistente: ok", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      hotels: [{ id: HOTEL_ID, tenant_id: TENANT, name: "Hotel Bellavista" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, hotel_id: HOTEL_ID }));
+    expect(res.status).toBe(200);
+    const upd = writes.updates.find((w) => w.table === "booking_groups" && w.filters.id === GROUP_ID);
+    expect(upd?.payload.hotel_id).toBe(HOTEL_ID);
+  });
+
+  it("4. svuota hotel (hotel_id: null): il patch invia esplicitamente null, non viene scartato come 'assente'", async () => {
+    const { admin, writes } = makeAdmin({ booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, hotel_id: HOTEL_ID }] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, hotel_id: null }));
+    expect(res.status).toBe(200);
+    const upd = writes.updates.find((w) => w.table === "booking_groups" && w.filters.id === GROUP_ID);
+    expect(upd?.payload).toHaveProperty("hotel_id", null);
+  });
+
+  it("5a. crea gruppo con hotel di un altro tenant → 400 (integrità tenant)", async () => {
+    const { admin } = makeAdmin({ hotels: [{ id: HOTEL_ID, tenant_id: OTHER_TENANT }] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "create_group", name: "X", expected_pax: 10, hotel_id: HOTEL_ID }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/Hotel/i);
+  });
+
+  it("5b. aggiorna gruppo con hotel di un altro tenant → 400 (integrità tenant)", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      hotels: [{ id: HOTEL_ID, tenant_id: OTHER_TENANT }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group", id: GROUP_ID, hotel_id: HOTEL_ID }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/Hotel/i);
+  });
+
+  it("GET catalog=hotels: elenco hotel del tenant per il picker UI, isolato per tenant", async () => {
+    const { admin } = makeAdmin({
+      hotels: [
+        { id: HOTEL_ID, tenant_id: TENANT, name: "Hotel Bellavista" },
+        { id: "77777777-7777-4777-8777-777777777777", tenant_id: OTHER_TENANT, name: "Hotel Altro Tenant" },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await GET(get("?catalog=hotels"));
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.hotels.map((h: Row) => h.id)).toEqual([HOTEL_ID]);
+  });
+
+  it("7. add_stop resta indipendente: booking_group_stops non riceve mai hotel_id (hotel = dato di gruppo, fermate separate)", async () => {
+    const { admin, writes } = makeAdmin({ booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, hotel_id: HOTEL_ID }] });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({
+      action: "add_stop",
+      booking_group_id: GROUP_ID,
+      city: "Roma",
+      expected_pax: 10,
+      direction: "arrival",
+    }));
+    expect(res.status).toBe(200);
+    const stopInsert = writes.inserts.find((w) => w.table === "booking_group_stops");
+    expect(stopInsert).toBeTruthy();
+    expect(stopInsert!.row).not.toHaveProperty("hotel_id");
   });
 });
 

@@ -233,6 +233,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, lines: data ?? [] });
   }
 
+  if (url.searchParams.get("catalog") === "hotels") {
+    const { data, error } = await admin
+      .from("hotels")
+      .select("id, name")
+      .eq("tenant_id", tenantId)
+      .order("name");
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, hotels: data ?? [] });
+  }
+
   if (url.searchParams.get("catalog") === "bus_stops") {
     const directionRaw = url.searchParams.get("direction");
     const direction = directionRaw === "arrival" || directionRaw === "departure" ? directionRaw : null;

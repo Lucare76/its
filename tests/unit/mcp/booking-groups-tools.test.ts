@@ -225,6 +225,37 @@ describe("its.preview_create_booking_group → its.create_booking_group (§30)",
     expect(db.booking_groups[0]).toMatchObject({ kind: "bus_exclusive", service_date: null, return_date: "2026-09-27" });
   });
 
+  it("Obiettivo A: preview con hotelId valido risolve e mostra hotel_name (mai inventato); create salva hotel_id", async () => {
+    const HOTEL_ID = "66666666-6666-4666-8666-666666666666";
+    const { admin, db } = makeAdmin({ hotels: [{ id: HOTEL_ID, tenant_id: TENANT, name: "Hotel Bellavista" }] });
+    const preview = await tool("its.preview_create_booking_group").handler(ctx(admin), {
+      name: "Gruppo con hotel", expectedPax: 20, hotelId: HOTEL_ID,
+    });
+    expect(preview.hotel_id).toBe(HOTEL_ID);
+    expect(preview.hotel_name).toBe("Hotel Bellavista");
+
+    const res = await tool("its.create_booking_group").handler(ctx(admin), { confirmationToken: preview.confirmationToken });
+    expect(res.name).toBe("Gruppo con hotel");
+    expect(db.booking_groups[0]).toMatchObject({ hotel_id: HOTEL_ID });
+  });
+
+  it("Obiettivo A: preview senza hotelId → hotel_id/hotel_name null, nessun default inventato", async () => {
+    const { admin } = makeAdmin({});
+    const preview = await tool("its.preview_create_booking_group").handler(ctx(admin), {
+      name: "Gruppo senza hotel", expectedPax: 20,
+    });
+    expect(preview.hotel_id).toBeNull();
+    expect(preview.hotel_name).toBeNull();
+  });
+
+  it("Obiettivo A: preview con hotelId di un altro tenant → MCP_INVALID_INPUT", async () => {
+    const HOTEL_ID = "77777777-7777-4777-8777-777777777777";
+    const { admin } = makeAdmin({ hotels: [{ id: HOTEL_ID, tenant_id: OTHER_TENANT, name: "Hotel Altrove" }] });
+    await expect(
+      tool("its.preview_create_booking_group").handler(ctx(admin), { name: "X", expectedPax: 10, hotelId: HOTEL_ID }),
+    ).rejects.toMatchObject({ code: "MCP_INVALID_INPUT" });
+  });
+
   it("preview blocca bus_exclusive senza arrivo e ritorno", async () => {
     const { admin } = makeAdmin({});
     await expect(
