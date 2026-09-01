@@ -201,8 +201,8 @@ describe("FASE A.5.2 §9 — allocazione sul bus riservato visibile in Linea Bus
       tenant_bus_units: [{ id: BUS_UNIT_ID, tenant_id: TENANT, bus_line_id: "line-adriatica", label: "Bus Esclusivo", capacity: 54, low_seat_threshold: 5, status: "open", manual_close: false, sort_order: 0, active: true }],
       tenant_bus_lines: [{ id: "line-adriatica", tenant_id: TENANT, family_code: "ADRIATICA", name: "Adriatica" }],
       tenant_bus_line_stops: [
-        { id: CANONICAL_ARR, tenant_id: TENANT, city: "Rimini", stop_name: "RIMINI", direction: "arrival", active: true, pickup_time: "05:10", stop_order: 0 },
-        { id: CANONICAL_DEP, tenant_id: TENANT, city: "Rimini", stop_name: "RIMINI", direction: "departure", active: true, pickup_time: "18:00", stop_order: 0 },
+        { id: CANONICAL_ARR, tenant_id: TENANT, bus_line_id: "line-adriatica", city: "Rimini", stop_name: "RIMINI", direction: "arrival", active: true, pickup_time: "05:10", stop_order: 0 },
+        { id: CANONICAL_DEP, tenant_id: TENANT, bus_line_id: "line-adriatica", city: "Rimini", stop_name: "RIMINI", direction: "departure", active: true, pickup_time: "18:00", stop_order: 0 },
       ],
       tenant_bus_allocations: [],
       ops_bus_allocation_details: [], tenant_bus_allocation_moves: [], hotels: [], bus_import_pending: [],

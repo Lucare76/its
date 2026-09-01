@@ -635,7 +635,11 @@ export default function BusNetworkPage() {
         .map((allocation) => serviceById.get(allocation.service_id))
         .find((service) => service?.booking_group_kind === "bus_exclusive" && service.booking_group_name?.trim())
         ?.booking_group_name?.trim();
-      return { ...unit, group_name: unit.group_name ?? allocatedGroupName ?? null, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
+      // Obiettivo E: il nome derivato LIVE dalle allocazioni della data
+      // selezionata vince sempre sull'etichetta manuale persistita — cosi'
+      // un bus torna al nome/etichetta originale nelle date in cui non è
+      // occupato da quel gruppo, invece di restare "GIACOMONI" per sempre.
+      return { ...unit, group_name: allocatedGroupName ?? unit.group_name ?? null, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
     }),
     [lineUnits, allDateAllocations, serviceById]
   );

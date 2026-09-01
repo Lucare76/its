@@ -608,21 +608,12 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
-      const { data: serviceGroup } = await auth.admin
-        .from("services")
-        .select("booking_group_id, booking_groups(name, kind)")
-        .eq("tenant_id", tenantId)
-        .eq("id", parsed.service_id)
-        .maybeSingle();
-      const bookingGroup = (serviceGroup as { booking_group_id?: string | null; booking_groups?: { name?: string | null; kind?: string | null } | null } | null)?.booking_groups;
-      const bookingGroupName = bookingGroup?.kind === "bus_exclusive" ? bookingGroup.name?.trim() : "";
-      if (bookingGroupName) {
-        await auth.admin
-          .from("tenant_bus_units")
-          .update({ group_name: bookingGroupName, updated_at: new Date().toISOString() })
-          .eq("tenant_id", tenantId)
-          .eq("id", parsed.bus_unit_id);
-      }
+      // Obiettivo E: niente piu' scrittura permanente di group_name su
+      // tenant_bus_units qui — il nome del gruppo per la card bus si deriva
+      // SEMPRE live, per la data selezionata, dalle allocazioni correnti
+      // (vedi dateUnitLoads in bus-network/page.tsx). Scriverlo qui lo
+      // rendeva uno stato stantio che restava visibile anche su date in cui
+      // il bus e' libero.
       const [networkPayload, allocateAlert] = await Promise.all([
         loadBusNetwork(auth),
         checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)
@@ -641,7 +632,6 @@ export async function POST(request: NextRequest) {
       }
 
       const errors: Array<{ service_id: string; message: string }> = [];
-      let bookingGroupNameToApply: string | null = null;
       for (const item of parsed.services) {
         try {
           await validateBusAllocationRequest(auth, {
@@ -669,18 +659,6 @@ export async function POST(request: NextRequest) {
             errors.push({ service_id: item.service_id, message: error.message });
             continue;
           }
-          if (!bookingGroupNameToApply) {
-            const { data: serviceGroup } = await auth.admin
-              .from("services")
-              .select("booking_group_id, booking_groups(name, kind)")
-              .eq("tenant_id", tenantId)
-              .eq("id", item.service_id)
-              .maybeSingle();
-            const bookingGroup = (serviceGroup as { booking_groups?: { name?: string | null; kind?: string | null } | null } | null)?.booking_groups;
-            if (bookingGroup?.kind === "bus_exclusive" && bookingGroup.name?.trim()) {
-              bookingGroupNameToApply = bookingGroup.name.trim();
-            }
-          }
         } catch (itemError) {
           errors.push({ service_id: item.service_id, message: itemError instanceof Error ? itemError.message : "Errore sconosciuto." });
         }
@@ -689,13 +667,8 @@ export async function POST(request: NextRequest) {
       if (errors.length === parsed.services.length) {
         return NextResponse.json({ ok: false, error: errors[0]?.message ?? "Assegnazione non riuscita." }, { status: 400 });
       }
-      if (bookingGroupNameToApply) {
-        await auth.admin
-          .from("tenant_bus_units")
-          .update({ group_name: bookingGroupNameToApply, updated_at: new Date().toISOString() })
-          .eq("tenant_id", tenantId)
-          .eq("id", parsed.bus_unit_id);
-      }
+      // Obiettivo E: niente piu' scrittura permanente di group_name su
+      // tenant_bus_units qui — vedi commento gemello in allocate_service.
       const [networkPayload, allocateAlert] = await Promise.all([
         loadBusNetwork(auth),
         checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)

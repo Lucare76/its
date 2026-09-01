@@ -1332,6 +1332,15 @@ export async function reserveBookingGroupBus(
   input: ReserveBusInput,
 ): Promise<BgResult<{ reservation: BookingGroupBusReservation }>> {
   const { tenantId, userId, role } = actor;
+  // NB: la data di un leg (soprattutto il ritorno) puo' legittimamente non
+  // essere mai scritta su booking_groups.return_date — FASE A.5 §B lascia la
+  // serviceDate un override puramente a livello di service, senza migration
+  // che la rispecchi sul gruppo. Quindi qui NON si puo' validare service_date
+  // contro service_date/return_date del gruppo (rotto: bloccherebbe reservation
+  // di ritorno legittime). La prevenzione della reservation su data orfana
+  // (bug osservato su GIACOMONI: reservation sulla return_date per un gruppo
+  // con solo fermate di andata) vive invece in `autoAssignBookingGroup`, che
+  // deriva sempre la data corretta da gruppo+fermate prima di riservare.
   if (!(await tenantRowExists(admin, "booking_groups", tenantId, input.bookingGroupId))) {
     return err(404, "Gruppo non trovato.");
   }
@@ -1356,6 +1365,127 @@ export async function reserveBookingGroupBus(
   if (error) return err(500, error.message);
   auditLog({ event: "booking_group_bus_reservation_changed", tenantId, userId, role, outcome: "upserted", details: { booking_group_id: input.bookingGroupId, bus_unit_id: input.busUnitId, service_date: input.service_date, reserved_pax: input.reserved_pax, exclusive: input.exclusive ?? false } });
   return ok({ reservation: data as BookingGroupBusReservation });
+}
+
+// ─── auto-assign "zero click" (bus_exclusive) ─────────────────────────────
+
+export type AutoAssignBookingGroupResult = {
+  attempted: boolean;
+  reservations_created: Array<{ service_date: string; bus_unit_id: string; bus_label: string }>;
+  blocked: Array<{ service_date: string; reason: string }>;
+  operationalize?: OperationalizeResult;
+};
+
+/**
+ * Zero-click per gruppi bus_exclusive (prompt "auto-assegnazione bus
+ * network"): appena il gruppo ha date + fermate (quindi pax attesi noti per
+ * direzione), sceglie da solo un bus esclusivo libero con capienza
+ * sufficiente per ciascuna data richiesta (andata/ritorno possono avere bus
+ * diversi), lo riserva e operativizza il gruppo — riusa integralmente
+ * `findAvailableBusesForGroup` + `reserveBookingGroupBus` +
+ * `operationalizeBookingGroup`, NESSUN nuovo motore di allocazione/SQL.
+ * Non tocca mai una reservation già esistente per quella data (una scelta
+ * fatta a mano o da un run precedente resta autorevole). Se nessun bus ha
+ * capienza libera, o i pax attesi non sono ancora noti, resta bloccato con
+ * un motivo esplicito — mai un bus scelto a caso.
+ *
+ * Pensata per essere chiamata "best effort" da addBookingGroupPassengers e
+ * da patchBookingGroup (quando si completano fermate/pax o si sistemano le
+ * date): un suo fallimento non deve MAI bloccare l'operazione chiamante.
+ */
+export async function autoAssignBookingGroup(
+  admin: SupabaseClient,
+  actor: BgActor,
+  bookingGroupId: string,
+): Promise<AutoAssignBookingGroupResult> {
+  const { tenantId } = actor;
+  const result: AutoAssignBookingGroupResult = { attempted: false, reservations_created: [], blocked: [] };
+
+  const { data: group } = await admin
+    .from("booking_groups")
+    .select("id, kind, status, service_date, return_date, expected_pax")
+    .eq("tenant_id", tenantId)
+    .eq("id", bookingGroupId)
+    .maybeSingle();
+  if (!group || group.status === "cancelled") return result;
+  const g = group as { kind: string; status: string; service_date: string | null; return_date: string | null; expected_pax: number | null };
+
+  if (g.kind === "bus_exclusive") {
+    const { data: stops } = await admin
+      .from("booking_group_stops")
+      .select("direction")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", bookingGroupId);
+    const directions = new Set(((stops ?? []) as Array<{ direction: string | null }>).map((s) => s.direction));
+    const neededDates = [
+      ...(directions.has("arrival") && g.service_date ? [g.service_date] : []),
+      ...(directions.has("departure") && g.return_date ? [g.return_date] : []),
+    ];
+
+    if (neededDates.length > 0) {
+      result.attempted = true;
+      const { data: existingReservations } = await admin
+        .from("booking_group_bus_reservations")
+        .select("service_date, exclusive")
+        .eq("tenant_id", tenantId)
+        .eq("booking_group_id", bookingGroupId);
+      const reservedDates = new Set(
+        ((existingReservations ?? []) as Array<{ service_date: string; exclusive: boolean | null }>)
+          .filter((r) => r.exclusive)
+          .map((r) => r.service_date),
+      );
+      const requiredCapacity = Number(g.expected_pax ?? 0);
+      for (const serviceDate of neededDates) {
+        if (reservedDates.has(serviceDate)) continue;
+        if (requiredCapacity <= 0) {
+          result.blocked.push({ service_date: serviceDate, reason: "Pax previsti del gruppo mancanti o a zero." });
+          continue;
+        }
+        const candidates = await findAvailableBusesForGroup(admin, tenantId, {
+          serviceDate,
+          requiredCapacity,
+          exclusiveOnly: true,
+        });
+        if (candidates.length === 0) {
+          result.blocked.push({ service_date: serviceDate, reason: "Nessun bus esclusivo libero con capienza sufficiente per quella data." });
+          continue;
+        }
+        if (candidates.length > 1) {
+          // Scelta non certa (stesso principio dell'assegnazione libera su
+          // linea, Obiettivo D e Test 7): con piu' bus ugualmente compatibili
+          // non si inventa un criterio di scelta — resta "Da validare" con la
+          // rosa di candidati, coerente con la conferma che Mario chiede in
+          // questo stesso scenario.
+          result.blocked.push({
+            service_date: serviceDate,
+            reason: `${candidates.length} bus esclusivi compatibili (${candidates.map((c) => c.label).join(", ")}): serve conferma manuale, nessuna scelta automatica.`,
+          });
+          continue;
+        }
+        const chosen = candidates[0];
+        const reserved = await reserveBookingGroupBus(admin, actor, {
+          bookingGroupId,
+          busUnitId: chosen.id,
+          service_date: serviceDate,
+          reserved_pax: requiredCapacity,
+          exclusive: true,
+        });
+        if (!reserved.ok) {
+          result.blocked.push({ service_date: serviceDate, reason: reserved.error });
+          continue;
+        }
+        result.reservations_created.push({ service_date: serviceDate, bus_unit_id: chosen.id, bus_label: chosen.label });
+      }
+    }
+  }
+
+  try {
+    const outcome = await operationalizeBookingGroup(admin, actor, { bookingGroupId });
+    if ("data" in outcome) result.operationalize = outcome.data;
+  } catch {
+    // best effort: un fallimento qui non deve mai propagarsi al chiamante.
+  }
+  return result;
 }
 
 // ─── FASE A.5.1 §20 — reconciliation: stato reale dal DB (fonte di verità) ─

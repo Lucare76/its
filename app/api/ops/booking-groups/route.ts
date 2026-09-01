@@ -28,6 +28,7 @@ import {
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
+  autoAssignBookingGroup,
   findAvailableBusesForGroup,
   isSupportedBookingGroupDate,
   suggestBookingGroupCatalogStops,
@@ -184,6 +185,11 @@ const operationalizeSchema = z.object({
   service_ids: z.array(z.string().uuid()).min(1).max(500).optional(),
 });
 
+const autoAssignSchema = z.object({
+  action: z.literal("auto_assign_group"),
+  booking_group_id: z.string().uuid(),
+});
+
 const bodySchema = z.discriminatedUnion("action", [
   createGroupSchema,
   updateGroupSchema,
@@ -198,6 +204,7 @@ const bodySchema = z.discriminatedUnion("action", [
   removeGroupPassengerSchema,
   previewOperationalizeSchema,
   operationalizeSchema,
+  autoAssignSchema,
 ]);
 
 /** Mapping uniforme BgResult/BgOutcome -> NextResponse. Le chiavi di
@@ -580,6 +587,17 @@ export async function POST(request: NextRequest) {
       bookingGroupId: body.booking_group_id,
       serviceIds: body.service_ids,
     }));
+  }
+
+  // ── auto_assign_group (WRITE) — Obiettivo A "zero click" ──────────────
+  // Un solo click per la UI umana al posto di "riserva bus" +
+  // "operativizza" separati: sceglie un bus esclusivo libero SOLO se non
+  // ambiguo (un solo candidato compatibile), riserva e operativizza.
+  // Mai chiamata da Mario/MCP: la conversazione guidata di Mario resta
+  // quella esistente (propone il bus, chiede conferma), invariata.
+  if (body.action === "auto_assign_group") {
+    const result = await autoAssignBookingGroup(admin, actor, body.booking_group_id);
+    return NextResponse.json({ ok: true, ...result });
   }
 
   return NextResponse.json({ ok: false, error: "Azione non riconosciuta." }, { status: 400 });
