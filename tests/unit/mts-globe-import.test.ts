@@ -410,4 +410,126 @@ describe("buildMtsGlobePreview / confirmMtsGlobeImport", () => {
     expect(state.agency_bookings).toHaveLength(0);
     expect(state.services).toHaveLength(0);
   });
+
+  function intermedioRow(voucherNo: string, groupingId: string, pickUp: string, dropOff: string, overrides: Record<string, unknown> = {}) {
+    return baseRow({
+      "Voucher No": voucherNo,
+      "Grouping Id": groupingId,
+      "Service Base Code": "Intermedio",
+      "Flight": " ",
+      "Dep Airport": " ",
+      "Dep Time": " ",
+      "Arr Airport": " ",
+      "Arr Time": " ",
+      "Pick-Up": pickUp,
+      "Drop-Off": dropOff,
+      ...overrides
+    });
+  }
+
+  it("gruppo Intermedio con 5 voucher che condividono lo stesso Grouping Id: una sola correzione di gruppo applicata a tutti e 5", async () => {
+    const { admin } = createFakeAdmin();
+    const rows = ["G1V1", "G1V2", "G1V3", "G1V4", "G1V5"].map((voucherNo) =>
+      intermedioRow(voucherNo, "G1", "AMTSIT1JC4 - Ramada by Wyndham Naples", "AMTSIT1JQK - Hotel Terme Royal Palm")
+    );
+
+    // Prima della correzione: un solo gruppo rilevato, 5 prenotazioni, tutte in warning.
+    const beforePreview = await buildMtsGlobePreview(admin, TENANT_ID, rows);
+    expect(beforePreview.intermedioGroups).toHaveLength(1);
+    expect(beforePreview.intermedioGroups[0].groupingId).toBe("G1");
+    expect(beforePreview.intermedioGroups[0].bookingCount).toBe(5);
+    expect(beforePreview.bookings.every((b) => b.status === "warning")).toBe(true);
+
+    const groupTimeCorrections = { G1: "11:15" };
+    const afterPreview = await buildMtsGlobePreview(admin, TENANT_ID, rows, {}, {}, groupTimeCorrections);
+    expect(afterPreview.bookings).toHaveLength(5);
+    for (const booking of afterPreview.bookings) {
+      expect(booking.status).toBe("ready");
+      expect(booking.generatedServices[0].time).toBe("11:15");
+    }
+    // Gruppo risolto: non compare piu' come "da compilare".
+    expect(afterPreview.intermedioGroups).toHaveLength(0);
+  });
+
+  it("gruppo Intermedio con 2 voucher: la correzione di gruppo si applica a entrambi", async () => {
+    const { admin } = createFakeAdmin();
+    const rows = ["G2V1", "G2V2"].map((voucherNo) =>
+      intermedioRow(voucherNo, "G2", "AMTSIT1JQK - Hotel Terme Royal Palm", "AITNAPKI08 - Best Western Plus Hotel Plaza Napoli")
+    );
+
+    const beforePreview = await buildMtsGlobePreview(admin, TENANT_ID, rows);
+    expect(beforePreview.intermedioGroups).toHaveLength(1);
+    expect(beforePreview.intermedioGroups[0].bookingCount).toBe(2);
+
+    const groupTimeCorrections = { G2: "09:30" };
+    const afterPreview = await buildMtsGlobePreview(admin, TENANT_ID, rows, {}, {}, groupTimeCorrections);
+    for (const booking of afterPreview.bookings) {
+      expect(booking.status).toBe("ready");
+      expect(booking.generatedServices[0].time).toBe("09:30");
+    }
+  });
+
+  it("voucher con Grouping Id diverso non viene toccato dalla correzione di un altro gruppo", async () => {
+    const { admin } = createFakeAdmin();
+    const groupRows = ["G1V1", "G1V2"].map((voucherNo) =>
+      intermedioRow(voucherNo, "G1", "AMTSIT1JC4 - Ramada by Wyndham Naples", "AMTSIT1JQK - Hotel Terme Royal Palm")
+    );
+    const otherRow = intermedioRow("G3V1", "G3", "AMTSIT1JQK - Hotel Terme Royal Palm", "AITNAPKI08 - Best Western Plus Hotel Plaza Napoli");
+    const rows = [...groupRows, otherRow];
+
+    const groupTimeCorrections = { G1: "11:15" };
+    const preview = await buildMtsGlobePreview(admin, TENANT_ID, rows, {}, {}, groupTimeCorrections);
+
+    const g1Bookings = preview.bookings.filter((b) => b.voucherNo.startsWith("G1"));
+    expect(g1Bookings.every((b) => b.status === "ready")).toBe(true);
+
+    const g3Booking = preview.bookings.find((b) => b.voucherNo === "G3V1");
+    expect(g3Booking?.status).toBe("warning");
+    expect(g3Booking?.generatedServices[0].time).toBe("");
+    expect(g3Booking?.reasons).toContain("Orario transfer Intermedio mancante.");
+
+    // Il gruppo G3 (1 solo voucher, ancora irrisolto) resta nella lista "da compilare".
+    expect(preview.intermedioGroups.map((g) => g.groupingId)).toEqual(["G3"]);
+  });
+
+  it("i booking del gruppo restano separati: 5 agency_bookings distinti con source_booking_key propria, mai fusi", async () => {
+    const { admin, state } = createFakeAdmin();
+    const rows = ["G1V1", "G1V2", "G1V3", "G1V4", "G1V5"].map((voucherNo) =>
+      intermedioRow(voucherNo, "G1", "AMTSIT1JC4 - Ramada by Wyndham Naples", "AMTSIT1JQK - Hotel Terme Royal Palm")
+    );
+    const groupTimeCorrections = { G1: "11:15" };
+
+    const result = await confirmMtsGlobeImport(admin, TENANT_ID, null, rows, null, {}, {}, groupTimeCorrections);
+    expect(result.importedBookingCount).toBe(5);
+    expect(result.importedServiceCount).toBe(5);
+    expect(state.agency_bookings).toHaveLength(5);
+    expect(state.services).toHaveLength(5);
+
+    const sourceKeys = (state.agency_bookings as Array<{ source_booking_key: string }>).map((b) => b.source_booking_key).sort();
+    expect(sourceKeys).toEqual(["mts_globe:G1V1", "mts_globe:G1V2", "mts_globe:G1V3", "mts_globe:G1V4", "mts_globe:G1V5"]);
+    expect(new Set(sourceKeys).size).toBe(5);
+  });
+
+  it("reimport dopo correzione di gruppo: idempotenza invariata, tutti duplicate, nessuna nuova scrittura", async () => {
+    const { admin, state } = createFakeAdmin();
+    const rows = ["G1V1", "G1V2", "G1V3", "G1V4", "G1V5"].map((voucherNo) =>
+      intermedioRow(voucherNo, "G1", "AMTSIT1JC4 - Ramada by Wyndham Naples", "AMTSIT1JQK - Hotel Terme Royal Palm")
+    );
+    const groupTimeCorrections = { G1: "11:15" };
+
+    const first = await confirmMtsGlobeImport(admin, TENANT_ID, null, rows, null, {}, {}, groupTimeCorrections);
+    expect(first.importedBookingCount).toBe(5);
+    expect(state.agency_bookings).toHaveLength(5);
+
+    const second = await confirmMtsGlobeImport(admin, TENANT_ID, null, rows, null, {}, {}, groupTimeCorrections);
+    expect(second.importedBookingCount).toBe(0);
+    expect(second.skippedDuplicateCount).toBe(5);
+    expect(state.agency_bookings).toHaveLength(5);
+    expect(state.services).toHaveLength(5);
+
+    // La preview di reimport risulta duplicate per tutti, a prescindere
+    // dalla correzione di gruppo (gia' esistente in DB con lo stesso payload).
+    const previewAgain = await buildMtsGlobePreview(admin, TENANT_ID, rows, {}, {}, groupTimeCorrections);
+    expect(previewAgain.bookings.every((b) => b.status === "duplicate")).toBe(true);
+  });
 });

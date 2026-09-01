@@ -9,6 +9,7 @@ type AgencyBookingRowStatus = "ready" | "warning" | "error" | "duplicate" | "upd
 
 type GeneratedServiceDraft = {
   legRowIndex: number;
+  groupingId: string | null;
   bookingServiceKind: "transfer_airport_hotel" | "transfer_hotel_hotel";
   direction: "arrival" | "departure";
   date: string;
@@ -43,8 +44,18 @@ type MtsGlobePreviewBooking = {
   existingAgencyBookingId: string | null;
 };
 
+type MtsGlobeIntermedioGroup = {
+  groupingId: string;
+  hotelFromNameRaw: string | null;
+  hotelToNameRaw: string | null;
+  bookingCount: number;
+  totalPax: number;
+  vouchers: Array<{ voucherNo: string; customerName: string; pax: number; legRowIndex: number }>;
+};
+
 type MtsGlobePreviewResult = {
   bookings: MtsGlobePreviewBooking[];
+  intermedioGroups: MtsGlobeIntermedioGroup[];
   rowErrors: Array<{ rowIndex: number; voucherNo: string | null; message: string }>;
   summary: {
     totalRows: number;
@@ -111,6 +122,7 @@ export default function MtsGlobeImportPage() {
   const [preview, setPreview] = useState<MtsGlobePreviewResult | null>(null);
   const [hotelCorrections, setHotelCorrections] = useState<Record<string, string>>({});
   const [timeCorrections, setTimeCorrections] = useState<Record<string, string>>({});
+  const [groupTimeCorrections, setGroupTimeCorrections] = useState<Record<string, string>>({});
   const [hotels, setHotels] = useState<HotelOption[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
@@ -140,6 +152,7 @@ export default function MtsGlobeImportPage() {
     setConfirmResult(null);
     setHotelCorrections({});
     setTimeCorrections({});
+    setGroupTimeCorrections({});
     setMessage(null);
     try {
       const rows = await readRowsFromFile(file);
@@ -149,13 +162,18 @@ export default function MtsGlobeImportPage() {
       }
       setRawRows(rows);
       await ensureHotelsLoaded();
-      await runPreview(rows, {}, {});
+      await runPreview(rows, {}, {}, {});
     } catch (error) {
       setMessage(`Errore lettura file: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  async function runPreview(rows: Array<Record<string, unknown>>, corrections: Record<string, string>, timeCorr: Record<string, string>) {
+  async function runPreview(
+    rows: Array<Record<string, unknown>>,
+    corrections: Record<string, string>,
+    timeCorr: Record<string, string>,
+    groupTimeCorr: Record<string, string>
+  ) {
     setPreviewLoading(true);
     setMessage(null);
     try {
@@ -163,7 +181,13 @@ export default function MtsGlobeImportPage() {
       const response = await fetch("/api/ops/agency-imports/mts-globe", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
-        body: JSON.stringify({ mode: "preview", rows, hotel_corrections: corrections, time_corrections: timeCorr })
+        body: JSON.stringify({
+          mode: "preview",
+          rows,
+          hotel_corrections: corrections,
+          time_corrections: timeCorr,
+          group_time_corrections: groupTimeCorr
+        })
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
@@ -196,9 +220,18 @@ export default function MtsGlobeImportPage() {
     });
   }
 
+  function setGroupTimeCorrection(groupingId: string, time: string) {
+    setGroupTimeCorrections((prev) => {
+      const next = { ...prev };
+      if (time) next[groupingId] = time;
+      else delete next[groupingId];
+      return next;
+    });
+  }
+
   async function reapplyCorrections() {
     if (rawRows.length === 0) return;
-    await runPreview(rawRows, hotelCorrections, timeCorrections);
+    await runPreview(rawRows, hotelCorrections, timeCorrections, groupTimeCorrections);
   }
 
   async function handleConfirm() {
@@ -210,7 +243,13 @@ export default function MtsGlobeImportPage() {
       const response = await fetch("/api/ops/agency-imports/mts-globe", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
-        body: JSON.stringify({ mode: "confirm", rows: rawRows, hotel_corrections: hotelCorrections, time_corrections: timeCorrections })
+        body: JSON.stringify({
+          mode: "confirm",
+          rows: rawRows,
+          hotel_corrections: hotelCorrections,
+          time_corrections: timeCorrections,
+          group_time_corrections: groupTimeCorrections
+        })
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
@@ -219,7 +258,7 @@ export default function MtsGlobeImportPage() {
       }
       setConfirmResult(data as ConfirmResult);
       // Rileggi la preview dopo il confirm: le pratiche appena create risultano DUPLICATE.
-      await runPreview(rawRows, hotelCorrections, timeCorrections);
+      await runPreview(rawRows, hotelCorrections, timeCorrections, groupTimeCorrections);
     } catch (error) {
       setMessage(`Errore di rete durante il confirm: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -281,9 +320,27 @@ export default function MtsGlobeImportPage() {
         </SectionCard>
       ) : null}
 
+      {preview && preview.intermedioGroups.length > 0 ? (
+        <SectionCard
+          title="3. Gruppi transfer Intermedio"
+          subtitle="Voucher diversi che condividono lo stesso Grouping Id (stesso transfer navetta): inserisci l'orario una sola volta per gruppo, viene propagato a tutti i voucher elencati."
+        >
+          <div className="space-y-3">
+            {preview.intermedioGroups.map((group) => (
+              <IntermedioGroupCard
+                key={group.groupingId}
+                group={group}
+                value={groupTimeCorrections[group.groupingId]}
+                onChange={setGroupTimeCorrection}
+              />
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
+
       {preview ? (
         <SectionCard
-          title="3. Prenotazioni"
+          title="4. Prenotazioni"
           subtitle="Ogni riga è una pratica (Voucher No), con i leg arrivo/partenza/intermedio sotto. Correggi l'hotel dove serve, poi conferma."
           actions={
             <button
@@ -313,7 +370,7 @@ export default function MtsGlobeImportPage() {
               ))}
               <div className="flex justify-end">
                 <button type="button" className="btn-saas-secondary" onClick={() => void reapplyCorrections()} disabled={previewLoading}>
-                  {previewLoading ? "Ricalcolo…" : "Applica correzioni hotel"}
+                  {previewLoading ? "Ricalcolo…" : "Applica correzioni"}
                 </button>
               </div>
             </div>
@@ -322,7 +379,7 @@ export default function MtsGlobeImportPage() {
       ) : null}
 
       {confirmResult ? (
-        <SectionCard title="4. Risultato import">
+        <SectionCard title="5. Risultato import">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <SummaryTile label="Pratiche importate" value={confirmResult.importedBookingCount} tone="emerald" />
             <SummaryTile label="Servizi creati" value={confirmResult.importedServiceCount} tone="emerald" />
@@ -546,6 +603,43 @@ function HotelCell({
         ))}
       </select>
     </div>
+  );
+}
+
+function IntermedioGroupCard({
+  group,
+  value,
+  onChange
+}: {
+  group: MtsGlobeIntermedioGroup;
+  value: string | undefined;
+  onChange: (groupingId: string, time: string) => void;
+}) {
+  return (
+    <article className="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+      <p className="text-sm font-semibold text-text">GRUPPO {group.groupingId}</p>
+      <p className="text-xs text-muted">
+        {group.hotelFromNameRaw ?? "?"} → {group.hotelToNameRaw ?? "?"}
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        {group.bookingCount} prenotazion{group.bookingCount === 1 ? "e" : "i"} / {group.totalPax} pax
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <label className="text-xs text-muted" htmlFor={`group-time-${group.groupingId}`}>Orario transfer:</label>
+        <input
+          id={`group-time-${group.groupingId}`}
+          type="time"
+          className="input-saas w-32 text-xs"
+          value={value ?? ""}
+          onChange={(event) => onChange(group.groupingId, event.target.value)}
+        />
+      </div>
+      <ul className="mt-2 space-y-0.5 text-xs text-muted">
+        {group.vouchers.map((v) => (
+          <li key={v.voucherNo}>Voucher {v.voucherNo} — {v.customerName} ({v.pax} pax)</li>
+        ))}
+      </ul>
+    </article>
   );
 }
 

@@ -16,7 +16,12 @@ const payloadSchema = z.object({
   hotel_corrections: z.record(z.string(), z.string().uuid()).optional().default({}),
   // Correzione orario manuale per i leg Intermedio (hotel->hotel) privi di
   // orario nel file: chiave "voucherNo#rowIndex#time" -> "HH:MM".
-  time_corrections: z.record(z.string(), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)).optional().default({})
+  time_corrections: z.record(z.string(), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)).optional().default({}),
+  // Correzione orario di GRUPPO per i leg Intermedio: chiave "Grouping Id"
+  // (MAI Voucher No) -> "HH:MM", propagata a tutti i voucher che condividono
+  // lo stesso Grouping Id. Una correzione specifica in time_corrections per
+  // lo stesso leg ha priorita' su questa.
+  group_time_corrections: z.record(z.string(), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)).optional().default({})
 });
 
 export async function POST(request: NextRequest) {
@@ -31,7 +36,14 @@ export async function POST(request: NextRequest) {
   const tenantId = auth.membership.tenant_id;
 
   if (parsed.data.mode === "preview") {
-    const preview = await buildMtsGlobePreview(auth.admin, tenantId, parsed.data.rows, parsed.data.hotel_corrections, parsed.data.time_corrections);
+    const preview = await buildMtsGlobePreview(
+      auth.admin,
+      tenantId,
+      parsed.data.rows,
+      parsed.data.hotel_corrections,
+      parsed.data.time_corrections,
+      parsed.data.group_time_corrections
+    );
     return NextResponse.json({ ok: true, ...preview });
   }
 
@@ -42,7 +54,8 @@ export async function POST(request: NextRequest) {
     parsed.data.rows,
     parsed.data.source_import_id ?? null,
     parsed.data.hotel_corrections,
-    parsed.data.time_corrections
+    parsed.data.time_corrections,
+    parsed.data.group_time_corrections
   );
 
   auditLog({

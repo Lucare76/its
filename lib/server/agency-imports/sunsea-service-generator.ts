@@ -25,6 +25,11 @@ export type ResolvedHotelForLeg = {
 
 export type GeneratedServiceDraft = {
   legRowIndex: number;
+  // "Grouping Id" del file MTS Globe: raggruppa piu' prenotazioni indipendenti
+  // che condividono lo stesso transfer navetta (vedi mts-globe-parser.ts).
+  // Usato SOLO per proporre in UI un'unica correzione orario Intermedio
+  // condivisa tra voucher dello stesso gruppo — mai come chiave di booking.
+  groupingId: string | null;
   bookingServiceKind: "transfer_airport_hotel" | "transfer_hotel_hotel";
   serviceTypeCode: "transfer_airport_hotel" | "transfer_hotel_port";
   direction: "arrival" | "departure";
@@ -115,6 +120,7 @@ export function generateSunSeaServices(
       }
       return {
         legRowIndex: leg.rowIndex,
+        groupingId: leg.groupingId,
         bookingServiceKind: "transfer_hotel_hotel",
         serviceTypeCode: "transfer_hotel_port",
         direction: "departure",
@@ -145,6 +151,7 @@ export function generateSunSeaServices(
 
     return {
       legRowIndex: leg.rowIndex,
+      groupingId: leg.groupingId,
       bookingServiceKind: "transfer_airport_hotel",
       serviceTypeCode: "transfer_airport_hotel",
       direction: leg.legType === "arrival" ? "arrival" : "departure",

@@ -27,6 +27,16 @@ function timeCorrectionKey(voucherNo: string, rowIndex: number): string {
   return `${voucherNo}#${rowIndex}#time`;
 }
 
+// Correzione orario Intermedio a livello di GRUPPO (chiave = "Grouping Id" del
+// file MTS Globe, MAI il Voucher No): righe Intermedio di voucher diversi che
+// condividono lo stesso Grouping Id rappresentano lo stesso transfer navetta
+// condiviso (stesso hotel origine/destinazione, stesso giorno) — l'operatore
+// inserisce l'orario una sola volta e viene propagato a tutti i voucher del
+// gruppo. Grouping Id resta puramente un raggruppamento operativo: non
+// diventa mai una chiave di booking (source_booking_key resta per Voucher
+// No) e non fonde mai prenotazioni diverse.
+export type MtsGlobeGroupTimeCorrections = Record<string, string>;
+
 const VALID_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // Serializzazione JSON con chiavi ordinate ricorsivamente, indipendente
@@ -73,8 +83,23 @@ export type MtsGlobePreviewBooking = {
   existingAgencyBookingId: string | null;
 };
 
+// Gruppo di righe Intermedio (voucher diversi) che condividono lo stesso
+// "Grouping Id" e hanno TUTTE l'orario ancora mancante: mostrato in UI come
+// un'unica sezione compilabile una volta sola. bookingCount/totalPax contano
+// i voucher distinti (mai i leg: un voucher potrebbe teoricamente avere piu'
+// leg Intermedio nello stesso gruppo, ma resta una sola prenotazione).
+export type MtsGlobeIntermedioGroup = {
+  groupingId: string;
+  hotelFromNameRaw: string | null;
+  hotelToNameRaw: string | null;
+  bookingCount: number;
+  totalPax: number;
+  vouchers: Array<{ voucherNo: string; customerName: string; pax: number; legRowIndex: number }>;
+};
+
 export type MtsGlobePreviewResult = {
   bookings: MtsGlobePreviewBooking[];
+  intermedioGroups: MtsGlobeIntermedioGroup[];
   rowErrors: Array<{ rowIndex: number; voucherNo: string | null; message: string }>;
   summary: {
     totalRows: number;
@@ -199,11 +224,18 @@ function resolveHotelNames(services: GeneratedServiceDraft[], hotels: HotelCatal
 function applyIntermedioTimeCorrections(
   services: GeneratedServiceDraft[],
   voucherNo: string,
-  corrections: MtsGlobeTimeCorrections
+  corrections: MtsGlobeTimeCorrections,
+  groupCorrections: MtsGlobeGroupTimeCorrections
 ): GeneratedServiceDraft[] {
   return services.map((service) => {
     if (service.bookingServiceKind !== "transfer_hotel_hotel" || service.time) return service;
-    const correction = corrections[timeCorrectionKey(voucherNo, service.legRowIndex)];
+    // Priorita' alla correzione specifica del singolo voucher/riga, se
+    // presente: permette all'operatore di sovrascrivere un caso puntuale
+    // dopo aver gia' applicato l'orario di gruppo (es. un pax che parte
+    // prima degli altri sullo stesso Grouping Id).
+    const specific = corrections[timeCorrectionKey(voucherNo, service.legRowIndex)];
+    const group = service.groupingId ? groupCorrections[service.groupingId] : undefined;
+    const correction = specific ?? group;
     if (!correction || !VALID_TIME_RE.test(correction)) return service;
     return {
       ...service,
@@ -329,7 +361,8 @@ export async function buildMtsGlobePreview(
   tenantId: string,
   rawRows: Array<Record<string, unknown>>,
   hotelCorrections: MtsGlobeHotelCorrections = {},
-  timeCorrections: MtsGlobeTimeCorrections = {}
+  timeCorrections: MtsGlobeTimeCorrections = {},
+  groupTimeCorrections: MtsGlobeGroupTimeCorrections = {}
 ): Promise<MtsGlobePreviewResult> {
   const parsed = parseMtsGlobeRows(rawRows);
   const hotels = await loadHotelCatalog(admin, tenantId);
@@ -351,7 +384,12 @@ export async function buildMtsGlobePreview(
 
     const generatedServicesBeforeTiming = generateSunSeaServices(booking, resolvedHotels);
     const generatedServicesWithNames = resolveHotelNames(generatedServicesBeforeTiming, hotels);
-    const generatedServicesWithIntermedioTime = applyIntermedioTimeCorrections(generatedServicesWithNames, booking.voucherNo, timeCorrections);
+    const generatedServicesWithIntermedioTime = applyIntermedioTimeCorrections(
+      generatedServicesWithNames,
+      booking.voucherNo,
+      timeCorrections,
+      groupTimeCorrections
+    );
     const generatedServices = applyDepartureOperationalTiming(generatedServicesWithIntermedioTime, booking, hotels, operationalContext);
 
     // Orario Intermedio non risolto ("indispensabile", stessa filosofia
@@ -419,6 +457,39 @@ export async function buildMtsGlobePreview(
     });
   }
 
+  // Gruppi Intermedio ancora da compilare: solo legs con orario mancante DOPO
+  // le correzioni gia' applicate sopra (specifiche + di gruppo) — un gruppo
+  // gia' risolto sparisce dalla lista, non serve piu' l'input operatore.
+  const intermedioGroupAcc = new Map<
+    string,
+    { hotelFromNameRaw: string | null; hotelToNameRaw: string | null; legs: MtsGlobeIntermedioGroup["vouchers"] }
+  >();
+  for (const b of bookings) {
+    for (const service of b.generatedServices) {
+      if (service.bookingServiceKind !== "transfer_hotel_hotel" || service.time || !service.groupingId) continue;
+      const entry = intermedioGroupAcc.get(service.groupingId) ?? {
+        hotelFromNameRaw: service.hotelNameRaw,
+        hotelToNameRaw: service.hotelToNameRaw,
+        legs: []
+      };
+      entry.legs.push({ voucherNo: b.voucherNo, customerName: b.customerName, pax: b.pax, legRowIndex: service.legRowIndex });
+      intermedioGroupAcc.set(service.groupingId, entry);
+    }
+  }
+  const intermedioGroups: MtsGlobeIntermedioGroup[] = Array.from(intermedioGroupAcc.entries())
+    .map(([groupingId, entry]) => {
+      const uniqueVouchers = new Map(entry.legs.map((leg) => [leg.voucherNo, leg]));
+      return {
+        groupingId,
+        hotelFromNameRaw: entry.hotelFromNameRaw,
+        hotelToNameRaw: entry.hotelToNameRaw,
+        bookingCount: uniqueVouchers.size,
+        totalPax: Array.from(uniqueVouchers.values()).reduce((sum, v) => sum + v.pax, 0),
+        vouchers: entry.legs
+      };
+    })
+    .sort((a, b) => a.groupingId.localeCompare(b.groupingId));
+
   const summary = {
     totalRows: parsed.totalRows,
     bookingCount: bookings.length,
@@ -430,7 +501,7 @@ export async function buildMtsGlobePreview(
     updateCount: bookings.filter((b) => b.status === "update").length
   };
 
-  return { bookings, rowErrors: parsed.errors, summary };
+  return { bookings, intermedioGroups, rowErrors: parsed.errors, summary };
 }
 
 export type ConfirmMtsGlobeImportResult = {
@@ -455,9 +526,10 @@ export async function confirmMtsGlobeImport(
   rawRows: Array<Record<string, unknown>>,
   sourceImportId: string | null,
   hotelCorrections: MtsGlobeHotelCorrections = {},
-  timeCorrections: MtsGlobeTimeCorrections = {}
+  timeCorrections: MtsGlobeTimeCorrections = {},
+  groupTimeCorrections: MtsGlobeGroupTimeCorrections = {}
 ): Promise<ConfirmMtsGlobeImportResult> {
-  const preview = await buildMtsGlobePreview(admin, tenantId, rawRows, hotelCorrections, timeCorrections);
+  const preview = await buildMtsGlobePreview(admin, tenantId, rawRows, hotelCorrections, timeCorrections, groupTimeCorrections);
   const parsed = parseMtsGlobeRows(rawRows);
   const bookingByVoucher = new Map(parsed.bookings.map((b) => [b.voucherNo, b]));
 
