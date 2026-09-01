@@ -28,6 +28,7 @@ import {
   operationalizeBookingGroup,
   findAvailableBusesForGroup,
   isSupportedBookingGroupDate,
+  suggestBookingGroupCatalogStops,
   type BgActor,
 } from "@/lib/server/booking-groups-service";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -229,6 +230,20 @@ export async function GET(request: NextRequest) {
       .order("name");
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, lines: data ?? [] });
+  }
+
+  if (url.searchParams.get("catalog") === "bus_stops") {
+    const directionRaw = url.searchParams.get("direction");
+    const direction = directionRaw === "arrival" || directionRaw === "departure" ? directionRaw : null;
+    const suggestions = await suggestBookingGroupCatalogStops(admin, tenantId, {
+      query: url.searchParams.get("q"),
+      city: url.searchParams.get("city"),
+      pickupPoint: url.searchParams.get("pickup_point"),
+      direction,
+      busLineId: url.searchParams.get("bus_line_id"),
+      limit: 8,
+    });
+    return NextResponse.json({ ok: true, stops: suggestions });
   }
 
   const availableForGroup = url.searchParams.get("available_buses_for_group");

@@ -24,6 +24,16 @@ type Detail = {
 };
 type AvailableBus = { id: string; label: string; capacity: number; tag: string | null };
 type BusLineOption = { id: string; name: string; code: string | null; family_name: string | null; variant_label: string | null };
+type BusStopSuggestion = {
+  id: string;
+  bus_line_id: string | null;
+  direction: "arrival" | "departure";
+  city: string | null;
+  stop_name: string | null;
+  pickup_note: string | null;
+  pickup_time: string | null;
+  label: string;
+};
 type PostResult = Record<string, unknown> | null;
 
 const KIND_LABEL: Record<string, string> = {
@@ -498,6 +508,8 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   const [persistCatalog, setPersistCatalog] = useState(true);
   const [busLineId, setBusLineId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stopSuggestions, setStopSuggestions] = useState<BusStopSuggestion[]>([]);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
   const orderedBusLines = useMemo(() => {
     if (!preferExclusiveLine) return busLines;
     return [...busLines].sort((a, b) => {
@@ -509,6 +521,49 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   const preferredBusLineId = preferExclusiveLine ? busLines.find((line) => line.code === "GRUPPI_ESCLUSIVI")?.id ?? "" : "";
   const effectiveBusLineId = busLineId || preferredBusLineId;
   const canAdd = !busy && city.trim().length > 0 && Number(px) > 0 && (!persistCatalog || Boolean(effectiveBusLineId));
+  const canSuggestStops = persistCatalog && Boolean(effectiveBusLineId) && (city.trim().length >= 2 || pickup.trim().length >= 2);
+  const visibleStopSuggestions = canSuggestStops ? stopSuggestions : [];
+
+  useEffect(() => {
+    const cityTerm = city.trim();
+    const pickupTerm = pickup.trim();
+    if (!persistCatalog || !effectiveBusLineId || (cityTerm.length < 2 && pickupTerm.length < 2)) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSuggestionLoading(true);
+      const qs = new URLSearchParams({
+        catalog: "bus_stops",
+        bus_line_id: effectiveBusLineId,
+        direction: dir,
+        city: cityTerm,
+        pickup_point: pickupTerm,
+        q: [cityTerm, pickupTerm].filter(Boolean).join(" "),
+      });
+      void api(`/api/ops/booking-groups?${qs.toString()}`).then(({ ok, json }) => {
+        if (cancelled) return;
+        setSuggestionLoading(false);
+        setStopSuggestions(ok && json.ok ? json.stops ?? [] : []);
+      });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [city, dir, effectiveBusLineId, pickup, persistCatalog]);
+
+  const applyStopSuggestion = (suggestion: BusStopSuggestion) => {
+    const nextCity = suggestion.city?.trim() || suggestion.stop_name?.trim() || city;
+    const note = suggestion.pickup_note?.trim();
+    const stopName = suggestion.stop_name?.trim();
+    setCity(nextCity);
+    setPickup(note || (stopName && stopName !== nextCity ? stopName : ""));
+    setDir(suggestion.direction);
+    setPickupTime(suggestion.pickup_time?.slice(0, 5) ?? "");
+    setBusLineId(suggestion.bus_line_id ?? effectiveBusLineId);
+    setStopSuggestions([]);
+  };
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
@@ -567,6 +622,26 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
         </select>
         <input className="input-saas" type="time" value={pickupTime} onChange={(e) => setPickupTime(e.target.value)} />
       </div>
+      {canSuggestStops && (suggestionLoading || visibleStopSuggestions.length > 0) ? (
+        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+          <div className="mb-1 text-[11px] font-semibold text-slate-500">
+            {suggestionLoading ? "Cerco fermate esistenti..." : "Fermate gia presenti"}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {visibleStopSuggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:border-indigo-300 hover:text-indigo-700"
+                onClick={() => applyStopSuggestion(suggestion)}
+              >
+                {suggestion.label}
+                {suggestion.pickup_time ? <span className="ml-1 text-slate-400">{suggestion.pickup_time.slice(0, 5)}</span> : null}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="mt-2 grid gap-2 md:grid-cols-[auto_minmax(220px,1fr)]">
         <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
           <input type="checkbox" checked={persistCatalog} onChange={(e) => setPersistCatalog(e.target.checked)} />

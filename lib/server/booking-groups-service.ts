@@ -74,6 +74,17 @@ export function isSupportedBookingGroupDate(value?: string | null): boolean {
 
 const EXCLUSIVE_GROUP_LINE_CODE = "GRUPPI_ESCLUSIVI";
 
+export type BookingGroupCatalogStopSuggestion = {
+  id: string;
+  bus_line_id: string | null;
+  direction: "arrival" | "departure";
+  city: string | null;
+  stop_name: string | null;
+  pickup_note: string | null;
+  pickup_time: string | null;
+  label: string;
+};
+
 async function getExclusiveGroupLineId(admin: SupabaseClient, tenantId: string): Promise<string | null> {
   const { data } = await admin
     .from("tenant_bus_lines")
@@ -127,6 +138,71 @@ export async function resolveCanonicalBookingGroupStop(
   });
   if (matches.length !== 1) return null;
   return { stopId: matches[0]!.id, pickupTime: matches[0]!.pickup_time ?? null };
+}
+
+export async function suggestBookingGroupCatalogStops(
+  admin: SupabaseClient,
+  tenantId: string,
+  input: {
+    query?: string | null;
+    city?: string | null;
+    pickupPoint?: string | null;
+    direction?: "arrival" | "departure" | null;
+    busLineId?: string | null;
+    limit?: number | null;
+  },
+): Promise<BookingGroupCatalogStopSuggestion[]> {
+  const queryKey = normalizeCityKey(input.query);
+  const cityKey = normalizeCityKey(input.city);
+  const pickupKey = normalizeCityKey(input.pickupPoint);
+  const wanted = [queryKey, cityKey, pickupKey].filter(Boolean);
+  if (wanted.length === 0) return [];
+
+  let request = admin
+    .from("tenant_bus_line_stops")
+    .select("id, bus_line_id, direction, city, stop_name, pickup_note, pickup_time")
+    .eq("tenant_id", tenantId)
+    .eq("active", true);
+  if (input.direction) request = request.eq("direction", input.direction);
+  if (input.busLineId) request = request.eq("bus_line_id", input.busLineId);
+
+  const { data } = await request.order("city").order("stop_order").limit(500);
+  const rows = (data ?? []) as Array<{
+    id: string;
+    bus_line_id: string | null;
+    direction: "arrival" | "departure";
+    city: string | null;
+    stop_name: string | null;
+    pickup_note: string | null;
+    pickup_time: string | null;
+  }>;
+
+  const scored = rows
+    .map((row) => {
+      const rowCity = normalizeCityKey(row.city);
+      const rowStop = normalizeCityKey(row.stop_name);
+      const rowNote = normalizeCityKey(row.pickup_note);
+      const haystack = [rowCity, rowStop, rowNote].filter(Boolean).join(" ");
+      let score = 0;
+      for (const token of wanted) {
+        if (rowCity === token) score += 8;
+        if (rowStop === token) score += 7;
+        if (rowNote === token) score += 6;
+        if (haystack.includes(token)) score += 2;
+      }
+      return { row, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || String(a.row.city ?? a.row.stop_name ?? "").localeCompare(String(b.row.city ?? b.row.stop_name ?? "")));
+
+  return scored.slice(0, Math.max(1, Math.min(input.limit ?? 8, 20))).map(({ row }) => {
+    const city = row.city?.trim() || row.stop_name?.trim() || "";
+    const point = row.pickup_note?.trim() || (row.stop_name?.trim() && row.stop_name.trim() !== city ? row.stop_name.trim() : "");
+    return {
+      ...row,
+      label: [city, point].filter(Boolean).join(" - ") || "Fermata catalogo",
+    };
+  });
 }
 
 /** Verifica che una riga di una tabella parent esista NELLO STESSO tenant. */
@@ -746,18 +822,20 @@ async function createManualCatalogStopForBookingGroup(
   if (!(await tenantRowExists(admin, "tenant_bus_lines", tenantId, input.bus_line_id))) {
     return err(400, "Linea bus non valida per il tenant.");
   }
-  const stopName = (input.pickup_point ?? input.city).trim();
+  const stopName = input.city.trim();
+  const pickupNote = input.pickup_point?.trim() || null;
   const { data: existing } = await admin
     .from("tenant_bus_line_stops")
-    .select("id, pickup_time")
+    .select("id, pickup_note, pickup_time")
     .eq("tenant_id", tenantId)
     .eq("bus_line_id", input.bus_line_id)
     .eq("direction", input.direction)
-    .eq("city", input.city)
     .eq("stop_name", stopName)
     .eq("active", true)
     .limit(1);
-  const found = (existing ?? [])[0] as { id: string; pickup_time: string | null } | undefined;
+  const found = ((existing ?? []) as Array<{ id: string; pickup_time: string | null; pickup_note?: string | null }>).find(
+    (row) => normalizeCityKey(row.pickup_note) === normalizeCityKey(pickupNote),
+  );
   if (found?.id) {
     const pickupTime = input.pickup_time?.trim() || found.pickup_time || null;
     if (pickupTime !== found.pickup_time) {
@@ -787,7 +865,7 @@ async function createManualCatalogStopForBookingGroup(
       direction: input.direction,
       stop_name: stopName,
       city: input.city,
-      pickup_note: input.pickup_point ?? null,
+      pickup_note: pickupNote,
       pickup_time: input.pickup_time?.trim() || null,
       stop_order: stopOrder,
       order_index: stopOrder,
@@ -796,7 +874,17 @@ async function createManualCatalogStopForBookingGroup(
     })
     .select("id, pickup_time")
     .single();
-  if (error || !data?.id) return err(500, error?.message ?? "Creazione fermata catalogo non riuscita.");
+  if (error || !data?.id) {
+    const isDuplicate = error?.code === "23505" || error?.message?.includes("tenant_bus_line_stops_line_direction_name_pickup_key");
+    if (isDuplicate) {
+      const canonical = await resolveCanonicalBookingGroupStop(admin, tenantId, input.city, input.direction, pickupNote, input.bus_line_id);
+      if (canonical) {
+        return ok({ id: canonical.stopId, pickup_time: input.pickup_time?.trim() || canonical.pickupTime || null });
+      }
+      return err(409, "Fermata gia presente nel catalogo: selezionala dai suggerimenti oppure modifica citta/punto di carico.");
+    }
+    return err(500, error?.message ?? "Creazione fermata catalogo non riuscita.");
+  }
   auditLog({
     event: "booking_group_catalog_stop_created",
     tenantId,
