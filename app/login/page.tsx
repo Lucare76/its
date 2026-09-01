@@ -278,24 +278,69 @@ export default function LoginPage() {
           onLoad={() => setTurnstileScriptLoaded(true)}
         />
       ) : null}
-      <section className="mx-auto max-w-lg page-section">
-        <h1 className="section-title">Login Supabase</h1>
-      <div className="card space-y-3 p-4">
-        <p className="text-sm leading-6 text-slate-600">
-          Ischia Transfer Service e attivo dal 2006. L&apos;area riservata consente al team di coordinare con rapidita i
-          transfer tra aeroporto, porto e hotel.
-        </p>
-        <div className="flex gap-2">
-          <button type="button" onClick={() => setMode("login")} className={mode === "login" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
-            Login
-          </button>
-          <button type="button" onClick={() => setMode("register")} className={mode === "register" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
-            Richiedi accesso
-          </button>
-          <button type="button" onClick={() => setMode("reset")} className={mode === "reset" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
-            Reset password
-          </button>
-        </div>
+      <section className="min-h-screen bg-[radial-gradient(circle_at_top_left,#dff8f4_0,#f6f8fb_34%,#eef3f8_100%)] px-4 py-6 sm:px-6 lg:px-10">
+        <div className="mx-auto grid min-h-[calc(100vh-48px)] max-w-6xl overflow-hidden rounded-[28px] border border-white/70 bg-white shadow-2xl shadow-slate-200/70 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="relative flex min-h-[360px] flex-col justify-between overflow-hidden bg-slate-950 p-8 text-white sm:p-10">
+            <div className="absolute inset-0 bg-[linear-gradient(145deg,rgba(20,184,166,0.34),rgba(79,70,229,0.18)_44%,rgba(2,6,23,0.94))]" />
+            <div className="absolute -right-20 top-14 h-64 w-64 rounded-full border border-white/10" />
+            <div className="absolute -bottom-24 left-16 h-72 w-72 rounded-full border border-cyan-200/10" />
+            <div className="relative">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.22em] text-cyan-100">
+                Ischia Transfer Service
+              </div>
+              <div className="mt-10">
+                <p className="text-sm font-semibold uppercase tracking-[0.42em] text-cyan-200">Area operativa</p>
+                <h1 className="mt-3 text-5xl font-black tracking-[0.16em] text-white sm:text-6xl">AURIS</h1>
+                <p className="mt-3 text-xl font-semibold text-cyan-50">Qualcosa in piu</p>
+                <p className="mt-5 max-w-md text-sm leading-6 text-slate-200">
+                  Coordinamento rapido per transfer, bus, gruppi esclusivi, hotel, porto e aeroporto in un&apos;unica cabina operativa.
+                </p>
+              </div>
+            </div>
+            <div className="relative grid gap-3 text-sm sm:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                <p className="text-2xl font-black text-white">Live</p>
+                <p className="mt-1 text-xs text-slate-300">planning e linee bus</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                <p className="text-2xl font-black text-white">Multi</p>
+                <p className="mt-1 text-xs text-slate-300">tenant e ruoli</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                <p className="text-2xl font-black text-white">Ops</p>
+                <p className="mt-1 text-xs text-slate-300">arrivi e partenze</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-center p-5 sm:p-8 lg:p-10">
+            <div className="w-full max-w-md">
+              <div className="mb-7">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-teal-600">Accesso riservato</p>
+                <h2 className="mt-2 text-3xl font-black text-slate-950">
+                  {mode === "login" ? "Bentornato" : mode === "register" ? "Richiedi accesso" : "Recupera password"}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  {mode === "login"
+                    ? "Entra nel pannello AURIS per gestire l'operativita giornaliera."
+                    : mode === "register"
+                    ? "Invia i dati della tua agenzia: il team verifichera la richiesta."
+                    : "Ricevi un link sicuro per impostare una nuova password."}
+                </p>
+              </div>
+
+              <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-200/60 sm:p-5">
+                <div className="grid grid-cols-3 gap-2 rounded-2xl bg-slate-100 p-1">
+                  <button type="button" onClick={() => setMode("login")} className={mode === "login" ? "rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm" : "rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"}>
+                    Login
+                  </button>
+                  <button type="button" onClick={() => setMode("register")} className={mode === "register" ? "rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm" : "rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"}>
+                    Accesso
+                  </button>
+                  <button type="button" onClick={() => setMode("reset")} className={mode === "reset" ? "rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm" : "rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"}>
+                    Reset
+                  </button>
+                </div>
         {mode === "register" ? (
           <>
             <label className="block text-sm">
@@ -389,7 +434,7 @@ export default function LoginPage() {
           type="button"
           onClick={mode === "login" ? handleSignIn : mode === "register" ? handleRegister : handleResetPassword}
           disabled={loading || (mode === "register" && (!TURNSTILE_SITE_KEY || !turnstileToken))}
-          className="btn-primary w-full disabled:opacity-60"
+          className="w-full rounded-2xl bg-gradient-to-r from-teal-500 to-indigo-600 px-4 py-3 text-sm font-black text-white shadow-lg shadow-indigo-200 transition hover:from-teal-400 hover:to-indigo-500 disabled:opacity-60"
         >
           {loading
             ? "Elaborazione..."
@@ -400,7 +445,7 @@ export default function LoginPage() {
             : "Invia link di reset"}
         </button>
         {mode === "login" ? (
-          <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
+          <button type="button" onClick={handleMagicLink} disabled={loading} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60">
             Invia link magico via email
           </button>
         ) : null}
@@ -409,7 +454,10 @@ export default function LoginPage() {
         ) : null}
         <p data-testid="login-message" className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>
-      </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     </>
   );
