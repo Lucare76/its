@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -128,6 +128,15 @@ export default function MtsGlobeImportPage() {
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [confirmResult, setConfirmResult] = useState<ConfirmResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [applyFeedback, setApplyFeedback] = useState<{ tone: "success" | "warning"; text: string } | null>(null);
+  const [everHadIntermedioGroups, setEverHadIntermedioGroups] = useState(false);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (preview && preview.intermedioGroups.length > 0) {
+      setEverHadIntermedioGroups(true);
+    }
+  }, [preview]);
 
   const hotelsLoaded = hotels.length > 0;
 
@@ -154,6 +163,8 @@ export default function MtsGlobeImportPage() {
     setTimeCorrections({});
     setGroupTimeCorrections({});
     setMessage(null);
+    setApplyFeedback(null);
+    setEverHadIntermedioGroups(false);
     try {
       const rows = await readRowsFromFile(file);
       if (rows.length === 0) {
@@ -173,7 +184,7 @@ export default function MtsGlobeImportPage() {
     corrections: Record<string, string>,
     timeCorr: Record<string, string>,
     groupTimeCorr: Record<string, string>
-  ) {
+  ): Promise<MtsGlobePreviewResult | null> {
     setPreviewLoading(true);
     setMessage(null);
     try {
@@ -192,11 +203,14 @@ export default function MtsGlobeImportPage() {
       const data = await response.json();
       if (!response.ok || !data.ok) {
         setMessage(data.error ?? "Errore durante la preview.");
-        return;
+        return null;
       }
-      setPreview(data as MtsGlobePreviewResult);
+      const result = data as MtsGlobePreviewResult;
+      setPreview(result);
+      return result;
     } catch (error) {
       setMessage(`Errore di rete durante la preview: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     } finally {
       setPreviewLoading(false);
     }
@@ -231,7 +245,28 @@ export default function MtsGlobeImportPage() {
 
   async function reapplyCorrections() {
     if (rawRows.length === 0) return;
-    await runPreview(rawRows, hotelCorrections, timeCorrections, groupTimeCorrections);
+    const prevSummary = preview?.summary ?? null;
+    setApplyFeedback(null);
+    const result = await runPreview(rawRows, hotelCorrections, timeCorrections, groupTimeCorrections);
+    if (!result) return; // errore già mostrato da runPreview via `message`
+    const changed =
+      !prevSummary ||
+      prevSummary.readyCount !== result.summary.readyCount ||
+      prevSummary.warningCount !== result.summary.warningCount ||
+      prevSummary.updateCount !== result.summary.updateCount ||
+      prevSummary.duplicateCount !== result.summary.duplicateCount;
+    setApplyFeedback(
+      changed
+        ? {
+            tone: "success",
+            text: `Correzioni applicate: ${result.summary.readyCount} pratiche pronte, ${result.summary.warningCount} warning.`
+          }
+        : {
+            tone: "warning",
+            text: "Nessuna modifica rilevata: verifica gli orari o gli hotel inseriti."
+          }
+    );
+    summaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function handleConfirm() {
@@ -290,22 +325,34 @@ export default function MtsGlobeImportPage() {
       </SectionCard>
 
       {summary ? (
-        <SectionCard title="2. Riepilogo">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-            <SummaryTile label="Righe file" value={summary.totalRows} />
-            <SummaryTile label="Prenotazioni" value={summary.bookingCount} />
-            <SummaryTile label="Pronte" value={summary.readyCount} tone="emerald" />
-            <SummaryTile label="Warning" value={summary.warningCount} tone="amber" />
-            <SummaryTile label="Duplicate" value={summary.duplicateCount} tone="slate" />
-            <SummaryTile label="Da rivedere" value={summary.updateCount} tone="sky" />
-            <SummaryTile label="Errori riga" value={summary.errorCount} tone="rose" />
-          </div>
-          <p className="mt-3 text-sm text-muted">
-            Servizi che verranno generati al confirm (solo pratiche pronte): <strong>{preview?.bookings
-              .filter((b) => b.status === "ready")
-              .reduce((sum, b) => sum + b.generatedServices.length, 0) ?? 0}</strong>
-          </p>
-        </SectionCard>
+        <div ref={summaryRef}>
+          <SectionCard title="2. Riepilogo">
+            {applyFeedback ? (
+              <p
+                className={`mb-3 rounded-md px-3 py-2 text-sm font-medium ${
+                  applyFeedback.tone === "success" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                }`}
+              >
+                {applyFeedback.tone === "success" ? "✅ " : "⚠️ "}
+                {applyFeedback.text}
+              </p>
+            ) : null}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+              <SummaryTile label="Righe file" value={summary.totalRows} />
+              <SummaryTile label="Prenotazioni" value={summary.bookingCount} />
+              <SummaryTile label="Pronte" value={summary.readyCount} tone="emerald" />
+              <SummaryTile label="Warning" value={summary.warningCount} tone="amber" />
+              <SummaryTile label="Duplicate" value={summary.duplicateCount} tone="slate" />
+              <SummaryTile label="Da rivedere" value={summary.updateCount} tone="sky" />
+              <SummaryTile label="Errori riga" value={summary.errorCount} tone="rose" />
+            </div>
+            <p className="mt-3 text-sm text-muted">
+              Servizi che verranno generati al confirm (solo pratiche pronte): <strong>{preview?.bookings
+                .filter((b) => b.status === "ready")
+                .reduce((sum, b) => sum + b.generatedServices.length, 0) ?? 0}</strong>
+            </p>
+          </SectionCard>
+        </div>
       ) : null}
 
       {preview && preview.rowErrors.length > 0 ? (
@@ -320,21 +367,40 @@ export default function MtsGlobeImportPage() {
         </SectionCard>
       ) : null}
 
-      {preview && preview.intermedioGroups.length > 0 ? (
+      {preview && (preview.intermedioGroups.length > 0 || everHadIntermedioGroups) ? (
         <SectionCard
           title="3. Gruppi transfer Intermedio"
           subtitle="Voucher diversi che condividono lo stesso Grouping Id (stesso transfer navetta): inserisci l'orario una sola volta per gruppo, viene propagato a tutti i voucher elencati."
+          actions={
+            preview.intermedioGroups.length > 0 ? (
+              <button
+                type="button"
+                className="btn-saas-primary"
+                onClick={() => void reapplyCorrections()}
+                disabled={previewLoading}
+              >
+                {previewLoading ? "Applicazione…" : "Applica correzioni"}
+              </button>
+            ) : null
+          }
         >
-          <div className="space-y-3">
-            {preview.intermedioGroups.map((group) => (
-              <IntermedioGroupCard
-                key={group.groupingId}
-                group={group}
-                value={groupTimeCorrections[group.groupingId]}
-                onChange={setGroupTimeCorrection}
-              />
-            ))}
-          </div>
+          {message ? <p className="mb-3 rounded-md bg-rose-50 px-3 py-2 text-sm font-medium text-rose-600">{message}</p> : null}
+          {preview.intermedioGroups.length > 0 ? (
+            <div className="space-y-3">
+              {preview.intermedioGroups.map((group) => (
+                <IntermedioGroupCard
+                  key={group.groupingId}
+                  group={group}
+                  value={groupTimeCorrections[group.groupingId]}
+                  onChange={setGroupTimeCorrection}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+              ✅ Tutti i gruppi corretti.
+            </p>
+          )}
         </SectionCard>
       ) : null}
 
@@ -368,9 +434,10 @@ export default function MtsGlobeImportPage() {
                   onTimeCorrect={setTimeCorrection}
                 />
               ))}
-              <div className="flex justify-end">
+              <div className="flex flex-col items-end gap-2">
+                {message ? <p className="rounded-md bg-rose-50 px-3 py-2 text-sm font-medium text-rose-600">{message}</p> : null}
                 <button type="button" className="btn-saas-secondary" onClick={() => void reapplyCorrections()} disabled={previewLoading}>
-                  {previewLoading ? "Ricalcolo…" : "Applica correzioni"}
+                  {previewLoading ? "Applicazione…" : "Applica correzioni"}
                 </button>
               </div>
             </div>
