@@ -88,10 +88,33 @@ export type MtsGlobePreviewResult = {
   };
 };
 
-type HotelCatalogRow = HotelMatchRow & { zone: string | null };
+type HotelCatalogRow = HotelMatchRow & { zone: string | null; city: string | null };
+
+// Comuni reali dell'isola d'Ischia (le uniche zone coperte dalla logica
+// pickup/nave esistente, pensata SOLO per transfer da/verso l'isola).
+// Deliberatamente NON usa normalizeZonaIschia() (logica condivisa, mai
+// modificata qui): quella funzione collassa qualunque zona non riconosciuta
+// su "ischia" di default — corretto per varianti di nome della stessa isola,
+// ma pericoloso per un hotel sul continente (es. Napoli), che verrebbe
+// silenziosamente trattato come se fosse a Ischia. Questo controllo serve
+// solo a decidere SE invocare applyPickupCalc, non a normalizzare la zona.
+const ISCHIA_COMUNI_RE = /ischia|forio|lacco ameno|casamicciola|serrara fontana|barano/i;
+
+function isIschiaComune(hotel: HotelCatalogRow | null): boolean {
+  if (!hotel) return true; // hotel non risolto: gestito altrove (hotelUnresolved), non e' questo il gate
+  const label = `${hotel.city ?? ""} ${hotel.zone ?? ""}`.trim();
+  if (!label) return true; // nessun dato di zona/citta': nessuna evidenza che sia continente, non bloccare qui
+  return ISCHIA_COMUNI_RE.test(label);
+}
+
+// Messaggio esatto per il caso "hotel su zona/citta' non coperta dalla
+// logica pickup Ischia" — confrontato per uguaglianza esatta altrove
+// (buildMtsGlobePreview) per decidere se bloccare il confirm, stesso
+// pattern di "Orario transfer Intermedio mancante.".
+const CONTINENTE_NOT_COVERED_WARNING = "Transfer continente non coperto dalla logica pickup automatica — verifica operatore.";
 
 async function loadHotelCatalog(admin: SupabaseClient, tenantId: string): Promise<HotelCatalogRow[]> {
-  const { data: hotels } = await admin.from("hotels").select("id, name, normalized_name, zone").eq("tenant_id", tenantId).limit(1000);
+  const { data: hotels } = await admin.from("hotels").select("id, name, normalized_name, zone, city").eq("tenant_id", tenantId).limit(1000);
   const { data: aliasRows } = await admin.from("hotel_aliases").select("hotel_id, alias").eq("tenant_id", tenantId).limit(5000);
   const aliasesByHotel = new Map<string, string[]>();
   for (const row of (aliasRows ?? []) as Array<{ hotel_id: string; alias: string }>) {
@@ -99,7 +122,7 @@ async function loadHotelCatalog(admin: SupabaseClient, tenantId: string): Promis
     bucket.push(row.alias);
     aliasesByHotel.set(row.hotel_id, bucket);
   }
-  return ((hotels ?? []) as Array<HotelMatchRow & { zone: string | null }>).map((hotel) => ({
+  return ((hotels ?? []) as Array<HotelMatchRow & { zone: string | null; city: string | null }>).map((hotel) => ({
     ...hotel,
     aliases: aliasesByHotel.get(hotel.id) ?? []
   }));
@@ -208,6 +231,26 @@ function applyDepartureOperationalTiming(
     if (service.direction !== "departure" || service.bookingServiceKind !== "transfer_airport_hotel") return service;
 
     const hotel = service.hotelId ? hotelById.get(service.hotelId) ?? null : null;
+
+    // Protezione locale, non nel motore condiviso: applyPickupCalc/
+    // normalizeZonaIschia coprono SOLO transfer da/verso l'isola d'Ischia.
+    // Un hotel risolto ma su zona/citta' non riconosciuta come comune di
+    // Ischia (es. Napoli) verrebbe altrimenti passato ad applyPickupCalc,
+    // che internamente ricade su normalizeZonaIschia() e tratterebbe
+    // silenziosamente "Napoli" come "ischia" — mai nave/porto/pickup
+    // inventati per un caso che il motore non e' stato pensato per coprire.
+    if (hotel && !isIschiaComune(hotel)) {
+      return {
+        ...service,
+        pickupHotel: null,
+        barcaCompagnia: null,
+        orarioBarca: null,
+        portoBruno: null,
+        pickupAlert: CONTINENTE_NOT_COVERED_WARNING,
+        warnings: [...service.warnings, CONTINENTE_NOT_COVERED_WARNING]
+      };
+    }
+
     const context: PickupCalcCanonicalContext = {
       operationalRules: operationalContext.operationalRules as never,
       ferrySchedules: operationalContext.ferrySchedules as never,
@@ -322,6 +365,11 @@ export async function buildMtsGlobePreview(
     const timingWarnings = generatedServices.flatMap((service) => (service.pickupAlert ? [service.pickupAlert] : []));
     reasons.push(...hotelWarnings, ...timeWarnings, ...timingWarnings);
 
+    // Hotel su zona/citta' non coperta dalla logica pickup Ischia (es.
+    // Napoli): nessun pickup/nave/porto inventato, dato indispensabile per
+    // una partenza mancante — stessa filosofia bloccante di hotel/orario.
+    const continenteUnresolved = generatedServices.some((service) => service.pickupAlert === CONTINENTE_NOT_COVERED_WARNING);
+
     // Trasparenza non bloccante: agenzia senza logica nave verificata nel
     // codice ITS (vedi isKnownAgency) — nessun secondo default inventato qui,
     // solo il segnale che il calcolo sotto usa la policy conservativa gia'
@@ -346,10 +394,11 @@ export async function buildMtsGlobePreview(
       status = previousPayload === currentPayload ? "duplicate" : "update";
       if (status === "update") reasons.push("Pratica già importata in precedenza con dati diversi.");
       else reasons.push("Pratica già importata: nessuna modifica rilevata.");
-    } else if (hotelUnresolved || timeUnresolved) {
-      // Dato indispensabile non risolto (hotel o orario Intermedio): WARNING
-      // in preview, ma NON confermabile finche' l'operatore non lo corregge
-      // (hotelCorrections / timeCorrections) — vedi confirmMtsGlobeImport.
+    } else if (hotelUnresolved || timeUnresolved || continenteUnresolved) {
+      // Dato indispensabile non risolto (hotel, orario Intermedio, o
+      // transfer verso zona/citta' non coperta dalla logica pickup Ischia):
+      // WARNING in preview, ma NON confermabile finche' l'operatore non
+      // risolve manualmente — vedi confirmMtsGlobeImport.
       status = "warning";
     } else {
       status = "ready";

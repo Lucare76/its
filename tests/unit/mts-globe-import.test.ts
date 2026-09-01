@@ -4,6 +4,7 @@ import { buildMtsGlobePreview, confirmMtsGlobeImport } from "@/lib/server/agency
 const TENANT_ID = "tenant-1";
 const HOTEL_ID = "hotel-royal-palm";
 const HOTEL_ID_2 = "hotel-best-western";
+const HOTEL_ID_NAPOLI = "hotel-ramada-napoli";
 
 function baseRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -38,8 +39,9 @@ function baseRow(overrides: Record<string, unknown> = {}) {
 function createFakeAdmin() {
   const state = {
     hotels: [
-      { id: HOTEL_ID, tenant_id: TENANT_ID, name: "Hotel Terme Royal Palm", normalized_name: "hotel terme royal palm", zone: "forio" },
-      { id: HOTEL_ID_2, tenant_id: TENANT_ID, name: "Best Western Plus Hotel Plaza Napoli", normalized_name: "best western plus hotel plaza napoli", zone: "ischia" }
+      { id: HOTEL_ID, tenant_id: TENANT_ID, name: "Hotel Terme Royal Palm", normalized_name: "hotel terme royal palm", zone: "forio", city: "Forio" },
+      { id: HOTEL_ID_2, tenant_id: TENANT_ID, name: "Best Western Plus Hotel Plaza Napoli", normalized_name: "best western plus hotel plaza napoli", zone: "ischia", city: "Ischia" },
+      { id: HOTEL_ID_NAPOLI, tenant_id: TENANT_ID, name: "Ramada by Wyndham Naples", normalized_name: "ramada by wyndham naples", zone: "Napoli", city: "Napoli" }
     ] as Array<Record<string, unknown>>,
     hotel_aliases: [] as Array<Record<string, unknown>>,
     agency_bookings: [] as Array<Record<string, unknown>>,
@@ -353,5 +355,59 @@ describe("buildMtsGlobePreview / confirmMtsGlobeImport", () => {
     expect(service.hotelToNameRaw).not.toBe("Hotel Sbagliato Nel File");
     expect(service.notes).toContain("Best Western Plus Hotel Plaza Napoli");
     expect(service.notes).not.toContain("Hotel Sbagliato Nel File");
+  });
+
+  it("partenza con hotel su comune di Ischia: applyPickupCalc viene applicato (pickup_hotel/vessel calcolati)", async () => {
+    const { admin } = createFakeAdmin();
+    const rows = [
+      baseRow({
+        "Voucher No": "V12",
+        "Service Base Code": "Partenza",
+        "Pick-Up": "AMTSIT1JQK - Hotel Terme Royal Palm",
+        "Drop-Off": "NAP-DUS W43429 10:10-12:25",
+        "Dep Time": "10:10:00"
+      })
+    ];
+    const preview = await buildMtsGlobePreview(admin, TENANT_ID, rows);
+    const service = preview.bookings[0].generatedServices[0];
+    expect(service.hotelId).toBe(HOTEL_ID);
+    // Nessuna regola canonica nel fixture -> fallback statico calcPickupTime,
+    // ma il punto e' che il motore VIENE invocato (risultato non tutto null).
+    expect(service.pickupHotel).not.toBeNull();
+    expect(service.warnings).not.toContain(
+      "Transfer continente non coperto dalla logica pickup automatica — verifica operatore."
+    );
+  });
+
+  it("partenza con hotel su Napoli (continente): applyPickupCalc NON viene applicato, nessun pickup/nave/porto inventato, WARNING bloccante", async () => {
+    const { admin, state } = createFakeAdmin();
+    const rows = [
+      baseRow({
+        "Voucher No": "V13",
+        "Service Base Code": "Partenza",
+        "Pick-Up": "AMTSIT1JC4 - Ramada by Wyndham Naples",
+        "Drop-Off": "NAP-DUS W43429 10:10-12:25",
+        "Dep Time": "10:10:00"
+      })
+    ];
+    const preview = await buildMtsGlobePreview(admin, TENANT_ID, rows);
+    expect(preview.bookings[0].status).toBe("warning");
+    const service = preview.bookings[0].generatedServices[0];
+    expect(service.hotelId).toBe(HOTEL_ID_NAPOLI);
+    expect(service.pickupHotel).toBeNull();
+    expect(service.barcaCompagnia).toBeNull();
+    expect(service.orarioBarca).toBeNull();
+    expect(service.portoBruno).toBeNull();
+    expect(service.warnings).toContain(
+      "Transfer continente non coperto dalla logica pickup automatica — verifica operatore."
+    );
+    expect(preview.bookings[0].reasons).toContain(
+      "Transfer continente non coperto dalla logica pickup automatica — verifica operatore."
+    );
+
+    const result = await confirmMtsGlobeImport(admin, TENANT_ID, null, rows, null);
+    expect(result.importedBookingCount).toBe(0);
+    expect(state.agency_bookings).toHaveLength(0);
+    expect(state.services).toHaveLength(0);
   });
 });
