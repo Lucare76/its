@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Script from "next/script";
 import { AUTH_PERSISTENCE_KEY, hasSupabaseEnv, setAuthPersistence, supabase } from "@/lib/supabase/client";
 import { PasswordStrengthMeter } from "@/components/password-strength-meter";
@@ -278,24 +279,47 @@ export default function LoginPage() {
           onLoad={() => setTurnstileScriptLoaded(true)}
         />
       ) : null}
-      <section className="mx-auto max-w-lg page-section">
-        <h1 className="section-title">Login Supabase</h1>
-      <div className="card space-y-3 p-4">
-        <p className="text-sm leading-6 text-slate-600">
-          Ischia Transfer Service e attivo dal 2006. L&apos;area riservata consente al team di coordinare con rapidita i
-          transfer tra aeroporto, porto e hotel.
-        </p>
-        <div className="flex gap-2">
-          <button type="button" onClick={() => setMode("login")} className={mode === "login" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
-            Login
-          </button>
-          <button type="button" onClick={() => setMode("register")} className={mode === "register" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
-            Richiedi accesso
-          </button>
-          <button type="button" onClick={() => setMode("reset")} className={mode === "reset" ? "btn-primary flex-1" : "btn-secondary flex-1"}>
-            Reset password
-          </button>
+      <section className="relative min-h-screen overflow-hidden bg-slate-950 text-slate-950">
+        <div className="absolute inset-0 overflow-hidden">
+          <Image
+            src="/mockups/auris-login-castello-icons-background.png"
+            alt=""
+            fill
+            priority
+            sizes="100vw"
+            className="h-full w-full object-cover object-left"
+          />
+          <div className="absolute inset-y-0 right-0 w-[48%] bg-[linear-gradient(90deg,rgba(2,6,23,0),rgba(2,6,23,0.28)_36%,rgba(2,6,23,0.62)_100%)]" />
+          <div className="absolute inset-x-0 bottom-0 h-28 bg-[linear-gradient(to_top,rgba(2,6,23,0.95),transparent)]" />
         </div>
+        <div className="relative flex min-h-screen items-center justify-end px-5 py-8 sm:px-8 lg:px-14 2xl:px-24">
+          <div className="w-full max-w-[390px] rounded-[28px] border border-white/70 bg-white p-5 shadow-2xl shadow-black/35 sm:p-7">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-950 text-2xl font-black text-white shadow-xl shadow-slate-300">
+              A
+            </div>
+            <div className="mt-7 text-center">
+              <h1 className="text-3xl font-black text-slate-950">Accesso riservato</h1>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {mode === "login"
+                  ? "Entra nella cabina operativa AURIS."
+                  : mode === "register"
+                    ? "Invia i dati della tua agenzia: il team verifichera la richiesta."
+                    : "Ricevi un link sicuro per impostare una nuova password."}
+              </p>
+            </div>
+
+            <div className="mt-7 space-y-4">
+                <div className="grid grid-cols-3 gap-2 rounded-2xl bg-slate-100 p-1">
+                  <button type="button" onClick={() => setMode("login")} className={mode === "login" ? "rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm" : "rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"}>
+                    Login
+                  </button>
+                  <button type="button" onClick={() => setMode("register")} className={mode === "register" ? "rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm" : "rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"}>
+                    Accesso
+                  </button>
+                  <button type="button" onClick={() => setMode("reset")} className={mode === "reset" ? "rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm" : "rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"}>
+                    Reset
+                  </button>
+                </div>
         {mode === "register" ? (
           <>
             <label className="block text-sm">
@@ -327,7 +351,7 @@ export default function LoginPage() {
           {mode === "login" ? "Email o username" : "Email"}
           <input
             data-testid="login-email"
-            className="input-saas mt-1"
+            className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-teal-400 focus:bg-white"
             type={mode === "login" ? "text" : "email"}
             value={identifier}
             onChange={(event) => setIdentifier(normalizeIdentifier(event.target.value))}
@@ -343,10 +367,10 @@ export default function LoginPage() {
         {mode !== "reset" ? (
           <label className="block text-sm">
             Password
-            <div className="mt-1 flex rounded-xl border border-slate-200 bg-white focus-within:border-slate-400">
+            <div className="mt-1 flex rounded-2xl border border-slate-200 bg-slate-50 transition focus-within:border-teal-400 focus-within:bg-white">
               <input
                 data-testid="login-password"
-                className="min-w-0 flex-1 rounded-l-xl border-0 bg-transparent px-3 py-2 text-sm outline-none"
+                className="min-w-0 flex-1 rounded-l-2xl border-0 bg-transparent px-4 py-3 text-sm outline-none"
                 data-no-uppercase
                 type={showPassword ? "text" : "password"}
                 value={password}
@@ -361,7 +385,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setShowPassword((prev) => !prev)}
-                className="shrink-0 rounded-r-xl border-l border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                className="shrink-0 rounded-r-2xl border-l border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-white"
                 aria-label={showPassword ? "Nascondi password" : "Mostra password"}
               >
                 {showPassword ? "Nascondi" : "Mostra"}
@@ -371,7 +395,7 @@ export default function LoginPage() {
           </label>
         ) : null}
         {mode === "login" ? (
-          <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={rememberMe}
@@ -389,7 +413,7 @@ export default function LoginPage() {
           type="button"
           onClick={mode === "login" ? handleSignIn : mode === "register" ? handleRegister : handleResetPassword}
           disabled={loading || (mode === "register" && (!TURNSTILE_SITE_KEY || !turnstileToken))}
-          className="btn-primary w-full disabled:opacity-60"
+          className="w-full rounded-2xl bg-orange-500 px-4 py-3.5 text-sm font-black text-white shadow-xl shadow-orange-200 transition hover:bg-orange-400 disabled:opacity-60"
         >
           {loading
             ? "Elaborazione..."
@@ -400,7 +424,7 @@ export default function LoginPage() {
             : "Invia link di reset"}
         </button>
         {mode === "login" ? (
-          <button type="button" onClick={handleMagicLink} disabled={loading} className="btn-secondary w-full disabled:opacity-60">
+          <button type="button" onClick={handleMagicLink} disabled={loading} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60">
             Invia link magico via email
           </button>
         ) : null}
@@ -409,7 +433,9 @@ export default function LoginPage() {
         ) : null}
         <p data-testid="login-message" className="text-sm text-slate-600">{message}</p>
         <p className="text-xs text-slate-500">Riceverai una risposta o un link di accesso in breve tempo, quando previsto.</p>
-      </div>
+              </div>
+            </div>
+          </div>
       </section>
     </>
   );
