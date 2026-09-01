@@ -315,7 +315,7 @@ export async function POST(request: NextRequest) {
 
         const { error: servicesError } = await admin
           .from("services")
-          .update({ status: "cancelled", booking_group_id: null, booking_group_stop_id: null, updated_at: new Date().toISOString() })
+          .update({ status: "cancelled", booking_group_id: null, booking_group_stop_id: null })
           .eq("tenant_id", tenantId)
           .in("id", serviceIds);
         if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
@@ -381,7 +381,6 @@ export async function POST(request: NextRequest) {
       .update({
         bus_city_origin: updatedStop.city,
         customer_name: nextDefaultName,
-        updated_at: new Date().toISOString(),
       })
       .eq("tenant_id", tenantId)
       .eq("booking_group_stop_id", id)
@@ -408,7 +407,7 @@ export async function POST(request: NextRequest) {
 
       const { error: servicesError } = await admin
         .from("services")
-        .update({ status: "cancelled", booking_group_id: null, booking_group_stop_id: null, updated_at: new Date().toISOString() })
+        .update({ status: "cancelled", booking_group_id: null, booking_group_stop_id: null })
         .eq("tenant_id", tenantId)
         .in("id", serviceIds);
       if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
