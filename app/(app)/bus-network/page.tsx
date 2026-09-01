@@ -98,6 +98,26 @@ function busDisplayLabel(unit: Pick<BusUnit, "label" | "group_name">): string {
   return unit.group_name?.trim() || unit.label;
 }
 
+function normalizeDisplayToken(value: string | null | undefined): string {
+  return String(value ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function isStopPlaceholderName(alloc: Pick<AllocationDetail, "customer_name" | "stop_name" | "stop_city" | "stop_pickup_note">): boolean {
+  const customer = normalizeDisplayToken(alloc.customer_name);
+  if (!customer) return false;
+  const stopName = normalizeDisplayToken(alloc.stop_name);
+  const stopCity = normalizeDisplayToken(alloc.stop_city);
+  const pickupNote = normalizeDisplayToken(alloc.stop_pickup_note);
+  const fullStop = stopCity && pickupNote ? `${stopCity} - ${pickupNote}` : "";
+  return customer === stopName || Boolean(fullStop && customer === fullStop);
+}
+
+function exclusiveAllocationDisplayName(unit: BusUnit, alloc: AllocationDetail): string | null {
+  if (unit.tag !== "esclusivo") return alloc.customer_name;
+  if (isStopPlaceholderName(alloc)) return null;
+  return alloc.customer_name;
+}
+
 function InlineCityEdit({ serviceId, currentCity, onSave, saving }: { serviceId: string; currentCity: string; onSave: (city: string) => Promise<unknown>; saving: boolean }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(currentCity);
@@ -2581,11 +2601,13 @@ export default function BusNetworkPage() {
                                   {unit.group_name}
                                 </div>
                               ) : null}
-                              <span
-                                className={`cursor-text uppercase tracking-wide ${unit.group_name ? "text-[10px] font-semibold opacity-70" : "text-base font-bold"} ${selectedLineFerryConfig ? "text-white hover:text-white/80" : "text-slate-900 hover:text-indigo-600"}`}
-                                title="Clicca per rinominare"
-                                onClick={(e) => { e.stopPropagation(); setEditLabelUnitId(unit.id); setEditLabelValue(unit.label); }}
-                              >{unit.label}</span>
+                              {!unit.group_name && (
+                                <span
+                                  className={`cursor-text text-base font-bold uppercase tracking-wide ${selectedLineFerryConfig ? "text-white hover:text-white/80" : "text-slate-900 hover:text-indigo-600"}`}
+                                  title="Clicca per rinominare"
+                                  onClick={(e) => { e.stopPropagation(); setEditLabelUnitId(unit.id); setEditLabelValue(unit.label); }}
+                                >{unit.label}</span>
+                              )}
                             </div>
                           )}
                           <div className="flex items-center gap-1">
@@ -2770,7 +2792,9 @@ export default function BusNetworkPage() {
                                 </span>
                               )}
                             </div>
-                            {allocs.map((alloc) => (
+                            {allocs.map((alloc) => {
+                              const displayName = exclusiveAllocationDisplayName(unit, alloc);
+                              return (
                               <div key={alloc.allocation_id}
                                 draggable
                                 onDragStart={() => handleDragStart(alloc)}
@@ -2783,9 +2807,11 @@ export default function BusNetworkPage() {
                                   className="mt-1 shrink-0 accent-indigo-600"
                                 />
                                 <div className="min-w-0 flex-1">
-                                  <div className="truncate text-sm font-semibold uppercase text-slate-800">
-                                    {alloc.customer_name}
-                                  </div>
+                                  {displayName && (
+                                    <div className="truncate text-sm font-semibold uppercase text-slate-800">
+                                      {displayName}
+                                    </div>
+                                  )}
                                   <div className="flex items-center gap-1">
                                     {editCardHotelId === alloc.allocation_id ? (
                                       <div className="relative w-full" onClick={(e) => e.stopPropagation()}>
@@ -2917,10 +2943,13 @@ export default function BusNetworkPage() {
                                   </div>
                                 </div>
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )),
-                        ...ungrouped.map((alloc) => (
+                        ...ungrouped.map((alloc) => {
+                          const displayName = exclusiveAllocationDisplayName(unit, alloc);
+                          return (
                           <div key={alloc.allocation_id} className="px-3 py-2">
                             <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">📍 {alloc.stop_name}</div>
                             <div
@@ -2935,7 +2964,9 @@ export default function BusNetworkPage() {
                                 className="mt-1 shrink-0 accent-indigo-600"
                               />
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-semibold uppercase text-slate-800">{alloc.customer_name}</div>
+                                {displayName && (
+                                  <div className="truncate text-sm font-semibold uppercase text-slate-800">{displayName}</div>
+                                )}
                                 {editCardHotelId === alloc.allocation_id ? (
                                   <div className="relative w-full" onClick={(e) => e.stopPropagation()}>
                                     <input
@@ -3061,7 +3092,8 @@ export default function BusNetworkPage() {
                               </div>
                             </div>
                           </div>
-                        ))]}
+                          );
+                        })]}
 
                         {cardAllocs.length === 0 && (
                           <div className="px-4 py-6 text-center text-xs text-slate-300 italic">
