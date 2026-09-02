@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, SectionCard } from "@/components/ui";
+import { formatBusNetworkUnassignedSummary, summarizeBusNetworkUnassigned } from "@/lib/bus-network-unassigned";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import BusImportModal from "./BusImportModal";
 
@@ -703,6 +704,10 @@ export default function BusNetworkPage() {
     }
     return { unassignedGroupRows: Array.from(groups.values()), unassignedIndividual: individual };
   }, [unassigned]);
+  const selectedUnassignedSummary = useMemo(
+    () => summarizeBusNetworkUnassigned(unassigned),
+    [unassigned]
+  );
 
   // Per-unit loads filtered by date — usa TUTTE le allocazioni (non filtrate per bus selezionato)
   const dateUnitLoads = useMemo(
@@ -777,15 +782,23 @@ export default function BusNetworkPage() {
     const paxToday = payload.allocation_details
       .filter((a) => a.bus_line_id === line.id && a.service_date === date && a.direction === direction)
       .reduce((sum, a) => sum + a.pax_assigned, 0);
-    const unassignedToday = payload.services.filter(
+    const unassignedServices = payload.services.filter(
       (s) => s.date === date && s.direction === direction &&
         serviceBelongsToLine(s, line) &&
         !allocatedServiceIds.has(s.id)
-    ).length;
+    );
+    const unassignedSummary = summarizeBusNetworkUnassigned(unassignedServices);
     const totalCapacity = payload.units
       .filter((u) => u.bus_line_id === line.id && u.status !== "closed" && u.status !== "completed")
       .reduce((sum, u) => sum + u.capacity, 0);
-    return { ...line, paxToday, unassignedToday, totalCapacity };
+    return {
+      ...line,
+      paxToday,
+      unassignedToday: unassignedSummary.itemCount,
+      unassignedPaxToday: unassignedSummary.pax,
+      unassignedLabel: formatBusNetworkUnassignedSummary(unassignedSummary),
+      totalCapacity,
+    };
   }), [payload.lines, payload.allocation_details, payload.services, payload.units, date, direction, allocatedServiceIds, serviceBelongsToLine]);
 
   const totalPaxToday = dateAllocations.reduce((sum, a) => sum + a.pax_assigned, 0);
@@ -2297,9 +2310,9 @@ export default function BusNetworkPage() {
         <div className="ml-auto flex items-center gap-3 text-sm">
           <span className="rounded-xl bg-slate-100 px-3 py-2 text-slate-600 capitalize">{fmtDate(date)}</span>
           <span className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 font-bold text-slate-900">{totalPaxToday} pax assegnati</span>
-          {unassigned.length > 0 && (
+          {selectedUnassignedSummary.itemCount > 0 && (
             <span className="rounded-xl bg-amber-100 px-3 py-2 text-sm font-bold text-amber-700">
-              {unassigned.length} da assegnare
+              {formatBusNetworkUnassignedSummary(selectedUnassignedSummary)}
             </span>
           )}
         </div>
@@ -2383,10 +2396,13 @@ export default function BusNetworkPage() {
                         style={{ width: line.totalCapacity > 0 ? `${Math.min(100, Math.round((line.paxToday / line.totalCapacity) * 100))}%` : "0%" }}
                       />
                     </div>
+                    {line.unassignedToday > 0 && (
+                      <div className="mt-1 text-xs font-medium text-amber-600">{line.unassignedLabel}</div>
+                    )}
                   </div>
                 )}
                 {line.totalCapacity === 0 && line.unassignedToday > 0 && (
-                  <div className="mt-0.5 text-xs font-medium text-amber-600">{line.unassignedToday} da assegnare</div>
+                  <div className="mt-0.5 text-xs font-medium text-amber-600">{line.unassignedLabel}</div>
                 )}
               </button>
             </div>
@@ -4010,13 +4026,12 @@ export default function BusNetworkPage() {
                 );
               })()}
 
-              {/* Unassigned passengers — Fix C: gruppi bus_exclusive aggregati
-                  per fermata (1 riga = N passeggeri), il resto invariato */}
-              {unassigned.length > 0 && (() => {
-                const totalUnassignedPax = unassigned.reduce((sum, svc) => sum + svc.pax, 0);
-                const rowCount = unassignedGroupRows.length + unassignedIndividual.length;
+              {/* Unassigned passengers: bus_exclusive aggregati per booking_group_id,
+                  gruppi non esclusivi per fermata, servizi individuali invariati. */}
+              {selectedUnassignedSummary.itemCount > 0 && (() => {
+                const unassignedTitle = formatBusNetworkUnassignedSummary(selectedUnassignedSummary);
                 return (
-                <SectionCard title={`👥 Da assegnare — ${selectedLine.name} (${rowCount} prenotazioni · ${totalUnassignedPax} pax)`}>
+                <SectionCard title={`👥 Da assegnare — ${selectedLine.name} (${unassignedTitle})`}>
                   <div className="divide-y divide-slate-100">
                     {unassignedGroupRows.map((group) => (
                       <div key={group.key} className="flex items-center gap-3 px-1 py-3 bg-indigo-50/40">
