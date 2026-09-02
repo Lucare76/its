@@ -598,7 +598,7 @@ export async function GET(req: NextRequest) {
         ? auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId).in("id", agencyIds)
         : Promise.resolve({ data: [], error: null }),
       bookingGroupIds.length
-        ? auth.admin.from("booking_groups").select("id,name,kind,service_date,return_date,hotel_id,notes,contact_name,contact_phone").eq("tenant_id", tenantId).in("id", bookingGroupIds)
+        ? auth.admin.from("booking_groups").select("id,name,kind,service_date,return_date,hotel_id,notes,contact_name,contact_phone,expected_pax").eq("tenant_id", tenantId).in("id", bookingGroupIds)
         : Promise.resolve({ data: [], error: null }),
       auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
       // Usato solo per arrivalLeg (vedi sotto) -> solo regole ARRIVO (to_ischia), mai PARTENZA.
@@ -651,7 +651,7 @@ export async function GET(req: NextRequest) {
     // va risolto a parte.
     const bookingGroupRows = (bookingGroupsResult.data ?? []) as Array<{
       id: string; name: string; kind: string | null; service_date: string | null; return_date: string | null; hotel_id: string | null; notes: string | null;
-      contact_name: string | null; contact_phone: string | null;
+      contact_name: string | null; contact_phone: string | null; expected_pax: number | null;
     }>;
     const missingGroupHotelIds = Array.from(new Set(
       bookingGroupRows.map((g) => g.hotel_id).filter((id): id is string => Boolean(id) && !hotelNameById.has(id as string)),
@@ -679,6 +679,8 @@ export async function GET(req: NextRequest) {
       // (usati altrove, es. bus-network) ma non erano esposti qui.
       contact_name: g.contact_name,
       contact_phone: g.contact_phone,
+      // Obiettivo D: pax reali del gruppo, mai una somma andata+ritorno.
+      expected_pax: g.expected_pax,
     }));
     const busAllocationsByServiceId = new Map<string, BusAllocationDetailRow[]>();
     for (const allocation of (busAllocationsResult.data ?? []) as BusAllocationDetailRow[]) {

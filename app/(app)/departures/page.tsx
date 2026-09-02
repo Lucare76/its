@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { BookingGroupSummaryCard } from "@/components/booking-group-summary-card";
+import type { BookingGroupMeta } from "@/lib/booking-group-card";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { openAuthenticatedHtml } from "@/lib/open-authenticated-html";
 
@@ -360,6 +362,35 @@ export default function DeparturesPage() {
   const [departureView, setDepartureView] = useState<"transfers" | "shuttles">("transfers");
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Obiettivo A (prompt "ALLINEARE TUTTE LE VISTE"): metadata di gruppo per
+  // aggregare i services bus_exclusive in un'unica riga — stessa fonte di
+  // verita' (booking_groups.name/contact/expected_pax/hotel) di /inbox e
+  // /ricerca, mai una seconda logica. Rifetch solo quando cambia l'insieme
+  // di booking_group_id presenti nei services del giorno selezionato.
+  const [groupMetaById, setGroupMetaById] = useState<Map<string, BookingGroupMeta>>(new Map());
+  const bookingGroupIdsKey = Array.from(new Set(data.services.map((s) => s.booking_group_id).filter(Boolean))).sort().join(",");
+  useEffect(() => {
+    const ids = bookingGroupIdsKey ? bookingGroupIdsKey.split(",") : [];
+    if (ids.length === 0) {
+      setGroupMetaById(new Map());
+      return;
+    }
+    if (!supabase) return;
+    let cancelled = false;
+    void (async () => {
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) return;
+      const res = await fetch(`/api/ops/booking-groups?meta_ids=${encodeURIComponent(ids.join(","))}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json().catch(() => null) as { ok?: boolean; groups?: BookingGroupMeta[] } | null;
+      if (cancelled || !res.ok || !body?.ok) return;
+      setGroupMetaById(new Map((body.groups ?? []).map((g) => [g.id, g])));
+    })();
+    return () => { cancelled = true; };
+  }, [bookingGroupIdsKey]);
+
   // Fonti per resolveOperationalTiming (treno/volo -> nave): caricate UNA
   // volta a mount, non per riga — evita N+1. ferry_pickup_rules e'
   // relativamente statica (poche decine di righe, editata da settings/ferry-
@@ -443,6 +474,29 @@ export default function DeparturesPage() {
   }, [data.services, selectedDate, agencyFilter, search, hotelsById, departureView, timeBand]);
 
   const totalPax = departures.reduce((sum, item) => sum + item.service.pax, 0);
+
+  // Obiettivo A: separa le istanze di un gruppo bus_exclusive dall'elenco
+  // individuale — mostrate come UNA riga aggregata (vedi departureGroupCards)
+  // invece che una riga per fermata. Services senza booking_group_id o di
+  // gruppi non-esclusivi restano invariati. `departures` (export/totali/
+  // ricerca) resta l'elenco completo, invariato.
+  const exclusiveGroupIds = new Set(
+    Array.from(groupMetaById.values()).filter((g) => g.kind === "bus_exclusive").map((g) => g.id)
+  );
+  const isExclusiveGroupInstance = (item: (typeof departures)[number]) =>
+    Boolean(item.service.booking_group_id && exclusiveGroupIds.has(item.service.booking_group_id));
+  const tableDepartures = departures.filter((item) => !isExclusiveGroupInstance(item));
+  const departureGroupCards = (() => {
+    const byGroup = new Map<string, (typeof departures)>();
+    for (const item of departures) {
+      if (!isExclusiveGroupInstance(item) || !item.service.booking_group_id) continue;
+      const list = byGroup.get(item.service.booking_group_id) ?? [];
+      list.push(item);
+      byGroup.set(item.service.booking_group_id, list);
+    }
+    return Array.from(byGroup.entries()).map(([groupId, items]) => ({ groupId, items }));
+  })();
+
   const busCount = departures.filter(
     (item) => item.service.service_type_code === "bus_line" || item.service.booking_service_kind === "bus_city_hotel"
   ).length;
@@ -776,9 +830,9 @@ export default function DeparturesPage() {
     return counts;
   }, { morning: 0, afternoon: 0, evening: 0 });
   const rowsPerPage = 50;
-  const pageCount = Math.max(1, Math.ceil(departures.length / rowsPerPage));
+  const pageCount = Math.max(1, Math.ceil(tableDepartures.length / rowsPerPage));
   const safePage = Math.min(currentPage, pageCount);
-  const visibleDepartures = departures.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
+  const visibleDepartures = tableDepartures.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
   return (
     <section className="page-section">
@@ -886,7 +940,22 @@ export default function DeparturesPage() {
         ) : (
           <>
           <div className="space-y-2 md:hidden">
-            {departures.map((item) => {
+            {departureGroupCards.map(({ groupId, items }) => (
+              <BookingGroupSummaryCard
+                key={`mobile-group-${groupId}`}
+                meta={groupMetaById.get(groupId)}
+                direction="departure"
+                stops={items.map((item) => ({
+                  id: item.serviceId,
+                  pax: item.service.pax,
+                  direction: item.direction,
+                  time: getDeparturePickupTime(item),
+                  bus_city_origin: item.service.bus_city_origin,
+                  meeting_point: item.service.meeting_point,
+                }))}
+              />
+            ))}
+            {tableDepartures.map((item) => {
               const hotelName = resolveHotelName(item.service);
               const meetingPoint = getDepartureDestinationLabel(item.service);
               const riferimento = getDepartureTransportLabel(item.service);
@@ -932,6 +1001,23 @@ export default function DeparturesPage() {
               );
             })}
           </div>
+          <div className="hidden md:block">
+            {departureGroupCards.map(({ groupId, items }) => (
+              <BookingGroupSummaryCard
+                key={`group-${groupId}`}
+                meta={groupMetaById.get(groupId)}
+                direction="departure"
+                stops={items.map((item) => ({
+                  id: item.serviceId,
+                  pax: item.service.pax,
+                  direction: item.direction,
+                  time: getDeparturePickupTime(item),
+                  bus_city_origin: item.service.bus_city_origin,
+                  meeting_point: item.service.meeting_point,
+                }))}
+              />
+            ))}
+          </div>
           <div className="table-card-scroll hidden md:block">
           <div className="min-w-[760px] rounded-2xl border border-slate-200 bg-white shadow-sm">
             {/* Header */}
@@ -940,10 +1026,10 @@ export default function DeparturesPage() {
                 <input
                   type="checkbox"
                   className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600"
-                  checked={departures.length > 0 && selectedDepIds.size === departures.length}
+                  checked={tableDepartures.length > 0 && selectedDepIds.size === tableDepartures.length}
                   onChange={() => {
-                    if (selectedDepIds.size === departures.length) setSelectedDepIds(new Set());
-                    else setSelectedDepIds(new Set(departures.map((i) => i.service.id)));
+                    if (selectedDepIds.size === tableDepartures.length) setSelectedDepIds(new Set());
+                    else setSelectedDepIds(new Set(tableDepartures.map((i) => i.service.id)));
                   }}
                   title="Seleziona tutti"
                 />
@@ -956,7 +1042,7 @@ export default function DeparturesPage() {
               <div className="text-right">Azioni</div>
             </div>
             <div className="divide-y divide-slate-100">
-              {departures.map((item) => {
+              {tableDepartures.map((item) => {
                 const hotelName = resolveHotelName(item.service);
                 const meetingPoint = getDepartureDestinationLabel(item.service);
                 const riferimento = getDepartureTransportLabel(item.service);

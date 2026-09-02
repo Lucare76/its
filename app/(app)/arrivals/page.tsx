@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, EmptyState, SectionCard } from "@/components/ui";
+import { BookingGroupSummaryCard } from "@/components/booking-group-summary-card";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 import { openAuthenticatedHtml } from "@/lib/open-authenticated-html";
 import { formatIsoDateShort, getCustomerFullName, getTransportReferenceOutward } from "@/lib/service-display";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
+import type { BookingGroupMeta } from "@/lib/booking-group-card";
 import type { Service, Hotel } from "@/lib/types";
 
 function isValidClockTime(value: string) {
@@ -565,6 +567,35 @@ export default function ArrivalsPage() {
     datasets: { services: true, assignments: true, hotels: true, memberships: true },
     serviceScope: { mode: "date", date: selectedDate }
   });
+  // Obiettivo A (prompt "ALLINEARE TUTTE LE VISTE"): metadata di gruppo per
+  // aggregare i services bus_exclusive in un'unica riga — stessa fonte di
+  // verita' (booking_groups.name/contact/expected_pax/hotel) di /inbox e
+  // /ricerca, mai una seconda logica. Rifetch solo quando cambia l'insieme
+  // di booking_group_id presenti nei services del giorno selezionato.
+  const [groupMetaById, setGroupMetaById] = useState<Map<string, BookingGroupMeta>>(new Map());
+  const bookingGroupIdsKey = Array.from(new Set(data.services.map((s) => s.booking_group_id).filter(Boolean))).sort().join(",");
+  useEffect(() => {
+    const ids = bookingGroupIdsKey ? bookingGroupIdsKey.split(",") : [];
+    if (ids.length === 0) {
+      setGroupMetaById(new Map());
+      return;
+    }
+    if (!supabase) return;
+    let cancelled = false;
+    void (async () => {
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) return;
+      const res = await fetch(`/api/ops/booking-groups?meta_ids=${encodeURIComponent(ids.join(","))}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json().catch(() => null) as { ok?: boolean; groups?: BookingGroupMeta[] } | null;
+      if (cancelled || !res.ok || !body?.ok) return;
+      setGroupMetaById(new Map((body.groups ?? []).map((g) => [g.id, g])));
+    })();
+    return () => { cancelled = true; };
+  }, [bookingGroupIdsKey]);
+
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -827,15 +858,38 @@ export default function ArrivalsPage() {
   [allArrivalInstances, selectedDate]);
 
   const totalPax = arrivals.reduce((sum, item) => sum + item.service.pax, 0);
+
+  // Obiettivo A: separa le istanze di un gruppo bus_exclusive dalla tabella
+  // individuale — vengono mostrate come UNA riga aggregata (vedi
+  // arrivalGroupCards) invece che una riga per fermata. Services senza
+  // booking_group_id o di gruppi non-esclusivi restano nella tabella,
+  // comportamento invariato. Solo la RESA a schermo cambia: `arrivals`
+  // (usata da export/totali/ricerca) resta l'elenco completo, invariato.
+  const exclusiveGroupIds = new Set(
+    Array.from(groupMetaById.values()).filter((g) => g.kind === "bus_exclusive").map((g) => g.id)
+  );
+  const isExclusiveGroupInstance = (item: (typeof arrivals)[number]) =>
+    Boolean(item.service.booking_group_id && exclusiveGroupIds.has(item.service.booking_group_id));
+  const tableArrivals = arrivals.filter((item) => !isExclusiveGroupInstance(item));
+  const arrivalGroupCards = (() => {
+    const byGroup = new Map<string, (typeof arrivals)>();
+    for (const item of arrivals) {
+      if (!isExclusiveGroupInstance(item) || !item.service.booking_group_id) continue;
+      const list = byGroup.get(item.service.booking_group_id) ?? [];
+      list.push(item);
+      byGroup.set(item.service.booking_group_id, list);
+    }
+    return Array.from(byGroup.entries()).map(([groupId, items]) => ({ groupId, items }));
+  })();
   const assignedServiceIds = new Set(data.assignments.map((assignment) => assignment.service_id));
   const assignmentByServiceId = new Map(data.assignments.map((assignment) => [assignment.service_id, assignment]));
   const driverById = new Map(data.memberships.map((member) => [member.user_id, member.full_name]));
   const unassignedCount = arrivals.filter((item) => !assignedServiceIds.has(item.service.id)).length;
   const reviewCount = arrivals.filter((item) => item.service.status === "new").length;
   const rowsPerPage = 50;
-  const pageCount = Math.max(1, Math.ceil(arrivals.length / rowsPerPage));
+  const pageCount = Math.max(1, Math.ceil(tableArrivals.length / rowsPerPage));
   const safeCurrentPage = Math.min(currentPage, pageCount);
-  const visibleArrivals = arrivals.slice((safeCurrentPage - 1) * rowsPerPage, safeCurrentPage * rowsPerPage);
+  const visibleArrivals = tableArrivals.slice((safeCurrentPage - 1) * rowsPerPage, safeCurrentPage * rowsPerPage);
   const timeBandCounts = allArrivalInstances.filter((item) => item.date === selectedDate && !isShuttleService(item.service)).reduce((counts, item) => {
     const hour = Number(item.time.slice(0, 2));
     counts[hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening"] += 1;
@@ -1042,7 +1096,22 @@ export default function ArrivalsPage() {
         ) : (
           <>
           <div className="space-y-2 md:hidden">
-            {arrivals.map((item) => {
+            {arrivalGroupCards.map(({ groupId, items }) => (
+              <BookingGroupSummaryCard
+                key={`mobile-group-${groupId}`}
+                meta={groupMetaById.get(groupId)}
+                direction="arrival"
+                stops={items.map((item) => ({
+                  id: item.serviceId,
+                  pax: item.service.pax,
+                  direction: item.direction,
+                  time: item.time,
+                  bus_city_origin: item.service.bus_city_origin,
+                  meeting_point: item.service.meeting_point,
+                }))}
+              />
+            ))}
+            {tableArrivals.map((item) => {
               const hotelName = resolveHotelName(item.service);
               const meetingPoint = item.service.meeting_point ?? item.service.vessel ?? null;
               const riferimento = getTransportReferenceOutward(item.service) ?? item.service.transport_code ?? item.service.vessel ?? null;
@@ -1230,6 +1299,23 @@ export default function ArrivalsPage() {
             )}
           </div>
         )}
+        <div className="hidden md:block">
+          {arrivalGroupCards.map(({ groupId, items }) => (
+            <BookingGroupSummaryCard
+              key={groupId}
+              meta={groupMetaById.get(groupId)}
+              direction="arrival"
+              stops={items.map((item) => ({
+                id: item.serviceId,
+                pax: item.service.pax,
+                direction: item.direction,
+                time: item.time,
+                bus_city_origin: item.service.bus_city_origin,
+                meeting_point: item.service.meeting_point,
+              }))}
+            />
+          ))}
+        </div>
         <ArrivalDesktopTable
           rows={visibleArrivals}
           hotelsById={hotelsById}
@@ -1240,7 +1326,7 @@ export default function ArrivalsPage() {
           onMore={openCancelModal}
           page={safeCurrentPage}
           pageCount={pageCount}
-          total={arrivals.length}
+          total={tableArrivals.length}
           onPageChange={setCurrentPage}
         />
       </SectionCard>
