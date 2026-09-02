@@ -27,6 +27,7 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     inserts: [] as Array<{ table: string; row: Row }>,
     updates: [] as Array<{ table: string; filters: Row; payload: Row }>,
     upserts: [] as Array<{ table: string; row: Row }>,
+    rpcs: [] as Array<{ name: string; args: Row }>,
   };
   let seq = 0;
 
@@ -90,7 +91,15 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     return b;
   }
 
-  return { admin: { from: (t: string) => builder(t) } as never, writes };
+  const rpc = async (name: string, args: Row) => {
+    writes.rpcs.push({ name, args });
+    if (name === "allocate_bus_service") {
+      return { data: { allocation_id: `alloc-${writes.rpcs.length}` }, error: null };
+    }
+    return { data: null, error: { message: `RPC ${name} non gestita nel fake test` } };
+  };
+
+  return { admin: { from: (t: string) => builder(t), rpc } as never, writes };
 }
 
 const actor = { tenantId: TENANT, userId: "u1", role: "operator" };
@@ -277,6 +286,70 @@ describe("autoAssignBookingGroup — regressione GIACOMONI (solo fermate andata,
 
     expect(result.attempted).toBe(false);
     expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+});
+
+describe("autoAssignBookingGroup - allocazioni mancanti su services gia operativi", () => {
+  it("reservation esistente + services new/is_draft=false senza allocations -> chiama allocate_bus_service sul bus riservato", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: [
+        { id: "stop-fano", tenant_id: TENANT, booking_group_id: GROUP_ID, direction: "arrival", city: "FANO", pickup_point: "PARCHEGGIO CASELLO A14", stop_id: "canonical-fano", expected_pax: 10 },
+        { id: "stop-marotta", tenant_id: TENANT, booking_group_id: GROUP_ID, direction: "arrival", city: "MAROTTA", pickup_point: "PARCHEGGIO CASELLO A14", stop_id: "canonical-marotta", expected_pax: 18 },
+      ],
+      services: [
+        { id: "svc-fano", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "stop-fano", customer_name: "GIACOMONI", pax: 10, date: "2026-09-06", direction: "arrival", status: "new", is_draft: false, bus_city_origin: "FANO", meeting_point: "PARCHEGGIO CASELLO A14", booking_service_kind: "bus_city_hotel", time: "06:00" },
+        { id: "svc-marotta", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "stop-marotta", customer_name: "GIACOMONI", pax: 18, date: "2026-09-06", direction: "arrival", status: "new", is_draft: false, bus_city_origin: "MAROTTA", meeting_point: "PARCHEGGIO CASELLO A14", booking_service_kind: "bus_city_hotel", time: "06:20" },
+      ],
+      booking_group_bus_reservations: [
+        { id: "r1", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_B, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+      tenant_bus_allocations: [],
+      tenant_bus_units: [
+        { id: BUS_B, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 1", capacity: 54, tag: "gruppi", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_line_stops: [
+        { id: "canonical-fano", tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, city: "FANO", stop_name: "FANO", pickup_note: "PARCHEGGIO CASELLO A14", direction: "arrival", active: true, pickup_time: "06:00" },
+        { id: "canonical-marotta", tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, city: "MAROTTA", stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", direction: "arrival", active: true, pickup_time: "06:20" },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
+
+    expect(result.blocked).toEqual([]);
+    expect(result.allocations_created).toHaveLength(2);
+    expect(writes.rpcs.filter((w) => w.name === "allocate_bus_service").map((w) => w.args.p_service_id)).toEqual(["svc-fano", "svc-marotta"]);
+    expect(writes.rpcs.every((w) => w.args.p_bus_unit_id === BUS_B)).toBe(true);
+  });
+});
+
+describe("linkOrphanReservationToGroup - evita doppia reservation sul reale", () => {
+  it("rifiuta se il gruppo reale ha gia una reservation esclusiva sulla stessa data", async () => {
+    const orphanId = "orphan-group-id";
+    const { admin, writes } = makeAdmin({
+      booking_groups: [
+        { ...GROUP, name: "GRUPPO GIACOMONI" },
+        { id: orphanId, tenant_id: TENANT, name: "GIACOMONI", kind: "bus_exclusive", status: "to_complete" },
+      ],
+      booking_group_bus_reservations: [
+        { id: "r-real", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_B, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+        { id: "r-orphan", tenant_id: TENANT, booking_group_id: orphanId, bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+      services: [
+        { id: "svc-real", tenant_id: TENANT, booking_group_id: GROUP_ID, customer_name: "GIACOMONI", pax: 38, direction: "arrival", status: "new" },
+      ],
+    });
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: orphanId,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(409);
+    expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   findAvailableBusesForGroup,
   allocateReservedBookingGroupBusService,
   suggestBookingGroupCatalogStops,
+  resolveCanonicalBookingGroupStop,
 } from "@/lib/server/booking-groups-service";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -150,6 +151,21 @@ describe("addBookingGroupStop — idempotenza (§2)", () => {
     const res = await addBookingGroupStop(admin as never, actor, { bookingGroupId: GROUP_ID, city: "Tivoli", expected_pax: 20, direction: "arrival" });
     expect(res.ok).toBe(true);
     expect(writes.inserts.filter((w) => w.table === "booking_group_stops")).toHaveLength(1);
+  });
+});
+
+describe("resolveCanonicalBookingGroupStop - citta e pickup comuni", () => {
+  it("con pickup_note uguale su piu citta sceglie solo la fermata della citta richiesta", async () => {
+    const { admin } = makeAdmin({
+      tenant_bus_line_stops: [
+        { id: "stop-fano", tenant_id: TENANT, bus_line_id: BUS_LINE_ID, city: "FANO", stop_name: "FANO", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: "09:10" },
+        { id: "stop-marotta", tenant_id: TENANT, bus_line_id: BUS_LINE_ID, city: "MAROTTA", stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: "09:00" },
+      ],
+    });
+
+    const resolved = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "FANO", "departure", "PARCHEGGIO CASELLO A14", BUS_LINE_ID);
+
+    expect(resolved).toEqual({ stopId: "stop-fano", pickupTime: "09:10" });
   });
 });
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, SectionCard } from "@/components/ui";
+import { summarizeBusReservationConflicts } from "@/lib/bus-network-reservations";
 import { formatBusNetworkUnassignedSummary, summarizeBusNetworkUnassigned } from "@/lib/bus-network-unassigned";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import BusImportModal from "./BusImportModal";
@@ -612,6 +613,18 @@ export default function BusNetworkPage() {
     [lineStops, activeStopIds, activeStopNames, selectedLine, direction]
   );
 
+  const reservationConflictByUnit = useMemo(() => {
+    const map = new Map<string, string>();
+    const conflicts = summarizeBusReservationConflicts(payload.booking_group_reservations ?? [], date);
+    for (const conflict of conflicts) {
+      const groups = conflict.groupNames.join(" / ") || conflict.normalizedGroupName;
+      const units = conflict.busUnitIds.join(", ");
+      const message = `Conflitto reservation ${groups}: ${conflict.bookingGroupIds.length} gruppi diversi sulla stessa data (${units}).`;
+      for (const unitId of conflict.busUnitIds) map.set(unitId, message);
+    }
+    return map;
+  }, [payload.booking_group_reservations, date]);
+
   // Unassigned services for this date + direction + line family
   const allocatedServiceIds = useMemo(
     () => new Set(allDateAllocations.map((a) => a.service_id)),
@@ -724,18 +737,22 @@ export default function BusNetworkPage() {
       // un'altra data) è l'unico altro segnale ammesso oltre alle
       // allocazioni reali — mostra "occupato" anche prima che i services
       // vengano allocati uno per uno.
-      const reservationGroupName = payload.booking_group_reservations
+      const reservation = payload.booking_group_reservations
         ?.find((r) => r.bus_unit_id === unit.id && r.service_date === date && r.exclusive)
-        ?.booking_group_name?.trim();
+        ?? null;
+      const reservationConflict = reservationConflictByUnit.get(unit.id) ?? null;
+      const reservationGroupName = reservation && !reservationConflict
+        ? reservation.booking_group_name?.trim()
+        : null;
       // Obiettivo E: MAI più tenant_bus_units.group_name come fallback qui —
       // quel campo non ha nozione di data/direzione e "sporca" date a cui il
       // gruppo non appartiene (es. PARROCCHIA SANTA BEATA che compariva
       // anche il 06/09 pur non avendo alcuna reservation/allocazione quel
       // giorno). Senza un segnale reale per QUESTA data, torna il nome
       // originale del bus (gestito da busDisplayLabel via unit.label).
-      return { ...unit, group_name: allocatedGroupName ?? reservationGroupName ?? null, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
+      return { ...unit, group_name: allocatedGroupName ?? reservationGroupName ?? null, reservation_conflict: reservationConflict, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
     }),
-    [lineUnits, allDateAllocations, serviceById, payload.booking_group_reservations, date]
+    [lineUnits, allDateAllocations, serviceById, payload.booking_group_reservations, reservationConflictByUnit, date]
   );
 
   // Bus cards — usa TUTTE le allocazioni per mostrare pax corretti su ogni card
@@ -3016,6 +3033,11 @@ export default function BusNetworkPage() {
                             >{paxTotal}/{unit.capacity}</span>
                           )}
                         </div>
+                        {unit.reservation_conflict ? (
+                          <div className={`mt-2 rounded-lg px-2 py-1 text-[11px] font-semibold ${selectedLineFerryConfig ? "bg-amber-100 text-amber-900" : "bg-amber-50 text-amber-700"}`}>
+                            {unit.reservation_conflict}
+                          </div>
+                        ) : null}
                         {/* Driver info */}
                         {editDriverUnitId === unit.id ? (
                           <div className="mt-2 space-y-1">

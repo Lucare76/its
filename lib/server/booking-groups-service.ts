@@ -128,10 +128,17 @@ export async function resolveCanonicalBookingGroupStop(
     const stopKey = normalizeCityKey(r.stop_name);
     const noteKey = normalizeCityKey(r.pickup_note);
     if (pickupTarget) {
+      if (target) {
+        return cityKey === target && (
+          stopKey === pickupTarget ||
+          noteKey === pickupTarget ||
+          stopKey.includes(pickupTarget) ||
+          noteKey.includes(pickupTarget)
+        );
+      }
       return (
         stopKey === pickupTarget ||
-        noteKey === pickupTarget ||
-        (cityKey === target && (stopKey.includes(pickupTarget) || noteKey.includes(pickupTarget)))
+        noteKey === pickupTarget
       );
     }
     return cityKey === target || stopKey === target;
@@ -1657,9 +1664,86 @@ export async function reserveBookingGroupBus(
 export type AutoAssignBookingGroupResult = {
   attempted: boolean;
   reservations_created: Array<{ service_date: string; bus_unit_id: string; bus_label: string }>;
+  allocations_created?: Array<{ service_id: string; service_date: string; bus_unit_id: string; bus_label: string; pax: number }>;
   blocked: Array<{ service_date: string; reason: string; orphan_conflict?: OrphanReservationConflict }>;
   operationalize?: OperationalizeResult;
 };
+
+async function allocateUnassignedReservedBookingGroupServices(
+  admin: SupabaseClient,
+  actor: BgActor,
+  bookingGroupId: string,
+): Promise<{
+  allocated: Array<{ service_id: string; service_date: string; bus_unit_id: string; bus_label: string; pax: number }>;
+  blocked: Array<{ service_date: string; reason: string }>;
+}> {
+  const { tenantId, userId } = actor;
+  const [{ data: reservations }, { data: services }] = await Promise.all([
+    admin
+      .from("booking_group_bus_reservations")
+      .select("bus_unit_id, service_date, exclusive")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", bookingGroupId),
+    admin
+      .from("services")
+      .select("id, date, pax, status, is_draft")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", bookingGroupId)
+      .neq("status", "cancelled"),
+  ]);
+
+  const exclusiveReservationByDate = new Map(
+    ((reservations ?? []) as Array<{ bus_unit_id: string; service_date: string; exclusive: boolean | null }>)
+      .filter((r) => r.exclusive)
+      .map((r) => [r.service_date, r.bus_unit_id]),
+  );
+  const serviceRows = (services ?? []) as Array<{ id: string; date: string | null; pax: number | null; status: string | null; is_draft: boolean | null }>;
+  const serviceIds = serviceRows.map((s) => s.id);
+  if (serviceIds.length === 0) return { allocated: [], blocked: [] };
+
+  const { data: existingAllocations } = await admin
+    .from("tenant_bus_allocations")
+    .select("service_id")
+    .eq("tenant_id", tenantId)
+    .in("service_id", serviceIds);
+  const alreadyAllocated = new Set(((existingAllocations ?? []) as Array<{ service_id: string }>).map((a) => a.service_id));
+
+  const allocated: Array<{ service_id: string; service_date: string; bus_unit_id: string; bus_label: string; pax: number }> = [];
+  const blocked: Array<{ service_date: string; reason: string }> = [];
+
+  for (const service of serviceRows) {
+    if (!service.date || alreadyAllocated.has(service.id)) continue;
+    if (service.is_draft) {
+      blocked.push({ service_date: service.date, reason: `Servizio ${service.id}: ancora draft, completa i campi mancanti prima dell'allocazione bus.` });
+      continue;
+    }
+    const busUnitId = exclusiveReservationByDate.get(service.date);
+    if (!busUnitId) {
+      blocked.push({ service_date: service.date, reason: `Reservation esclusiva mancante per il servizio ${service.id}.` });
+      continue;
+    }
+
+    const outcome = await allocateReservedBookingGroupBusService(admin, {
+      tenantId,
+      serviceId: service.id,
+      busUnitId,
+      userId: userId ?? "",
+    });
+    if (outcome.allocated) {
+      allocated.push({
+        service_id: service.id,
+        service_date: service.date,
+        bus_unit_id: outcome.busUnitId,
+        bus_label: outcome.busLabel,
+        pax: outcome.pax,
+      });
+    } else if (outcome.reason !== "Già allocato") {
+      blocked.push({ service_date: service.date, reason: `Servizio ${service.id}: ${outcome.reason}` });
+    }
+  }
+
+  return { allocated, blocked };
+}
 
 /**
  * Zero-click per gruppi bus_exclusive (prompt "auto-assegnazione bus
@@ -1684,7 +1768,7 @@ export async function autoAssignBookingGroup(
   bookingGroupId: string,
 ): Promise<AutoAssignBookingGroupResult> {
   const { tenantId } = actor;
-  const result: AutoAssignBookingGroupResult = { attempted: false, reservations_created: [], blocked: [] };
+  const result: AutoAssignBookingGroupResult = { attempted: false, reservations_created: [], allocations_created: [], blocked: [] };
 
   const { data: group } = await admin
     .from("booking_groups")
@@ -1768,6 +1852,13 @@ export async function autoAssignBookingGroup(
     if ("data" in outcome) result.operationalize = outcome.data;
   } catch {
     // best effort: un fallimento qui non deve mai propagarsi al chiamante.
+  }
+  if (g.kind === "bus_exclusive") {
+    const postOperationalAllocation = await allocateUnassignedReservedBookingGroupServices(admin, actor, bookingGroupId);
+    result.allocations_created = postOperationalAllocation.allocated;
+    for (const blocked of postOperationalAllocation.blocked) {
+      result.blocked.push(blocked);
+    }
   }
   return result;
 }
@@ -2088,6 +2179,19 @@ export async function linkOrphanReservationToGroup(
     .neq("status", "cancelled");
   if ((realServiceCount ?? 0) === 0) {
     return err(422, "Il gruppo reale non ha services attivi: nulla da assegnare.");
+  }
+
+  const { data: realSameDateReservations } = await admin
+    .from("booking_group_bus_reservations")
+    .select("id, bus_unit_id")
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.realBookingGroupId)
+    .eq("service_date", reservation.service_date)
+    .eq("exclusive", true);
+  const realSameDateConflict = ((realSameDateReservations ?? []) as Array<{ id: string; bus_unit_id: string }>)
+    .find((r) => r.id !== input.reservationId);
+  if (realSameDateConflict) {
+    return err(409, "Il gruppo reale ha gia una reservation esclusiva per questa data: non posso collegare l'orfano senza creare una doppia reservation.");
   }
 
   const { data: nameRows } = await admin
