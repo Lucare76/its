@@ -107,6 +107,8 @@ const addStopSchema = z.object({
   direction: z.enum(["arrival", "departure"]),
   sort_order: z.number().int().min(0).max(9999).optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
+  contact_name: z.string().trim().max(160).nullable().optional(),
+  contact_phone: z.string().trim().max(60).nullable().optional(),
 });
 
 const updateStopSchema = z.object({
@@ -120,6 +122,8 @@ const updateStopSchema = z.object({
   sort_order: z.number().int().min(0).max(9999).optional(),
   pickup_time: clock.nullable().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
+  contact_name: z.string().trim().max(160).nullable().optional(),
+  contact_phone: z.string().trim().max(60).nullable().optional(),
 });
 
 const deleteStopSchema = z.object({ action: z.literal("delete_stop"), id: z.string().uuid() });
@@ -273,6 +277,17 @@ export async function GET(request: NextRequest) {
       .order("name");
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, hotels: data ?? [] });
+  }
+
+  if (url.searchParams.get("catalog") === "agencies") {
+    const { data, error } = await admin
+      .from("agencies")
+      .select("id, name")
+      .eq("tenant_id", tenantId)
+      .eq("active", true)
+      .order("name");
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, agencies: data ?? [] });
   }
 
   if (url.searchParams.get("catalog") === "bus_stops") {

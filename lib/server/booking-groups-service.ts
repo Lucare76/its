@@ -22,7 +22,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
 import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 import {
-  computeBookingGroupStatusSummary,
+  computeBookingGroupStatusSummaryByDirection,
   summarizeStopPax,
   evaluateBookingGroupServiceReadiness,
   BOOKING_GROUP_PLACEHOLDER_TIME,
@@ -378,12 +378,20 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
   // nominativo rimosso via removeGroupPassenger (soft-cancel) continuerebbe
   // a gonfiare i conteggi.
   const activeServiceRows = serviceRows.filter((s) => s.status !== "cancelled");
+  // Direzione derivata dalla FERMATA collegata (sempre affidabile, e' quella
+  // che definisce andata/ritorno nel dominio), con fallback su
+  // services.direction solo per service orfani senza booking_group_stop_id.
+  const directionByStopId = new Map(enrichedStopRows.map((s) => [s.id, s.direction] as const));
+  const serviceDirection = (s: (typeof activeServiceRows)[number]): string | null =>
+    (s.booking_group_stop_id ? directionByStopId.get(s.booking_group_stop_id) : undefined) ?? s.direction ?? null;
 
-  const summary = computeBookingGroupStatusSummary({
+  const summary = computeBookingGroupStatusSummaryByDirection({
     status: (group as BookingGroup).status,
     expectedPax: (group as BookingGroup).expected_pax,
-    stopExpectedPax: enrichedStopRows.map((s) => s.expected_pax),
-    servicePax: activeServiceRows.map((s) => Number(s.pax ?? 0)),
+    arrivalStopExpectedPax: enrichedStopRows.filter((s) => s.direction === "arrival").map((s) => s.expected_pax),
+    departureStopExpectedPax: enrichedStopRows.filter((s) => s.direction === "departure").map((s) => s.expected_pax),
+    arrivalServicePax: activeServiceRows.filter((s) => serviceDirection(s) === "arrival").map((s) => Number(s.pax ?? 0)),
+    departureServicePax: activeServiceRows.filter((s) => serviceDirection(s) === "departure").map((s) => Number(s.pax ?? 0)),
     busReservationCount: reservationRows.length,
   });
 
@@ -854,6 +862,8 @@ export type AddStopInput = {
   direction: "arrival" | "departure";
   sort_order?: number;
   notes?: string | null;
+  contact_name?: string | null;
+  contact_phone?: string | null;
 };
 
 type CreatedCatalogStop = { id: string; pickup_time: string | null };
@@ -1055,6 +1065,8 @@ export async function addBookingGroupStop(
     direction: input.direction,
     sort_order: input.sort_order ?? 0,
     notes: input.notes,
+    contact_name: input.contact_name,
+    contact_phone: input.contact_phone,
   });
   const { data, error } = await admin.from("booking_group_stops").insert(insert).select("*").single();
   if (error) return err(500, error.message);
@@ -1621,19 +1633,17 @@ export async function autoAssignBookingGroup(
           result.blocked.push({ service_date: serviceDate, reason, orphan_conflict: orphanConflict });
           continue;
         }
-        if (candidates.length > 1) {
-          // Scelta non certa (stesso principio dell'assegnazione libera su
-          // linea, Obiettivo D e Test 7): con piu' bus ugualmente compatibili
-          // non si inventa un criterio di scelta — resta "Da validare" con la
-          // rosa di candidati, coerente con la conferma che Mario chiede in
-          // questo stesso scenario.
-          result.blocked.push({
-            service_date: serviceDate,
-            reason: `${candidates.length} bus esclusivi compatibili (${candidates.map((c) => c.label).join(", ")}): serve conferma manuale, nessuna scelta automatica.`,
-          });
-          continue;
-        }
-        const chosen = candidates[0];
+        // FIX FINALE bus_exclusive (Obiettivo A): con più bus esclusivi
+        // ugualmente liberi e capienti non si resta bloccati in attesa di
+        // conferma manuale — `findAvailableBusesForGroup` ha già escluso
+        // qualunque bus con una reservation exclusive attiva per la data,
+        // quindi ogni candidato qui è realmente libero. Si sceglie il primo
+        // in ordine deterministico (capacità -> sort_order -> label -> id,
+        // vedi findAvailableBusesForGroup) e lo si riserva subito in
+        // esclusiva: nessun altro gruppo/servizio potrà più finirci (vedi
+        // migration 0269, enforcement lato allocate_bus_service/
+        // move_bus_allocation).
+        const chosen = candidates[0]!;
         const reserved = await reserveBookingGroupBus(admin, actor, {
           bookingGroupId,
           busUnitId: chosen.id,
@@ -1779,7 +1789,7 @@ export async function findAvailableBusesForGroup(
   input: { serviceDate: string; requiredCapacity: number; exclusiveOnly?: boolean },
 ): Promise<AvailableBus[]> {
   const [{ data: units }, { data: reservations }, { data: exclusiveLines }] = await Promise.all([
-    admin.from("tenant_bus_units").select("id, bus_line_id, label, capacity, tag, status, manual_close, active").eq("tenant_id", tenantId).eq("active", true),
+    admin.from("tenant_bus_units").select("id, bus_line_id, label, capacity, tag, status, manual_close, active, sort_order").eq("tenant_id", tenantId).eq("active", true),
     admin.from("booking_group_bus_reservations").select("bus_unit_id, exclusive").eq("tenant_id", tenantId).eq("service_date", input.serviceDate),
     input.exclusiveOnly
       ? admin
@@ -1797,14 +1807,19 @@ export async function findAvailableBusesForGroup(
   const exclusivelyReserved = new Set(
     ((reservations ?? []) as Array<{ bus_unit_id: string; exclusive: boolean | null }>).filter((r) => r.exclusive).map((r) => r.bus_unit_id),
   );
-  const rows = (units ?? []) as Array<{ id: string; bus_line_id: string | null; label: string; capacity: number; tag: string | null; status: string | null; manual_close: boolean | null }>;
+  const rows = (units ?? []) as Array<{ id: string; bus_line_id: string | null; label: string; capacity: number; tag: string | null; status: string | null; manual_close: boolean | null; sort_order: number | null }>;
   return rows
     .filter((u) => !input.exclusiveOnly || (u.bus_line_id && exclusiveLineIds.has(u.bus_line_id)))
     .filter((u) => u.capacity >= input.requiredCapacity)
     .filter((u) => u.status !== "closed" && u.status !== "completed" && !u.manual_close)
     .filter((u) => !exclusivelyReserved.has(u.id))
-    .map((u) => ({ id: u.id, label: u.label, capacity: u.capacity, tag: u.tag ?? null }))
-    .sort((a, b) => a.capacity - b.capacity);
+    .map((u) => ({ id: u.id, label: u.label, capacity: u.capacity, tag: u.tag ?? null, sortOrder: u.sort_order ?? 0 }))
+    // Ordinamento stabile e deterministico (Obiettivo A): capacità minima
+    // sufficiente prima, poi sort_order del catalogo bus, poi label/id come
+    // tiebreak finale — mai un ordine casuale tra candidati altrimenti
+    // equivalenti.
+    .sort((a, b) => a.capacity - b.capacity || a.sortOrder - b.sortOrder || a.label.localeCompare(b.label) || a.id.localeCompare(b.id))
+    .map(({ id, label, capacity, tag }) => ({ id, label, capacity, tag }));
 }
 
 // Obiettivo C/D (Prompt "GIACOMONI bus exclusive"): quando un bus altrimenti

@@ -61,6 +61,10 @@ describe("Booking Groups page.tsx — action remove_group_passenger cablata da G
   it("i conteggi pax del gruppo escludono i services con status='cancelled' (stessa regola server-side)", () => {
     const detailBody = extractFunctionBody("GroupDetail");
     expect(detailBody).toMatch(/services\.filter\(\(s\) => s\.status !== "cancelled"\)/);
-    expect(detailBody).toMatch(/servicePax: activeServices\.map/);
+    // Obiettivo G: i pax vanno calcolati SEPARATAMENTE per andata/ritorno
+    // (mai sommati), ma sempre a partire da activeServices (cancellati
+    // esclusi) — vedi computeBookingGroupStatusSummaryByDirection.
+    expect(detailBody).toMatch(/arrivalServicePax: activeServices\.filter/);
+    expect(detailBody).toMatch(/departureServicePax: activeServices\.filter/);
   });
 });

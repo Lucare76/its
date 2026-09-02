@@ -4,8 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { PageHeader, SectionCard, EmptyState } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import {
-  summarizeBookingGroupPax,
-  computeBookingGroupStatusSummary,
+  computeBookingGroupStatusSummaryByDirection,
   BOOKING_GROUP_KINDS,
   BOOKING_GROUP_STATUSES,
   type BookingGroup,
@@ -19,7 +18,7 @@ type Detail = {
   stops: BookingGroupStop[];
   bus_reservations: BookingGroupBusReservation[];
   services: Array<{ id: string; pax: number | null; customer_name: string | null; status: string | null; is_draft: boolean | null; booking_group_stop_id: string | null }>;
-  summary: ReturnType<typeof computeBookingGroupStatusSummary>;
+  summary: ReturnType<typeof computeBookingGroupStatusSummaryByDirection>;
   stop_summaries: BookingGroupStopPaxSummary[];
 };
 type AvailableBus = { id: string; label: string; capacity: number; tag: string | null };
@@ -36,6 +35,7 @@ type BusStopSuggestion = {
 };
 type PostResult = Record<string, unknown> | null;
 type HotelOption = { id: string; name: string };
+type AgencyOption = { id: string; name: string };
 
 const KIND_LABEL: Record<string, string> = {
   bus_exclusive: "Bus esclusivo",
@@ -79,6 +79,7 @@ export default function BookingGroupsPage() {
   const [showNew, setShowNew] = useState(false);
   const [busLines, setBusLines] = useState<BusLineOption[]>([]);
   const [hotels, setHotels] = useState<HotelOption[]>([]);
+  const [agencies, setAgencies] = useState<AgencyOption[]>([]);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -109,6 +110,11 @@ export default function BookingGroupsPage() {
     if (ok && json.ok) setHotels(json.hotels ?? []);
   }, []);
 
+  const loadAgencies = useCallback(async () => {
+    const { ok, json } = await api("/api/ops/booking-groups?catalog=agencies");
+    if (ok && json.ok) setAgencies(json.agencies ?? []);
+  }, []);
+
   // Il setState avviene dentro loadList/loadDetail dopo un await (fetch), non
   // in modo sincrono nel corpo dell'effect: nessun rischio di cascading render.
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -117,6 +123,8 @@ export default function BookingGroupsPage() {
   useEffect(() => { void loadBusLines(); }, [loadBusLines]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void loadHotels(); }, [loadHotels]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void loadAgencies(); }, [loadAgencies]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedId) void loadDetail(selectedId); }, [selectedId, loadDetail]);
 
@@ -170,7 +178,6 @@ export default function BookingGroupsPage() {
         ) : (
           <div className="space-y-2">
             {visibleGroups.map((g) => {
-              const s = summarizeBookingGroupPax({ expectedPax: g.expected_pax, stopExpectedPax: [], servicePax: [] });
               return (
                 <button
                   key={g.id}
@@ -187,7 +194,7 @@ export default function BookingGroupsPage() {
                     {g.service_date ? <span>arrivo {g.service_date}</span> : null}
                     {g.return_date ? <span>ritorno {g.return_date}</span> : null}
                     {!g.service_date && !g.return_date ? <span>date da definire</span> : null}
-                    <span className="font-semibold text-slate-700">{s.expectedPax} previsti</span>
+                    <span className="font-semibold text-slate-700">{g.expected_pax} previsti</span>
                   </div>
                 </button>
               );
@@ -197,9 +204,9 @@ export default function BookingGroupsPage() {
       </SectionCard>
 
       {detailLoading ? <p className="text-sm text-slate-500">Caricamento dettaglio…</p> : null}
-      {detail ? <GroupDetail detail={detail} busLines={busLines} hotels={hotels} onChange={refresh} onMessage={(m) => { setErr(null); setMsg(m); }} onError={(e) => { setMsg(null); setErr(e); }} onClose={closeDetail} /> : null}
+      {detail ? <GroupDetail detail={detail} busLines={busLines} hotels={hotels} agencies={agencies} onChange={refresh} onMessage={(m) => { setErr(null); setMsg(m); }} onError={(e) => { setMsg(null); setErr(e); }} onClose={closeDetail} /> : null}
 
-      {showNew ? <NewGroupForm hotels={hotels} onClose={() => setShowNew(false)} onCreated={async (id) => { setShowNew(false); await loadList(); selectGroup(id); }} onError={(e) => { setMsg(null); setErr(e); }} /> : null}
+      {showNew ? <NewGroupForm hotels={hotels} agencies={agencies} onClose={() => setShowNew(false)} onCreated={async (id) => { setShowNew(false); await loadList(); selectGroup(id); }} onError={(e) => { setMsg(null); setErr(e); }} /> : null}
     </div>
   );
 }
@@ -253,7 +260,7 @@ function HotelField({ hotels, hotelId, onChange, label = "Hotel / struttura" }: 
 
 // ─── New group form ────────────────────────────────────────────────────────
 
-function NewGroupForm({ hotels, onClose, onCreated, onError }: { hotels: HotelOption[]; onClose: () => void; onCreated: (id: string) => void; onError: (e: string) => void }) {
+function NewGroupForm({ hotels, agencies, onClose, onCreated, onError }: { hotels: HotelOption[]; agencies: AgencyOption[]; onClose: () => void; onCreated: (id: string) => void; onError: (e: string) => void }) {
   const [name, setName] = useState("");
   const [expectedPax, setExpectedPax] = useState("50");
   const [kind, setKind] = useState<string>("bus_exclusive");
@@ -263,6 +270,7 @@ function NewGroupForm({ hotels, onClose, onCreated, onError }: { hotels: HotelOp
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [hotelId, setHotelId] = useState<string | null>(null);
+  const [agencyId, setAgencyId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const formError = useMemo(() => {
@@ -291,6 +299,7 @@ function NewGroupForm({ hotels, onClose, onCreated, onError }: { hotels: HotelOp
         contact_name: contactName.trim() || null,
         contact_phone: contactPhone.trim() || null,
         hotel_id: hotelId,
+        agency_id: agencyId,
         notes: notes.trim() || null,
       }),
     });
@@ -338,6 +347,12 @@ function NewGroupForm({ hotels, onClose, onCreated, onError }: { hotels: HotelOp
           </label>
         </div>
         <HotelField hotels={hotels} hotelId={hotelId} onChange={setHotelId} />
+        <label className="block text-xs font-medium text-slate-600">Agenzia
+          <select className="input-saas mt-1 w-full" value={agencyId ?? ""} onChange={(e) => setAgencyId(e.target.value || null)}>
+            <option value="">{agencies.length ? "Nessuna agenzia" : "Nessuna agenzia disponibile"}</option>
+            {agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
         <label className="block text-xs font-medium text-slate-600">Note
           <textarea rows={2} className="input-saas mt-1 w-full resize-none" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
@@ -356,10 +371,11 @@ function NewGroupForm({ hotels, onClose, onCreated, onError }: { hotels: HotelOp
 
 // ─── Group detail ──────────────────────────────────────────────────────────
 
-function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, onClose }: {
+function GroupDetail({ detail, busLines, hotels, agencies, onChange, onMessage, onError, onClose }: {
   detail: Detail;
   busLines: BusLineOption[];
   hotels: HotelOption[];
+  agencies: AgencyOption[];
   onChange: () => Promise<void> | void;
   onMessage: (m: string) => void;
   onError: (e: string) => void;
@@ -370,18 +386,20 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
   // come pax pianificato/servito — stessa regola applicata server-side in
   // loadGroupDetail per stop_summaries.
   const activeServices = services.filter((s) => s.status !== "cancelled");
-  const pax = summarizeBookingGroupPax({
-    expectedPax: group.expected_pax,
-    stopExpectedPax: stops.map((s) => s.expected_pax),
-    servicePax: activeServices.map((s) => Number(s.pax ?? 0)),
-  });
-  const statusSummary = computeBookingGroupStatusSummary({
+  // Andata e ritorno vanno calcolati SEPARATAMENTE contro expected_pax (mai
+  // sommati): un gruppo A/R pieno (38 andata + 38 ritorno) e' 38 pax gruppo,
+  // non 76 — vedi computeBookingGroupStatusSummaryByDirection (Obiettivo G).
+  const statusSummary = computeBookingGroupStatusSummaryByDirection({
     status: group.status,
     expectedPax: group.expected_pax,
-    stopExpectedPax: stops.map((s) => s.expected_pax),
-    servicePax: activeServices.map((s) => Number(s.pax ?? 0)),
+    arrivalStopExpectedPax: stops.filter((s) => s.direction === "arrival").map((s) => s.expected_pax),
+    departureStopExpectedPax: stops.filter((s) => s.direction === "departure").map((s) => s.expected_pax),
+    arrivalServicePax: activeServices.filter((s) => stops.find((st) => st.id === s.booking_group_stop_id)?.direction === "arrival").map((s) => Number(s.pax ?? 0)),
+    departureServicePax: activeServices.filter((s) => stops.find((st) => st.id === s.booking_group_stop_id)?.direction === "departure").map((s) => Number(s.pax ?? 0)),
     busReservationCount: bus_reservations.length,
   });
+  const pax = statusSummary.pax;
+  const { arrival: arrivalPax, departure: departurePax } = statusSummary.paxByDirection;
 
   const post = async (body: unknown): Promise<PostResult> => {
     const { ok, json } = await api("/api/ops/booking-groups", { method: "POST", body: JSON.stringify(body) });
@@ -417,9 +435,10 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
           <span><b>Telefono:</b> {group.contact_phone ?? "—"}</span>
           <span><b>Tipo:</b> {KIND_LABEL[group.kind] ?? group.kind}</span>
           <span><b>Hotel / struttura:</b> {hotels.find((h) => h.id === group.hotel_id)?.name ?? (group.hotel_id ? group.hotel_id : "—")}</span>
+          <span><b>Agenzia:</b> {agencies.find((a) => a.id === group.agency_id)?.name ?? (group.agency_id ? group.agency_id : "—")}</span>
         </div>
 
-        <GroupEditSection key={`edit-${group.id}-${group.updated_at}`} group={group} hotels={hotels} onSave={(patch) => post({ action: "update_group", id: group.id, ...patch })} />
+        <GroupEditSection key={`edit-${group.id}-${group.updated_at}`} group={group} hotels={hotels} agencies={agencies} onSave={(patch) => post({ action: "update_group", id: group.id, ...patch })} />
 
         {/* FASE A.5 §T — group.status "operational" è uno stato commerciale
             manuale (FASE 1), non certifica da solo che il gruppo sia
@@ -439,14 +458,16 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
         <div className={`rounded-lg border p-3 text-sm ${pax.overbooked ? "border-rose-300 bg-rose-50 text-rose-800" : "border-slate-200"}`}>
           <div className="font-semibold">Avanzamento pax</div>
           <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs md:grid-cols-3">
-            <span>{pax.expectedPax} previsti</span>
-            <span>{pax.plannedPax} pianificati su fermate</span>
-            <span>{Math.max(0, pax.unplannedPax)} da pianificare{pax.unplannedPax < 0 ? " (sforato)" : ""}</span>
-            <span>{pax.servicePax} creati come services</span>
-            <span>{Math.max(0, pax.remainingServicePax)} ancora da creare</span>
+            <span>{pax.expectedPax} previsti (totale gruppo)</span>
+            <span>Andata: {arrivalPax.servicePax}/{arrivalPax.expectedPax}{arrivalPax.overbooked ? <b className="text-rose-700"> sforata</b> : null}</span>
+            <span>Ritorno: {departurePax.servicePax}/{departurePax.expectedPax}{departurePax.overbooked ? <b className="text-rose-700"> sforato</b> : null}</span>
+            <span>{pax.plannedPax} pianificati su fermate (andata+ritorno)</span>
+            <span>{pax.servicePax} creati come services (andata+ritorno)</span>
             <span>stato suggerito: <b>{STATUS_LABEL[statusSummary.suggestedStatus] ?? statusSummary.suggestedStatus}</b></span>
           </div>
-          {pax.overbooked ? <p className="mt-1 font-semibold">Attenzione: overbooking — non corretto automaticamente.</p> : null}
+          {/* Obiettivo G: andata + ritorno pieni (es. 38 + 38) NON e' overbooking
+              — lo e' solo se una singola gamba supera da sola expected_pax. */}
+          {pax.overbooked ? <p className="mt-1 font-semibold">Attenzione: overbooking — {arrivalPax.overbooked ? "andata" : "ritorno"} supera i pax previsti del gruppo, non corretto automaticamente.</p> : null}
         </div>
 
         {/* Fermate */}
@@ -460,6 +481,7 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
           returnDate={group.return_date}
           busLines={busLines}
           preferExclusiveLine={group.kind === "bus_exclusive"}
+          groupContactPhone={group.contact_phone}
         />
 
         {/* Bus riservato */}
@@ -495,7 +517,7 @@ function GroupDetail({ detail, busLines, hotels, onChange, onMessage, onError, o
   );
 }
 
-function GroupEditSection({ group, hotels, onSave }: { group: BookingGroup; hotels: HotelOption[]; onSave: (patch: Record<string, string | number | null>) => Promise<PostResult> }) {
+function GroupEditSection({ group, hotels, agencies, onSave }: { group: BookingGroup; hotels: HotelOption[]; agencies: AgencyOption[]; onSave: (patch: Record<string, string | number | null>) => Promise<PostResult> }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState(group.name);
@@ -505,6 +527,7 @@ function GroupEditSection({ group, hotels, onSave }: { group: BookingGroup; hote
   const [contactName, setContactName] = useState(group.contact_name ?? "");
   const [contactPhone, setContactPhone] = useState(group.contact_phone ?? "");
   const [hotelId, setHotelId] = useState<string | null>(group.hotel_id ?? null);
+  const [agencyId, setAgencyId] = useState<string | null>(group.agency_id ?? null);
   const [notes, setNotes] = useState(group.notes ?? "");
 
   if (!open) {
@@ -531,6 +554,12 @@ function GroupEditSection({ group, hotels, onSave }: { group: BookingGroup; hote
         <div className="md:col-span-2">
           <HotelField hotels={hotels} hotelId={hotelId} onChange={setHotelId} />
         </div>
+        <label className="block text-xs font-medium text-slate-600 md:col-span-2">Agenzia
+          <select className="input-saas mt-1 w-full" value={agencyId ?? ""} onChange={(e) => setAgencyId(e.target.value || null)}>
+            <option value="">{agencies.length ? "Nessuna agenzia" : "Nessuna agenzia disponibile"}</option>
+            {agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
         <textarea rows={2} className="input-saas resize-none md:col-span-2" placeholder="Note" value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
       <button
@@ -546,6 +575,7 @@ function GroupEditSection({ group, hotels, onSave }: { group: BookingGroup; hote
             contact_name: contactName.trim() || null,
             contact_phone: contactPhone.trim() || null,
             hotel_id: hotelId,
+            agency_id: agencyId,
             notes: notes.trim() || null,
           });
           setBusy(false);
@@ -558,12 +588,12 @@ function GroupEditSection({ group, hotels, onSave }: { group: BookingGroup; hote
   );
 }
 
-function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, onRemovePassenger, arrivalDate, returnDate, busLines, preferExclusiveLine }: {
+function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, onRemovePassenger, arrivalDate, returnDate, busLines, preferExclusiveLine, groupContactPhone }: {
   stops: BookingGroupStop[];
   stopSummaries: BookingGroupStopPaxSummary[];
   services: Detail["services"];
-  onAddStop: (s: { city: string; pickup_point: string | null; expected_pax: number; direction: string; notes: string | null; create_catalog_stop?: boolean; bus_line_id?: string | null; pickup_time?: string | null }) => Promise<PostResult>;
-  onUpdateStop: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null }) => Promise<PostResult>;
+  onAddStop: (s: { city: string; pickup_point: string | null; expected_pax: number; direction: string; notes: string | null; create_catalog_stop?: boolean; bus_line_id?: string | null; pickup_time?: string | null; contact_name?: string | null; contact_phone?: string | null }) => Promise<PostResult>;
+  onUpdateStop: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null; contact_name?: string | null; contact_phone?: string | null }) => Promise<PostResult>;
   onDeleteStop: (id: string) => Promise<PostResult>;
   onCreateServices: (stopId: string, passengers: Array<{ customer_name: string; pax: number }>, serviceDate: string) => Promise<PostResult>;
   onRemovePassenger: (stopId: string, serviceId: string) => Promise<PostResult>;
@@ -571,12 +601,15 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   returnDate: string | null;
   busLines: BusLineOption[];
   preferExclusiveLine: boolean;
+  groupContactPhone: string | null;
 }) {
   const [city, setCity] = useState("");
   const [pickup, setPickup] = useState("");
   const [pickupTime, setPickupTime] = useState("");
   const [px, setPx] = useState("20");
   const [dir, setDir] = useState("arrival");
+  const [stopContactName, setStopContactName] = useState("");
+  const [stopContactPhone, setStopContactPhone] = useState("");
   const [persistCatalog, setPersistCatalog] = useState(true);
   const [busLineId, setBusLineId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -650,6 +683,10 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
             <div key={s.id} className={`rounded-lg border p-2 text-xs ${sum?.overbooked ? "border-rose-300 bg-rose-50" : "border-slate-200"}`}>
               <div className="font-semibold uppercase text-slate-700">{s.city}</div>
               <div className="text-slate-500">{s.pickup_point ?? "punto di carico da definire"} · {s.expected_pax} pax · {s.direction}{s.stop_id ? " · fermata catalogo" : ""}</div>
+              <div className="mt-0.5 text-slate-500">
+                {/* Fallback lettura (Obiettivo E): telefono fermata -> telefono capogruppo -> "non indicato". */}
+                <b>Referente fermata:</b> {s.contact_name ?? "—"} · <b>Tel:</b> {s.contact_phone ?? (groupContactPhone ? `${groupContactPhone} (capogruppo)` : "Telefono non indicato")}
+              </div>
               {sum ? (
                 <div className="mt-1 text-slate-600">
                   {sum.expectedPax} previsti · {sum.servicePax} in services · {Math.max(0, sum.remainingServicePax)} da inserire
@@ -712,6 +749,10 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
         </select>
         <input className="input-saas" type="time" value={pickupTime} onChange={(e) => setPickupTime(e.target.value)} />
       </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <input className="input-saas" placeholder="Referente fermata (facoltativo)" value={stopContactName} onChange={(e) => setStopContactName(e.target.value)} />
+        <input className="input-saas" placeholder="Telefono fermata (facoltativo)" value={stopContactPhone} onChange={(e) => setStopContactPhone(e.target.value)} />
+      </div>
       {canSuggestStops && (suggestionLoading || visibleStopSuggestions.length > 0) ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
           <div className="mb-1 text-[11px] font-semibold text-slate-500">
@@ -758,9 +799,11 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
             create_catalog_stop: persistCatalog,
             bus_line_id: persistCatalog ? effectiveBusLineId : null,
             pickup_time: pickupTime || null,
+            contact_name: stopContactName.trim() || null,
+            contact_phone: stopContactPhone.trim() || null,
           });
           setBusy(false);
-          if (result) { setCity(""); setPickup(""); setPickupTime(""); setPx("20"); }
+          if (result) { setCity(""); setPickup(""); setPickupTime(""); setPx("20"); setStopContactName(""); setStopContactPhone(""); }
         }}
         className="btn-secondary mt-2 px-3 py-1.5 text-xs disabled:opacity-50">{busy ? "Aggiungo…" : "+ Aggiungi fermata"}</button>
     </div>
@@ -827,7 +870,7 @@ function StopCatalogLinker({ stop, busLines, defaultBusLineId, onLink }: {
 
 function EditableStopRow({ stop, onSave }: {
   stop: BookingGroupStop;
-  onSave: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null }) => Promise<PostResult>;
+  onSave: (id: string, patch: { city?: string; pickup_point?: string | null; expected_pax?: number; direction?: string; pickup_time?: string | null; contact_name?: string | null; contact_phone?: string | null }) => Promise<PostResult>;
 }) {
   const [open, setOpen] = useState(false);
   const [city, setCity] = useState(stop.city);
@@ -835,6 +878,8 @@ function EditableStopRow({ stop, onSave }: {
   const [pax, setPax] = useState(String(stop.expected_pax));
   const [direction, setDirection] = useState(stop.direction);
   const [pickupTime, setPickupTime] = useState(stop.catalog_pickup_time?.slice(0, 5) ?? "");
+  const [contactName, setContactName] = useState(stop.contact_name ?? "");
+  const [contactPhone, setContactPhone] = useState(stop.contact_phone ?? "");
   const [busy, setBusy] = useState(false);
   const canSave = city.trim().length > 0 && Number(pax) > 0;
 
@@ -849,6 +894,8 @@ function EditableStopRow({ stop, onSave }: {
           setPax(String(stop.expected_pax));
           setDirection(stop.direction);
           setPickupTime(stop.catalog_pickup_time?.slice(0, 5) ?? "");
+          setContactName(stop.contact_name ?? "");
+          setContactPhone(stop.contact_phone ?? "");
           setOpen(true);
         }}
       >
@@ -869,6 +916,10 @@ function EditableStopRow({ stop, onSave }: {
         </select>
         <input className="input-saas text-xs" type="time" value={pickupTime} onChange={(e) => setPickupTime(e.target.value)} />
       </div>
+      <div className="mt-2 grid gap-2 md:grid-cols-2">
+        <input className="input-saas text-xs" placeholder="Referente fermata (facoltativo)" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+        <input className="input-saas text-xs" placeholder="Telefono fermata (facoltativo)" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} />
+      </div>
       <div className="mt-2 flex flex-wrap gap-2">
         <button
           type="button"
@@ -882,6 +933,8 @@ function EditableStopRow({ stop, onSave }: {
               expected_pax: Number(pax),
               direction,
               pickup_time: pickupTime || null,
+              contact_name: contactName.trim() || null,
+              contact_phone: contactPhone.trim() || null,
             });
             setBusy(false);
             if (result) setOpen(false);

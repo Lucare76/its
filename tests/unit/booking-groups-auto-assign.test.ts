@@ -181,26 +181,46 @@ describe("autoAssignBookingGroup — regressione GIACOMONI (solo fermate andata,
     expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
   });
 
-  it("2 bus esclusivi ugualmente compatibili → bloccato, mai una scelta a caso, elenca le label", async () => {
-    const { admin } = makeAdmin({
+  it("2 bus esclusivi ugualmente compatibili e liberi → sceglie automaticamente il primo in ordine deterministico (Obiettivo A), nessun blocco", async () => {
+    const { admin, writes } = makeAdmin({
       booking_groups: [GROUP],
       booking_group_stops: ARRIVAL_ONLY_STOPS,
       booking_group_bus_reservations: [],
       tenant_bus_units: [
-        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
-        { id: BUS_B, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 4", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true, sort_order: 3 },
+        { id: BUS_B, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 4", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true, sort_order: 4 },
       ],
       tenant_bus_lines: [EXCLUSIVE_LINE],
     });
 
     const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
 
-    expect(result.reservations_created).toEqual([]);
-    expect(result.blocked).toHaveLength(1);
-    expect(result.blocked[0].service_date).toBe("2026-09-06");
-    expect(result.blocked[0].reason).toMatch(/GRUPPO EX 3/);
-    expect(result.blocked[0].reason).toMatch(/GRUPPO EX 4/);
-    expect(result.blocked[0].reason).toMatch(/conferma manuale/i);
+    expect(result.blocked).toEqual([]);
+    expect(result.reservations_created).toEqual([{ service_date: "2026-09-06", bus_unit_id: BUS_A, bus_label: "GRUPPO EX 3" }]);
+    const reservations = writes.upserts.filter((w) => w.table === "booking_group_bus_reservations");
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0].row.bus_unit_id).toBe(BUS_A);
+    expect(reservations[0].row.exclusive).toBe(true);
+  });
+
+  it("5 bus esclusivi ugualmente compatibili (scenario GIACOMONI) → sceglie comunque un solo bus, deterministico per sort_order", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: ARRIVAL_ONLY_STOPS,
+      booking_group_bus_reservations: [],
+      tenant_bus_units: [1, 2, 3, 4, 5].map((n) => ({
+        id: `bus-${n}`, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: `GRUPPO EX ${n}`,
+        capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true, sort_order: n,
+      })),
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
+
+    expect(result.blocked).toEqual([]);
+    expect(result.reservations_created).toHaveLength(1);
+    expect(result.reservations_created[0].bus_unit_id).toBe("bus-1");
+    expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(1);
   });
 
   it("reservation già esistente per quella data → non viene ricreata, resta autorevole quella esistente", async () => {

@@ -86,6 +86,10 @@ export interface BookingGroupStop {
   direction: BookingGroupDirection;
   sort_order: number;
   notes: string | null;
+  /** Referente/telefono della SINGOLA fermata (migration 0269). Fallback in
+   *  lettura: telefono fermata -> contact_phone del gruppo -> "non indicato". */
+  contact_name: string | null;
+  contact_phone: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +151,51 @@ export function summarizeBookingGroupPax(input: {
   };
 }
 
+export interface BookingGroupPaxByDirection {
+  expectedPax: number;
+  /** Quadro pax SOLO andata: stopExpectedPax/servicePax con direction='arrival'. */
+  arrival: BookingGroupPaxSummary;
+  /** Quadro pax SOLO ritorno: stopExpectedPax/servicePax con direction='departure'. */
+  departure: BookingGroupPaxSummary;
+  /** true SOLO se andata OPPURE ritorno superano da soli expectedPax — MAI
+   *  se semplicemente arrival+departure > expectedPax (un gruppo A/R legittimo
+   *  ha entrambe le gambe piene: 38 andata + 38 ritorno = 38 pax gruppo, non 76). */
+  overbooked: boolean;
+}
+
+/**
+ * Come `summarizeBookingGroupPax`, ma calcola andata e ritorno SEPARATAMENTE
+ * contro lo stesso expectedPax, invece di sommarli. Root cause del bug
+ * overbooking "38 previsti / 58 creati" (prompt FIX FINALE BUS EXCLUSIVE
+ * A/R, Obiettivo G): il vecchio calcolo passava stopExpectedPax/servicePax di
+ * ENTRAMBE le direzioni in un unico array, quindi un gruppo A/R pieno
+ * (38 + 38) risultava sempre "overbooked" anche se corretto.
+ */
+export function summarizeBookingGroupPaxByDirection(input: {
+  expectedPax: number;
+  arrivalStopExpectedPax: number[];
+  departureStopExpectedPax: number[];
+  arrivalServicePax: number[];
+  departureServicePax: number[];
+}): BookingGroupPaxByDirection {
+  const arrival = summarizeBookingGroupPax({
+    expectedPax: input.expectedPax,
+    stopExpectedPax: input.arrivalStopExpectedPax,
+    servicePax: input.arrivalServicePax,
+  });
+  const departure = summarizeBookingGroupPax({
+    expectedPax: input.expectedPax,
+    stopExpectedPax: input.departureStopExpectedPax,
+    servicePax: input.departureServicePax,
+  });
+  return {
+    expectedPax: arrival.expectedPax,
+    arrival,
+    departure,
+    overbooked: arrival.overbooked || departure.overbooked,
+  };
+}
+
 export interface BookingGroupStatusSummary {
   status: BookingGroupStatus;
   hasStops: boolean;
@@ -187,6 +236,44 @@ export function computeBookingGroupStatusSummary(input: {
   }
 
   return { status: input.status, hasStops, hasServices, hasBusReservation, pax, suggestedStatus };
+}
+
+export interface BookingGroupStatusSummaryByDirection extends BookingGroupStatusSummary {
+  paxByDirection: BookingGroupPaxByDirection;
+}
+
+/**
+ * Variante di `computeBookingGroupStatusSummary` che riceve fermate/services
+ * già separati per direzione (andata/ritorno) e calcola `pax.overbooked`
+ * correttamente (vedi `summarizeBookingGroupPaxByDirection`). `pax.plannedPax`
+ * / `pax.servicePax` restano il TOTALE informativo delle due gambe (utile per
+ * la UI "creati come services"), ma non guidano più `overbooked`: quello
+ * dipende solo da `paxByDirection.overbooked`.
+ */
+export function computeBookingGroupStatusSummaryByDirection(input: {
+  status: BookingGroupStatus;
+  expectedPax: number;
+  arrivalStopExpectedPax: number[];
+  departureStopExpectedPax: number[];
+  arrivalServicePax: number[];
+  departureServicePax: number[];
+  busReservationCount: number;
+}): BookingGroupStatusSummaryByDirection {
+  const paxByDirection = summarizeBookingGroupPaxByDirection(input);
+  const stopExpectedPax = [...input.arrivalStopExpectedPax, ...input.departureStopExpectedPax];
+  const servicePax = [...input.arrivalServicePax, ...input.departureServicePax];
+  const base = computeBookingGroupStatusSummary({
+    status: input.status,
+    expectedPax: input.expectedPax,
+    stopExpectedPax,
+    servicePax,
+    busReservationCount: input.busReservationCount,
+  });
+  return {
+    ...base,
+    pax: { ...base.pax, overbooked: paxByDirection.overbooked },
+    paxByDirection,
+  };
 }
 
 // ─── FASE 2.5 — operativizzazione: codici stabili + readiness helper ────────
