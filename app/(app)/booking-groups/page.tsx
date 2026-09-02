@@ -146,11 +146,17 @@ export default function BookingGroupsPage() {
     if (selectedId) await loadDetail(selectedId);
   }, [loadList, loadDetail, selectedId]);
 
+  // Con una ricerca testuale attiva (query non vuota) i risultati restituiti
+  // dall'API vanno sempre mostrati, indipendentemente dal tab di stato:
+  // altrimenti un gruppo diventato "operational" (es. GIACOMONI dopo
+  // l'assegnazione bus) risulta introvabile cercandolo per nome col tab
+  // "Aperti" attivo, pur essendo presente nel payload API.
   const visibleGroups = useMemo(() => groups.filter((g) => {
+    if (query.trim()) return true;
     if (statusFilter === "all") return true;
     if (statusFilter === "open") return g.status !== "cancelled" && g.status !== "operational";
     return g.status === statusFilter;
-  }), [groups, statusFilter]);
+  }), [groups, statusFilter, query]);
 
   return (
     <div className="space-y-4">
