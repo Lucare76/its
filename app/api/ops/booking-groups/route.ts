@@ -25,6 +25,7 @@ import {
   resolveCanonicalBookingGroupStop,
   addBookingGroupPassengers,
   removeGroupPassenger,
+  updateGroupPassenger,
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
@@ -180,6 +181,21 @@ const removeGroupPassengerSchema = z.object({
   service_id: z.string().uuid(),
 });
 
+// Obiettivo D (prompt "FIX MIRATO — GIACOMONI"): correggere un nominativo
+// sbagliato senza cancellare/ricreare. Tutti i campi opzionali cosi' un
+// singolo campo (es. solo il nome) puo' essere corretto senza dover
+// ripassare pax/telefono/note invariati.
+const updateGroupPassengerSchema = z.object({
+  action: z.literal("update_group_passenger"),
+  booking_group_id: z.string().uuid(),
+  booking_group_stop_id: z.string().uuid(),
+  service_id: z.string().uuid(),
+  customer_name: z.string().trim().min(1).max(200).optional(),
+  pax: paxInt.optional(),
+  phone: z.string().trim().max(60).nullable().optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+});
+
 const previewOperationalizeSchema = z.object({
   action: z.literal("preview_operationalize_group"),
   booking_group_id: z.string().uuid(),
@@ -220,6 +236,7 @@ const bodySchema = z.discriminatedUnion("action", [
   createGroupServicesBatchSchema,
   unlinkGroupServiceSchema,
   removeGroupPassengerSchema,
+  updateGroupPassengerSchema,
   previewOperationalizeSchema,
   operationalizeSchema,
   autoAssignSchema,
@@ -277,6 +294,47 @@ export async function GET(request: NextRequest) {
       .order("name");
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, hotels: data ?? [] });
+  }
+
+  // Obiettivo A/B/C/D (prompt "ALLINEARE TUTTE LE VISTE"): metadata leggera
+  // di gruppo per viste che NON passano da /api/ops/search (arrivals/
+  // departures leggono da /api/ops/tenant-data) — stessa identica forma
+  // (BookingGroupMeta) usata da /inbox e /ricerca, cosi' nome/telefono/pax
+  // reali del gruppo sono sempre gli stessi ovunque, mai una seconda fonte.
+  const metaIdsParam = url.searchParams.get("meta_ids");
+  if (metaIdsParam != null) {
+    const ids = Array.from(new Set(metaIdsParam.split(",").map((s) => s.trim()).filter(Boolean)));
+    if (ids.length === 0) return NextResponse.json({ ok: true, groups: [] });
+    const { data, error } = await admin
+      .from("booking_groups")
+      .select("id,name,kind,service_date,return_date,hotel_id,notes,contact_name,contact_phone,expected_pax")
+      .eq("tenant_id", tenantId)
+      .in("id", ids);
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    const rows = (data ?? []) as Array<{
+      id: string; name: string; kind: string | null; service_date: string | null; return_date: string | null;
+      hotel_id: string | null; notes: string | null; contact_name: string | null; contact_phone: string | null; expected_pax: number | null;
+    }>;
+    const hotelIds = Array.from(new Set(rows.map((g) => g.hotel_id).filter((v): v is string => Boolean(v))));
+    const hotelNameById = new Map<string, string>();
+    if (hotelIds.length) {
+      const { data: hotelRows } = await admin.from("hotels").select("id,name").eq("tenant_id", tenantId).in("id", hotelIds);
+      for (const hotel of (hotelRows ?? []) as Array<{ id: string; name: string }>) hotelNameById.set(hotel.id, hotel.name);
+    }
+    const groups = rows.map((g) => ({
+      id: g.id,
+      name: g.name,
+      kind: g.kind,
+      service_date: g.service_date,
+      return_date: g.return_date,
+      hotel_id: g.hotel_id,
+      hotel_name: g.hotel_id ? hotelNameById.get(g.hotel_id) ?? null : null,
+      notes: g.notes,
+      contact_name: g.contact_name,
+      contact_phone: g.contact_phone,
+      expected_pax: g.expected_pax,
+    }));
+    return NextResponse.json({ ok: true, groups });
   }
 
   if (url.searchParams.get("catalog") === "agencies") {
@@ -607,6 +665,22 @@ export async function POST(request: NextRequest) {
     }));
   }
 
+  // ── update_group_passenger (WRITE) — Obiettivo D ───────────────────────
+  // Corregge un nominativo/nucleo (nome/pax/telefono/note) senza cancellare
+  // e ricreare. Validazioni (tenant/gruppo/fermata, draft vs operativo)
+  // dentro il service module.
+  if (body.action === "update_group_passenger") {
+    return toResponse(await updateGroupPassenger(admin, actor, {
+      bookingGroupId: body.booking_group_id,
+      bookingGroupStopId: body.booking_group_stop_id,
+      serviceId: body.service_id,
+      customer_name: body.customer_name,
+      pax: body.pax,
+      phone: body.phone,
+      notes: body.notes,
+    }));
+  }
+
   // ── preview_operationalize_group (READ, nessuna scrittura) ────────────
   if (body.action === "preview_operationalize_group") {
     return toResponse(await previewOperationalizeBookingGroup(admin, tenantId, body.booking_group_id));
@@ -622,8 +696,9 @@ export async function POST(request: NextRequest) {
 
   // ── auto_assign_group (WRITE) — Obiettivo A "zero click" ──────────────
   // Un solo click per la UI umana al posto di "riserva bus" +
-  // "operativizza" separati: sceglie un bus esclusivo libero SOLO se non
-  // ambiguo (un solo candidato compatibile), riserva e operativizza.
+  // "operativizza" separati: sceglie un bus esclusivo libero (deterministico
+  // anche con piu' candidati ugualmente liberi, vedi FIX FINALE bus_exclusive
+  // A/R Obiettivo A), riserva e operativizza.
   // Mai chiamata da Mario/MCP: la conversazione guidata di Mario resta
   // quella esistente (propone il bus, chiede conferma), invariata.
   if (body.action === "auto_assign_group") {

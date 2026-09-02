@@ -800,6 +800,105 @@ describe("POST remove_group_passenger — elimina un nominativo dalla fermata", 
   });
 });
 
+describe("POST update_group_passenger — corregge un nominativo senza cancellare/ricreare (Obiettivo D, prompt FIX MIRATO)", () => {
+  const SVC = "77777777-7777-4777-8777-777777777777";
+  const OTHER_GROUP = "99999999-9999-4999-8999-999999999999";
+  const OTHER_STOP = "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa";
+
+  it("1. draft: aggiorna nome/pax/telefono/note, nessun delete/insert, booking_group_id e booking_group_stop_id invariati", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review", customer_name: "Bernardi Luisa", pax: 1, phone: null, notes: null }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, customer_name: "Bernardi Luigia", pax: 2, phone: "333123456", notes: "Sedia a rotelle" }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json).toMatchObject({ ok: true, updated: true });
+    expect(writes.inserts).toHaveLength(0);
+    expect(writes.deletes).toHaveLength(0);
+    const update = writes.updates.find((w) => w.table === "services" && w.filters.id === SVC);
+    expect(update?.payload).toMatchObject({ customer_name: "Bernardi Luigia", pax: 2, phone: "333123456", notes: "Sedia a rotelle" });
+    expect(update?.payload.booking_group_id).toBeUndefined();
+    expect(update?.payload.booking_group_stop_id).toBeUndefined();
+  });
+
+  it("2. draft: solo nome corretto (pax/telefono/note omessi) -> patch mirato, nessun campo azzerato", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review", customer_name: "Rossi Mario", pax: 3, phone: "333", notes: "vecchia nota" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, customer_name: "Rossi Marco" }));
+    expect(res.status).toBe(200);
+    const update = writes.updates.find((w) => w.table === "services" && w.filters.id === SVC);
+    expect(update?.payload.customer_name).toBe("Rossi Marco");
+    expect(update?.payload.pax).toBeUndefined();
+    expect(update?.payload.phone).toBeUndefined();
+    expect(update?.payload.notes).toBeUndefined();
+  });
+
+  it("3. operativo (is_draft=false): modifica pax -> 422, nessuna scrittura", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: false, status: "new", customer_name: "Verdi Anna", pax: 2, phone: null, notes: null }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, pax: 5 }));
+    expect(res.status).toBe(422);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("4. operativo (is_draft=false): nome/telefono/note restano modificabili", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: false, status: "new", customer_name: "Verdi Anna", pax: 2, phone: null, notes: null }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, customer_name: "Verdi Anna Maria", phone: "333999" }));
+    expect(res.status).toBe(200);
+    const update = writes.updates.find((w) => w.table === "services" && w.filters.id === SVC);
+    expect(update?.payload).toMatchObject({ customer_name: "Verdi Anna Maria", phone: "333999" });
+    expect(update?.payload.pax).toBeUndefined();
+  });
+
+  it("5. service di un altro gruppo -> 404, nessuna scrittura", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: OTHER_GROUP, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, customer_name: "X" }));
+    expect(res.status).toBe(404);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("6. service di un'altra fermata dello stesso gruppo -> 404, nessuna scrittura", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: OTHER_STOP, is_draft: true, status: "needs_review" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, customer_name: "X" }));
+    expect(res.status).toBe(404);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("7. passeggero cancellato -> 422, nessuna scrittura", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "cancelled" }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "update_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC, customer_name: "X" }));
+    expect(res.status).toBe(422);
+    expect(writes.updates).toHaveLength(0);
+  });
+
+  it("8. delete continua a funzionare invariato dopo l'introduzione di update", async () => {
+    const { admin, writes } = makeAdmin({
+      services: [{ id: SVC, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, is_draft: true, status: "needs_review", customer_name: "Bernardi Luisa", pax: 1 }],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "remove_group_passenger", booking_group_id: GROUP_ID, booking_group_stop_id: STOP_ID, service_id: SVC }));
+    expect(res.status).toBe(200);
+    expect(writes.deletes).toContainEqual({ table: "services", filters: { tenant_id: TENANT, id: SVC } });
+  });
+});
+
 describe("GET detail — stop_summaries per fermata (FASE 2)", () => {
   it("G: Tivoli 20 previsti con 16 pax in services → remaining 4; Guidonia 20 con 0 → remaining 20", async () => {
     const { admin } = makeAdmin({

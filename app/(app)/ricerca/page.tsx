@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
+import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, resolveGroupTotalPax, resolveGroupReturnStatus, type BookingGroupMeta } from "@/lib/booking-group-card";
 
 type SearchResult = {
   id: string;
@@ -76,7 +76,6 @@ function BookingGroupCard({
   onGenerateReturn: () => void;
 }) {
   const groupName = meta?.name ?? services[0]?.booking_group_name ?? "Gruppo";
-  const totalPax = services.reduce((sum, s) => sum + (s.pax || 0), 0);
   const kindLabel = meta?.kind ? GROUP_KIND_LABEL[meta.kind] ?? meta.kind : null;
   const arrivalStops = services
     .filter((s) => s.direction === "arrival")
@@ -84,9 +83,13 @@ function BookingGroupCard({
   const departureStops = services
     .filter((s) => s.direction === "departure")
     .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
-  // Obiettivo C: mai inventare fermate di ritorno — se return_date c'è ma
-  // nessun service departure esiste ancora, si mostra solo un warning.
-  const returnMissing = Boolean(meta?.return_date) && departureStops.length === 0;
+  // Obiettivo D: mai sommare andata+ritorno come pax gruppo.
+  const totalPax = resolveGroupTotalPax(meta, arrivalStops.map((s) => s.pax || 0), departureStops.map((s) => s.pax || 0));
+  // Obiettivo B/C (prompt "FIX MIRATO — GIACOMONI"): mai inventare fermate di
+  // ritorno — mostra sempre il warning/CTA se il ritorno è mancante O
+  // PARZIALE (root cause del bug MAROTTA: il vecchio gate spariva appena UNA
+  // fermata esisteva).
+  const returnStatus = resolveGroupReturnStatus(meta, arrivalStops.map((s) => s.pax || 0), departureStops.map((s) => s.pax || 0));
   const anyMatchedStop = services.some((s) => s.matched_query);
 
   return (
@@ -159,14 +162,16 @@ function BookingGroupCard({
             ) : (
               <p className="text-slate-400">Da completare</p>
             )}
-            {returnMissing && (
+            {returnStatus.incomplete && (
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <p className="text-amber-700">
-                  Ritorno previsto il {fmtDate(meta!.return_date)}, fermate ritorno non ancora inserite
+                  {returnStatus.missing
+                    ? <>Ritorno previsto il {fmtDate(meta!.return_date)}, fermate ritorno non ancora inserite</>
+                    : <>Ritorno incompleto: {Math.max(0, returnStatus.arrivalPax - returnStatus.departurePax)} pax mancanti ({returnStatus.departurePax}/{returnStatus.arrivalPax})</>}
                 </p>
                 {meta?.kind === "bus_exclusive" && (
                   <button type="button" onClick={onGenerateReturn} className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100">
-                    Genera ritorno da andata
+                    {returnStatus.missing ? "Genera ritorno da andata" : "Completa fermate mancanti"}
                   </button>
                 )}
               </div>

@@ -337,7 +337,7 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
       .order("service_date"),
     admin
       .from("services")
-      .select("id, pax, direction, date, status, is_draft, customer_name, booking_group_stop_id, bus_city_origin, meeting_point")
+      .select("id, pax, direction, date, status, is_draft, customer_name, booking_group_stop_id, bus_city_origin, meeting_point, phone, notes")
       .eq("tenant_id", tenantId)
       .eq("booking_group_id", groupId),
   ]);
@@ -371,6 +371,8 @@ export async function loadGroupDetail(admin: SupabaseClient, tenantId: string, g
     booking_group_stop_id: string | null;
     bus_city_origin: string | null;
     meeting_point: string | null;
+    phone: string | null;
+    notes: string | null;
   }>;
 
   // Un service 'cancelled' resta collegato al gruppo/fermata (audit/storico)
@@ -1320,10 +1322,6 @@ export async function generateReturnStopsFromArrival(
   const arrivalStops = stops.filter((s) => s.direction === "arrival");
   const departureStops = stops.filter((s) => s.direction === "departure");
 
-  // Idempotente: fermate ritorno già presenti -> no-op, mai un duplicato.
-  if (departureStops.length > 0) {
-    return ok({ created_stops: 0, created_services: 0, message: "Fermate ritorno già esistenti: nessuna azione." });
-  }
   if (arrivalStops.length === 0) {
     return err(422, "Nessuna fermata andata da cui generare il ritorno.");
   }
@@ -1353,24 +1351,40 @@ export async function generateReturnStopsFromArrival(
   // dell'ordine di inserimento andata.
   const reversedArrivalStops = [...arrivalStops].reverse();
 
+  // Obiettivo E (prompt "ALLINEARE TUTTE LE VISTE"): idempotenza PER FERMATA,
+  // non più per l'intero ritorno — un ritorno parziale (es. mancava solo
+  // MAROTTA per un errore in un run precedente) deve poter essere completato
+  // con SOLO la fermata mancante, mai un no-op totale che lascia la card
+  // gruppo bloccata a 20/38 pax, e mai un duplicato delle fermate già presenti.
+  const departureStopKey = (city: string, pickup: string | null) => `${normalizeCityKey(city)}|${normalizeCityKey(pickup)}`;
+  const existingDepartureByKey = new Map(departureStops.map((s) => [departureStopKey(s.city, s.pickup_point), s]));
+
   let createdStops = 0;
   let createdServices = 0;
+  let reusedStops = 0;
   for (const stop of reversedArrivalStops) {
-    const { data: newStop, error: stopError } = await admin
-      .from("booking_group_stops")
-      .insert({
-        tenant_id: tenantId,
-        booking_group_id: bookingGroupId,
-        city: stop.city,
-        pickup_point: stop.pickup_point,
-        direction: "departure",
-        expected_pax: stop.expected_pax,
-        notes: stop.notes,
-      })
-      .select("id")
-      .single();
-    if (stopError || !newStop?.id) continue;
-    createdStops++;
+    const key = departureStopKey(stop.city, stop.pickup_point);
+    let targetStopId = existingDepartureByKey.get(key)?.id;
+    if (!targetStopId) {
+      const { data: newStop, error: stopError } = await admin
+        .from("booking_group_stops")
+        .insert({
+          tenant_id: tenantId,
+          booking_group_id: bookingGroupId,
+          city: stop.city,
+          pickup_point: stop.pickup_point,
+          direction: "departure",
+          expected_pax: stop.expected_pax,
+          notes: stop.notes,
+        })
+        .select("id")
+        .single();
+      if (stopError || !newStop?.id) continue;
+      targetStopId = newStop.id as string;
+      createdStops++;
+    } else {
+      reusedStops++;
+    }
 
     const passengers: PassengerRow[] = (servicesByStopId.get(stop.id) ?? []).map((svc) => ({
       customer_name: svc.customer_name,
@@ -1381,13 +1395,20 @@ export async function generateReturnStopsFromArrival(
     }));
     if (passengers.length === 0) continue;
 
+    // addBookingGroupPassengers e' gia' idempotente per nominativo (§3): su
+    // una fermata di ritorno gia' esistente e completa non crea nulla di
+    // nuovo, su una fermata riusata ma senza services li completa.
     const addResult = await addBookingGroupPassengers(admin, actor, {
       bookingGroupId,
-      bookingGroupStopId: newStop.id as string,
+      bookingGroupStopId: targetStopId,
       passengers,
       serviceDate: g.return_date,
     });
     if (addResult.ok) createdServices += addResult.data.created_count;
+  }
+
+  if (createdStops === 0 && createdServices === 0 && reusedStops > 0) {
+    return ok({ created_stops: 0, created_services: 0, message: "Fermate ritorno già esistenti: nessuna azione." });
   }
 
   auditLog({
@@ -1495,6 +1516,88 @@ export async function removeGroupPassenger(
     details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, customer_name: row.customer_name, pax: row.pax },
   });
   return ok({ removed: true, mode: "cancelled", serviceId: input.serviceId });
+}
+
+// ─── update_group_passenger (Obiettivo D, prompt "FIX MIRATO — GIACOMONI") ─
+// Corregge un nominativo/nucleo sbagliato SENZA cancellare e ricreare (mai un
+// nuovo service, mai un delete). Per un service draft di gruppo consente
+// customer_name/pax/phone/notes; per un service GIA' operativo (is_draft
+// false) resta conservativo — mai pax/fermata (romperebbe capienza bus/
+// allocazione gia' fatta), solo customer_name/phone/notes.
+
+export type UpdateGroupPassengerInput = {
+  bookingGroupId: string;
+  bookingGroupStopId: string;
+  serviceId: string;
+  customer_name?: string;
+  pax?: number;
+  phone?: string | null;
+  notes?: string | null;
+};
+
+export type UpdateGroupPassengerResult = {
+  updated: boolean;
+  serviceId: string;
+};
+
+export async function updateGroupPassenger(
+  admin: SupabaseClient,
+  actor: BgActor,
+  input: UpdateGroupPassengerInput,
+): Promise<BgResult<UpdateGroupPassengerResult>> {
+  const { tenantId, userId, role } = actor;
+
+  const { data: svc } = await admin
+    .from("services")
+    .select("id, booking_group_id, booking_group_stop_id, is_draft, status, customer_name, pax")
+    .eq("tenant_id", tenantId)
+    .eq("id", input.serviceId)
+    .maybeSingle();
+  if (!svc) return err(404, "Passeggero non trovato.");
+  const row = svc as {
+    id: string; booking_group_id: string | null; booking_group_stop_id: string | null;
+    is_draft: boolean | null; status: string | null; customer_name: string | null; pax: number | null;
+  };
+  if (row.booking_group_id !== input.bookingGroupId) {
+    return err(404, "Il passeggero non appartiene a questo gruppo.");
+  }
+  if (row.booking_group_stop_id !== input.bookingGroupStopId) {
+    return err(404, "Il passeggero non appartiene a questa fermata.");
+  }
+  if (row.status === "cancelled") {
+    return err(422, "Passeggero annullato: nessuna modifica possibile.");
+  }
+
+  const isDraft = row.is_draft === true;
+  if (!isDraft && input.pax != null && input.pax !== row.pax) {
+    return err(422, "Il nominativo è già operativo: il numero pax non è modificabile da qui (romperebbe capienza/allocazione bus già fatta).");
+  }
+
+  const patch = compact({
+    customer_name: input.customer_name?.trim() || undefined,
+    pax: isDraft ? input.pax : undefined,
+    phone: input.phone !== undefined ? (input.phone ?? "").trim() : undefined,
+    notes: input.notes !== undefined ? (input.notes ?? "").trim() : undefined,
+    updated_at: new Date().toISOString(),
+  });
+  if (Object.keys(patch).length <= 1) {
+    return err(400, "Nessun campo da aggiornare.");
+  }
+
+  const { error } = await admin
+    .from("services")
+    .update(patch)
+    .eq("tenant_id", tenantId)
+    .eq("id", input.serviceId);
+  if (error) return err(500, error.message);
+
+  auditLog({
+    event: "booking_group_passenger_updated",
+    tenantId, userId, role,
+    serviceId: input.serviceId, outcome: "updated",
+    details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, fields: Object.keys(patch).filter((k) => k !== "updated_at") },
+  });
+  return ok({ updated: true, serviceId: input.serviceId });
 }
 
 // ─── reserve bus (upsert_bus_reservation) ────────────────────────────────

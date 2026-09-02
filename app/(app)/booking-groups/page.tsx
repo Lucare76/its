@@ -17,7 +17,7 @@ type Detail = {
   group: BookingGroup;
   stops: BookingGroupStop[];
   bus_reservations: BookingGroupBusReservation[];
-  services: Array<{ id: string; pax: number | null; customer_name: string | null; status: string | null; is_draft: boolean | null; booking_group_stop_id: string | null }>;
+  services: Array<{ id: string; pax: number | null; customer_name: string | null; status: string | null; is_draft: boolean | null; booking_group_stop_id: string | null; phone: string | null; notes: string | null }>;
   summary: ReturnType<typeof computeBookingGroupStatusSummaryByDirection>;
   stop_summaries: BookingGroupStopPaxSummary[];
 };
@@ -462,12 +462,23 @@ function GroupDetail({ detail, busLines, hotels, agencies, onChange, onMessage, 
             <span>Andata: {arrivalPax.servicePax}/{arrivalPax.expectedPax}{arrivalPax.overbooked ? <b className="text-rose-700"> sforata</b> : null}</span>
             <span>Ritorno: {departurePax.servicePax}/{departurePax.expectedPax}{departurePax.overbooked ? <b className="text-rose-700"> sforato</b> : null}</span>
             <span>{pax.plannedPax} pianificati su fermate (andata+ritorno)</span>
-            <span>{pax.servicePax} creati come services (andata+ritorno)</span>
+            {/* Obiettivo C (prompt "FIX MIRATO — GIACOMONI"): mai chiamare
+                questo numero "pax gruppo" — sono TRATTE (andata+ritorno
+                sommate), un concetto diverso da expected_pax. */}
+            <span>{pax.servicePax} tratte create come services (andata+ritorno)</span>
             <span>stato suggerito: <b>{STATUS_LABEL[statusSummary.suggestedStatus] ?? statusSummary.suggestedStatus}</b></span>
           </div>
           {/* Obiettivo G: andata + ritorno pieni (es. 38 + 38) NON e' overbooking
               — lo e' solo se una singola gamba supera da sola expected_pax. */}
           {pax.overbooked ? <p className="mt-1 font-semibold">Attenzione: overbooking — {arrivalPax.overbooked ? "andata" : "ritorno"} supera i pax previsti del gruppo, non corretto automaticamente.</p> : null}
+          {!pax.overbooked && group.return_date && departurePax.servicePax < arrivalPax.servicePax ? (
+            <p className="mt-1 font-semibold text-amber-700">
+              Ritorno incompleto: mancano {arrivalPax.servicePax - departurePax.servicePax} pax
+              {stops.filter((s) => s.direction === "arrival").length - stops.filter((s) => s.direction === "departure").length > 0
+                ? ` / ${stops.filter((s) => s.direction === "arrival").length - stops.filter((s) => s.direction === "departure").length} fermata/e`
+                : ""}.
+            </p>
+          ) : null}
         </div>
 
         {/* Fermate */}
@@ -477,6 +488,7 @@ function GroupDetail({ detail, busLines, hotels, agencies, onChange, onMessage, 
           onDeleteStop={(id) => post({ action: "delete_stop", id })}
           onCreateServices={(stopId, passengers, serviceDate) => post({ action: "create_group_services_batch", booking_group_id: group.id, booking_group_stop_id: stopId, service_date: serviceDate, passengers })}
           onRemovePassenger={(stopId, serviceId) => post({ action: "remove_group_passenger", booking_group_id: group.id, booking_group_stop_id: stopId, service_id: serviceId })}
+          onUpdatePassenger={(stopId, serviceId, patch) => post({ action: "update_group_passenger", booking_group_id: group.id, booking_group_stop_id: stopId, service_id: serviceId, ...patch })}
           arrivalDate={group.service_date}
           returnDate={group.return_date}
           busLines={busLines}
@@ -588,7 +600,7 @@ function GroupEditSection({ group, hotels, agencies, onSave }: { group: BookingG
   );
 }
 
-function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, onRemovePassenger, arrivalDate, returnDate, busLines, preferExclusiveLine, groupContactPhone }: {
+function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop, onDeleteStop, onCreateServices, onRemovePassenger, onUpdatePassenger, arrivalDate, returnDate, busLines, preferExclusiveLine, groupContactPhone }: {
   stops: BookingGroupStop[];
   stopSummaries: BookingGroupStopPaxSummary[];
   services: Detail["services"];
@@ -597,6 +609,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   onDeleteStop: (id: string) => Promise<PostResult>;
   onCreateServices: (stopId: string, passengers: Array<{ customer_name: string; pax: number }>, serviceDate: string) => Promise<PostResult>;
   onRemovePassenger: (stopId: string, serviceId: string) => Promise<PostResult>;
+  onUpdatePassenger: (stopId: string, serviceId: string, patch: { customer_name?: string; pax?: number; phone?: string | null; notes?: string | null }) => Promise<PostResult>;
   arrivalDate: string | null;
   returnDate: string | null;
   busLines: BusLineOption[];
@@ -616,6 +629,7 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
   const [stopSuggestions, setStopSuggestions] = useState<BusStopSuggestion[]>([]);
   const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [editingPassengerId, setEditingPassengerId] = useState<string | null>(null);
   const orderedBusLines = useMemo(() => {
     if (!preferExclusiveLine) return busLines;
     return [...busLines].sort((a, b) => {
@@ -696,8 +710,16 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
               {linked.length > 0 ? (
                 <ul className="mt-1 list-disc pl-4 text-slate-500">
                   {linked.map((sv) => (
-                    <li key={sv.id} className="flex items-center gap-2">
+                    <li key={sv.id} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
                       <span>{sv.customer_name} — {sv.pax} pax <span className="text-slate-400">({sv.status})</span></span>
+                      <button
+                        type="button"
+                        onClick={() => setEditingPassengerId(editingPassengerId === sv.id ? null : sv.id)}
+                        className="text-[11px] font-semibold text-indigo-600 underline"
+                      >
+                        {editingPassengerId === sv.id ? "annulla" : "Modifica"}
+                      </button>
                       <button
                         type="button"
                         disabled={removingId === sv.id}
@@ -711,6 +733,17 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
                       >
                         {removingId === sv.id ? "Elimino…" : "Elimina"}
                       </button>
+                    </div>
+                    {editingPassengerId === sv.id ? (
+                      <EditablePassengerRow
+                        passenger={sv}
+                        onSave={async (patch) => {
+                          const result = await onUpdatePassenger(s.id, sv.id, patch);
+                          if (result) setEditingPassengerId(null);
+                          return result;
+                        }}
+                      />
+                    ) : null}
                     </li>
                   ))}
                 </ul>
@@ -864,6 +897,53 @@ function StopCatalogLinker({ stop, busLines, defaultBusLineId, onLink }: {
         </button>
         <button type="button" className="text-[11px] text-slate-500 underline" onClick={() => setOpen(false)}>chiudi</button>
       </div>
+    </div>
+  );
+}
+
+// Obiettivo D (prompt "FIX MIRATO — GIACOMONI"): correggere un nominativo
+// sbagliato senza cancellare/ricreare. Per un service GIA' operativo
+// (is_draft false) il pax non e' modificabile da qui (bloccato anche
+// server-side in updateGroupPassenger) — l'input resta disabilitato con una
+// nota, mai un campo che sembra editabile ma fallisce silenziosamente.
+function EditablePassengerRow({ passenger, onSave }: {
+  passenger: Detail["services"][number];
+  onSave: (patch: { customer_name?: string; pax?: number; phone?: string | null; notes?: string | null }) => Promise<PostResult>;
+}) {
+  const [name, setName] = useState(passenger.customer_name ?? "");
+  const [pax, setPax] = useState(String(passenger.pax ?? 1));
+  const [phone, setPhone] = useState(passenger.phone ?? "");
+  const [notes, setNotes] = useState(passenger.notes ?? "");
+  const [busy, setBusy] = useState(false);
+  const isDraft = passenger.is_draft === true;
+  const canSave = name.trim().length > 0 && Number(pax) > 0;
+
+  return (
+    <div className="w-full rounded-lg border border-indigo-100 bg-indigo-50/60 p-2">
+      <div className="grid gap-2 md:grid-cols-[1.3fr_80px_1fr]">
+        <input className="input-saas text-xs" placeholder="Nome nucleo/nominativo" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="input-saas text-xs" type="number" min={1} max={500} value={pax} disabled={!isDraft} title={!isDraft ? "Service già operativo: pax non modificabile da qui." : undefined} onChange={(e) => setPax(e.target.value)} />
+        <input className="input-saas text-xs" placeholder="Telefono" value={phone} onChange={(e) => setPhone(e.target.value)} />
+      </div>
+      <textarea rows={1} className="input-saas mt-2 w-full resize-none text-xs" placeholder="Note" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      {!isDraft ? <p className="mt-1 text-[11px] text-amber-700">Service già operativo: solo nome/telefono/note modificabili qui.</p> : null}
+      <button
+        type="button"
+        disabled={busy || !canSave}
+        onClick={async () => {
+          setBusy(true);
+          await onSave({
+            customer_name: name.trim(),
+            pax: isDraft ? Number(pax) : undefined,
+            phone: phone.trim() || null,
+            notes: notes.trim() || null,
+          });
+          setBusy(false);
+        }}
+        className="mt-2 rounded bg-indigo-700 px-3 py-1.5 text-[11px] font-bold text-white disabled:opacity-50"
+      >
+        {busy ? "Salvo..." : "Salva modifica"}
+      </button>
     </div>
   );
 }
