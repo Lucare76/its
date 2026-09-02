@@ -13,6 +13,7 @@ import { bookingListTransportTimes } from "@/lib/booking-list-display";
 import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
 import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
+import { GROUP_KIND_LABEL, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -47,6 +48,12 @@ type GlobalBookingSearchResult = Partial<Service> & {
   phone: string | null;
   hotel_name?: string | null;
   owner_label?: string | null;
+  bus_city_origin?: string | null;
+  // Obiettivo A (card gruppo unica): questa È la pagina "Prenotazioni" reale
+  // (voce sidebar -> /inbox, vedi lib/app-shell-nav.tsx) — non /ricerca.
+  booking_group_id?: string | null;
+  booking_group_name?: string | null;
+  matched_query?: boolean;
   cancellation?: {
     cancelled_at?: string | null;
     operator_name?: string | null;
@@ -487,6 +494,101 @@ const DUP_REASON_LABEL: Record<string, string> = {
   pdf_composite: "stesso cliente + data + hotel",
 };
 
+// Obiettivo A (card gruppo unica): una sola card per booking_group_id in
+// questa vista — la vera pagina "Prenotazioni" della sidebar (/inbox, non
+// /ricerca). Stessa logica/dati di /ricerca, stile adattato ai pms-panel
+// di questa pagina.
+function InboxBookingGroupCard({
+  meta, services, expanded, onToggle,
+}: {
+  meta: BookingGroupMeta | undefined;
+  services: GlobalBookingSearchResult[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const groupName = meta?.name ?? services[0]?.booking_group_name ?? "Gruppo";
+  const totalPax = services.reduce((sum, s) => sum + (s.pax || 0), 0);
+  const kindLabel = meta?.kind ? GROUP_KIND_LABEL[meta.kind] ?? meta.kind : null;
+  const arrivalStops = services
+    .filter((s) => s.direction === "arrival")
+    .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
+  const departureStops = services
+    .filter((s) => s.direction === "departure")
+    .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
+  // Obiettivo C: mai inventare fermate di ritorno — se return_date c'è ma
+  // nessun service departure esiste ancora, solo un warning.
+  const returnMissing = Boolean(meta?.return_date) && departureStops.length === 0;
+
+  return (
+    <article className="pms-panel overflow-hidden p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="font-extrabold text-slate-900">{groupName}</p>
+        <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-700">{totalPax} pax</span>
+        {kindLabel && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">🚌 {kindLabel}</span>}
+      </div>
+      {meta?.hotel_name && <p className="mt-1 text-xs font-semibold text-slate-700">Hotel: {meta.hotel_name}</p>}
+      <p className="mt-1 text-xs text-slate-600">
+        {meta?.service_date && <span><strong className="text-blue-700">Arrivo</strong> {fmtDateIt(meta.service_date)}</span>}
+        {meta?.service_date && meta?.return_date && "　·　"}
+        {meta?.return_date && <span><strong className="text-violet-700">Ritorno</strong> {fmtDateIt(meta.return_date)}</span>}
+      </p>
+
+      <div className="mt-2 text-xs text-slate-600">
+        <p className="font-semibold text-slate-500">Fermate andata:</p>
+        {arrivalStops.length > 0 ? (
+          <ul className="mt-0.5 space-y-0.5">
+            {arrivalStops.map((s) => (
+              <li key={s.id} className={s.matched_query ? "rounded bg-amber-50 px-1 -mx-1 font-medium text-amber-800" : undefined}>
+                {formatStopLine(s)}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-slate-400">Da completare</p>}
+      </div>
+
+      <div className="mt-2 text-xs text-slate-600">
+        <p className="font-semibold text-slate-500">Fermate ritorno:</p>
+        {departureStops.length > 0 ? (
+          <ul className="mt-0.5 space-y-0.5">
+            {departureStops.map((s) => (
+              <li key={s.id} className={s.matched_query ? "rounded bg-amber-50 px-1 -mx-1 font-medium text-amber-800" : undefined}>
+                {formatStopLine(s)}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-slate-400">Da completare</p>}
+        {returnMissing && (
+          <p className="mt-1 font-semibold text-amber-700">
+            ⚠ Ritorno previsto il {fmtDateIt(meta!.return_date)} ma fermate ritorno mancanti
+          </p>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-600 space-y-2">
+          {meta?.notes && <p><span className="font-semibold text-slate-500">Note gruppo: </span>{meta.notes}</p>}
+          <div>
+            <p className="font-semibold text-slate-500">Services collegati ({services.length}):</p>
+            <ul className="mt-0.5 space-y-1">
+              {services.map((s) => (
+                <li key={s.id} className="flex flex-wrap items-center gap-2">
+                  <span>{s.customer_name} — {s.pax} pax — {s.direction === "arrival" ? "andata" : "ritorno"}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${s.status === "cancelled" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600"}`}>{s.status}</span>
+                  <Link href={`/services/${s.id}/edit`} className="text-blue-700 hover:underline">Modifica</Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      <button type="button" onClick={onToggle} className="mt-2 text-xs font-semibold text-blue-700 hover:underline">
+        {expanded ? "Nascondi dettagli" : "Dettagli"}
+      </button>
+    </article>
+  );
+}
+
 // ─── Componente ─────────────────────────────────────────────────────────────
 
 export default function InboxPage() {
@@ -563,10 +665,12 @@ export default function InboxPage() {
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
   const [searchResults, setSearchResults] = useState<GlobalBookingSearchResult[]>([]);
+  const [bookingGroups, setBookingGroups] = useState<BookingGroupMeta[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [bookingFilter, setBookingFilter] = useState<"all" | "today" | "tomorrow" | "week" | "arrival" | "departure" | "review">("all");
   const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [cancelDialogService, setCancelDialogService] = useState<GlobalBookingSearchResult | null>(null);
   const [cancelReason, setCancelReason] = useState<(typeof CANCEL_REASONS)[number]>("Cliente ha annullato");
@@ -976,6 +1080,7 @@ export default function InboxPage() {
     const agency = agencyFilter.trim();
     if (!accessToken || (query.length < 1 && agency.length < 1)) {
       setSearchResults([]);
+      setBookingGroups([]);
       setSearchLoading(false);
       setSearchError(null);
       return;
@@ -992,19 +1097,22 @@ export default function InboxPage() {
         const res = await fetch(`/api/ops/search?${params.toString()}`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: GlobalBookingSearchResult[]; error?: string } | null;
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: GlobalBookingSearchResult[]; booking_groups?: BookingGroupMeta[]; error?: string } | null;
         if (active) {
           if (!res.ok || !body?.ok) {
             setSearchResults([]);
+            setBookingGroups([]);
             setSearchError(body?.error ?? "Ricerca non disponibile.");
           } else {
             setSearchResults(body.results ?? []);
+            setBookingGroups(body.booking_groups ?? []);
             setSearchError(null);
           }
         }
       } catch (searchRequestError) {
         if (active) {
           setSearchResults([]);
+          setBookingGroups([]);
           setSearchError(searchRequestError instanceof Error ? searchRequestError.message : "Ricerca non disponibile.");
         }
       } finally {
@@ -1481,6 +1589,8 @@ export default function InboxPage() {
     if (bookingFilter === "review") return service.status === "needs_review" || service.status === "new";
     return true;
   }).slice(0, 30);
+  const bookingGroupById = new Map(bookingGroups.map((g) => [g.id, g]));
+  const renderBookingItems = groupSearchResults(visibleBookings);
 
   return (
     <section className="mx-auto max-w-[1400px] space-y-5" data-testid="pdf-imports-page">
@@ -1565,7 +1675,19 @@ export default function InboxPage() {
         {!searchLoading && searchError ? <div className="pms-panel border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">Errore ricerca: {searchError}</div> : null}
         {!searchLoading && !searchError && !hasBookingSearch ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Cerca una prenotazione per nome, codice, telefono, hotel o agenzia.</div> : null}
         {!searchLoading && !searchError && hasBookingSearch && visibleBookings.length === 0 ? <div className="pms-panel p-8 text-center text-sm text-slate-500">Nessuna prenotazione trovata.</div> : null}
-        {!searchLoading && visibleBookings.map((service, index) => {
+        {!searchLoading && renderBookingItems.map((item, index) => {
+          if (item.type === "group") {
+            return (
+              <InboxBookingGroupCard
+                key={item.groupId}
+                meta={bookingGroupById.get(item.groupId)}
+                services={item.services}
+                expanded={expandedGroupId === item.groupId}
+                onToggle={() => setExpandedGroupId((current) => (current === item.groupId ? null : item.groupId))}
+              />
+            );
+          }
+          const service = item.result;
           const expanded = expandedServiceId === service.id || (expandedServiceId === null && index === 0);
           const transportTimes = bookingListTransportTimes(service);
           const hotelName = service.hotel_name?.trim() || hotels.find((hotel) => hotel.id === service.hotel_id)?.name || "Struttura non indicata";

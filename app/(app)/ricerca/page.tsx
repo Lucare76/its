@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { GROUP_KIND_LABEL, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
 
 type SearchResult = {
   id: string;
@@ -32,31 +33,6 @@ type SearchResult = {
   matched_query?: boolean;
 };
 
-// Obiettivo A/B/C: metadata del gruppo per l'header/dettagli della card —
-// mai inventati, vengono da booking_groups tramite app/api/ops/search.
-type BookingGroupMeta = {
-  id: string;
-  name: string;
-  kind: string | null;
-  service_date: string | null;
-  return_date: string | null;
-  hotel_id: string | null;
-  hotel_name: string | null;
-  notes: string | null;
-};
-
-const GROUP_KIND_LABEL: Record<string, string> = {
-  bus_exclusive: "Bus esclusivo",
-  bus_group: "Gruppo bus",
-};
-
-function formatStopLine(r: SearchResult): string {
-  const city = r.bus_city_origin?.trim();
-  const pickup = r.meeting_point?.trim();
-  const place = city && pickup && pickup.toUpperCase() !== city.toUpperCase() ? `${city} - ${pickup}` : city || pickup || "Fermata da definire";
-  const time = r.time?.trim();
-  return `${place} — ${r.pax} pax${time ? ` — ${time.slice(0, 5)}` : ""}`;
-}
 
 const STATUS_LABEL: Record<string, string> = {
   new: "Nuovo", assigned: "Assegnato", partito: "Partito",
@@ -88,31 +64,6 @@ const KIND_LABEL: Record<string, string> = {
 function fmtDate(d: string | null) {
   if (!d) return "—";
   return new Date(`${d}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-// Obiettivo A: una sola card per booking_group_id, mai una per service —
-// i services senza booking_group_id restano individuali (Obiettivo F).
-function groupSearchResults(results: SearchResult[]) {
-  type RenderItem = { type: "individual"; result: SearchResult } | { type: "group"; groupId: string; services: SearchResult[] };
-  const servicesByGroup = new Map<string, SearchResult[]>();
-  for (const r of results) {
-    if (!r.booking_group_id) continue;
-    const list = servicesByGroup.get(r.booking_group_id) ?? [];
-    list.push(r);
-    servicesByGroup.set(r.booking_group_id, list);
-  }
-  const items: RenderItem[] = [];
-  const seenGroups = new Set<string>();
-  for (const r of results) {
-    if (r.booking_group_id) {
-      if (seenGroups.has(r.booking_group_id)) continue;
-      seenGroups.add(r.booking_group_id);
-      items.push({ type: "group", groupId: r.booking_group_id, services: servicesByGroup.get(r.booking_group_id) ?? [] });
-    } else {
-      items.push({ type: "individual", result: r });
-    }
-  }
-  return items;
 }
 
 function BookingGroupCard({
