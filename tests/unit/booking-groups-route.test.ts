@@ -379,7 +379,10 @@ describe("POST add_stop — pianificazione fermata, nessun service/allocazione",
       pickup_point: "Villa d'Este",
       expected_pax: 20,
       direction: "arrival",
-      sort_order: 0,
+      // Regola fondamentale "ORDINE SCARICO RITORNO": senza sort_order
+      // esplicito, la prima fermata arrival del gruppo prende 1 (mai 0 fisso
+      // — sennò tutte le fermate finiscono indistinguibili per ordine).
+      sort_order: 1,
     });
     expect(stopInserts[0]!.row.stop_id).toBeUndefined();
     expect(writes.inserts.filter((w) => w.table === "services")).toHaveLength(0);
@@ -535,6 +538,54 @@ describe("POST update_stop — modifica orario/punto di carico senza duplicare t
     expect(writes.inserts.filter((w) => w.table === "tenant_bus_line_stops")).toHaveLength(0);
     const timeSync = writes.updates.find((w) => w.table === "tenant_bus_line_stops" && w.filters.id === CATALOG_ID_B && w.payload.pickup_time === "05:30");
     expect(timeSync).toBeTruthy();
+  });
+
+  // Obiettivo B (prompt "FIX MIRATO — SALVATAGGIO ORARIO PICKUP..."): un
+  // orario salvato su "Modifica città/punto" (update_stop) deve propagarsi
+  // ai services collegati a QUELLA fermata ancora al placeholder, MAI ad
+  // altre fermate dello stesso gruppo, MAI alla direzione opposta, e MAI
+  // usando services.updated_at (colonna inesistente).
+  const OTHER_STOP_ID = "99999999-9999-4999-9999-999999999999";
+  const SVC_TARGET = "aaaaaaaa-2222-4aaa-8aaa-aaaaaaaaaaaa";
+  const SVC_OTHER_STOP = "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb";
+  const SVC_ALREADY_REAL_TIME = "cccccccc-2222-4ccc-8ccc-cccccccccccc";
+
+  it("propaga l'orario ai services collegati alla fermata modificata, mai ad altre fermate, mai su services già con orario reale", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ id: GROUP_ID, tenant_id: TENANT }],
+      booking_group_stops: [
+        { id: BG_STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Barano", pickup_point: "Chiesa di San Rocco", direction: "departure", stop_id: CATALOG_ID_A },
+        { id: OTHER_STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Ischia", pickup_point: "Porto", direction: "departure", stop_id: null },
+      ],
+      tenant_bus_line_stops: [{ id: CATALOG_ID_A, tenant_id: TENANT, bus_line_id: BUS_LINE_ID, direction: "departure", city: "Barano", stop_name: "Barano", pickup_note: "Chiesa di San Rocco", pickup_time: null, active: true }],
+      services: [
+        { id: SVC_TARGET, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: BG_STOP_ID, time: "00:00", direction: "departure" },
+        { id: SVC_OTHER_STOP, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: OTHER_STOP_ID, time: "00:00", direction: "departure" },
+        { id: SVC_ALREADY_REAL_TIME, tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: BG_STOP_ID, time: "07:15", direction: "departure" },
+      ],
+    });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+
+    const res = await POST(post({
+      action: "update_stop",
+      id: BG_STOP_ID,
+      city: "Barano",
+      pickup_point: "Chiesa di San Rocco",
+      expected_pax: 20,
+      direction: "departure",
+      pickup_time: "08:30",
+    }));
+    expect(res.status).toBe(200);
+
+    const timeUpdates = writes.updates.filter((w) => w.table === "services" && w.payload.time === "08:30");
+    expect(timeUpdates).toHaveLength(1);
+    expect(timeUpdates[0].filters.booking_group_stop_id).toBe(BG_STOP_ID);
+    expect(timeUpdates[0].filters.time).toBe("00:00");
+    // Mai updated_at su services (colonna inesistente).
+    expect(timeUpdates[0].payload.updated_at).toBeUndefined();
+    // Il service dell'ALTRA fermata e quello già con orario reale non vengono toccati per il time.
+    expect(writes.updates.some((w) => w.table === "services" && w.filters.id === SVC_OTHER_STOP && w.payload.time)).toBe(false);
+    expect(writes.updates.some((w) => w.table === "services" && w.filters.id === SVC_ALREADY_REAL_TIME && w.payload.time)).toBe(false);
   });
 });
 

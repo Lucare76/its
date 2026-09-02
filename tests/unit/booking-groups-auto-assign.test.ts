@@ -621,6 +621,10 @@ describe("generateReturnStopsFromArrival — Obiettivo B: fermate ritorno da and
     const newStops = writes.inserts.filter((w) => w.table === "booking_group_stops");
     expect(newStops.map((w) => w.row.city)).toEqual(["MAROTTA", "FANO", "PESARO", "CATTOLICA"]);
     expect(newStops.every((w) => w.row.direction === "departure")).toBe(true);
+    // Regola fondamentale "ORDINE SCARICO RITORNO": sort_order esplicito e
+    // sequenziale (1..N) nell'ordine di scarico — mai lasciato a 0/assente,
+    // mai alfabetico, mai dedotto dall'orario.
+    expect(newStops.map((w) => w.row.sort_order)).toEqual([1, 2, 3, 4]);
   });
 
   it("mantiene pax e booking_group_id sui nuovi services departure, data = return_date", async () => {

@@ -877,7 +877,7 @@ export type AddStopInput = {
 
 type CreatedCatalogStop = { id: string; pickup_time: string | null };
 
-async function syncPlaceholderTimesForBookingGroupStop(
+export async function syncPlaceholderTimesForBookingGroupStop(
   admin: SupabaseClient,
   tenantId: string,
   bookingGroupStopId: string,
@@ -1064,6 +1064,24 @@ export async function addBookingGroupStop(
     return ok({ stop: existingStop });
   }
 
+  // Regola fondamentale "ORDINE SCARICO RITORNO": senza un sort_order
+  // esplicito (la UI di aggiunta fermata non ne invia mai uno), le fermate
+  // finivano tutte a 0 — indistinguibili per ordine, mai un ordine alfabetico
+  // o per orario. Auto-incrementa per gruppo+direzione, stesso pattern già
+  // usato per il catalogo bus (lastOrder+1).
+  let nextSortOrder = input.sort_order;
+  if (!nextSortOrder) {
+    const { data: lastGroupStops } = await admin
+      .from("booking_group_stops")
+      .select("sort_order")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", input.bookingGroupId)
+      .eq("direction", input.direction)
+      .order("sort_order", { ascending: false })
+      .limit(1);
+    const lastOrder = Number(((lastGroupStops ?? [])[0] as { sort_order?: number } | undefined)?.sort_order ?? 0);
+    nextSortOrder = lastOrder + 1;
+  }
   const insert = compact({
     tenant_id: tenantId,
     booking_group_id: input.bookingGroupId,
@@ -1072,7 +1090,7 @@ export async function addBookingGroupStop(
     expected_pax: input.expected_pax,
     stop_id: stopId,
     direction: input.direction,
-    sort_order: input.sort_order ?? 0,
+    sort_order: nextSortOrder,
     notes: input.notes,
     contact_name: input.contact_name,
     contact_phone: input.contact_phone,
@@ -1321,11 +1339,15 @@ export async function generateReturnStopsFromArrival(
 
   const { data: stopRows } = await admin
     .from("booking_group_stops")
-    .select("id, city, pickup_point, direction, expected_pax, notes")
+    .select("id, city, pickup_point, direction, expected_pax, notes, sort_order")
     .eq("tenant_id", tenantId)
     .eq("booking_group_id", bookingGroupId)
+    // Regola fondamentale "ORDINE SCARICO RITORNO": l'ordine andata di
+    // riferimento e' quello EFFETTIVO (sort_order se valorizzato, altrimenti
+    // ordine di inserimento) — mai alfabetico, mai per orario.
+    .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
-  const stops = (stopRows ?? []) as Array<{ id: string; city: string; pickup_point: string | null; direction: string | null; expected_pax: number | null; notes: string | null }>;
+  const stops = (stopRows ?? []) as Array<{ id: string; city: string; pickup_point: string | null; direction: string | null; expected_pax: number | null; notes: string | null; sort_order: number | null }>;
   const arrivalStops = stops.filter((s) => s.direction === "arrival");
   const departureStops = stops.filter((s) => s.direction === "departure");
 
@@ -1369,7 +1391,7 @@ export async function generateReturnStopsFromArrival(
   let createdStops = 0;
   let createdServices = 0;
   let reusedStops = 0;
-  for (const stop of reversedArrivalStops) {
+  for (const [index, stop] of reversedArrivalStops.entries()) {
     const key = departureStopKey(stop.city, stop.pickup_point);
     let targetStopId = existingDepartureByKey.get(key)?.id;
     if (!targetStopId) {
@@ -1383,6 +1405,10 @@ export async function generateReturnStopsFromArrival(
           direction: "departure",
           expected_pax: stop.expected_pax,
           notes: stop.notes,
+          // Regola fondamentale "ORDINE SCARICO RITORNO": ordine di scarico
+          // SEMPRE inverso rispetto all'andata (indice 1-based nell'elenco
+          // già invertito) — mai alfabetico, mai dedotto dall'orario.
+          sort_order: index + 1,
         })
         .select("id")
         .single();

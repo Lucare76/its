@@ -26,6 +26,7 @@ import {
   addBookingGroupPassengers,
   removeGroupPassenger,
   updateGroupPassenger,
+  syncPlaceholderTimesForBookingGroupStop,
   reserveBookingGroupBus,
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
@@ -545,6 +546,16 @@ export async function POST(request: NextRequest) {
             .eq("id", canonical.stopId);
         }
       }
+    }
+    // Obiettivo B (prompt "FIX MIRATO — SALVATAGGIO ORARIO PICKUP..."): un
+    // orario salvato qui sul catalogo (o riallineato in caso di duplicato)
+    // deve propagarsi ai services collegati a QUESTA fermata che sono ancora
+    // al placeholder "00:00" — stessa identica funzione già usata da add_stop
+    // per il primo collegamento catalogo, mai una seconda logica duplicata.
+    // Mai eseguita se l'operatore non ha toccato l'orario in questa chiamata
+    // (pickup_time undefined = campo non inviato).
+    if (pickup_time !== undefined) {
+      await syncPlaceholderTimesForBookingGroupStop(admin, tenantId, id, pickup_time ?? null);
     }
     const nextDefaultName = updatedStop.pickup_point ? `${updatedStop.city} - ${updatedStop.pickup_point}` : updatedStop.city;
     const { data: linkedServices, error: linkedServicesError } = await admin
