@@ -2567,7 +2567,7 @@ export default function BusNetworkPage() {
                 const routeStops = isExclusiveLine ? activeStops : lineStops;
                 const stopsWithPax = routeStops.map(stop => {
                   const allocatedPax = dateAllocations
-                    .filter((a) => (a.stop_id && a.stop_id === stop.id) || a.stop_name.toLowerCase() === stop.stop_name.toLowerCase())
+                    .filter((a) => (a.stop_id ? a.stop_id === stop.id : a.stop_name.toLowerCase() === stop.stop_name.toLowerCase()))
                     .reduce((sum, a) => sum + a.pax_assigned, 0);
                   const sn = stop.stop_name.toLowerCase().trim();
                   const sc = (stop.city ?? "").toLowerCase().trim();
@@ -2941,13 +2941,13 @@ export default function BusNetworkPage() {
                   const stopGroups = activeStops.map((stop) => ({
                     stop,
                     allocs: cardAllocs
-                      .filter((a) => (a.stop_id && a.stop_id === stop.id) || a.stop_name === stop.stop_name)
+                      .filter((a) => (a.stop_id ? a.stop_id === stop.id : a.stop_name === stop.stop_name))
                       .sort((a, b) => (a.service_time ?? "99:99").localeCompare(b.service_time ?? "99:99"))
                   })).filter((g) => g.allocs.length > 0);
 
                   // Allocations at stops not in the active list
                   const ungrouped = cardAllocs.filter(
-                    (a) => !activeStops.some((s) => (a.stop_id && a.stop_id === s.id) || s.stop_name === a.stop_name)
+                    (a) => !activeStops.some((s) => (a.stop_id ? a.stop_id === s.id : s.stop_name === a.stop_name))
                   );
 
                   const isSelected = selectedBusUnitId === unit.id;
@@ -4240,7 +4240,7 @@ export default function BusNetworkPage() {
                         .sort((a, b) => a.stop_order - b.stop_order)
                         .map((stop, idx, arr) => {
                           const stopAllocs = dateAllocations
-                            .filter((a) => a.stop_name.toLowerCase() === stop.stop_name.toLowerCase());
+                            .filter((a) => (a.stop_id ? a.stop_id === stop.id : a.stop_name.toLowerCase() === stop.stop_name.toLowerCase()));
                           const stopPaxToday = stopAllocs.reduce((sum, a) => sum + a.pax_assigned, 0);
                           if (hideEmptyStops && stopPaxToday === 0) return null;
                           return (
