@@ -193,6 +193,10 @@ registerTool({
         bookingGroupStopId: a.booking_group_stop_id,
         passengers: a.passengers,
         serviceDate: a.service_date ?? undefined,
+        // Obiettivo A: l'auto-assegnazione "zero click" resta SOLO per la UI
+        // umana — Mario propone il bus e chiede conferma, flusso invariato
+        // (vedi commento in autoAssignBookingGroup).
+        autoAssign: false,
       });
       // 404 gruppo / 422 data mancante / 400 hotel di altro tenant → lo stato
       // non è quello approvato in preview: forza una nuova preview.

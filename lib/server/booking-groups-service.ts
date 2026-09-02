@@ -728,7 +728,7 @@ export async function patchBookingGroup(
   actor: BgActor,
   id: string,
   fields: Record<string, unknown>,
-  opts: { validateFks?: boolean } = {},
+  opts: { validateFks?: boolean; autoAssign?: boolean } = {},
 ): Promise<BgResult<{ group: BookingGroup }>> {
   const { tenantId } = actor;
   if (!(await tenantRowExists(admin, "booking_groups", tenantId, id))) {
@@ -784,7 +784,14 @@ export async function patchBookingGroup(
         // -> return_date (con fallback su service_date se assente),
         // arrivo -> service_date. Non azzera mai una data esistente.
         const nextDate = svc.direction === "departure" ? (group.return_date ?? group.service_date) : group.service_date;
-        if (nextDate && nextDate !== svc.date) svcPatch.date = nextDate;
+        if (nextDate && nextDate !== svc.date) {
+          svcPatch.date = nextDate;
+          // Obiettivo C: arrival_date/departure_date seguono `date` per la
+          // stessa direzione, cosi' le viste che leggono quei campi vedono
+          // subito la data aggiornata.
+          if (svc.direction === "departure") svcPatch.departure_date = nextDate;
+          else svcPatch.arrival_date = nextDate;
+        }
       }
       // Mai sovrascrivere un hotel gia' impostato sul singolo passeggero
       // (manuale o gia' propagato): solo riempie il vuoto.
@@ -792,6 +799,19 @@ export async function patchBookingGroup(
       if (Object.keys(svcPatch).length > 0) {
         await admin.from("services").update(svcPatch).eq("tenant_id", tenantId).eq("id", svc.id);
       }
+    }
+  }
+
+  // Obiettivo A — "zero click": se le date del gruppo sono cambiate (es. la
+  // prima data valida arriva solo ora), prova a riservare/operativizzare da
+  // sola (best effort, mai bloccante). Mai chiamata da MCP oggi (nessun tool
+  // Mario invoca patchBookingGroup direttamente), ma resta rispettato lo
+  // stesso opt-out esplicito di addBookingGroupPassengers per uniformita'.
+  if (touchesDates && opts.autoAssign !== false) {
+    try {
+      await autoAssignBookingGroup(admin, actor, id);
+    } catch {
+      // best-effort: un fallimento qui non deve mai propagarsi al chiamante.
     }
   }
 
@@ -1062,7 +1082,7 @@ export type AddPassengersResult = {
 export async function addBookingGroupPassengers(
   admin: SupabaseClient,
   actor: BgActor,
-  input: { bookingGroupId: string; bookingGroupStopId: string; passengers: PassengerRow[]; serviceDate?: string | null },
+  input: { bookingGroupId: string; bookingGroupStopId: string; passengers: PassengerRow[]; serviceDate?: string | null; autoAssign?: boolean },
 ): Promise<BgOutcome<AddPassengersResult>> {
   const { tenantId, userId, role } = actor;
 
@@ -1151,6 +1171,10 @@ export async function addBookingGroupPassengers(
     bus_city_origin: st.city,
     meeting_point: st.pickup_point,
     notes: (row.notes ?? "").trim(),
+    // Obiettivo C — allineati a `date` fin dalla creazione così le viste che
+    // leggono arrival_date/departure_date (non solo `date`) trovano subito il
+    // service nel giorno giusto, senza aspettare un patch successivo.
+    ...(st.direction === "arrival" ? { arrival_date: serviceDate } : { departure_date: serviceDate }),
     ...(isBusKind ? { booking_service_kind: "bus_city_hotel", service_type_code: "bus_line" } : {}),
   });
 
@@ -1208,6 +1232,18 @@ export async function addBookingGroupPassengers(
       serviceId: svc.id as string, outcome: "created",
       details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, pax: row.pax, city: st.city },
     });
+  }
+
+  // Obiettivo A — "zero click": appena il gruppo ha almeno un passeggero
+  // nuovo, prova a riservare/operativizzare da sola (best effort, mai
+  // bloccante — vedi autoAssignBookingGroup). `autoAssign: false` (usato dal
+  // tool MCP Mario) preserva il flusso conversazionale esistente invariato.
+  if (created.length > 0 && input.autoAssign !== false) {
+    try {
+      await autoAssignBookingGroup(admin, actor, input.bookingGroupId);
+    } catch {
+      // best-effort: un fallimento qui non deve mai propagarsi al chiamante.
+    }
   }
 
   const status = failed.length === 0 ? 200 : created.length === 0 ? 500 : 207;

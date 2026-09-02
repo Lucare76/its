@@ -334,19 +334,26 @@ async function loadLookupMatches(
   const hotelPattern = `%${q}%`;
   const agencyNeedle = agency || q;
   const agencyPattern = `%${agencyNeedle}%`;
-  const [hotelsResult, agenciesResult] = await Promise.all([
+  // Obiettivo I: risolve q -> booking_groups.id come per hotel/agenzia, cosi'
+  // cercare "GIACOMONI" trova anche i services del gruppo il cui
+  // customer_name non contiene "GIACOMONI".
+  const [hotelsResult, agenciesResult, bookingGroupsMatchResult] = await Promise.all([
     q
       ? admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).ilike("name", hotelPattern).limit(100)
       : Promise.resolve({ data: [], error: null }),
     agencyNeedle
       ? admin.from("agencies").select("id,name").eq("tenant_id", tenantId).ilike("name", agencyPattern).limit(100)
       : Promise.resolve({ data: [], error: null }),
+    q
+      ? admin.from("booking_groups").select("id,name").eq("tenant_id", tenantId).ilike("name", hotelPattern).limit(100)
+      : Promise.resolve({ data: [], error: null }),
   ]);
-  const error = hotelsResult.error ?? agenciesResult.error ?? null;
+  const error = hotelsResult.error ?? agenciesResult.error ?? bookingGroupsMatchResult.error ?? null;
   if (error) throw new Error(error.message);
   return {
     matchedHotels: (hotelsResult.data ?? []) as Array<{ id: string; name: string; zone?: string | null }>,
     matchedAgencies: (agenciesResult.data ?? []) as Array<{ id: string; name: string }>,
+    matchedBookingGroups: (bookingGroupsMatchResult.data ?? []) as Array<{ id: string; name: string }>,
   };
 }
 
@@ -403,6 +410,7 @@ async function querySearchCandidates(
     matchedHotelIds: string[];
     matchedAgencyIds: string[];
     matchedAgencyBookingIds: string[];
+    matchedBookingGroupIds: string[];
   }
 ): Promise<SearchServiceRow[]> {
   const perQueryLimit = Math.min(Math.max(input.limit * 8, 160), 500);
@@ -481,6 +489,10 @@ async function querySearchCandidates(
     // Obiettivo C: services collegati agli agency_bookings MTS Globe trovati
     // via Voucher No (queryVoucherMatches), tramite services.agency_booking_id.
     if (input.matchedAgencyBookingIds.length) run((query) => query.in("agency_booking_id", input.matchedAgencyBookingIds));
+    // Obiettivo I: services collegati a un booking_groups.name che matcha q
+    // (es. "GIACOMONI"), anche se il customer_name del singolo service non
+    // contiene quel testo.
+    if (input.matchedBookingGroupIds.length) run((query) => query.in("booking_group_id", input.matchedBookingGroupIds));
     if (isPrivateNeedle(input.q)) {
       run((query) => query.is("agency_id", null).is("billing_party_name", null));
       run((query) => query.ilike("billing_party_name", "%privato%"));
@@ -538,7 +550,7 @@ export async function GET(req: NextRequest) {
 
     const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? "30"), 100);
 
-    const [{ matchedHotels, matchedAgencies }, matchedAgencyBookings] = await Promise.all([
+    const [{ matchedHotels, matchedAgencies, matchedBookingGroups }, matchedAgencyBookings] = await Promise.all([
       loadLookupMatches(auth.admin, tenantId, q, agency),
       queryVoucherMatches(auth.admin, tenantId, q),
     ]);
@@ -552,6 +564,7 @@ export async function GET(req: NextRequest) {
       matchedHotelIds: matchedHotels.map((hotel) => hotel.id),
       matchedAgencyIds: matchedAgencies.map((agencyRow) => agencyRow.id),
       matchedAgencyBookingIds: matchedAgencyBookings.map((booking) => booking.id),
+      matchedBookingGroupIds: matchedBookingGroups.map((group) => group.id),
     });
 
     const linkedServices = await loadRowsByIds(
@@ -568,10 +581,13 @@ export async function GET(req: NextRequest) {
       ...matchedAgencies.map((agencyRow) => agencyRow.id),
       ...serviceRows.map((service) => String(service.agency_id ?? "")).filter(Boolean),
     ]));
-    // Fix B: gruppi prenotazione dei services trovati, per il badge "Gruppo".
-    const bookingGroupIds = Array.from(new Set(
-      serviceRows.map((service) => String(service.booking_group_id ?? "")).filter(Boolean)
-    ));
+    // Fix B / Obiettivo I: gruppi prenotazione dei services trovati, per il
+    // badge "Gruppo" — include anche i gruppi trovati per nome anche se, per
+    // qualunque motivo, nessun loro service e' finito in serviceRows.
+    const bookingGroupIds = Array.from(new Set([
+      ...matchedBookingGroups.map((group) => group.id),
+      ...serviceRows.map((service) => String(service.booking_group_id ?? "")).filter(Boolean),
+    ]));
     const serviceIds = Array.from(new Set(serviceRows.map((service) => service.id).filter(Boolean)));
 
     const [hotelsResult, agenciesResult, bookingGroupsResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult, cancellationLogsResult] = await Promise.all([
@@ -627,7 +643,7 @@ export async function GET(req: NextRequest) {
     const hotelNameById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; name: string }) => [hotel.id, hotel.name]));
     const hotelZoneById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; zone?: string | null }) => [hotel.id, hotel.zone ?? null]));
     const agencyNameById = new Map([...(matchedAgencies ?? []), ...(agenciesResult.data ?? [])].map((item: { id: string; name: string }) => [item.id, item.name]));
-    const bookingGroupNameById = new Map((bookingGroupsResult.data ?? []).map((group: { id: string; name: string }) => [group.id, group.name]));
+    const bookingGroupNameById = new Map([...(matchedBookingGroups ?? []), ...(bookingGroupsResult.data ?? [])].map((group: { id: string; name: string }) => [group.id, group.name]));
     const busAllocationsByServiceId = new Map<string, BusAllocationDetailRow[]>();
     for (const allocation of (busAllocationsResult.data ?? []) as BusAllocationDetailRow[]) {
       const rows = busAllocationsByServiceId.get(allocation.service_id) ?? [];
@@ -653,6 +669,11 @@ export async function GET(req: NextRequest) {
         // matchesBookingSearch (lib/booking-search.ts) trova il voucher nel
         // testo cercabile anche se nessun campo services lo contiene.
         voucher_no: service.agency_booking_id ? voucherByAgencyBookingId.get(service.agency_booking_id) ?? null : null,
+        // Obiettivo I: stesso motivo del voucher_no sopra — matchesBookingSearch
+        // deve trovare "GIACOMONI" anche su un service il cui customer_name
+        // non lo contiene, altrimenti il filtro finale lo scarterebbe anche
+        // se querySearchCandidates lo ha già recuperato via booking_group_id.
+        booking_group_name: service.booking_group_id ? bookingGroupNameById.get(service.booking_group_id) ?? null : null,
       }));
 
     const results = collapseLinkedBookingPairs(

@@ -35,6 +35,11 @@ export interface BookingSearchRecord {
   // effimera calcolata da app/api/ops/search/route.ts a partire da
   // agency_bookings.source_booking_key — vedi commento lì per il motivo.
   voucher_no?: string | null;
+  // Obiettivo I: nome del booking group risolto lato route (join su
+  // booking_groups), mai testo libero — permette di trovare un service il
+  // cui customer_name non contiene il nome del gruppo (es. "MURATORI
+  // SANDRA" cercando "GIACOMONI").
+  booking_group_name?: string | null;
 }
 
 export function collapseLinkedBookingPairs<T extends BookingSearchRecord>(records: T[]): T[] {
@@ -136,6 +141,7 @@ export function matchesBookingSearch(
     record.id,
     record.practice_number,
     record.voucher_no,
+    record.booking_group_name,
   ].map((value) => normalizeText(value)).join(" ");
 
   const phoneHaystack = `${record.phone ?? ""} ${record.phone_e164 ?? ""}`.replace(/\D/g, "");

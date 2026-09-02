@@ -22,6 +22,7 @@ type SearchResult = {
   hotel_name: string | null;
   meeting_point: string | null;
   notes: string | null;
+  booking_group_name: string | null;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -156,6 +157,11 @@ function RicercaInner() {
                     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_COLOR[r.status] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
                       {STATUS_LABEL[r.status] ?? r.status}
                     </span>
+                    {r.booking_group_name && (
+                      <span className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 border-indigo-200">
+                        Gruppo: {r.booking_group_name}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
                     {r.booking_service_kind && (

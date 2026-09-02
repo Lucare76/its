@@ -146,6 +146,10 @@ describe("addBookingGroupPassengers — serviceDate override + pickup_time reale
     const svc = writes.inserts.find((w) => w.table === "services")!.row;
     expect(svc.date).toBe("2026-09-20"); // ritorno, NON group.service_date (13-09)
     expect(svc.direction).toBe("departure");
+    // Obiettivo C: departure_date segue `date` fin dalla creazione (vista
+    // Ritorni/Partenza deve trovarlo subito nel giorno giusto).
+    expect(svc.departure_date).toBe("2026-09-20");
+    expect(svc.arrival_date).toBeUndefined();
   });
 
   it("senza serviceDate esplicito → default group.service_date (andata, invariato)", async () => {
@@ -162,6 +166,10 @@ describe("addBookingGroupPassengers — serviceDate override + pickup_time reale
     expect(res.ok).toBe(true);
     const svc = writes.inserts.find((w) => w.table === "services")!.row;
     expect(svc.date).toBe("2026-09-13");
+    // Obiettivo C: arrival_date segue `date` fin dalla creazione (vista
+    // Arrivi/Andata deve trovarlo subito nel giorno giusto).
+    expect(svc.arrival_date).toBe("2026-09-13");
+    expect(svc.departure_date).toBeUndefined();
   });
 
   it("stop con canonico risolto → time = pickup_time reale, non 00:00", async () => {

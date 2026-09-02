@@ -654,6 +654,97 @@ describe("GET /api/ops/search — Fix B: visibilità services di Booking Groups"
   });
 });
 
+describe("GET /api/ops/search — Obiettivo I: ricerca per nome del booking group", () => {
+  it("cerca 'GIACOMONI' -> trova i services collegati anche se customer_name non contiene 'GIACOMONI'", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI" }],
+      services: [
+        service("s1", TENANT_A, { customer_name: "MURATORI SANDRA", booking_group_id: "bg-giacomoni", is_draft: true, status: "needs_review" }),
+        service("s2", TENANT_A, { customer_name: "ONOFRI VALDES", booking_group_id: "bg-giacomoni", is_draft: true, status: "needs_review" }),
+        service("s3", TENANT_A, { customer_name: "Cliente Non Collegato" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=GIACOMONI")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toContain("s1");
+    expect(ids).toContain("s2");
+    expect(ids).not.toContain("s3");
+    expect(body.results.every((r: Row) => r.booking_group_name === "GIACOMONI")).toBe(true);
+  });
+
+  it("cerca 'MURATORI' (nome passeggero) -> il risultato espone booking_group_name = GIACOMONI", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI" }],
+      services: [
+        service("s1", TENANT_A, { customer_name: "MURATORI SANDRA", booking_group_id: "bg-giacomoni", is_draft: true, status: "needs_review" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=MURATORI")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].booking_group_name).toBe("GIACOMONI");
+  });
+
+  it("un service SENZA booking_group_id con customer_name non collegato non compare cercando il nome di un gruppo altrui", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI" }],
+      services: [
+        service("s1", TENANT_A, { customer_name: "Cliente Privato Qualsiasi", booking_group_id: null }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=GIACOMONI")).json();
+    expect(body.results).toEqual([]);
+  });
+
+  it("due gruppi diversi: cercare il nome di uno non restituisce i services dell'altro", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [
+        { id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI" },
+        { id: "bg-parrocchia", tenant_id: TENANT_A, name: "PARROCCHIA SANTA BEATA" },
+      ],
+      services: [
+        service("s1", TENANT_A, { customer_name: "MURATORI SANDRA", booking_group_id: "bg-giacomoni" }),
+        service("s2", TENANT_A, { customer_name: "ROSSI MARIO", booking_group_id: "bg-parrocchia" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=GIACOMONI")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toEqual(["s1"]);
+    expect(ids).not.toContain("s2");
+  });
+
+  it("isolamento tenant: un gruppo con lo stesso nome in un altro tenant non fa comparire i suoi services", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [
+        { id: "bg-a", tenant_id: TENANT_A, name: "GIACOMONI" },
+        { id: "bg-b", tenant_id: TENANT_B, name: "GIACOMONI" },
+      ],
+      services: [
+        service("s-a", TENANT_A, { customer_name: "Passeggero A", booking_group_id: "bg-a" }),
+        service("s-b", TENANT_B, { customer_name: "Passeggero B", booking_group_id: "bg-b" }),
+      ],
+    });
+    authorizeAs(fake.admin, TENANT_A);
+    const body = await (await callGet("?q=GIACOMONI")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toContain("s-a");
+    expect(ids).not.toContain("s-b");
+  });
+
+  it("nessun gruppo con quel nome: comportamento invariato, nessun errore", async () => {
+    const fake = createFakeAdmin({
+      services: [service("s1", TENANT_A, { customer_name: "Cliente Normale" })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Normale")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].booking_group_name).toBeNull();
+  });
+});
+
 describe("Performance — nessun select('*'), nessun fetch non paginato", () => {
   const source = readFileSync(join(process.cwd(), "app/api/ops/search/route.ts"), "utf8");
 

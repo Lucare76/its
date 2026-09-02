@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({ autoAllocateBusService: vi.fn() }));
 vi.mock("@/lib/server/bus-auto-allocation", () => ({ autoAllocateBusService: mocks.autoAllocateBusService }));
 
-import { autoAssignBookingGroup } from "@/lib/server/booking-groups-service";
+import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup } from "@/lib/server/booking-groups-service";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const GROUP_ID = "11111111-1111-4111-8111-111111111111";
@@ -51,6 +51,15 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
       }
       if (pending?.kind === "update") {
         writes.updates.push({ table, filters: { ...filters }, payload: pending.payload ?? {} });
+        // Persiste la mutazione nel seed (come una vera UPDATE) cosi' una
+        // successiva lettura nello stesso test vede i dati aggiornati —
+        // necessario perche' autoAssignBookingGroup ri-legge booking_groups
+        // subito dopo che patchBookingGroup lo ha aggiornato.
+        for (const row of seed[table] ?? []) {
+          if (Object.entries(filters).every(([k, v]) => row[k] === v)) {
+            Object.assign(row, pending.payload ?? {});
+          }
+        }
         return { data: { id: filters.id, ...(pending.payload ?? {}) }, error: null };
       }
       return { data: null, error: null };
@@ -237,5 +246,112 @@ describe("autoAssignBookingGroup — regressione GIACOMONI (solo fermate andata,
 
     expect(result.attempted).toBe(false);
     expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+});
+
+describe("addBookingGroupPassengers — Obiettivo A: zero click reale via aggiunta passeggeri", () => {
+  const STOP_ID = "s1";
+  const STOP = { id: STOP_ID, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "Cattolica", pickup_point: "CASELLO A14", direction: "arrival", stop_id: "canonical-stop" };
+
+  it("UI umana (autoAssign di default): aggiunge il passeggero e riserva/operativizza da sola, nessun click aggiuntivo", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, expected_pax: 38 }],
+      booking_group_stops: [STOP],
+      booking_group_bus_reservations: [],
+      tenant_bus_line_stops: [{ id: "canonical-stop", tenant_id: TENANT, pickup_time: "05:20" }],
+      tenant_bus_units: [
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    const res = await addBookingGroupPassengers(admin as never, actor, {
+      bookingGroupId: GROUP_ID,
+      bookingGroupStopId: STOP_ID,
+      passengers: [{ customer_name: "GIACOMONI", pax: 38 }],
+    });
+
+    expect(res.ok).toBe(true);
+    const reservations = writes.upserts.filter((w) => w.table === "booking_group_bus_reservations");
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0].row.service_date).toBe("2026-09-06");
+    expect(reservations[0].row.bus_unit_id).toBe(BUS_A);
+  });
+
+  it("chiamata MCP (autoAssign: false, come Mario): aggiunge il passeggero ma NON riserva/operativizza automaticamente", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, expected_pax: 38 }],
+      booking_group_stops: [STOP],
+      booking_group_bus_reservations: [],
+      tenant_bus_line_stops: [{ id: "canonical-stop", tenant_id: TENANT, pickup_time: "05:20" }],
+      tenant_bus_units: [
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    const res = await addBookingGroupPassengers(admin as never, actor, {
+      bookingGroupId: GROUP_ID,
+      bookingGroupStopId: STOP_ID,
+      passengers: [{ customer_name: "GIACOMONI", pax: 38 }],
+      autoAssign: false,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+});
+
+describe("patchBookingGroup — Obiettivo C/H: arrival_date/departure_date seguono `date` sui services draft", () => {
+  it("service arrival draft: cambiare service_date del gruppo aggiorna date + arrival_date, MAI departure_date", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, service_date: "2026-09-01" }],
+      services: [
+        { id: "svc-1", tenant_id: TENANT, booking_group_id: GROUP_ID, direction: "arrival", date: "2026-09-01", hotel_id: null, is_draft: true },
+      ],
+    });
+
+    const res = await patchBookingGroup(admin as never, actor, GROUP_ID, { service_date: "2026-09-06" });
+
+    expect(res.ok).toBe(true);
+    const svcUpdate = writes.updates.find((w) => w.table === "services" && w.filters.id === "svc-1");
+    expect(svcUpdate?.payload.date).toBe("2026-09-06");
+    expect(svcUpdate?.payload.arrival_date).toBe("2026-09-06");
+    expect(svcUpdate?.payload.departure_date).toBeUndefined();
+  });
+
+  it("service departure draft: cambiare return_date del gruppo aggiorna date + departure_date, MAI arrival_date", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, return_date: null }],
+      services: [
+        { id: "svc-2", tenant_id: TENANT, booking_group_id: GROUP_ID, direction: "departure", date: "2026-09-06", hotel_id: null, is_draft: true },
+      ],
+    });
+
+    const res = await patchBookingGroup(admin as never, actor, GROUP_ID, { return_date: "2026-09-13" });
+
+    expect(res.ok).toBe(true);
+    const svcUpdate = writes.updates.find((w) => w.table === "services" && w.filters.id === "svc-2");
+    expect(svcUpdate?.payload.date).toBe("2026-09-13");
+    expect(svcUpdate?.payload.departure_date).toBe("2026-09-13");
+    expect(svcUpdate?.payload.arrival_date).toBeUndefined();
+  });
+
+  it("cambio date su gruppo bus_exclusive completo (fermate + pax noti) → tenta anche l'auto-assegnazione (best effort)", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, service_date: "2026-09-01" }],
+      booking_group_stops: ARRIVAL_ONLY_STOPS,
+      booking_group_bus_reservations: [],
+      tenant_bus_units: [
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    await patchBookingGroup(admin as never, actor, GROUP_ID, { service_date: "2026-09-06" });
+
+    const reservations = writes.upserts.filter((w) => w.table === "booking_group_bus_reservations");
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0].row.service_date).toBe("2026-09-06");
   });
 });
