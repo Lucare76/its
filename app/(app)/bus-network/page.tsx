@@ -1417,7 +1417,17 @@ export default function BusNetworkPage() {
     aoa.push(["", "", "", "", "", "", ""]);
     aoa.push(["TOTALE", totalPax, "", "", "", "", ""]);
 
-    const usedStopNames = new Set(sorted.map((a) => a.stop_name.toUpperCase()));
+    // Obiettivo "FORMATO SCARICO ATTESO": una riga per fermata di scarico con
+    // il totale pax di quella fermata a destra (prima sempre vuoto — nessun
+    // numero mai mostrato) — ordine per stop_order di catalogo (allineato a
+    // booking_group_stops.sort_order per i gruppi bus_exclusive, mai
+    // alfabetico né per orario), mai una sola fermata (es. solo MAROTTA).
+    const paxByStopName = new Map<string, number>();
+    for (const alloc of sorted) {
+      const key = alloc.stop_name.toUpperCase();
+      paxByStopName.set(key, (paxByStopName.get(key) ?? 0) + alloc.pax_assigned);
+    }
+    const usedStopNames = new Set(paxByStopName.keys());
     const usedStops = stops
       .filter((s) => usedStopNames.has(s.stop_name.toUpperCase()))
       .sort((a, b) => {
@@ -1431,7 +1441,8 @@ export default function BusNetworkPage() {
       aoa.push(["SCARICO", "", "", "", "", "", ""]);
       for (const stop of usedStops) {
         const label = stop.pickup_note ? `${stop.stop_name} - ${stop.pickup_note}` : stop.stop_name;
-        aoa.push([label, "", "", "", "", "", ""]);
+        const stopPax = paxByStopName.get(stop.stop_name.toUpperCase()) ?? 0;
+        aoa.push([label, stopPax, "", "", "", "", ""]);
       }
     }
 

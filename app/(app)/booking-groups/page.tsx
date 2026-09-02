@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { PageHeader, SectionCard, EmptyState } from "@/components/ui";
+import { isPlaceholderStopTime } from "@/lib/booking-group-card";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import {
   computeBookingGroupStatusSummaryByDirection,
@@ -696,7 +697,17 @@ function StopsSection({ stops, stopSummaries, services, onAddStop, onUpdateStop,
           return (
             <div key={s.id} className={`rounded-lg border p-2 text-xs ${sum?.overbooked ? "border-rose-300 bg-rose-50" : "border-slate-200"}`}>
               <div className="font-semibold uppercase text-slate-700">{s.city}</div>
-              <div className="text-slate-500">{s.pickup_point ?? "punto di carico da definire"} · {s.expected_pax} pax · {s.direction}{s.stop_id ? " · fermata catalogo" : ""}</div>
+              <div className="text-slate-500">
+                {s.pickup_point ?? "punto di carico da definire"} · {s.expected_pax} pax · {s.direction}
+                {s.stop_id ? " · fermata catalogo" : ""}
+                {/* Obiettivo A/D (prompt "FIX MIRATO — SALVATAGGIO ORARIO PICKUP..."):
+                    conferma visibile dell'orario salvato — prima non compariva mai
+                    in questa riga, quindi un salvataggio riuscito sembrava non fare
+                    nulla. Mai mostrare il placeholder 00:00 come orario reale. */}
+                {s.catalog_pickup_time && !isPlaceholderStopTime(s.catalog_pickup_time)
+                  ? ` · orario ${s.catalog_pickup_time.slice(0, 5)}`
+                  : s.stop_id ? " · orario da verificare" : ""}
+              </div>
               <div className="mt-0.5 text-slate-500">
                 {/* Fallback lettura (Obiettivo E): telefono fermata -> telefono capogruppo -> "non indicato". */}
                 <b>Referente fermata:</b> {s.contact_name ?? "—"} · <b>Tel:</b> {s.contact_phone ?? (groupContactPhone ? `${groupContactPhone} (capogruppo)` : "Telefono non indicato")}
@@ -879,7 +890,11 @@ function StopCatalogLinker({ stop, busLines, defaultBusLineId, onLink }: {
           disabled={busy || !effectiveLineId || !time}
           onClick={async () => {
             setBusy(true);
-            await onLink({
+            // Obiettivo A (prompt "FIX MIRATO — SALVATAGGIO ORARIO PICKUP...")
+            // — prima il form si chiudeva SEMPRE, anche su errore, dando
+            // l'impressione di un salvataggio riuscito quando in realtà
+            // `post()` aveva già mostrato onError e non aveva scritto nulla.
+            const result = await onLink({
               city: stop.city,
               pickup_point: stop.pickup_point,
               expected_pax: stop.expected_pax,
@@ -890,7 +905,7 @@ function StopCatalogLinker({ stop, busLines, defaultBusLineId, onLink }: {
               pickup_time: time,
             });
             setBusy(false);
-            setOpen(false);
+            if (result) setOpen(false);
           }}
         >
           {busy ? "Salvo..." : "Salva orario"}
