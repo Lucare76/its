@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -11,6 +11,7 @@ type SearchResult = {
   customer_name: string;
   phone: string | null;
   date: string;
+  time?: string | null;
   status: string;
   direction: string;
   pax: number;
@@ -20,10 +21,42 @@ type SearchResult = {
   departure_date: string | null;
   transport_code: string | null;
   hotel_name: string | null;
+  bus_city_origin?: string | null;
   meeting_point: string | null;
   notes: string | null;
+  booking_group_id?: string | null;
   booking_group_name: string | null;
+  // Obiettivo A/E (card gruppo unica): true se questa riga ha davvero
+  // combaciato con la query; false se è stata aggiunta solo per completare
+  // la card del gruppo (vedi "fratelli" in app/api/ops/search/route.ts).
+  matched_query?: boolean;
 };
+
+// Obiettivo A/B/C: metadata del gruppo per l'header/dettagli della card —
+// mai inventati, vengono da booking_groups tramite app/api/ops/search.
+type BookingGroupMeta = {
+  id: string;
+  name: string;
+  kind: string | null;
+  service_date: string | null;
+  return_date: string | null;
+  hotel_id: string | null;
+  hotel_name: string | null;
+  notes: string | null;
+};
+
+const GROUP_KIND_LABEL: Record<string, string> = {
+  bus_exclusive: "Bus esclusivo",
+  bus_group: "Gruppo bus",
+};
+
+function formatStopLine(r: SearchResult): string {
+  const city = r.bus_city_origin?.trim();
+  const pickup = r.meeting_point?.trim();
+  const place = city && pickup && pickup.toUpperCase() !== city.toUpperCase() ? `${city} - ${pickup}` : city || pickup || "Fermata da definire";
+  const time = r.time?.trim();
+  return `${place} — ${r.pax} pax${time ? ` — ${time.slice(0, 5)}` : ""}`;
+}
 
 const STATUS_LABEL: Record<string, string> = {
   new: "Nuovo", assigned: "Assegnato", partito: "Partito",
@@ -57,10 +90,157 @@ function fmtDate(d: string | null) {
   return new Date(`${d}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+// Obiettivo A: una sola card per booking_group_id, mai una per service —
+// i services senza booking_group_id restano individuali (Obiettivo F).
+function groupSearchResults(results: SearchResult[]) {
+  type RenderItem = { type: "individual"; result: SearchResult } | { type: "group"; groupId: string; services: SearchResult[] };
+  const servicesByGroup = new Map<string, SearchResult[]>();
+  for (const r of results) {
+    if (!r.booking_group_id) continue;
+    const list = servicesByGroup.get(r.booking_group_id) ?? [];
+    list.push(r);
+    servicesByGroup.set(r.booking_group_id, list);
+  }
+  const items: RenderItem[] = [];
+  const seenGroups = new Set<string>();
+  for (const r of results) {
+    if (r.booking_group_id) {
+      if (seenGroups.has(r.booking_group_id)) continue;
+      seenGroups.add(r.booking_group_id);
+      items.push({ type: "group", groupId: r.booking_group_id, services: servicesByGroup.get(r.booking_group_id) ?? [] });
+    } else {
+      items.push({ type: "individual", result: r });
+    }
+  }
+  return items;
+}
+
+function BookingGroupCard({
+  meta, services, expanded, onToggle,
+}: {
+  meta: BookingGroupMeta | undefined;
+  services: SearchResult[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const groupName = meta?.name ?? services[0]?.booking_group_name ?? "Gruppo";
+  const totalPax = services.reduce((sum, s) => sum + (s.pax || 0), 0);
+  const kindLabel = meta?.kind ? GROUP_KIND_LABEL[meta.kind] ?? meta.kind : null;
+  const arrivalStops = services
+    .filter((s) => s.direction === "arrival")
+    .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
+  const departureStops = services
+    .filter((s) => s.direction === "departure")
+    .sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
+  // Obiettivo C: mai inventare fermate di ritorno — se return_date c'è ma
+  // nessun service departure esiste ancora, si mostra solo un warning.
+  const returnMissing = Boolean(meta?.return_date) && departureStops.length === 0;
+  const anyMatchedStop = services.some((s) => s.matched_query);
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-900 text-sm">{groupName}</span>
+            <span className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 border-indigo-200">
+              {totalPax} pax
+            </span>
+            {kindLabel && (
+              <span className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-600 border-slate-200">
+                {kindLabel}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
+            {meta?.hotel_name && <span>Hotel: {meta.hotel_name}</span>}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
+            {meta?.service_date && <span>Arrivo: {fmtDate(meta.service_date)}</span>}
+            {meta?.return_date && <span>Ritorno: {fmtDate(meta.return_date)}</span>}
+          </div>
+
+          <div className="mt-2 text-xs text-slate-600">
+            <p className="font-semibold text-slate-500">Fermate andata:</p>
+            {arrivalStops.length > 0 ? (
+              <ul className="mt-0.5 space-y-0.5">
+                {arrivalStops.map((s) => (
+                  <li
+                    key={s.id}
+                    className={s.matched_query && anyMatchedStop ? "rounded bg-amber-50 px-1 -mx-1 font-medium text-amber-800" : undefined}
+                  >
+                    {formatStopLine(s)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-slate-400">Da completare</p>
+            )}
+          </div>
+
+          <div className="mt-2 text-xs text-slate-600">
+            <p className="font-semibold text-slate-500">Fermate ritorno:</p>
+            {departureStops.length > 0 ? (
+              <ul className="mt-0.5 space-y-0.5">
+                {departureStops.map((s) => (
+                  <li
+                    key={s.id}
+                    className={s.matched_query && anyMatchedStop ? "rounded bg-amber-50 px-1 -mx-1 font-medium text-amber-800" : undefined}
+                  >
+                    {formatStopLine(s)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-slate-400">Da completare</p>
+            )}
+            {returnMissing && (
+              <p className="mt-1 text-amber-700">
+                Ritorno previsto il {fmtDate(meta!.return_date)}, fermate ritorno non ancora inserite
+              </p>
+            )}
+          </div>
+
+          {expanded && (
+            <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-600 space-y-2">
+              {meta?.notes && (
+                <p><span className="font-semibold text-slate-500">Note gruppo: </span>{meta.notes}</p>
+              )}
+              <div>
+                <p className="font-semibold text-slate-500">Services collegati ({services.length}):</p>
+                <ul className="mt-0.5 space-y-0.5">
+                  {services.map((s) => (
+                    <li key={s.id}>
+                      {s.customer_name} — {s.pax} pax — {s.direction === "arrival" ? "andata" : "ritorno"} —{" "}
+                      <span className={`inline-flex rounded-full border px-1.5 py-0 text-[10px] font-semibold ${STATUS_COLOR[s.status] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                        {STATUS_LABEL[s.status] ?? s.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={onToggle}
+            className="mt-2 text-xs font-semibold text-blue-700 hover:underline"
+          >
+            {expanded ? "Nascondi dettagli" : "Dettagli"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RicercaInner() {
   const searchParams = useSearchParams();
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [bookingGroups, setBookingGroups] = useState<BookingGroupMeta[]>([]);
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [initError, setInitError] = useState("");
@@ -88,7 +268,7 @@ function RicercaInner() {
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query.trim().length < 2) { setResults([]); return; }
+    if (query.trim().length < 2) { setResults([]); setBookingGroups([]); return; }
     if (!accessToken) return;
 
     debounceRef.current = setTimeout(async () => {
@@ -97,13 +277,19 @@ function RicercaInner() {
         const res = await fetch(`/api/ops/search?q=${encodeURIComponent(query.trim())}&limit=40`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: SearchResult[] } | null;
-        if (body?.ok) setResults(body.results ?? []);
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; results?: SearchResult[]; booking_groups?: BookingGroupMeta[] } | null;
+        if (body?.ok) {
+          setResults(body.results ?? []);
+          setBookingGroups(body.booking_groups ?? []);
+        }
       } finally {
         setLoading(false);
       }
     }, 280);
   }, [query, accessToken]);
+
+  const bookingGroupById = useMemo(() => new Map(bookingGroups.map((g) => [g.id, g])), [bookingGroups]);
+  const renderItems = useMemo(() => groupSearchResults(results), [results]);
 
   if (initError) return <div className="card p-4 text-sm text-slate-500">{initError}</div>;
 
@@ -138,55 +324,64 @@ function RicercaInner() {
       </div>
 
       {/* Results */}
-      {results.length > 0 ? (
+      {renderItems.length > 0 ? (
         <div className="space-y-2">
-          <p className="text-xs text-slate-500 px-1">{results.length} risultat{results.length === 1 ? "o" : "i"}</p>
-          {results.map((r) => (
-            <Link
-              key={r.id}
-              href={`/scan/${r.id}`}
-              className="card block p-4 hover:bg-slate-50 transition-colors"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-slate-900 text-sm">{r.customer_name}</span>
-                    {r.phone && (
-                      <span className="text-xs text-slate-500">{r.phone}</span>
-                    )}
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_COLOR[r.status] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
-                      {STATUS_LABEL[r.status] ?? r.status}
-                    </span>
-                    {r.booking_group_name && (
-                      <span className="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 border-indigo-200">
-                        Gruppo: {r.booking_group_name}
+          <p className="text-xs text-slate-500 px-1">{renderItems.length} risultat{renderItems.length === 1 ? "o" : "i"}</p>
+          {renderItems.map((item) => {
+            if (item.type === "group") {
+              return (
+                <BookingGroupCard
+                  key={item.groupId}
+                  meta={bookingGroupById.get(item.groupId)}
+                  services={item.services}
+                  expanded={expandedGroupId === item.groupId}
+                  onToggle={() => setExpandedGroupId((current) => (current === item.groupId ? null : item.groupId))}
+                />
+              );
+            }
+            const r = item.result;
+            return (
+              <Link
+                key={r.id}
+                href={`/scan/${r.id}`}
+                className="card block p-4 hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-slate-900 text-sm">{r.customer_name}</span>
+                      {r.phone && (
+                        <span className="text-xs text-slate-500">{r.phone}</span>
+                      )}
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_COLOR[r.status] ?? "bg-slate-100 text-slate-500 border-slate-200"}`}>
+                        {STATUS_LABEL[r.status] ?? r.status}
                       </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
+                      {r.booking_service_kind && (
+                        <span>{KIND_LABEL[r.booking_service_kind] ?? r.booking_service_kind}</span>
+                      )}
+                      <span>{r.pax} pax</span>
+                      {r.hotel_name && <span>· {r.hotel_name}</span>}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                      {r.arrival_date && <span>Arrivo: {fmtDate(r.arrival_date)}</span>}
+                      {r.departure_date && <span>Partenza: {fmtDate(r.departure_date)}</span>}
+                      {!r.arrival_date && !r.departure_date && <span>{fmtDate(r.date)}</span>}
+                      {r.vessel && <span>· {r.vessel}</span>}
+                      {r.transport_code && <span>· {r.transport_code}</span>}
+                    </div>
+                    {r.notes && (
+                      <p className="mt-1 text-xs text-slate-400 line-clamp-1">{r.notes}</p>
                     )}
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
-                    {r.booking_service_kind && (
-                      <span>{KIND_LABEL[r.booking_service_kind] ?? r.booking_service_kind}</span>
-                    )}
-                    <span>{r.pax} pax</span>
-                    {r.hotel_name && <span>· {r.hotel_name}</span>}
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
-                    {r.arrival_date && <span>Arrivo: {fmtDate(r.arrival_date)}</span>}
-                    {r.departure_date && <span>Partenza: {fmtDate(r.departure_date)}</span>}
-                    {!r.arrival_date && !r.departure_date && <span>{fmtDate(r.date)}</span>}
-                    {r.vessel && <span>· {r.vessel}</span>}
-                    {r.transport_code && <span>· {r.transport_code}</span>}
-                  </div>
-                  {r.notes && (
-                    <p className="mt-1 text-xs text-slate-400 line-clamp-1">{r.notes}</p>
-                  )}
+                  <svg className="shrink-0 h-4 w-4 text-slate-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
                 </div>
-                <svg className="shrink-0 h-4 w-4 text-slate-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            );
+          })}
         </div>
       ) : query.trim().length >= 2 && !loading ? (
         <div className="card p-8 text-center">

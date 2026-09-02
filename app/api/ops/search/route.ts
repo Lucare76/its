@@ -598,7 +598,7 @@ export async function GET(req: NextRequest) {
         ? auth.admin.from("agencies").select("id,name").eq("tenant_id", tenantId).in("id", agencyIds)
         : Promise.resolve({ data: [], error: null }),
       bookingGroupIds.length
-        ? auth.admin.from("booking_groups").select("id,name").eq("tenant_id", tenantId).in("id", bookingGroupIds)
+        ? auth.admin.from("booking_groups").select("id,name,kind,service_date,return_date,hotel_id,notes").eq("tenant_id", tenantId).in("id", bookingGroupIds)
         : Promise.resolve({ data: [], error: null }),
       auth.admin.from("ferry_schedules").select("company,departure_port,arrival_port,departure_time,arrival_time,direction,days_of_week,valid_from,valid_to"),
       // Usato solo per arrivalLeg (vedi sotto) -> solo regole ARRIVO (to_ischia), mai PARTENZA.
@@ -644,6 +644,36 @@ export async function GET(req: NextRequest) {
     const hotelZoneById = new Map([...(matchedHotels ?? []), ...(hotelsResult.data ?? [])].map((hotel: { id: string; zone?: string | null }) => [hotel.id, hotel.zone ?? null]));
     const agencyNameById = new Map([...(matchedAgencies ?? []), ...(agenciesResult.data ?? [])].map((item: { id: string; name: string }) => [item.id, item.name]));
     const bookingGroupNameById = new Map([...(matchedBookingGroups ?? []), ...(bookingGroupsResult.data ?? [])].map((group: { id: string; name: string }) => [group.id, group.name]));
+    // Obiettivo A/B/D (card gruppo unica): metadata di gruppo per l'header
+    // della card — service_date/return_date/hotel/notes, mai lette prima
+    // d'ora da questa route. L'hotel del gruppo puo' non coincidere con
+    // nessun hotel_id gia' risolto sopra (nessun service lo porta), quindi
+    // va risolto a parte.
+    const bookingGroupRows = (bookingGroupsResult.data ?? []) as Array<{
+      id: string; name: string; kind: string | null; service_date: string | null; return_date: string | null; hotel_id: string | null; notes: string | null;
+    }>;
+    const missingGroupHotelIds = Array.from(new Set(
+      bookingGroupRows.map((g) => g.hotel_id).filter((id): id is string => Boolean(id) && !hotelNameById.has(id as string)),
+    ));
+    if (missingGroupHotelIds.length) {
+      const { data: extraHotels, error: extraHotelsError } = await auth.admin
+        .from("hotels").select("id,name,zone").eq("tenant_id", tenantId).in("id", missingGroupHotelIds);
+      if (extraHotelsError) throw new Error(extraHotelsError.message);
+      for (const hotel of (extraHotels ?? []) as Array<{ id: string; name: string; zone?: string | null }>) {
+        hotelNameById.set(hotel.id, hotel.name);
+        hotelZoneById.set(hotel.id, hotel.zone ?? null);
+      }
+    }
+    const bookingGroupsForResponse = bookingGroupRows.map((g) => ({
+      id: g.id,
+      name: g.name,
+      kind: g.kind,
+      service_date: g.service_date,
+      return_date: g.return_date,
+      hotel_id: g.hotel_id,
+      hotel_name: g.hotel_id ? hotelNameById.get(g.hotel_id) ?? null : null,
+      notes: g.notes,
+    }));
     const busAllocationsByServiceId = new Map<string, BusAllocationDetailRow[]>();
     for (const allocation of (busAllocationsResult.data ?? []) as BusAllocationDetailRow[]) {
       const rows = busAllocationsByServiceId.get(allocation.service_id) ?? [];
@@ -676,10 +706,12 @@ export async function GET(req: NextRequest) {
         booking_group_name: service.booking_group_id ? bookingGroupNameById.get(service.booking_group_id) ?? null : null,
       }));
 
-    const results = collapseLinkedBookingPairs(
-      filterBookingsBySearch(searchable, q, agency, agencyNameById, Math.max(limit * 2, 100))
-    ).slice(0, limit)
-      .map((r) => {
+    // Obiettivo A/E (card gruppo unica): estratta in una funzione nominata,
+    // stesso identico corpo di prima, per poterla riusare tale e quale sia
+    // sui risultati che hanno effettivamente combaciato con la query sia sui
+    // "fratelli" di gruppo aggiunti sotto — nessuna logica ferry/pickup/bus
+    // toccata, solo resa riusabile.
+    const mapResultRow = (r: SearchServiceRow) => {
         const linked = r.linked_service_id
           ? serviceById.get(String(r.linked_service_id))
           : null;
@@ -851,9 +883,45 @@ export async function GET(req: NextRequest) {
             note: cancellationLog.after_data?.cancellation_note ?? null,
           } : null,
         };
-      });
+    };
 
-    return NextResponse.json({ ok: true, results });
+    const results = collapseLinkedBookingPairs(
+      filterBookingsBySearch(searchable, q, agency, agencyNameById, Math.max(limit * 2, 100))
+    ).slice(0, limit)
+      .map((r) => ({ ...mapResultRow(r), matched_query: true }));
+
+    // Obiettivo A/E (card gruppo unica): se un risultato appartiene a un
+    // booking_group, includi anche gli altri services dello stesso gruppo
+    // (anche se non combaciano testualmente con la query) così il frontend
+    // può assemblarli in un'unica card — mai filtrati da
+    // matchesBookingSearch, "fratelli" espliciti, mai una card gruppo
+    // incompleta. matched_query distingue chi ha davvero fatto match
+    // (per evidenziare la fermata giusta) dai fratelli aggiunti solo per
+    // completare la card.
+    const primaryGroupIds = Array.from(new Set(
+      results.map((r) => r.booking_group_id).filter((id): id is string => Boolean(id)),
+    ));
+    let finalResults = results;
+    if (primaryGroupIds.length) {
+      const primaryIds = new Set(results.map((r) => r.id));
+      const { data: siblingRows, error: siblingError } = await auth.admin
+        .from("services")
+        .select(SERVICE_SEARCH_COLUMNS)
+        .eq("tenant_id", tenantId)
+        .in("booking_group_id", primaryGroupIds);
+      if (siblingError) throw new Error(siblingError.message);
+      const siblingCandidates = ((siblingRows ?? []) as unknown as SearchServiceRow[]).filter((s) => !primaryIds.has(s.id));
+      const siblingSearchable = siblingCandidates.map((service) => ({
+        ...service,
+        hotel_name: service.hotel_id ? hotelNameById.get(service.hotel_id) ?? null : null,
+        voucher_no: service.agency_booking_id ? voucherByAgencyBookingId.get(service.agency_booking_id) ?? null : null,
+        booking_group_name: service.booking_group_id ? bookingGroupNameById.get(service.booking_group_id) ?? null : null,
+      }));
+      const siblingResults = siblingSearchable.map((r) => ({ ...mapResultRow(r), matched_query: false }));
+      finalResults = [...results, ...siblingResults];
+    }
+
+    return NextResponse.json({ ok: true, results: finalResults, booking_groups: bookingGroupsForResponse });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : "Errore" },

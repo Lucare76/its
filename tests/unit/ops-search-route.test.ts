@@ -745,6 +745,99 @@ describe("GET /api/ops/search — Obiettivo I: ricerca per nome del booking grou
   });
 });
 
+describe("GET /api/ops/search — Obiettivo A/E (card gruppo unica): espansione fratelli + metadata gruppo", () => {
+  it("cerca una fermata (PESARO) -> tornano TUTTI i services del gruppo, non solo quello di Pesaro", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI", kind: "bus_exclusive", service_date: "2026-09-06", return_date: "2026-09-13", hotel_id: null, notes: null }],
+      services: [
+        service("s-cattolica", TENANT_A, { customer_name: "GIACOMONI", pax: 4, bus_city_origin: "CATTOLICA", booking_group_id: "bg-giacomoni", direction: "arrival" }),
+        service("s-pesaro", TENANT_A, { customer_name: "GIACOMONI", pax: 6, bus_city_origin: "PESARO", booking_group_id: "bg-giacomoni", direction: "arrival" }),
+        service("s-fano", TENANT_A, { customer_name: "GIACOMONI", pax: 10, bus_city_origin: "FANO", booking_group_id: "bg-giacomoni", direction: "arrival" }),
+        service("s-marotta", TENANT_A, { customer_name: "GIACOMONI", pax: 18, bus_city_origin: "MAROTTA", booking_group_id: "bg-giacomoni", direction: "arrival" }),
+        service("s-altro", TENANT_A, { customer_name: "Cliente Non Collegato", bus_city_origin: "PESARO" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=PESARO")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toEqual(expect.arrayContaining(["s-cattolica", "s-pesaro", "s-fano", "s-marotta"]));
+    // Il cliente non collegato al gruppo (match diretto su PESARO ma senza
+    // booking_group_id) resta comunque tra i risultati, non va confuso con
+    // l'espansione fratelli.
+    expect(ids).toContain("s-altro");
+
+    const pesaroRow = body.results.find((r: Row) => r.id === "s-pesaro");
+    const cattolicaRow = body.results.find((r: Row) => r.id === "s-cattolica");
+    expect(pesaroRow.matched_query).toBe(true);
+    // Cattolica non contiene "PESARO": è stato incluso solo come fratello di
+    // gruppo, mai come match testuale diretto.
+    expect(cattolicaRow.matched_query).toBe(false);
+  });
+
+  it("risposta include booking_groups con service_date/return_date/hotel_name/notes", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI", kind: "bus_exclusive", service_date: "2026-09-06", return_date: "2026-09-13", hotel_id: "hotel-1", notes: "CI SAREBBERO 2 PAX CHE VORREBBERO SALIRE A CESENA" }],
+      hotels: [{ id: "hotel-1", tenant_id: TENANT_A, name: "GRAND HOTEL DELLE TERME RE FERDINANDO", zone: null }],
+      services: [
+        service("s1", TENANT_A, { customer_name: "GIACOMONI", pax: 4, booking_group_id: "bg-giacomoni" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=GIACOMONI")).json();
+    expect(body.booking_groups).toEqual([{
+      id: "bg-giacomoni",
+      name: "GIACOMONI",
+      kind: "bus_exclusive",
+      service_date: "2026-09-06",
+      return_date: "2026-09-13",
+      hotel_id: "hotel-1",
+      hotel_name: "GRAND HOTEL DELLE TERME RE FERDINANDO",
+      notes: "CI SAREBBERO 2 PAX CHE VORREBBERO SALIRE A CESENA",
+    }]);
+  });
+
+  it("gruppo senza hotel/notes: booking_groups espone comunque la riga con campi null (nessun dato inventato)", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [{ id: "bg-giacomoni", tenant_id: TENANT_A, name: "GIACOMONI", kind: "bus_exclusive", service_date: "2026-09-06", return_date: "2026-09-13", hotel_id: null, notes: null }],
+      services: [service("s1", TENANT_A, { customer_name: "GIACOMONI", booking_group_id: "bg-giacomoni" })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=GIACOMONI")).json();
+    expect(body.booking_groups[0].hotel_name).toBeNull();
+    expect(body.booking_groups[0].notes).toBeNull();
+  });
+
+  it("servizio individuale (booking_group_id null): nessuna espansione fratelli, comportamento invariato", async () => {
+    const fake = createFakeAdmin({
+      services: [service("s1", TENANT_A, { customer_name: "Rossi Mario" })],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Rossi")).json();
+    expect(body.results.map((r: Row) => r.id)).toEqual(["s1"]);
+    expect(body.results[0].matched_query).toBe(true);
+    expect(body.booking_groups).toEqual([]);
+  });
+
+  it("isolamento tenant: l'espansione fratelli non pesca services di un altro tenant anche con lo stesso booking_group_id letterale", async () => {
+    const fake = createFakeAdmin({
+      booking_groups: [
+        { id: "bg-shared-id", tenant_id: TENANT_A, name: "GIACOMONI", kind: "bus_exclusive", service_date: null, return_date: null, hotel_id: null, notes: null },
+      ],
+      services: [
+        service("s-a1", TENANT_A, { customer_name: "GIACOMONI", bus_city_origin: "PESARO", booking_group_id: "bg-shared-id" }),
+        service("s-a2", TENANT_A, { customer_name: "MURATORI SANDRA", booking_group_id: "bg-shared-id" }),
+        service("s-b1", TENANT_B, { customer_name: "Altro Passeggero", booking_group_id: "bg-shared-id" }),
+      ],
+    });
+    authorizeAs(fake.admin, TENANT_A);
+    const body = await (await callGet("?q=PESARO")).json();
+    const ids = body.results.map((r: Row) => r.id);
+    expect(ids).toContain("s-a1");
+    expect(ids).toContain("s-a2");
+    expect(ids).not.toContain("s-b1");
+  });
+});
+
 describe("Performance — nessun select('*'), nessun fetch non paginato", () => {
   const source = readFileSync(join(process.cwd(), "app/api/ops/search/route.ts"), "utf8");
 
