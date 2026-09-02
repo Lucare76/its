@@ -183,3 +183,191 @@ describe("POST allocate_services_bulk — assegnazione a blocco fermata gruppo (
     expect(writes.rpcCalls).toHaveLength(0);
   });
 });
+
+/**
+ * FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY.
+ *
+ * L'azione "auto_assign_date" (bulk PARTENZE/ARRIVI da /bus-network) non deve
+ * mai fermarsi al primo bus candidato che fallisce: deve escludere a monte i
+ * bus con reservation exclusive=true per un booking_group diverso da quello
+ * del service, e ritentare sul candidato successivo (in ordine sort_order)
+ * se la RPC allocate_bus_service rifiuta comunque il bus scelto — mai uno
+ * skip immediato al primo fallimento.
+ *
+ * Città "Rimini" / family_code "ADRIATICA": senza transport_code,
+ * deriveServiceBusIdentity risolve la linea tramite il catalogo reale
+ * (findNearestBusStop), che per "Rimini" restituisce la famiglia ADRIATICA —
+ * stesso pattern già verificato in mario-exclusive-reservation-e2e.test.ts,
+ * nessun mock del catalogo.
+ */
+describe("POST auto_assign_date — prefiltro exclusive + retry su bus successivo (FIX MIRATO)", () => {
+  const AA_LINE_ID = "line-adriatica-aa";
+  const AA_STOP_ID = "stop-rimini-aa";
+  const AA_BUS_1 = "aa-bus-1";
+  const AA_BUS_2 = "aa-bus-2";
+  const AA_BUS_3 = "aa-bus-3";
+  const AA_SVC_1 = "aa-svc-1";
+  const AA_GROUP_ID = "aa-group-1";
+  const AA_OTHER_GROUP_ID = "aa-group-2";
+
+  function makeAutoAssignAdmin(seed: Record<string, Row[]>, opts: { failRpcForBusIds?: Set<string> } = {}) {
+    const rpcCalls: Array<{ name: string; params: Row }> = [];
+    function builder(table: string) {
+      const filters: Row = {};
+      const rowsForFilters = () => (seed[table] ?? []).filter((r) => Object.entries(filters).every(([k, v]) => r[k] === v));
+      const b: Record<string, unknown> = {};
+      b.select = () => b;
+      b.order = () => b;
+      b.limit = () => b;
+      b.in = () => b;
+      b.or = () => b;
+      b.eq = (col: string, val: unknown) => { filters[col] = val; return b; };
+      b.maybeSingle = async () => ({ data: rowsForFilters()[0] ?? null, error: null });
+      b.single = async () => ({ data: rowsForFilters()[0] ?? null, error: null });
+      b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve({ data: rowsForFilters(), error: null }).then(resolve, reject);
+      return b;
+    }
+    const admin = {
+      from: (t: string) => builder(t),
+      rpc: async (name: string, params: Row) => {
+        rpcCalls.push({ name, params });
+        if (name !== "allocate_bus_service") return { data: null, error: { message: `RPC ${name} non gestita nel fake test` } };
+        const busUnitId = String(params.p_bus_unit_id);
+        if (opts.failRpcForBusIds?.has(busUnitId)) {
+          return { data: null, error: { message: `Rifiutato (fake) per ${busUnitId}` } };
+        }
+        return { data: { allocation_id: `alloc-${busUnitId}` }, error: null };
+      },
+    };
+    return { admin, rpcCalls };
+  }
+
+  function autoAssignSeed(overrides: Partial<Record<string, Row[]>> = {}): Record<string, Row[]> {
+    return {
+      tenant_bus_lines: [{ id: AA_LINE_ID, tenant_id: TENANT, code: "ADRIATICA", name: "Adriatica", family_code: "ADRIATICA", active: true }],
+      tenant_bus_line_stops: [{ id: AA_STOP_ID, tenant_id: TENANT, bus_line_id: AA_LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true }],
+      tenant_bus_units: [
+        { id: AA_BUS_1, tenant_id: TENANT, bus_line_id: AA_LINE_ID, label: "Bus 1", capacity: 54, status: "open", sort_order: 1, active: true },
+        { id: AA_BUS_2, tenant_id: TENANT, bus_line_id: AA_LINE_ID, label: "Bus 2", capacity: 54, status: "open", sort_order: 2, active: true },
+        { id: AA_BUS_3, tenant_id: TENANT, bus_line_id: AA_LINE_ID, label: "Bus 3", capacity: 54, status: "open", sort_order: 3, active: true },
+      ],
+      tenant_bus_allocations: [],
+      booking_group_bus_reservations: [],
+      services: [
+        { id: AA_SVC_1, tenant_id: TENANT, customer_name: "Cliente Individuale", direction: "departure", booking_service_kind: "bus_city_hotel", booking_group_id: null, date: "2026-09-13", time: "18:00", pax: 1, bus_city_origin: "Rimini" },
+      ],
+      ...overrides,
+    };
+  }
+
+  function autoAssign(admin: unknown, direction: "arrival" | "departure" = "departure") {
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    return POST(post({ action: "auto_assign_date", date: "2026-09-13", direction }));
+  }
+
+  it("1) bus 1 vuoto ma reserved exclusive per altro gruppo, bus 2 libero: servizio individuale assegnato a bus 2, non skipped", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed({
+      booking_group_bus_reservations: [{ tenant_id: TENANT, bus_unit_id: AA_BUS_1, service_date: "2026-09-13", exclusive: true, booking_group_id: AA_OTHER_GROUP_ID }],
+    }));
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    expect(json.skipped).toBe(0);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls.map((c) => c.params.p_bus_unit_id)).toEqual([AA_BUS_2]);
+  });
+
+  it("2) bus 1 fallisce la RPC, bus 2 riesce: servizio assegnato a bus 2", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed(), { failRpcForBusIds: new Set([AA_BUS_1]) });
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    expect(json.skipped).toBe(0);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls.map((c) => c.params.p_bus_unit_id)).toEqual([AA_BUS_1, AA_BUS_2]);
+  });
+
+  it("3) bus 1 e bus 2 falliscono la RPC, bus 3 riesce: servizio assegnato a bus 3", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed(), { failRpcForBusIds: new Set([AA_BUS_1, AA_BUS_2]) });
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    expect(json.skipped).toBe(0);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls.map((c) => c.params.p_bus_unit_id)).toEqual([AA_BUS_1, AA_BUS_2, AA_BUS_3]);
+  });
+
+  it("4) tutti i candidati falliscono: il servizio va in skipped con reason utile che elenca i tentativi", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed(), { failRpcForBusIds: new Set([AA_BUS_1, AA_BUS_2, AA_BUS_3]) });
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(0);
+    expect(json.skipped).toBe(1);
+    expect(json.skipped_detail[0].reason).toMatch(/Bus 1/);
+    expect(json.skipped_detail[0].reason).toMatch(/Bus 2/);
+    expect(json.skipped_detail[0].reason).toMatch(/Bus 3/);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls.map((c) => c.params.p_bus_unit_id)).toEqual([AA_BUS_1, AA_BUS_2, AA_BUS_3]);
+  });
+
+  it("5) bus riservato in esclusiva allo STESSO booking_group del service: non escluso, assegnazione consentita su bus 1", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed({
+      services: [{ id: AA_SVC_1, tenant_id: TENANT, customer_name: "Gruppo Test", direction: "departure", booking_service_kind: "bus_city_hotel", booking_group_id: AA_GROUP_ID, date: "2026-09-13", time: "18:00", pax: 1, bus_city_origin: "Rimini" }],
+      booking_group_bus_reservations: [{ tenant_id: TENANT, bus_unit_id: AA_BUS_1, service_date: "2026-09-13", exclusive: true, booking_group_id: AA_GROUP_ID }],
+    }));
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls.map((c) => c.params.p_bus_unit_id)).toEqual([AA_BUS_1]);
+  });
+
+  it("6) servizio senza booking_group_id, bus riservato in esclusiva a un gruppo: escluso dai candidati", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed({
+      booking_group_bus_reservations: [{ tenant_id: TENANT, bus_unit_id: AA_BUS_1, service_date: "2026-09-13", exclusive: true, booking_group_id: AA_OTHER_GROUP_ID }],
+    }));
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls.some((c) => c.params.p_bus_unit_id === AA_BUS_1)).toBe(false);
+  });
+
+  it("7) direzione arrival: il retry non rompe l'assegnazione arrivi quando nessun bus e' bloccato", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed({
+      tenant_bus_line_stops: [{ id: AA_STOP_ID, tenant_id: TENANT, bus_line_id: AA_LINE_ID, direction: "arrival", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true }],
+      services: [{ id: AA_SVC_1, tenant_id: TENANT, customer_name: "Cliente Individuale", direction: "arrival", booking_service_kind: "bus_city_hotel", booking_group_id: null, date: "2026-09-13", time: "05:10", pax: 1, bus_city_origin: "Rimini" }],
+    }));
+    const res = await autoAssign(admin, "arrival");
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    expect(json.skipped).toBe(0);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    expect(allocCalls).toHaveLength(1);
+    expect(allocCalls[0]?.params.p_bus_unit_id).toBe(AA_BUS_1);
+  });
+
+  it("8) same stop: preferisce il bus gia' usato per la stessa fermata; se quel bus fallisce, ritenta sul successivo", async () => {
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed({
+      // Allocazione preesistente su bus 1 per la stessa fermata: pickBusCandidatesOrdered
+      // lo sceglierebbe come "primary" per preferenza stessa-fermata.
+      tenant_bus_allocations: [{ id: "prior-alloc", tenant_id: TENANT, service_id: "prior-svc", bus_unit_id: AA_BUS_1, bus_line_id: AA_LINE_ID, stop_id: AA_STOP_ID, stop_name: "RIMINI", direction: "departure", pax_assigned: 1 }],
+    }), { failRpcForBusIds: new Set([AA_BUS_1]) });
+    const res = await autoAssign(admin);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    expect(json.skipped).toBe(0);
+    const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
+    // primo tentativo sul bus preferito (stessa fermata) fallisce, poi ritenta sul successivo
+    expect(allocCalls.map((c) => c.params.p_bus_unit_id)).toEqual([AA_BUS_1, AA_BUS_2]);
+  });
+});

@@ -17,6 +17,7 @@ type ServiceRow = {
   transport_code: string | null;
   service_type_code: string | null;
   booking_service_kind: string | null;
+  booking_group_id: string | null;
 };
 
 type BusLineRow = {
@@ -65,24 +66,59 @@ function normCity(value?: string | null) {
     .trim();
 }
 
-function pickBusWithAvailability(
+/**
+ * Ordina i bus candidati per un service: stessa fermata (con posto) per
+ * prima, poi gli altri bus della linea con posto, nell'ordine sort_order
+ * originale. `lockedBusIds` esclude a monte i bus riservati in esclusiva
+ * (booking_group_bus_reservations.exclusive = true) a un booking_group
+ * diverso da quello del service — la RPC `allocate_bus_service` resta
+ * comunque la barriera finale (stesso identico controllo lato SQL, mai
+ * bypassato), ma senza questa esclusione a monte il primo bus "vuoto"
+ * (0 pax in tenant_bus_allocations) veniva sempre riproposto e rifiutato
+ * dalla RPC, senza mai avanzare al successivo (FIX MIRATO — AUTO ASSEGNAZIONE
+ * BUS: PREFILTRO EXCLUSIVE + RETRY).
+ */
+function pickBusCandidates(
   units: BusUnitRow[],
   datePaxByBus: Map<string, number>,
   stopBusMap: Map<string, Set<string>>,
+  lockedBusIds: Set<string>,
   input: { lineId: string; stopId: string; pax: number }
-) {
+): BusUnitRow[] {
   const lineUnits = units.filter((unit) =>
     unit.bus_line_id === input.lineId &&
     unit.status !== "closed" &&
-    unit.status !== "completed"
+    unit.status !== "completed" &&
+    !lockedBusIds.has(unit.id)
   );
   const hasRoom = (unit: BusUnitRow) => unit.capacity - (datePaxByBus.get(unit.id) ?? 0) >= input.pax;
 
   const sameStopBusIds = stopBusMap.get(`${input.lineId}:${input.stopId}`) ?? new Set<string>();
   const sameStop = lineUnits.find((unit) => sameStopBusIds.has(unit.id) && hasRoom(unit));
-  if (sameStop) return sameStop;
+  const primary = sameStop ?? lineUnits.find(hasRoom) ?? null;
 
-  return lineUnits.find(hasRoom) ?? null;
+  const rest = lineUnits.filter((unit) => hasRoom(unit) && unit.id !== primary?.id);
+  return primary ? [primary, ...rest] : rest;
+}
+
+/**
+ * bus_unit_id -> booking_group_id per le reservation esclusive attive nella
+ * data del service. Un bus e' "locked" per QUESTO service se e' presente in
+ * questa mappa e il suo booking_group_id e' diverso da quello del service
+ * (o il service non ha booking_group_id — regola identica a quella
+ * applicata dentro la RPC allocate_bus_service, mai una seconda logica).
+ */
+function computeLockedBusIds(
+  exclusiveReservations: Array<{ bus_unit_id: string; booking_group_id: string }>,
+  serviceBookingGroupId: string | null,
+): Set<string> {
+  const locked = new Set<string>();
+  for (const reservation of exclusiveReservations) {
+    if (!serviceBookingGroupId || serviceBookingGroupId !== reservation.booking_group_id) {
+      locked.add(reservation.bus_unit_id);
+    }
+  }
+  return locked;
 }
 
 export async function autoAllocateBusService(params: {
@@ -95,7 +131,7 @@ export async function autoAllocateBusService(params: {
 
   const serviceRes = await admin
     .from("services")
-    .select("id,date,time,outbound_time,direction,pax,customer_name,bus_city_origin,transport_code,service_type_code,booking_service_kind")
+    .select("id,date,time,outbound_time,direction,pax,customer_name,bus_city_origin,transport_code,service_type_code,booking_service_kind,booking_group_id")
     .eq("tenant_id", tenantId)
     .eq("id", serviceId)
     .maybeSingle();
@@ -121,7 +157,7 @@ export async function autoAllocateBusService(params: {
     return { ok: true, allocated: false, serviceId, reason: "Già allocato" };
   }
 
-  const [linesRes, stopsRes, unitsRes, allocRes] = await Promise.all([
+  const [linesRes, stopsRes, unitsRes, allocRes, exclusiveRes] = await Promise.all([
     admin.from("tenant_bus_lines").select("id,code,name,family_code").eq("tenant_id", tenantId).eq("active", true),
     admin
       .from("tenant_bus_line_stops")
@@ -141,17 +177,30 @@ export async function autoAllocateBusService(params: {
       .eq("tenant_id", tenantId)
       .eq("services.date", service.date)
       .eq("services.direction", service.direction),
+    // FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY. Stessa
+    // condizione di lock applicata dentro allocate_bus_service (per data,
+    // exclusive=true), letta qui a monte per evitare di riproporre sempre lo
+    // stesso bus "vuoto ma riservato" come primo candidato.
+    admin
+      .from("booking_group_bus_reservations")
+      .select("bus_unit_id,booking_group_id")
+      .eq("tenant_id", tenantId)
+      .eq("service_date", service.date)
+      .eq("exclusive", true),
   ]);
 
   if (linesRes.error) return { ok: true, allocated: false, serviceId, reason: linesRes.error.message };
   if (stopsRes.error) return { ok: true, allocated: false, serviceId, reason: stopsRes.error.message };
   if (unitsRes.error) return { ok: true, allocated: false, serviceId, reason: unitsRes.error.message };
   if (allocRes.error) return { ok: true, allocated: false, serviceId, reason: allocRes.error.message };
+  if (exclusiveRes.error) return { ok: true, allocated: false, serviceId, reason: exclusiveRes.error.message };
 
   const lines = (linesRes.data ?? []) as BusLineRow[];
   const stops = (stopsRes.data ?? []) as BusStopRow[];
   const units = ((unitsRes.data ?? []) as BusUnitRow[]).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   const allocations = (allocRes.data ?? []) as AllocationRow[];
+  const exclusiveReservations = (exclusiveRes.data ?? []) as Array<{ bus_unit_id: string; booking_group_id: string }>;
+  const lockedBusIds = computeLockedBusIds(exclusiveReservations, service.booking_group_id);
 
   const identity = deriveServiceBusIdentity({
     transport_code: service.transport_code,
@@ -201,35 +250,47 @@ export async function autoAllocateBusService(params: {
     }
   }
 
-  const chosenBus = pickBusWithAvailability(units, datePaxByBus, stopBusMap, {
+  const candidates = pickBusCandidates(units, datePaxByBus, stopBusMap, lockedBusIds, {
     lineId: line.id,
     stopId: stop.id,
     pax: service.pax,
   });
-  if (!chosenBus) return { ok: true, allocated: false, serviceId, reason: "Nessun bus con posti disponibili" };
+  if (candidates.length === 0) return { ok: true, allocated: false, serviceId, reason: "Nessun bus con posti disponibili" };
 
-  const allocRpc = await admin.rpc("allocate_bus_service", {
-    p_tenant_id: tenantId,
-    p_service_id: serviceId,
-    p_bus_line_id: line.id,
-    p_bus_unit_id: chosenBus.id,
-    p_stop_id: stop.id,
-    p_stop_name: stop.stop_name,
-    p_direction: service.direction,
-    p_pax_assigned: service.pax,
-    p_notes: null,
-    p_created_by_user_id: userId,
-  });
+  const attemptReasons: string[] = [];
+  for (const candidate of candidates) {
+    const allocRpc = await admin.rpc("allocate_bus_service", {
+      p_tenant_id: tenantId,
+      p_service_id: serviceId,
+      p_bus_line_id: line.id,
+      p_bus_unit_id: candidate.id,
+      p_stop_id: stop.id,
+      p_stop_name: stop.stop_name,
+      p_direction: service.direction,
+      p_pax_assigned: service.pax,
+      p_notes: null,
+      p_created_by_user_id: userId,
+    });
 
-  if (allocRpc.error) return { ok: true, allocated: false, serviceId, reason: allocRpc.error.message };
+    if (!allocRpc.error) {
+      return {
+        ok: true,
+        allocated: true,
+        serviceId,
+        busUnitId: candidate.id,
+        busLabel: candidate.label,
+        stopId: stop.id,
+        stopName: stop.stop_name,
+        pax: service.pax,
+      };
+    }
+    attemptReasons.push(`${candidate.label}: ${allocRpc.error.message}`);
+  }
+
   return {
     ok: true,
-    allocated: true,
+    allocated: false,
     serviceId,
-    busUnitId: chosenBus.id,
-    busLabel: chosenBus.label,
-    stopId: stop.id,
-    stopName: stop.stop_name,
-    pax: service.pax,
+    reason: `Tutti i bus candidati rifiutati (${attemptReasons.length}): ${attemptReasons.join(" | ")}`,
   };
 }

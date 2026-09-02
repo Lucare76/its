@@ -174,6 +174,58 @@ async function findExistingBusCityHotelService(
   return { id: ids[0], allocated: false };
 }
 
+/**
+ * FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY. Come
+ * pickSameStopFirstBus ma: (1) esclude a monte i bus in `lockedBusIds`
+ * (riservati in esclusiva a un booking_group diverso — stessa condizione
+ * applicata dentro la RPC allocate_bus_service, mai una seconda regola), e
+ * (2) ritorna TUTTI i candidati con posto in ordine di priorità (stessa
+ * fermata/preferiti prima, poi il resto in ordine sort_order), non solo il
+ * primo — così il chiamante può ritentare sul successivo se la RPC rifiuta.
+ * Usata solo da `auto_assign_date`: pickSameStopFirstBus resta invariata per
+ * gli altri percorsi (nessun refactor dei call site esistenti).
+ */
+function pickBusCandidatesOrdered<T extends { id: string; bus_line_id: string; capacity: number; label?: string }>(
+  units: T[],
+  datePaxMap: Map<string, number>,
+  stopBusMap: Map<string, Set<string>>,
+  lockedBusIds: Set<string>,
+  input: {
+    lineId: string;
+    stopId: string | null;
+    pax: number;
+    excludedLabels?: Set<string>;
+    preferredLabels?: string[];
+  }
+): T[] {
+  const lineUnits = units.filter((unit) =>
+    unit.bus_line_id === input.lineId &&
+    !input.excludedLabels?.has(unit.label ?? "") &&
+    !lockedBusIds.has(unit.id)
+  );
+  const hasRoom = (unit: T) => unit.capacity - (datePaxMap.get(unit.id) ?? 0) >= input.pax;
+
+  let primary: T | null = null;
+  if (input.stopId) {
+    const sameStopBusIds = stopBusMap.get(`${input.lineId}:${input.stopId}`) ?? new Set<string>();
+    const sameStop = lineUnits.find((unit) => sameStopBusIds.has(unit.id) && hasRoom(unit));
+    if (sameStop) {
+      const sameStopIndex = lineUnits.findIndex((unit) => unit.id === sameStop.id);
+      const earlierWithRoom = sameStopIndex > 0 ? lineUnits.slice(0, sameStopIndex).find(hasRoom) ?? null : null;
+      primary = earlierWithRoom ?? sameStop;
+    }
+  }
+  if (!primary && input.preferredLabels?.length) {
+    primary = input.preferredLabels
+      .map((label) => lineUnits.find((unit) => unit.label === label && hasRoom(unit)) ?? null)
+      .find((unit): unit is T => Boolean(unit)) ?? null;
+  }
+  if (!primary) primary = lineUnits.find(hasRoom) ?? null;
+
+  const rest = lineUnits.filter((unit) => hasRoom(unit) && unit.id !== primary?.id);
+  return primary ? [primary, ...rest] : rest;
+}
+
 function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capacity: number; label?: string }>(
   units: T[],
   datePaxMap: Map<string, number>,
@@ -1093,21 +1145,40 @@ export async function POST(request: NextRequest) {
       const parsed = autoSchema.parse(body);
 
       // Carica dati necessari
-      const [svcRes, linesRes, stopsRes, unitsRes, allocRes] = await Promise.all([
-        auth.admin.from("services").select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind")
+      const [svcRes, linesRes, stopsRes, unitsRes, allocRes, exclusiveRes] = await Promise.all([
+        auth.admin.from("services").select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id")
           .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction)
           .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
           .order("time"),
         auth.admin.from("tenant_bus_lines").select("id,code,name,family_code").eq("tenant_id", tenantId),
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,stop_order").eq("tenant_id", tenantId).eq("active", true),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status,sort_order").eq("tenant_id", tenantId).eq("active", true).order("sort_order"),
-        auth.admin.from("tenant_bus_allocations").select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId)
+        auth.admin.from("tenant_bus_allocations").select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId),
+        // FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY.
+        // Stessa condizione di lock applicata dentro allocate_bus_service
+        // (per data, exclusive=true), letta qui a monte per evitare di
+        // riproporre sempre lo stesso bus "vuoto ma riservato" come primo
+        // candidato per ogni service del batch.
+        auth.admin.from("booking_group_bus_reservations").select("bus_unit_id,booking_group_id")
+          .eq("tenant_id", tenantId).eq("service_date", parsed.date).eq("exclusive", true)
       ]);
       if (svcRes.error) throw new Error(svcRes.error.message);
       if (linesRes.error) throw new Error(linesRes.error.message);
       if (stopsRes.error) throw new Error(stopsRes.error.message);
       if (unitsRes.error) throw new Error(unitsRes.error.message);
       if (allocRes.error) throw new Error(allocRes.error.message);
+      if (exclusiveRes.error) throw new Error(exclusiveRes.error.message);
+
+      const exclusiveReservations = (exclusiveRes.data ?? []) as Array<{ bus_unit_id: string; booking_group_id: string }>;
+      function lockedBusIdsFor(serviceBookingGroupId: string | null | undefined): Set<string> {
+        const locked = new Set<string>();
+        for (const reservation of exclusiveReservations) {
+          if (!serviceBookingGroupId || serviceBookingGroupId !== reservation.booking_group_id) {
+            locked.add(reservation.bus_unit_id);
+          }
+        }
+        return locked;
+      }
 
       function normCity(v?: string | null) {
         return String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
@@ -1153,7 +1224,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      type SvcRow = { id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null };
+      type SvcRow = { id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null; booking_group_id?: string | null };
       const sortedServices = [...(services as SvcRow[])].sort((a, b) => {
         const ca = normCity(a.bus_city_origin); const cb = normCity(b.bus_city_origin);
         if (ca !== cb) return ca.localeCompare(cb);
@@ -1210,28 +1281,47 @@ export async function POST(request: NextRequest) {
         const preferred = isPuglia ? ["ITALIA PUGLIA", "ITALIA PUGLIA 2"] : undefined;
         const excluded = isPuglia ? undefined : reserved;
         const allLineUnits = (busesByLineId.get(line.id) ?? []) as Array<SimUnit & { label: string }>;
-        const chosenBus = pickSameStopFirstBus(allLineUnits, datePax, stopBusMap, {
+        const lockedBusIds = lockedBusIdsFor(svc.booking_group_id);
+        const candidates = pickBusCandidatesOrdered(allLineUnits, datePax, stopBusMap, lockedBusIds, {
           lineId: line.id,
           stopId: stop.id,
           pax: svc.pax,
           excludedLabels: excluded,
           preferredLabels: preferred,
         });
-        if (!chosenBus) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: "Nessun bus disponibile" }); continue; }
+        if (candidates.length === 0) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: "Nessun bus disponibile" }); continue; }
 
-        const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
-          p_tenant_id: tenantId,
-          p_service_id: svc.id,
-          p_bus_line_id: line.id,
-          p_bus_unit_id: chosenBus.id,
-          p_stop_id: stop.id.startsWith("new-") ? null : stop.id,
-          p_stop_name: stop.stop_name,
-          p_direction: parsed.direction,
-          p_pax_assigned: svc.pax,
-          p_notes: null,
-          p_created_by_user_id: auth.user.id
-        });
-        if (allocErr) { skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: allocErr.message }); continue; }
+        // FIX MIRATO — AUTO ASSEGNAZIONE BUS: RETRY. Se la RPC rifiuta il
+        // primo candidato (es. un lock esclusivo non ancora presente al
+        // momento del prefiltro, o un altro vincolo lato SQL), si prova il
+        // successivo nell'ordine calcolato sopra — mai skip immediato al
+        // primo fallimento. datePax/stopBusMap vengono aggiornati SOLO sul
+        // candidato che va effettivamente a buon fine.
+        let chosenBus: (SimUnit & { label: string }) | null = null;
+        const attemptReasons: string[] = [];
+        for (const candidate of candidates) {
+          const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
+            p_tenant_id: tenantId,
+            p_service_id: svc.id,
+            p_bus_line_id: line.id,
+            p_bus_unit_id: candidate.id,
+            p_stop_id: stop.id.startsWith("new-") ? null : stop.id,
+            p_stop_name: stop.stop_name,
+            p_direction: parsed.direction,
+            p_pax_assigned: svc.pax,
+            p_notes: null,
+            p_created_by_user_id: auth.user.id
+          });
+          if (!allocErr) { chosenBus = candidate; break; }
+          attemptReasons.push(`${candidate.label}: ${allocErr.message}`);
+        }
+        if (!chosenBus) {
+          const reason = attemptReasons.length
+            ? `Tutti i bus candidati rifiutati (${attemptReasons.length}): ${attemptReasons.join(" | ")}`
+            : "Nessun bus disponibile";
+          skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason });
+          continue;
+        }
 
         const sbKey = `${line.id}:${stop.id}`;
         if (!stopBusMap.has(sbKey)) stopBusMap.set(sbKey, new Set());
