@@ -12,6 +12,9 @@ type ExportAlloc = {
   agency_name?: string | null;
   notes?: string | null;
   service_time?: string | null;
+  // Obiettivo B/C: note gruppo/fermata/servizio gia' composte a monte
+  // (page.tsx, composeGroupNotesBlock) — mai lette prima d'ora dall'export.
+  group_notes_block?: string | null;
 };
 
 type ExportStop = {
@@ -192,6 +195,10 @@ export async function buildArrivalWorkbook(
     const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes ?? "");
     const stopTime = alloc.stop_pickup_time ?? "";
     const orario = stopTime ? `${stopTime.slice(0, 5)} ${alloc.stop_name}` : alloc.stop_name;
+    // Obiettivo B/C: la nota "pulita" resta la base (comportamento
+    // invariato); le note gruppo/fermata/servizio si aggiungono senza
+    // sovrascriverla.
+    const noteCell = [cleanNote, alloc.group_notes_block].filter(Boolean).join(" · ");
     const row = ws.addRow([
       orario,
       alloc.stop_pickup_note ?? "",
@@ -199,7 +206,7 @@ export async function buildArrivalWorkbook(
       alloc.customer_name,
       alloc.customer_phone ?? "",
       shortenHotelName(alloc.hotel_name || hotelFromNotes || ""),
-      cleanNote,
+      noteCell,
       alloc.agency_name || agencyFromNotes || "",
     ]);
     row.font = { size: 10 };
@@ -299,6 +306,8 @@ export async function buildDepartureWorkbook(
     const stopNote = alloc.stop_pickup_note ?? "";
     const destinazione = stopNote ? `${alloc.stop_name} - ${stopNote}` : alloc.stop_name;
     const pickupTime = (alloc.hotel_pickup_time ?? "").slice(0, 5);
+    // Obiettivo B/C: vedi commento gemello nel foglio Andata sopra.
+    const noteCell = [cleanNote, alloc.group_notes_block].filter(Boolean).join(" · ");
     const row = ws.addRow([
       pickupTime,
       hotelPartenza,
@@ -307,7 +316,7 @@ export async function buildDepartureWorkbook(
       alloc.customer_phone ?? "",
       destinazione,
       alloc.agency_name || agencyFromNotes || "",
-      cleanNote,
+      noteCell,
     ]);
     row.font = { size: 10 };
     if (pickupTime) row.getCell(1).font = { size: 10, bold: true };

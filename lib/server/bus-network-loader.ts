@@ -94,10 +94,10 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       .order("time"),
     auth.admin.from("hotels").select("*").eq("tenant_id", tenantId),
     auth.admin.from("bus_import_pending").select("*").eq("tenant_id", tenantId).eq("status", "pending").order("created_at", { ascending: false }),
-    auth.admin.from("booking_group_stops").select("id, stop_id, city, pickup_point, direction").eq("tenant_id", tenantId),
+    auth.admin.from("booking_group_stops").select("id, stop_id, city, pickup_point, direction, notes").eq("tenant_id", tenantId),
     auth.admin
       .from("booking_groups")
-      .select("id, name, kind, status, hotel_id, contact_name, contact_phone, outbound_ferry_company, outbound_departure_port, outbound_ferry_time, outbound_arrival_port, return_ferry_company, return_departure_port, return_ferry_time, return_arrival_port")
+      .select("id, name, kind, status, hotel_id, notes, contact_name, contact_phone, outbound_ferry_company, outbound_departure_port, outbound_ferry_time, outbound_arrival_port, return_ferry_company, return_departure_port, return_ferry_time, return_arrival_port")
       .eq("tenant_id", tenantId),
     date
       ? auth.admin.from("bus_unit_driver_dates").select("*").eq("tenant_id", tenantId).eq("travel_date", date)
@@ -144,6 +144,15 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
   );
   const bookingGroupHotelIdById = new Map(
     ((bookingGroupsResult.data ?? []) as Array<{ id: string; hotel_id: string | null }>).map((group) => [group.id, group.hotel_id]),
+  );
+  // Obiettivo B/C (PDF/export/lista): note generali del gruppo e note della
+  // singola fermata, esposte separatamente cosi' i consumer (PDF/Excel) le
+  // possono mostrare entrambe senza perdere quella piu' specifica.
+  const bookingGroupNotesById = new Map(
+    ((bookingGroupsResult.data ?? []) as Array<{ id: string; notes: string | null }>).map((group) => [group.id, group.notes]),
+  );
+  const bookingGroupStopNotesById = new Map(
+    (bookingGroupStopsResult.data ?? []).map((stop: { id: string; notes?: string | null }) => [stop.id, stop.notes ?? null]),
   );
   const bookingGroupContactById = new Map(
     ((bookingGroupsResult.data ?? []) as Array<{ id: string; contact_name: string | null; contact_phone: string | null }>).map((group) => [
@@ -271,6 +280,10 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       booking_group_kind: service.booking_group_id ? bookingGroupKindById.get(service.booking_group_id) ?? null : null,
       booking_group_name: service.booking_group_id ? bookingGroupNameById.get(service.booking_group_id) ?? null : null,
       booking_group_catalog_stop_id: service.booking_group_stop_id ? bookingGroupStopCatalogById.get(service.booking_group_stop_id) ?? null : null,
+      // Obiettivo B/C: note gruppo/fermata, mai lette da PDF/export prima
+      // d'ora — servono separate da service.notes cosi' nessuna va persa.
+      booking_group_notes: service.booking_group_id ? bookingGroupNotesById.get(service.booking_group_id) ?? null : null,
+      booking_group_stop_notes: service.booking_group_stop_id ? bookingGroupStopNotesById.get(service.booking_group_stop_id) ?? null : null,
     };
   });
 

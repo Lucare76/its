@@ -23,6 +23,9 @@ export type BusPdfAllocation = {
   hotel_name?: string | null;
   agency_name?: string | null;
   notes?: string | null;
+  // Obiettivo B/C: note gruppo/fermata/servizio gia' composte a monte
+  // (page.tsx, composeGroupNotesBlock) — mai lette prima d'ora dal PDF.
+  group_notes_block?: string | null;
 };
 
 export type BusPdfStop = {
@@ -133,7 +136,11 @@ function displayPickupPoint(alloc: BusPdfAllocation, fallbackPickup: string | nu
 }
 
 function displayHotel(alloc: BusPdfAllocation, hotelFromNotes: string) {
-  if (alloc.is_booking_group) return "";
+  // Obiettivo A: prima azzerava sempre l'hotel per le righe di gruppo
+  // (perdendo booking_group.hotel_id anche quando valorizzato). Ora
+  // alloc.hotel_name arriva gia' risolto da page.tsx con la priorita'
+  // corretta (service > gruppo > note legacy > vuoto), quindi si usa
+  // sempre — nessun comportamento speciale per is_booking_group.
   return alloc.hotel_name || hotelFromNotes;
 }
 
@@ -223,7 +230,11 @@ function buildRows(input: BusPdfInput) {
       const stopNote = displayPickupPoint(alloc, rawStopNote);
       const hotel = displayHotel(alloc, hotelFromNotes);
       const agency = alloc.agency_name || agencyFromNotes;
-      return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hotel, agency, cleanNote, runningTotal: total };
+      // Obiettivo B/C: la nota "pulita" dell'allocazione (comportamento
+      // invariato) resta la base; le note gruppo/fermata/servizio si
+      // aggiungono senza sovrascriverla.
+      const noteCell = [cleanNote, alloc.group_notes_block].filter(Boolean).join(" · ");
+      return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hotel, agency, cleanNote: noteCell, runningTotal: total };
     }),
   };
 }

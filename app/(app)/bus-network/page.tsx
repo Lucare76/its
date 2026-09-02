@@ -32,8 +32,8 @@ type BusStop = { id: string; bus_line_id: string; direction: "arrival" | "depart
 type BusUnit = { id: string; bus_line_id: string; label: string; capacity: number; low_seat_threshold: number; minimum_passengers?: number | null; status: "open" | "low" | "closed" | "completed"; manual_close: boolean; close_reason?: string | null; driver_name_outbound?: string | null; driver_phone_outbound?: string | null; driver_name_return?: string | null; driver_phone_return?: string | null; tag?: "gruppi" | "esclusivo" | null; group_name?: string | null };
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
-type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_id?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string };
-type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null; booking_group_id?: string | null; booking_group_kind?: string | null; booking_group_name?: string | null; booking_group_stop_id?: string | null; booking_group_catalog_stop_id?: string | null; booking_group_contact_name?: string | null; booking_group_contact_phone?: string | null; booking_group_outbound_ferry_company?: string | null; booking_group_outbound_departure_port?: string | null; booking_group_outbound_ferry_time?: string | null; booking_group_outbound_arrival_port?: string | null; booking_group_return_ferry_company?: string | null; booking_group_return_departure_port?: string | null; booking_group_return_ferry_time?: string | null; booking_group_return_arrival_port?: string | null };
+type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_id?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string; group_notes_block?: string | null; is_booking_group?: boolean };
+type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null; booking_group_id?: string | null; booking_group_kind?: string | null; booking_group_name?: string | null; booking_group_stop_id?: string | null; booking_group_catalog_stop_id?: string | null; booking_group_contact_name?: string | null; booking_group_contact_phone?: string | null; booking_group_outbound_ferry_company?: string | null; booking_group_outbound_departure_port?: string | null; booking_group_outbound_ferry_time?: string | null; booking_group_outbound_arrival_port?: string | null; booking_group_return_ferry_company?: string | null; booking_group_return_departure_port?: string | null; booking_group_return_ferry_time?: string | null; booking_group_return_arrival_port?: string | null; notes?: string | null; booking_group_notes?: string | null; booking_group_stop_notes?: string | null };
 // Fix C — riga aggregata "Da assegnare" per una fermata di un booking group
 // bus_exclusive: N passeggeri con lo stesso booking_group_stop_id diventano
 // UNA riga con "Assegna fermata", mai N righe da 1 pax.
@@ -107,6 +107,21 @@ function sortDistAllocations(allocations: IschiaDistAllocation[]): IschiaDistAll
     if (hotelDelta !== 0) return hotelDelta;
     return a.customer_name.localeCompare(b.customer_name, "it");
   });
+}
+
+// Obiettivo B/C (PDF/export/lista): compone in un'unica riga leggibile le
+// note di gruppo/fermata/servizio senza scartarne nessuna se piu' di una e'
+// presente — stesso ordine dell'esempio del prompt (gruppo, fermata,
+// servizio).
+function composeGroupNotesBlock(input: { groupNotes?: string | null; stopNotes?: string | null; serviceNotes?: string | null }): string | null {
+  const parts: string[] = [];
+  const group = input.groupNotes?.trim();
+  const stop = input.stopNotes?.trim();
+  const service = input.serviceNotes?.trim();
+  if (group) parts.push(`Gruppo: ${group}`);
+  if (stop) parts.push(`Fermata: ${stop}`);
+  if (service) parts.push(`Servizio: ${service}`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 function busDisplayLabel(unit: Pick<BusUnit, "label" | "group_name">): string {
@@ -466,6 +481,25 @@ export default function BusNetworkPage() {
     const isBookingGroup = Boolean(service?.booking_group_id);
     const contactName = service?.booking_group_contact_name?.trim();
     const contactPhone = service?.booking_group_contact_phone?.trim();
+    // Obiettivo A (PDF/export/lista): per una riga di gruppo senza hotel
+    // proprio sul service, usa l'hotel del gruppo — gia' risolto dal loader
+    // con la stessa priorita' service > gruppo > note legacy > N/D — invece
+    // di azzerare sempre l'hotel come prima (bug: "Hotel N/D"/vuoto anche
+    // quando booking_group.hotel_id era valorizzato).
+    const resolvedGroupHotel = service?.hotel_name && service.hotel_name !== "Hotel N/D" ? service.hotel_name : null;
+    const exportHotelName = isBookingGroup
+      ? (allocation.hotel_id ? allocation.hotel_name : resolvedGroupHotel)
+      : allocation.hotel_name;
+    // Obiettivo B/C: note gruppo/fermata/servizio, mai lette prima d'ora da
+    // PDF/export — composte in un'unica riga leggibile senza perderne
+    // nessuna.
+    const groupNotesBlock = isBookingGroup
+      ? composeGroupNotesBlock({
+          groupNotes: service?.booking_group_notes,
+          stopNotes: service?.booking_group_stop_notes,
+          serviceNotes: service?.notes,
+        })
+      : null;
     return {
       ...allocation,
       booking_group_contact_name: contactName || null,
@@ -479,7 +513,8 @@ export default function BusNetworkPage() {
       booking_group_return_ferry_time: service?.booking_group_return_ferry_time ?? null,
       booking_group_return_arrival_port: service?.booking_group_return_arrival_port ?? null,
       is_booking_group: isBookingGroup,
-      hotel_name: isBookingGroup ? null : allocation.hotel_name,
+      hotel_name: exportHotelName,
+      group_notes_block: groupNotesBlock,
     } as AllocationDetail;
   }, [serviceById]);
 
