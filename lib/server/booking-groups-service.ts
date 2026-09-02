@@ -887,7 +887,7 @@ async function syncPlaceholderTimesForBookingGroupStop(
   if (!time) return;
   await admin
     .from("services")
-    .update({ time, updated_at: new Date().toISOString() })
+    .update({ time })
     .eq("tenant_id", tenantId)
     .eq("booking_group_stop_id", bookingGroupStopId)
     .eq("time", BOOKING_GROUP_PLACEHOLDER_TIME);
@@ -1580,14 +1580,18 @@ export async function updateGroupPassenger(
     return err(422, "Il nominativo è già operativo: il numero pax non è modificabile da qui (romperebbe capienza/allocazione bus già fatta).");
   }
 
+  // Obiettivo A (prompt "FIX MIRATO — RITORNO GIACOMONI"): services NON ha
+  // una colonna updated_at (verificato contro lo schema reale) — mai
+  // includerla nel patch, altrimenti PostgREST rifiuta l'intera UPDATE con
+  // "Could not find the 'updated_at' column of 'services' in the schema
+  // cache" e blocca anche i campi validi.
   const patch = compact({
     customer_name: input.customer_name?.trim() || undefined,
     pax: isDraft ? input.pax : undefined,
     phone: input.phone !== undefined ? (input.phone ?? "").trim() : undefined,
     notes: input.notes !== undefined ? (input.notes ?? "").trim() : undefined,
-    updated_at: new Date().toISOString(),
   });
-  if (Object.keys(patch).length <= 1) {
+  if (Object.keys(patch).length === 0) {
     return err(400, "Nessun campo da aggiornare.");
   }
 
@@ -1761,7 +1765,7 @@ async function allocateUnassignedReservedBookingGroupServices(
       }
       const { error: promoteError } = await admin
         .from("services")
-        .update({ is_draft: false, status: "new", updated_at: new Date().toISOString() })
+        .update({ is_draft: false, status: "new" })
         .eq("tenant_id", tenantId)
         .eq("id", service.id)
         .eq("is_draft", true);

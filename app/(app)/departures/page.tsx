@@ -858,6 +858,26 @@ export default function DeparturesPage() {
             <p className="mt-3 text-xs text-slate-500">ⓘ {departureView === "shuttles" ? "Vista dedicata alle navette quotidiane" : "Navette escluse dalla vista standard"}</p>
           </div>
           {departures.length === 0 ? <p className="py-12 text-center text-sm text-slate-500">Nessuna partenza nel filtro selezionato.</p> : <>
+          {/* Obiettivo C (prompt "FIX MIRATO — RITORNO GIACOMONI"): la lista
+              principale (a differenza della sidebar "Prossime partenze", mai
+              toccata) deve aggregare un gruppo bus_exclusive in un'unica
+              card — questa resa era gia' implementata ma finita nel blocco
+              legacy sotto `className="hidden"`, mai raggiunta dall'utente. */}
+          {departureGroupCards.map(({ groupId, items }) => (
+            <BookingGroupSummaryCard
+              key={`main-group-${groupId}`}
+              meta={groupMetaById.get(groupId)}
+              direction="departure"
+              stops={items.map((item) => ({
+                id: item.serviceId,
+                pax: item.service.pax,
+                direction: item.direction,
+                time: getDeparturePickupTime(item),
+                bus_city_origin: item.service.bus_city_origin,
+                meeting_point: item.service.meeting_point,
+              }))}
+            />
+          ))}
           <div className="space-y-2 md:hidden">{visibleDepartures.map((item)=><article key={`compact-${item.instanceId}`} className="rounded-xl border border-slate-200 bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-slate-800">{getCustomerFullName(item.service)}</p><p className="mt-1 text-xs text-slate-500">{resolveHotelName(item.service)}</p></div><strong className="rounded-lg bg-indigo-50 px-2 py-1 text-indigo-700">{getDeparturePickupTime(item)}</strong></div><div className="mt-3 flex items-center gap-2 text-sm text-slate-600"><TransportIcon service={item.service}/><span>{getDepartureTransportLabel(item.service)}</span></div><div className="mt-3 flex gap-2"><button type="button" onClick={()=>setQrServiceId(item.service.id)} className="btn-secondary px-3 py-1.5 text-xs">Dettagli</button><button type="button" onClick={()=>setEditingService(item.service)} className="btn-secondary px-3 py-1.5 text-xs">Modifica</button><button type="button" onClick={()=>openCancelModal(item.service)} className="btn-secondary px-3 py-1.5 text-xs">•••</button></div></article>)}</div>
           <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white md:block">
             <div className="grid grid-cols-[70px_minmax(125px,1.1fr)_32px_minmax(120px,1fr)_minmax(135px,1.15fr)_minmax(105px,.8fr)_94px_124px] gap-2 border-b border-slate-200 px-3 py-3 text-[10px] font-bold uppercase tracking-wide text-slate-500"><span>Ora pickup</span><span>Cliente</span><span>Pax</span><span>Hotel / Pickup</span><span>Corsa / Destinazione</span><span>Autista / Veicolo</span><span>Stato</span><span className="text-right">Azioni</span></div>
