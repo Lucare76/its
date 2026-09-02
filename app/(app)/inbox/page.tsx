@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput } from "@/components/ui";
 import { PdfAdvancedReview } from "@/components/pdf/PdfAdvancedReview";
 import { getInboxPdfParsingSignal, isInboxPdfReviewOpen, isInboxPdfTestNoise } from "@/lib/pdf/parser";
@@ -13,7 +13,7 @@ import { bookingListTransportTimes } from "@/lib/booking-list-display";
 import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
 import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
-import { GROUP_KIND_LABEL, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
+import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -499,12 +499,13 @@ const DUP_REASON_LABEL: Record<string, string> = {
 // /ricerca). Stessa logica/dati di /ricerca, stile adattato ai pms-panel
 // di questa pagina.
 function InboxBookingGroupCard({
-  meta, services, expanded, onToggle,
+  meta, services, expanded, onToggle, onGenerateReturn,
 }: {
   meta: BookingGroupMeta | undefined;
   services: GlobalBookingSearchResult[];
   expanded: boolean;
   onToggle: () => void;
+  onGenerateReturn: () => void;
 }) {
   const groupName = meta?.name ?? services[0]?.booking_group_name ?? "Gruppo";
   const totalPax = services.reduce((sum, s) => sum + (s.pax || 0), 0);
@@ -527,6 +528,14 @@ function InboxBookingGroupCard({
         {kindLabel && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">🚌 {kindLabel}</span>}
       </div>
       {meta?.hotel_name && <p className="mt-1 text-xs font-semibold text-slate-700">Hotel: {meta.hotel_name}</p>}
+      <p className="mt-1 text-xs text-slate-600">
+        {(() => {
+          const contact = formatGroupContact(meta);
+          return contact.hasContact
+            ? [contact.name ? `Capogruppo: ${contact.name}` : null, contact.phone ? `Cellulare: ${contact.phone}` : null].filter(Boolean).join("　·　")
+            : <span className="text-slate-400">Contatto non indicato</span>;
+        })()}
+      </p>
       <p className="mt-1 text-xs text-slate-600">
         {meta?.service_date && <span><strong className="text-blue-700">Arrivo</strong> {fmtDateIt(meta.service_date)}</span>}
         {meta?.service_date && meta?.return_date && "　·　"}
@@ -558,9 +567,16 @@ function InboxBookingGroupCard({
           </ul>
         ) : <p className="text-slate-400">Da completare</p>}
         {returnMissing && (
-          <p className="mt-1 font-semibold text-amber-700">
-            ⚠ Ritorno previsto il {fmtDateIt(meta!.return_date)} ma fermate ritorno mancanti
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <p className="font-semibold text-amber-700">
+              ⚠ Ritorno previsto il {fmtDateIt(meta!.return_date)} ma fermate ritorno mancanti
+            </p>
+            {meta?.kind === "bus_exclusive" && (
+              <button type="button" onClick={onGenerateReturn} className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100">
+                Genera ritorno da andata
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -671,6 +687,10 @@ export default function InboxPage() {
   const [bookingFilter, setBookingFilter] = useState<"all" | "today" | "tomorrow" | "week" | "arrival" | "departure" | "review">("all");
   const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  // Obiettivo B: incrementato per forzare un refresh della ricerca corrente
+  // dopo un'azione di gruppo (es. "Genera ritorno da andata") — senza,
+  // cambiare lo stesso searchQuery non ririesegue l'effetto.
+  const [searchRefreshKey, setSearchRefreshKey] = useState(0);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [cancelDialogService, setCancelDialogService] = useState<GlobalBookingSearchResult | null>(null);
   const [cancelReason, setCancelReason] = useState<(typeof CANCEL_REASONS)[number]>("Cliente ha annullato");
@@ -1124,7 +1144,21 @@ export default function InboxPage() {
       active = false;
       clearTimeout(timer);
     };
-  }, [accessToken, searchQuery, agencyFilter]);
+  }, [accessToken, searchQuery, agencyFilter, searchRefreshKey]);
+
+  // Obiettivo B: azione esplicita, mai automatica — genera le fermate/
+  // services di ritorno rispecchiando l'andata in ordine invertito, poi
+  // aggiorna la ricerca corrente per mostrarli subito.
+  const handleGenerateReturnStops = useCallback(async (bookingGroupId: string) => {
+    const token = await getToken();
+    if (!token) return;
+    await fetch("/api/ops/booking-groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: "generate_return_stops_from_arrival", booking_group_id: bookingGroupId }),
+    });
+    setSearchRefreshKey((k) => k + 1);
+  }, []);
 
   const pdfUploadStatus = useMemo(() => {
     if (pdfUploadSaving) return "Salvataggio in corso...";
@@ -1684,6 +1718,7 @@ export default function InboxPage() {
                 services={item.services}
                 expanded={expandedGroupId === item.groupId}
                 onToggle={() => setExpandedGroupId((current) => (current === item.groupId ? null : item.groupId))}
+                onGenerateReturn={() => void handleGenerateReturnStops(item.groupId)}
               />
             );
           }

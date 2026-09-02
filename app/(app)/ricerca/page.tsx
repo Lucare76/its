@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { GROUP_KIND_LABEL, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
+import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, type BookingGroupMeta } from "@/lib/booking-group-card";
 
 type SearchResult = {
   id: string;
@@ -67,12 +67,13 @@ function fmtDate(d: string | null) {
 }
 
 function BookingGroupCard({
-  meta, services, expanded, onToggle,
+  meta, services, expanded, onToggle, onGenerateReturn,
 }: {
   meta: BookingGroupMeta | undefined;
   services: SearchResult[];
   expanded: boolean;
   onToggle: () => void;
+  onGenerateReturn: () => void;
 }) {
   const groupName = meta?.name ?? services[0]?.booking_group_name ?? "Gruppo";
   const totalPax = services.reduce((sum, s) => sum + (s.pax || 0), 0);
@@ -105,6 +106,19 @@ function BookingGroupCard({
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
             {meta?.hotel_name && <span>Hotel: {meta.hotel_name}</span>}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
+            {(() => {
+              const contact = formatGroupContact(meta);
+              return contact.hasContact ? (
+                <>
+                  {contact.name && <span>Capogruppo: {contact.name}</span>}
+                  {contact.phone && <span>Cellulare: {contact.phone}</span>}
+                </>
+              ) : (
+                <span className="text-slate-400">Contatto non indicato</span>
+              );
+            })()}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
             {meta?.service_date && <span>Arrivo: {fmtDate(meta.service_date)}</span>}
@@ -146,9 +160,16 @@ function BookingGroupCard({
               <p className="text-slate-400">Da completare</p>
             )}
             {returnMissing && (
-              <p className="mt-1 text-amber-700">
-                Ritorno previsto il {fmtDate(meta!.return_date)}, fermate ritorno non ancora inserite
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="text-amber-700">
+                  Ritorno previsto il {fmtDate(meta!.return_date)}, fermate ritorno non ancora inserite
+                </p>
+                {meta?.kind === "bus_exclusive" && (
+                  <button type="button" onClick={onGenerateReturn} className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100">
+                    Genera ritorno da andata
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -192,6 +213,9 @@ function RicercaInner() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [bookingGroups, setBookingGroups] = useState<BookingGroupMeta[]>([]);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  // Obiettivo B: forza un refresh della ricerca corrente dopo un'azione di
+  // gruppo (es. "Genera ritorno da andata").
+  const [searchRefreshKey, setSearchRefreshKey] = useState(0);
   const [loading, setLoading] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [initError, setInitError] = useState("");
@@ -237,7 +261,20 @@ function RicercaInner() {
         setLoading(false);
       }
     }, 280);
-  }, [query, accessToken]);
+  }, [query, accessToken, searchRefreshKey]);
+
+  // Obiettivo B: azione esplicita, mai automatica — genera le fermate/
+  // services di ritorno rispecchiando l'andata in ordine invertito, poi
+  // aggiorna la ricerca corrente per mostrarli subito.
+  const handleGenerateReturnStops = async (bookingGroupId: string) => {
+    if (!accessToken) return;
+    await fetch("/api/ops/booking-groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ action: "generate_return_stops_from_arrival", booking_group_id: bookingGroupId }),
+    });
+    setSearchRefreshKey((k) => k + 1);
+  };
 
   const bookingGroupById = useMemo(() => new Map(bookingGroups.map((g) => [g.id, g])), [bookingGroups]);
   const renderItems = useMemo(() => groupSearchResults(results), [results]);
@@ -287,6 +324,7 @@ function RicercaInner() {
                   services={item.services}
                   expanded={expandedGroupId === item.groupId}
                   onToggle={() => setExpandedGroupId((current) => (current === item.groupId ? null : item.groupId))}
+                  onGenerateReturn={() => void handleGenerateReturnStops(item.groupId)}
                 />
               );
             }

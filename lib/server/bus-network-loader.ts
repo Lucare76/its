@@ -78,7 +78,7 @@ function resolveCatalogStopForBookingGroupStop(groupStop: BookingGroupStopLink, 
  */
 export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
   const tenantId = auth.membership.tenant_id;
-  const [linesResult, stopsResult, unitsResult, allocationsResult, allocationDetailsResult, movesResult, servicesResult, hotelsResult, pendingResult, bookingGroupStopsResult, bookingGroupsResult, driverDatesResult] = await Promise.all([
+  const [linesResult, stopsResult, unitsResult, allocationsResult, allocationDetailsResult, movesResult, servicesResult, hotelsResult, pendingResult, bookingGroupStopsResult, bookingGroupsResult, driverDatesResult, bookingGroupReservationsResult] = await Promise.all([
     auth.admin.from("tenant_bus_lines").select("*").eq("tenant_id", tenantId).order("family_code").order("name"),
     auth.admin.from("tenant_bus_line_stops").select("*").eq("tenant_id", tenantId).order("direction").order("order_index").order("stop_order"),
     auth.admin.from("tenant_bus_units").select("*").eq("tenant_id", tenantId).order("bus_line_id").order("sort_order"),
@@ -102,6 +102,13 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     date
       ? auth.admin.from("bus_unit_driver_dates").select("*").eq("tenant_id", tenantId).eq("travel_date", date)
       : Promise.resolve({ data: [], error: null }),
+    // Obiettivo E: reservation gruppo per bus/data, mai esposte prima
+    // d'ora — servono per calcolare una label bus SEMPRE data-scoped, mai
+    // dal campo statico tenant_bus_units.group_name (che non ha nozione di
+    // data e quindi "sporca" date a cui non appartiene, es. PARROCCHIA
+    // SANTA BEATA che compariva anche il 06/09 senza averci nulla a che
+    // fare).
+    auth.admin.from("booking_group_bus_reservations").select("id, booking_group_id, bus_unit_id, service_date, exclusive, reserved_pax").eq("tenant_id", tenantId),
   ]);
 
   const error =
@@ -115,7 +122,8 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     hotelsResult.error ||
     pendingResult.error ||
     bookingGroupStopsResult.error ||
-    bookingGroupsResult.error;
+    bookingGroupsResult.error ||
+    bookingGroupReservationsResult.error;
   if (error) {
     throw new Error(error.message);
   }
@@ -190,6 +198,18 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
       .filter((group) => group.status === "cancelled")
       .map((group) => group.id),
   );
+  // Obiettivo E: reservation per bus+data, con nome/kind gruppo risolti —
+  // unica fonte ammessa per una label bus "occupato da gruppo" scoped a
+  // data reale, mai tenant_bus_units.group_name (statico, senza data).
+  const bookingGroupReservations = ((bookingGroupReservationsResult.data ?? []) as Array<{
+    id: string; booking_group_id: string; bus_unit_id: string; service_date: string; exclusive: boolean | null; reserved_pax: number | null;
+  }>)
+    .filter((r) => !cancelledBookingGroupIds.has(r.booking_group_id))
+    .map((r) => ({
+      ...r,
+      booking_group_name: bookingGroupNameById.get(r.booking_group_id) ?? null,
+      booking_group_kind: bookingGroupKindById.get(r.booking_group_id) ?? null,
+    }));
   const catalogStopRows = stops as CatalogStopLink[];
   const bookingGroupStopCatalogById = new Map(
     (bookingGroupStopsResult.data ?? []).map((stop: BookingGroupStopLink) => [
@@ -331,6 +351,10 @@ export async function loadBusNetwork(auth: PricingAuthContext, date?: string) {
     units,
     allocations: visibleAllocations,
     allocation_details: visibleAllocationDetails,
+    // Obiettivo E/D: reservation gruppo, per label bus data-scoped e per
+    // capire perché un'auto-assegnazione risulta bloccata (bus già preso da
+    // un altro gruppo su quella data).
+    booking_group_reservations: bookingGroupReservations,
     moves: movesResult.data ?? [],
     services: enrichedServices,
     unit_loads: unitLoads,

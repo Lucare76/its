@@ -103,6 +103,7 @@ export interface Service {
   tenant_id: string;
   inbound_email_id?: string | null;
   is_draft?: boolean;
+  booking_group_id?: string | null;
   agency_id?: string | null;
   route_id?: string | null;
   import_id?: string | null;

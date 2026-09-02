@@ -48,6 +48,10 @@ type UnassignedGroupRow = {
   totalPax: number;
   serviceIds: string[];
   services: BusService[];
+  // Obiettivo F: true per bus_exclusive — un solo blocco per l'intero
+  // gruppo (tutte le fermate), mai una riga "Assegna fermata" per fermata.
+  isWholeGroup: boolean;
+  stopCities: string[];
 };
 type UnitLoad = BusUnit & { pax_assigned: number; remaining_seats: number; suggested_status: string };
 type StopLoad = BusStop & { pax_assigned: number };
@@ -58,7 +62,8 @@ type IschiaDistAllocation = { id: string; dist_bus_id: string; service_id: strin
 type IschiaDistVehicle = { id: string; label: string; plate: string; capacity: number };
 type IschiaDistDriver = { id: string; full_name: string; phone: string | null };
 type HotelListItem = { id: string; name: string; zone: string };
-type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }>; pending_passengers: PendingPassenger[]; ischia_dist_buses: IschiaDistBus[]; pozzuoli_dist_buses: IschiaDistBus[]; ischia_dist_allocations: IschiaDistAllocation[]; ischia_dist_vehicles: IschiaDistVehicle[]; ischia_dist_drivers: IschiaDistDriver[]; hotels_list: HotelListItem[]; bus_line_ferry_config: BusLineFerryConfig[]; user_role?: string };
+type BookingGroupReservation = { id: string; booking_group_id: string; bus_unit_id: string; service_date: string; exclusive: boolean | null; reserved_pax: number | null; booking_group_name: string | null; booking_group_kind: string | null };
+type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; booking_group_reservations?: BookingGroupReservation[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }>; pending_passengers: PendingPassenger[]; ischia_dist_buses: IschiaDistBus[]; pozzuoli_dist_buses: IschiaDistBus[]; ischia_dist_allocations: IschiaDistAllocation[]; ischia_dist_vehicles: IschiaDistVehicle[]; ischia_dist_drivers: IschiaDistDriver[]; hotels_list: HotelListItem[]; bus_line_ferry_config: BusLineFerryConfig[]; user_role?: string };
 
 const emptyPayload: ApiPayload = { lines: [], stops: [], units: [], allocations: [], allocation_details: [], moves: [], services: [], unit_loads: [], stop_loads: [], redistribution_suggestions: [], geographic_suggestions: [], arrival_windows: [], pending_passengers: [], ischia_dist_buses: [], pozzuoli_dist_buses: [], ischia_dist_allocations: [], ischia_dist_vehicles: [], ischia_dist_drivers: [], hotels_list: [], bus_line_ferry_config: [], user_role: undefined };
 
@@ -239,6 +244,9 @@ export default function BusNetworkPage() {
   const [assignGroupSelection, setAssignGroupSelection] = useState<UnassignedGroupRow | null>(null);
   const [assignGroupModalOpen, setAssignGroupModalOpen] = useState(false);
   const [assignGroupResult, setAssignGroupResult] = useState<{ assigned: number; errors: number } | null>(null);
+  // Obiettivo F/D: esito per-gruppo dell'auto-assegnazione "gruppo intero"
+  // (bus_exclusive) — motivo del blocco se non riesce, mai un errore muto.
+  const [wholeGroupAssignResult, setWholeGroupAssignResult] = useState<Record<string, string>>({});
 
   // Modifica nome linea
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -381,6 +389,7 @@ export default function BusNetworkPage() {
     const next: ApiPayload = {
       lines: body.lines ?? [], stops: body.stops ?? [], units: body.units ?? [],
       allocations: body.allocations ?? [], allocation_details: body.allocation_details ?? [],
+      booking_group_reservations: body.booking_group_reservations ?? [],
       moves: body.moves ?? [], services: body.services ?? [],
       unit_loads: body.unit_loads ?? [], stop_loads: body.stop_loads ?? [],
       redistribution_suggestions: body.redistribution_suggestions ?? [],
@@ -412,6 +421,7 @@ export default function BusNetworkPage() {
       units: body.units ?? [],
       allocations: body.allocations ?? [],
       allocation_details: body.allocation_details ?? [],
+      booking_group_reservations: body.booking_group_reservations ?? [],
       moves: body.moves ?? [],
       services: body.services ?? [],
       unit_loads: body.unit_loads ?? [],
@@ -623,15 +633,44 @@ export default function BusNetworkPage() {
     [payload.services, date, direction, selectedLine, allocatedServiceIds, serviceBelongsToLine]
   );
 
-  // Fix C — passeggeri di un gruppo bus_exclusive aggregati per fermata
-  // (booking_group_stop_id): una riga per fermata invece di una per
-  // passeggero. I services senza gruppo (o gruppo non bus_exclusive)
-  // restano nella lista individuale invariata, stesso comportamento di prima.
+  // Fix C / Obiettivo F — passeggeri di gruppo aggregati: per bus_exclusive
+  // UN SOLO blocco per l'intero gruppo (tutte le fermate insieme, mai una
+  // riga "Assegna fermata" per fermata — un gruppo esclusivo si assegna
+  // sempre come blocco unico, mai a pezzi). Per gruppi non esclusivi resta
+  // l'aggregazione per fermata di prima. I services senza gruppo restano
+  // nella lista individuale invariata.
   const { unassignedGroupRows, unassignedIndividual } = useMemo(() => {
     const groups = new Map<string, UnassignedGroupRow>();
     const individual: BusService[] = [];
     for (const svc of unassigned) {
       if (svc.booking_group_kind === "bus_exclusive" && svc.booking_group_id) {
+        const key = svc.booking_group_id;
+        const existing = groups.get(key);
+        const city = svc.bus_city_origin?.trim() || "Fermata da definire";
+        if (existing) {
+          existing.totalPax += svc.pax;
+          existing.serviceIds.push(svc.id);
+          existing.services.push(svc);
+          if (!existing.stopCities.includes(city)) existing.stopCities.push(city);
+        } else {
+          groups.set(key, {
+            key,
+            bookingGroupId: svc.booking_group_id,
+            bookingGroupName: svc.booking_group_name ?? null,
+            bookingGroupStopId: null,
+            catalogStopId: null,
+            cityLabel: city,
+            hotelName: svc.hotel_name && svc.hotel_name !== "Hotel N/D" ? svc.hotel_name : null,
+            totalPax: svc.pax,
+            serviceIds: [svc.id],
+            services: [svc],
+            isWholeGroup: true,
+            stopCities: [city],
+          });
+        }
+      } else if (svc.booking_group_id) {
+        // Gruppi non esclusivi: aggregazione per fermata (comportamento
+        // pre-esistente, invariato).
         const key = svc.booking_group_stop_id ?? `${svc.booking_group_id}:${svc.bus_city_origin ?? ""}`;
         const existing = groups.get(key);
         if (existing) {
@@ -650,6 +689,8 @@ export default function BusNetworkPage() {
             totalPax: svc.pax,
             serviceIds: [svc.id],
             services: [svc],
+            isWholeGroup: false,
+            stopCities: [svc.bus_city_origin?.trim() || "Fermata da definire"],
           });
         }
       } else {
@@ -670,13 +711,22 @@ export default function BusNetworkPage() {
         .map((allocation) => serviceById.get(allocation.service_id))
         .find((service) => service?.booking_group_kind === "bus_exclusive" && service.booking_group_name?.trim())
         ?.booking_group_name?.trim();
-      // Obiettivo E: il nome derivato LIVE dalle allocazioni della data
-      // selezionata vince sempre sull'etichetta manuale persistita — cosi'
-      // un bus torna al nome/etichetta originale nelle date in cui non è
-      // occupato da quel gruppo, invece di restare "GIACOMONI" per sempre.
-      return { ...unit, group_name: allocatedGroupName ?? unit.group_name ?? null, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
+      // Obiettivo E: una reservation esclusiva PER QUESTA data+bus (mai per
+      // un'altra data) è l'unico altro segnale ammesso oltre alle
+      // allocazioni reali — mostra "occupato" anche prima che i services
+      // vengano allocati uno per uno.
+      const reservationGroupName = payload.booking_group_reservations
+        ?.find((r) => r.bus_unit_id === unit.id && r.service_date === date && r.exclusive)
+        ?.booking_group_name?.trim();
+      // Obiettivo E: MAI più tenant_bus_units.group_name come fallback qui —
+      // quel campo non ha nozione di data/direzione e "sporca" date a cui il
+      // gruppo non appartiene (es. PARROCCHIA SANTA BEATA che compariva
+      // anche il 06/09 pur non avendo alcuna reservation/allocazione quel
+      // giorno). Senza un segnale reale per QUESTA data, torna il nome
+      // originale del bus (gestito da busDisplayLabel via unit.label).
+      return { ...unit, group_name: allocatedGroupName ?? reservationGroupName ?? null, pax_assigned: datePax, remaining_seats: Math.max(0, unit.capacity - datePax) };
     }),
-    [lineUnits, allDateAllocations, serviceById]
+    [lineUnits, allDateAllocations, serviceById, payload.booking_group_reservations, date]
   );
 
   // Bus cards — usa TUTTE le allocazioni per mostrare pax corretti su ogni card
@@ -856,6 +906,45 @@ export default function BusNetworkPage() {
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignGroupModalOpen(true);
   }, [dateUnitLoads, lineStops, selectedLine]);
+
+  // Obiettivo D/F: per bus_exclusive, "Assegna gruppo" riusa
+  // autoAssignBookingGroup (via l'azione esistente auto_assign_group sulla
+  // route booking-groups) — sceglie da sola il bus corretto per ogni
+  // fermata del gruppo in un'unica operazione, mai un bulk-allocate su un
+  // singolo stop_id condiviso (che romperebbe le fermate diverse dal
+  // gruppo). Se bloccato, mostra il motivo esplicito restituito, mai un
+  // fallimento muto.
+  const handleAssignWholeGroup = useCallback(async (bookingGroupId: string) => {
+    const token = await getToken();
+    if (!token) return;
+    setSaving(true);
+    setWholeGroupAssignResult((prev) => {
+      const next = { ...prev };
+      delete next[bookingGroupId];
+      return next;
+    });
+    try {
+      const res = await fetch("/api/ops/booking-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: "auto_assign_group", booking_group_id: bookingGroupId }),
+      });
+      const body = (await res.json().catch(() => null)) as ({
+        ok?: boolean;
+        error?: string;
+        blocked?: Array<{ service_date: string; reason: string }>;
+      }) | null;
+      if (!res.ok || !body?.ok) {
+        setWholeGroupAssignResult((prev) => ({ ...prev, [bookingGroupId]: body?.error ?? "Assegnazione non riuscita." }));
+      } else if (body.blocked && body.blocked.length > 0) {
+        setWholeGroupAssignResult((prev) => ({ ...prev, [bookingGroupId]: body.blocked!.map((b) => b.reason).join(" · ") }));
+      } else {
+        await load();
+      }
+    } finally {
+      setSaving(false);
+    }
+  }, [load]);
 
   const confirmAssignGroup = useCallback(async () => {
     if (!assignGroupSelection || !assignUnitId || !assignStopId || !assignLineId) return;
@@ -3878,15 +3967,36 @@ export default function BusNetworkPage() {
                         <div className="min-w-0 flex-1">
                           <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold uppercase text-white">Gruppo</span>
                           <span className="ml-2 font-semibold uppercase text-slate-800">{group.bookingGroupName ?? "Gruppo"}</span>
-                          <span className="ml-2 uppercase text-sm text-slate-500">{group.cityLabel}</span>
+                          {group.isWholeGroup ? (
+                            <span className="ml-2 uppercase text-sm text-slate-500">{group.stopCities.join(" · ")}</span>
+                          ) : (
+                            <span className="ml-2 uppercase text-sm text-slate-500">{group.cityLabel}</span>
+                          )}
                           {group.hotelName ? <span className="ml-2 uppercase text-sm text-slate-500">· {group.hotelName}</span> : null}
-                          <div className="text-xs text-slate-400">{group.serviceIds.length} passeggeri/nuclei da questa fermata</div>
+                          <div className="text-xs text-slate-400">
+                            {group.isWholeGroup
+                              ? `Gruppo intero — ${group.stopCities.length} fermate, ${group.serviceIds.length} nuclei`
+                              : `${group.serviceIds.length} passeggeri/nuclei da questa fermata`}
+                          </div>
+                          {wholeGroupAssignResult[group.bookingGroupId] && (
+                            <div className="mt-1 text-xs font-medium text-amber-700">
+                              ⚠ {wholeGroupAssignResult[group.bookingGroupId]}
+                            </div>
+                          )}
                         </div>
                         <span className="text-sm text-slate-500">{group.totalPax} pax</span>
-                        <button onClick={() => openAssignGroupModal(group)}
-                          className="btn-primary px-4 py-1.5 text-sm">
-                          Assegna fermata →
-                        </button>
+                        {group.isWholeGroup ? (
+                          <button onClick={() => void handleAssignWholeGroup(group.bookingGroupId)}
+                            disabled={saving}
+                            className="btn-primary px-4 py-1.5 text-sm">
+                            {saving ? "Assegnazione..." : "Assegna gruppo →"}
+                          </button>
+                        ) : (
+                          <button onClick={() => openAssignGroupModal(group)}
+                            className="btn-primary px-4 py-1.5 text-sm">
+                            Assegna fermata →
+                          </button>
+                        )}
                       </div>
                     ))}
                     {unassignedIndividual.map((svc) => (

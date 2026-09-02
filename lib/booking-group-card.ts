@@ -12,6 +12,10 @@ export type BookingGroupMeta = {
   hotel_id: string | null;
   hotel_name: string | null;
   notes: string | null;
+  // Obiettivo A: contatto capogruppo — mai un parsing di note, solo campi
+  // strutturati già esistenti su booking_groups.
+  contact_name: string | null;
+  contact_phone: string | null;
 };
 
 export const GROUP_KIND_LABEL: Record<string, string> = {
@@ -29,6 +33,16 @@ export type GroupableRow = {
   booking_group_id?: string | null;
   booking_group_name?: string | null;
 };
+
+// Obiettivo A: contatto capogruppo. Regola fallback esplicita — mai un
+// parsing di note come telefono strutturato:
+// 1. contact_name/contact_phone (già su booking_groups);
+// 2. "Contatto non indicato" se nessuno dei due è presente.
+export function formatGroupContact(meta: Pick<BookingGroupMeta, "contact_name" | "contact_phone"> | undefined): { name: string | null; phone: string | null; hasContact: boolean } {
+  const name = meta?.contact_name?.trim() || null;
+  const phone = meta?.contact_phone?.trim() || null;
+  return { name, phone, hasContact: Boolean(name || phone) };
+}
 
 export function formatStopLine(r: GroupableRow): string {
   const city = r.bus_city_origin?.trim();

@@ -29,6 +29,7 @@ import {
   previewOperationalizeBookingGroup,
   operationalizeBookingGroup,
   autoAssignBookingGroup,
+  generateReturnStopsFromArrival,
   findAvailableBusesForGroup,
   isSupportedBookingGroupDate,
   suggestBookingGroupCatalogStops,
@@ -190,6 +191,11 @@ const autoAssignSchema = z.object({
   booking_group_id: z.string().uuid(),
 });
 
+const generateReturnStopsSchema = z.object({
+  action: z.literal("generate_return_stops_from_arrival"),
+  booking_group_id: z.string().uuid(),
+});
+
 const bodySchema = z.discriminatedUnion("action", [
   createGroupSchema,
   updateGroupSchema,
@@ -205,6 +211,7 @@ const bodySchema = z.discriminatedUnion("action", [
   previewOperationalizeSchema,
   operationalizeSchema,
   autoAssignSchema,
+  generateReturnStopsSchema,
 ]);
 
 /** Mapping uniforme BgResult/BgOutcome -> NextResponse. Le chiavi di
@@ -598,6 +605,14 @@ export async function POST(request: NextRequest) {
   if (body.action === "auto_assign_group") {
     const result = await autoAssignBookingGroup(admin, actor, body.booking_group_id);
     return NextResponse.json({ ok: true, ...result });
+  }
+
+  // ── generate_return_stops_from_arrival (WRITE) — Obiettivo B ───────────
+  // Azione ESPLICITA, mai automatica per gruppi storici: genera le fermate
+  // (e i services) di ritorno rispecchiando l'andata in ordine invertito.
+  // Idempotente — vedi generateReturnStopsFromArrival.
+  if (body.action === "generate_return_stops_from_arrival") {
+    return toResponse(await generateReturnStopsFromArrival(admin, actor, body.booking_group_id));
   }
 
   return NextResponse.json({ ok: false, error: "Azione non riconosciuta." }, { status: 400 });

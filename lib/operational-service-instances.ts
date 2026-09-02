@@ -20,8 +20,13 @@ function sortTimeKey(value: string) {
   return value === "--:--" ? "99:99" : value;
 }
 
+// Obiettivo C/G: stesso carve-out gia' applicato in ops/search (Fix B) —
+// un draft di gruppo (booking_group_id valorizzato) e' una prenotazione
+// reale in attesa di operativizzazione, non un draft generico da nascondere.
+// Senza questo, un gruppo bus_exclusive come GIACOMONI non compariva mai in
+// Arrivi/Partenze finche' qualcuno non lo operativizzava a mano.
 function isOperationallyVisible(service: Service) {
-  return !service.is_draft && service.status !== "cancelled";
+  return (!service.is_draft || Boolean(service.booking_group_id)) && service.status !== "cancelled";
 }
 
 export function buildOperationalInstances(services: Service[]) {

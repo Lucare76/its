@@ -36,4 +36,24 @@ describe("buildOperationalInstances", () => {
     const instances = buildOperationalInstances([service({ linked_service_id: null })]);
     expect(instances.map((item) => item.instanceId)).toEqual(["outbound:arrival", "outbound:departure"]);
   });
+
+  describe("Obiettivo C/G: draft di gruppo visibile in Arrivi/Partenze", () => {
+    it("service is_draft=true CON booking_group_id -> visibile (prenotazione reale di gruppo in attesa di operativizzazione)", () => {
+      const groupDraft = service({ id: "svc-giacomoni", is_draft: true, status: "needs_review", booking_group_id: "bg-giacomoni", direction: "arrival", linked_service_id: null });
+      const instances = buildOperationalInstances([groupDraft]);
+      expect(instances.some((i) => i.serviceId === "svc-giacomoni")).toBe(true);
+    });
+
+    it("service is_draft=true SENZA booking_group_id -> resta nascosto (comportamento invariato)", () => {
+      const genericDraft = service({ id: "svc-generic-draft", is_draft: true, status: "needs_review", booking_group_id: null, linked_service_id: null });
+      const instances = buildOperationalInstances([genericDraft]);
+      expect(instances.some((i) => i.serviceId === "svc-generic-draft")).toBe(false);
+    });
+
+    it("service di gruppo CANCELLATO resta nascosto anche con booking_group_id valorizzato", () => {
+      const cancelled = service({ id: "svc-cancelled", is_draft: true, status: "cancelled", booking_group_id: "bg-giacomoni", linked_service_id: null });
+      const instances = buildOperationalInstances([cancelled]);
+      expect(instances.some((i) => i.serviceId === "svc-cancelled")).toBe(false);
+    });
+  });
 });

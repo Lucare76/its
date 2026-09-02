@@ -157,3 +157,86 @@ describe("loadBusNetwork — Fix D: fallback hotel del booking group quando serv
     expect(svc.hotel_name).toBe("Hotel N/D");
   });
 });
+
+describe("loadBusNetwork — Obiettivo E: booking_group_reservations esposte per label bus data-scoped", () => {
+  const GROUP_ID = "bg-giacomoni";
+  const ORPHAN_ID = "bg-orphan";
+  const BUS_ID = "bus-shared";
+
+  function baseSeed(overrides: Partial<Record<string, Row[]>> = {}): Record<string, Row[]> {
+    return {
+      tenant_bus_lines: [], tenant_bus_line_stops: [], tenant_bus_units: [],
+      tenant_bus_allocations: [], ops_bus_allocation_details: [], tenant_bus_allocation_moves: [],
+      hotels: [], bus_import_pending: [], bus_unit_driver_dates: [],
+      bus_ischia_dist_buses: [], bus_ischia_dist_allocations: [], vehicles: [], driver_profiles: [],
+      bus_line_ferry_config: [], services: [],
+      ...overrides,
+    };
+  }
+
+  it("reservation esclusiva per bus+data -> esposta con nome/kind gruppo risolti", async () => {
+    const auth = {
+      admin: makeAdmin(baseSeed({
+        booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, name: "GIACOMONI", kind: "bus_exclusive", status: "to_complete", hotel_id: null }],
+        booking_group_bus_reservations: [
+          { id: "r1", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_ID, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+        ],
+      })),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+
+    const result = await loadBusNetwork(auth);
+    expect(result.booking_group_reservations).toMatchObject([
+      { id: "r1", booking_group_id: GROUP_ID, bus_unit_id: BUS_ID, service_date: "2026-09-06", exclusive: true, reserved_pax: 38, booking_group_name: "GIACOMONI", booking_group_kind: "bus_exclusive" },
+    ]);
+  });
+
+  it("reservation di un gruppo CANCELLATO -> esclusa (mai una label per un gruppo cancellato)", async () => {
+    const auth = {
+      admin: makeAdmin(baseSeed({
+        booking_groups: [{ id: GROUP_ID, tenant_id: TENANT, name: "GIACOMONI", kind: "bus_exclusive", status: "cancelled", hotel_id: null }],
+        booking_group_bus_reservations: [
+          { id: "r1", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_ID, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+        ],
+      })),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+
+    const result = await loadBusNetwork(auth);
+    expect(result.booking_group_reservations).toEqual([]);
+  });
+
+  it("due gruppi (reale + orfano) con reservation su bus/date diverse -> entrambe esposte distintamente, mai mescolate", async () => {
+    const auth = {
+      admin: makeAdmin(baseSeed({
+        booking_groups: [
+          { id: GROUP_ID, tenant_id: TENANT, name: "GIACOMONI", kind: "bus_exclusive", status: "to_complete", hotel_id: null },
+          { id: ORPHAN_ID, tenant_id: TENANT, name: "GRUPPO GIACOMONI", kind: "bus_exclusive", status: "operational", hotel_id: null },
+        ],
+        booking_group_bus_reservations: [
+          { id: "r-real", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_ID, service_date: "2026-09-13", exclusive: true, reserved_pax: 38 },
+          { id: "r-orphan", tenant_id: TENANT, booking_group_id: ORPHAN_ID, bus_unit_id: BUS_ID, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+        ],
+      })),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+
+    const result = await loadBusNetwork(auth);
+    const byDate = new Map((result.booking_group_reservations ?? []).map((r: Record<string, unknown>) => [r.service_date, r.booking_group_name]));
+    expect(byDate.get("2026-09-06")).toBe("GRUPPO GIACOMONI");
+    expect(byDate.get("2026-09-13")).toBe("GIACOMONI");
+  });
+
+  it("nessuna reservation -> array vuoto, nessun errore", async () => {
+    const auth = {
+      admin: makeAdmin(baseSeed()),
+      membership: { tenant_id: TENANT, role: "operator", suspended: false },
+      user: { id: "u1", email: "op@example.com" },
+    } as unknown as PricingAuthContext;
+    const result = await loadBusNetwork(auth);
+    expect(result.booking_group_reservations).toEqual([]);
+  });
+});

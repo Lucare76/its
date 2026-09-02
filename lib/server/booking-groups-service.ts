@@ -1254,6 +1254,140 @@ export async function addBookingGroupPassengers(
   };
 }
 
+// ─── generate_return_stops_from_arrival (Obiettivo B) ─────────────────────
+
+export type GenerateReturnStopsResult = {
+  created_stops: number;
+  created_services: number;
+  message?: string;
+};
+
+/**
+ * Azione esplicita, MAI automatica per gruppi storici (prompt "IMPORTANTE":
+ * niente copia nascosta per tutti i gruppi esistenti) — genera le fermate di
+ * ritorno rispecchiando quelle di andata in ordine INVERSO (Nord->Sud
+ * all'andata => Sud->Nord al ritorno), con gli stessi passeggeri/pax,
+ * riusando integralmente `addBookingGroupPassengers` per la creazione dei
+ * services (stessa idempotenza, stesso readiness gate su orario "00:00" mai
+ * inventato, stesso auto-assign best-effort) — nessun secondo motore di
+ * creazione services.
+ *
+ * Precondizioni (tutte richieste, altrimenti blocco esplicito, mai un
+ * ritorno inventato):
+ *  - return_date valorizzata;
+ *  - kind = bus_exclusive;
+ *  - esistono fermate arrival con expected_pax > 0;
+ *  - NESSUNA fermata departure già esistente (idempotente: se già generate,
+ *    no-op con created_stops:0, mai un duplicato).
+ */
+export async function generateReturnStopsFromArrival(
+  admin: SupabaseClient,
+  actor: BgActor,
+  bookingGroupId: string,
+): Promise<BgOutcome<GenerateReturnStopsResult>> {
+  const { tenantId, userId, role } = actor;
+  const { data: group } = await admin
+    .from("booking_groups")
+    .select("id, kind, return_date, status")
+    .eq("tenant_id", tenantId)
+    .eq("id", bookingGroupId)
+    .maybeSingle();
+  if (!group?.id) return err(404, "Gruppo non trovato.");
+  const g = group as { kind: string | null; return_date: string | null; status: string | null };
+  if (g.status === "cancelled") return err(422, "Gruppo cancellato: nessun ritorno da generare.");
+  if (!g.return_date) return err(422, "return_date mancante: impossibile generare il ritorno.");
+  if (g.kind !== "bus_exclusive") return err(422, "Generazione automatica del ritorno disponibile solo per gruppi bus_exclusive.");
+
+  const { data: stopRows } = await admin
+    .from("booking_group_stops")
+    .select("id, city, pickup_point, direction, expected_pax, notes")
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", bookingGroupId)
+    .order("created_at", { ascending: true });
+  const stops = (stopRows ?? []) as Array<{ id: string; city: string; pickup_point: string | null; direction: string | null; expected_pax: number | null; notes: string | null }>;
+  const arrivalStops = stops.filter((s) => s.direction === "arrival");
+  const departureStops = stops.filter((s) => s.direction === "departure");
+
+  // Idempotente: fermate ritorno già presenti -> no-op, mai un duplicato.
+  if (departureStops.length > 0) {
+    return ok({ created_stops: 0, created_services: 0, message: "Fermate ritorno già esistenti: nessuna azione." });
+  }
+  if (arrivalStops.length === 0) {
+    return err(422, "Nessuna fermata andata da cui generare il ritorno.");
+  }
+  if (arrivalStops.some((s) => !(Number(s.expected_pax) > 0))) {
+    return err(422, "Alcune fermate andata non hanno pax validi: impossibile generare il ritorno.");
+  }
+
+  const { data: arrivalServiceRows } = await admin
+    .from("services")
+    .select("id, customer_name, pax, phone, hotel_id, notes, booking_group_stop_id, status")
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", bookingGroupId)
+    .eq("direction", "arrival");
+  const activeArrivalServices = ((arrivalServiceRows ?? []) as Array<{
+    id: string; customer_name: string; pax: number; phone: string | null; hotel_id: string | null; notes: string | null; booking_group_stop_id: string | null; status: string | null;
+  }>).filter((s) => s.status !== "cancelled");
+  const servicesByStopId = new Map<string, typeof activeArrivalServices>();
+  for (const svc of activeArrivalServices) {
+    if (!svc.booking_group_stop_id) continue;
+    const list = servicesByStopId.get(svc.booking_group_stop_id) ?? [];
+    list.push(svc);
+    servicesByStopId.set(svc.booking_group_stop_id, list);
+  }
+
+  // Regola Nord<->Sud del prompt: stesse fermate dell'andata, ordine
+  // INVERTITO — mai un ordine geografico reinventato, solo il reverse
+  // dell'ordine di inserimento andata.
+  const reversedArrivalStops = [...arrivalStops].reverse();
+
+  let createdStops = 0;
+  let createdServices = 0;
+  for (const stop of reversedArrivalStops) {
+    const { data: newStop, error: stopError } = await admin
+      .from("booking_group_stops")
+      .insert({
+        tenant_id: tenantId,
+        booking_group_id: bookingGroupId,
+        city: stop.city,
+        pickup_point: stop.pickup_point,
+        direction: "departure",
+        expected_pax: stop.expected_pax,
+        notes: stop.notes,
+      })
+      .select("id")
+      .single();
+    if (stopError || !newStop?.id) continue;
+    createdStops++;
+
+    const passengers: PassengerRow[] = (servicesByStopId.get(stop.id) ?? []).map((svc) => ({
+      customer_name: svc.customer_name,
+      pax: svc.pax,
+      phone: svc.phone,
+      hotel_id: svc.hotel_id,
+      notes: svc.notes,
+    }));
+    if (passengers.length === 0) continue;
+
+    const addResult = await addBookingGroupPassengers(admin, actor, {
+      bookingGroupId,
+      bookingGroupStopId: newStop.id as string,
+      passengers,
+      serviceDate: g.return_date,
+    });
+    if (addResult.ok) createdServices += addResult.data.created_count;
+  }
+
+  auditLog({
+    event: "booking_group_return_stops_generated",
+    tenantId, userId, role,
+    outcome: "created",
+    details: { booking_group_id: bookingGroupId, created_stops: createdStops, created_services: createdServices },
+  });
+
+  return ok({ created_stops: createdStops, created_services: createdServices });
+}
+
 // ─── remove_group_passenger ───────────────────────────────────────────────
 // Elimina UN SOLO passeggero/nominativo (service) da una fermata del gruppo.
 // Draft/pre-operativo (is_draft=true, status='needs_review') -> hard delete
@@ -1483,7 +1617,8 @@ export async function autoAssignBookingGroup(
           exclusiveOnly: true,
         });
         if (candidates.length === 0) {
-          result.blocked.push({ service_date: serviceDate, reason: "Nessun bus esclusivo libero con capienza sufficiente per quella data." });
+          const reason = await describeNoExclusiveBusReason(admin, tenantId, serviceDate, requiredCapacity);
+          result.blocked.push({ service_date: serviceDate, reason });
           continue;
         }
         if (candidates.length > 1) {
@@ -1670,6 +1805,55 @@ export async function findAvailableBusesForGroup(
     .filter((u) => !exclusivelyReserved.has(u.id))
     .map((u) => ({ id: u.id, label: u.label, capacity: u.capacity, tag: u.tag ?? null }))
     .sort((a, b) => a.capacity - b.capacity);
+}
+
+// Obiettivo D (bus-network zero-click): quando findAvailableBusesForGroup
+// non trova nulla, dice solo "nessun bus disponibile" — non basta per capire
+// se il problema è la capienza o un bus altrimenti compatibile già preso da
+// un ALTRO gruppo (es. il duplicato orfano GIACOMONI). Stessa identica
+// select di findAvailableBusesForGroup, riusata solo per diagnosticare il
+// motivo esatto — non introduce un secondo motore di scelta bus.
+async function describeNoExclusiveBusReason(
+  admin: SupabaseClient,
+  tenantId: string,
+  serviceDate: string,
+  requiredCapacity: number,
+): Promise<string> {
+  const [{ data: units }, { data: reservations }, { data: exclusiveLines }] = await Promise.all([
+    admin.from("tenant_bus_units").select("id, bus_line_id, label, capacity, status, manual_close").eq("tenant_id", tenantId).eq("active", true),
+    admin.from("booking_group_bus_reservations").select("bus_unit_id, exclusive, booking_group_id").eq("tenant_id", tenantId).eq("service_date", serviceDate),
+    admin.from("tenant_bus_lines").select("id, code, family_code").eq("tenant_id", tenantId).eq("active", true),
+  ]);
+  const exclusiveLineIds = new Set(
+    ((exclusiveLines ?? []) as Array<{ id: string; code?: string | null; family_code?: string | null }>)
+      .filter((line) => line.code === EXCLUSIVE_GROUP_LINE_CODE || line.family_code === EXCLUSIVE_GROUP_LINE_CODE)
+      .map((line) => line.id),
+  );
+  const capableUnits = ((units ?? []) as Array<{ id: string; bus_line_id: string | null; label: string; capacity: number; status: string | null; manual_close: boolean | null }>)
+    .filter((u) => u.bus_line_id && exclusiveLineIds.has(u.bus_line_id))
+    .filter((u) => u.capacity >= requiredCapacity)
+    .filter((u) => u.status !== "closed" && u.status !== "completed" && !u.manual_close);
+  if (capableUnits.length === 0) {
+    return "Nessun bus esclusivo con capienza sufficiente per quella data.";
+  }
+  const reservedGroupIdByUnit = new Map(
+    ((reservations ?? []) as Array<{ bus_unit_id: string; exclusive: boolean | null; booking_group_id: string }>)
+      .filter((r) => r.exclusive)
+      .map((r) => [r.bus_unit_id, r.booking_group_id]),
+  );
+  const blocked = capableUnits.filter((u) => reservedGroupIdByUnit.has(u.id));
+  if (blocked.length === 0 || blocked.length !== capableUnits.length) {
+    // O nessuno è bloccato da reservation (capienza insufficiente altrove)
+    // o solo alcuni lo sono ma resta comunque un candidato libero — non
+    // dovrebbe capitare (findAvailableBusesForGroup li avrebbe trovati),
+    // messaggio generico invariato per sicurezza.
+    return "Nessun bus esclusivo libero con capienza sufficiente per quella data.";
+  }
+  const otherGroupIds = Array.from(new Set(blocked.map((u) => reservedGroupIdByUnit.get(u.id)!)));
+  const { data: otherGroups } = await admin.from("booking_groups").select("id, name").in("id", otherGroupIds);
+  const nameById = new Map(((otherGroups ?? []) as Array<{ id: string; name: string }>).map((g) => [g.id, g.name]));
+  const details = blocked.map((u) => `${u.label} già riservato da ${nameById.get(reservedGroupIdByUnit.get(u.id)!) ?? "un altro gruppo"}`);
+  return details.join(" · ");
 }
 
 // ─── FASE A.5.1 §15 — allocazione su bus RISERVATO (predeterminato) ───────

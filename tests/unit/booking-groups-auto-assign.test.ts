@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({ autoAllocateBusService: vi.fn() }));
 vi.mock("@/lib/server/bus-auto-allocation", () => ({ autoAllocateBusService: mocks.autoAllocateBusService }));
 
-import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup } from "@/lib/server/booking-groups-service";
+import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup, generateReturnStopsFromArrival } from "@/lib/server/booking-groups-service";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const GROUP_ID = "11111111-1111-4111-8111-111111111111";
@@ -34,7 +34,10 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     const filters: Row = {};
     let pending: { kind: "insert" | "update" | "upsert"; payload?: Row } | null = null;
 
-    const rowsForFilters = () => (seed[table] ?? []).filter((r) => Object.entries(filters).every(([k, v]) => r[k] === v));
+    const inFilters: Record<string, unknown[]> = {};
+    const rowsForFilters = () => (seed[table] ?? [])
+      .filter((r) => Object.entries(filters).every(([k, v]) => r[k] === v))
+      .filter((r) => Object.entries(inFilters).every(([k, values]) => values.includes(r[k])));
 
     const finish = () => {
       if (pending?.kind === "insert") {
@@ -70,6 +73,7 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     b.order = () => b;
     b.limit = () => b;
     b.eq = (col: string, val: unknown) => { filters[col] = val; return b; };
+    b.in = (col: string, values: unknown[]) => { inFilters[col] = values; return b; };
     b.maybeSingle = async () => (pending ? finish() : { data: rowsForFilters()[0] ?? null, error: null });
     b.single = async () => (pending ? finish() : { data: rowsForFilters()[0] ?? null, error: null });
     b.insert = (payload: Row) => { pending = { kind: "insert", payload }; return b; };
@@ -147,13 +151,13 @@ describe("autoAssignBookingGroup — regressione GIACOMONI (solo fermate andata,
     const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
 
     expect(result.reservations_created).toEqual([]);
-    expect(result.blocked).toEqual([{ service_date: "2026-09-06", reason: "Nessun bus esclusivo libero con capienza sufficiente per quella data." }]);
+    expect(result.blocked).toEqual([{ service_date: "2026-09-06", reason: "Nessun bus esclusivo con capienza sufficiente per quella data." }]);
     expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
   });
 
-  it("bus già riservato da un ALTRO gruppo per la stessa data → escluso dai candidati, bloccato (mai un doppio esclusivo sullo stesso bus)", async () => {
+  it("bus già riservato da un ALTRO gruppo per la stessa data → escluso dai candidati, bloccato con motivo che nomina il gruppo (Obiettivo D)", async () => {
     const { admin, writes } = makeAdmin({
-      booking_groups: [GROUP],
+      booking_groups: [GROUP, { id: "other-group", tenant_id: TENANT, name: "GRUPPO GIACOMONI" }],
       booking_group_stops: ARRIVAL_ONLY_STOPS,
       booking_group_bus_reservations: [
         { id: "r-other", tenant_id: TENANT, booking_group_id: "other-group", bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
@@ -166,7 +170,10 @@ describe("autoAssignBookingGroup — regressione GIACOMONI (solo fermate andata,
 
     const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
 
-    expect(result.blocked).toEqual([{ service_date: "2026-09-06", reason: "Nessun bus esclusivo libero con capienza sufficiente per quella data." }]);
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0].service_date).toBe("2026-09-06");
+    expect(result.blocked[0].reason).toMatch(/GRUPPO EX 3/);
+    expect(result.blocked[0].reason).toMatch(/GRUPPO GIACOMONI/);
     expect(writes.upserts.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
   });
 
@@ -353,5 +360,126 @@ describe("patchBookingGroup — Obiettivo C/H: arrival_date/departure_date seguo
     const reservations = writes.upserts.filter((w) => w.table === "booking_group_bus_reservations");
     expect(reservations).toHaveLength(1);
     expect(reservations[0].row.service_date).toBe("2026-09-06");
+  });
+});
+
+describe("generateReturnStopsFromArrival — Obiettivo B: fermate ritorno da andata in ordine inverso", () => {
+  const STOP_CATTOLICA = "stop-cattolica";
+  const STOP_PESARO = "stop-pesaro";
+  const STOP_FANO = "stop-fano";
+  const STOP_MAROTTA = "stop-marotta";
+
+  function arrivalStopsSeed() {
+    return [
+      { id: STOP_CATTOLICA, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "CATTOLICA", pickup_point: "CASELLO A14", direction: "arrival", expected_pax: 4, notes: null },
+      { id: STOP_PESARO, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "PESARO", pickup_point: "CASELLO A14", direction: "arrival", expected_pax: 6, notes: null },
+      { id: STOP_FANO, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "FANO", pickup_point: "PARCHEGGIO CASELLO A14", direction: "arrival", expected_pax: 10, notes: null },
+      { id: STOP_MAROTTA, tenant_id: TENANT, booking_group_id: GROUP_ID, city: "MAROTTA", pickup_point: "PARCHEGGIO CASELLO A14", direction: "arrival", expected_pax: 18, notes: null },
+    ];
+  }
+  function arrivalServicesSeed() {
+    return [
+      { id: "svc-cattolica", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_CATTOLICA, customer_name: "GIACOMONI", pax: 4, direction: "arrival", status: "needs_review", phone: null, hotel_id: null, notes: null },
+      { id: "svc-pesaro", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_PESARO, customer_name: "GIACOMONI", pax: 6, direction: "arrival", status: "needs_review", phone: null, hotel_id: null, notes: null },
+      { id: "svc-fano", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_FANO, customer_name: "GIACOMONI", pax: 10, direction: "arrival", status: "needs_review", phone: null, hotel_id: null, notes: null },
+      { id: "svc-marotta", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: STOP_MAROTTA, customer_name: "GIACOMONI", pax: 18, direction: "arrival", status: "needs_review", phone: null, hotel_id: null, notes: null },
+    ];
+  }
+
+  it("genera le fermate ritorno nello stesso ordine dell'andata INVERTITO (Sud->Nord se andata era Nord->Sud)", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: arrivalStopsSeed(),
+      services: arrivalServicesSeed(),
+    });
+
+    const res = await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+
+    expect(res.ok).toBe(true);
+    const newStops = writes.inserts.filter((w) => w.table === "booking_group_stops");
+    expect(newStops.map((w) => w.row.city)).toEqual(["MAROTTA", "FANO", "PESARO", "CATTOLICA"]);
+    expect(newStops.every((w) => w.row.direction === "departure")).toBe(true);
+  });
+
+  it("mantiene pax e booking_group_id sui nuovi services departure, data = return_date", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: arrivalStopsSeed(),
+      services: arrivalServicesSeed(),
+    });
+
+    const res = await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.created_stops).toBe(4);
+    if (res.ok) expect(res.data.created_services).toBe(4);
+    const newServices = writes.inserts.filter((w) => w.table === "services");
+    expect(newServices).toHaveLength(4);
+    const paxByCity = new Map(newServices.map((w) => [w.row.bus_city_origin, w.row.pax]));
+    expect(paxByCity.get("MAROTTA")).toBe(18);
+    expect(paxByCity.get("FANO")).toBe(10);
+    expect(paxByCity.get("PESARO")).toBe(6);
+    expect(paxByCity.get("CATTOLICA")).toBe(4);
+    expect(newServices.every((w) => w.row.booking_group_id === GROUP_ID)).toBe(true);
+    expect(newServices.every((w) => w.row.direction === "departure")).toBe(true);
+    expect(newServices.every((w) => w.row.date === "2026-09-13")).toBe(true);
+    expect(newServices.every((w) => w.row.departure_date === "2026-09-13")).toBe(true);
+    // Obiettivo B: mai un orario inventato senza una regola canonica nota.
+    expect(newServices.every((w) => w.row.time === "00:00")).toBe(true);
+  });
+
+  it("idempotente: una seconda chiamata non duplica le fermate/services già generati", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: arrivalStopsSeed(),
+      services: arrivalServicesSeed(),
+    });
+
+    await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+    const res2 = await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+
+    expect(res2.ok).toBe(true);
+    if (res2.ok) expect(res2.data.created_stops).toBe(0);
+    expect(writes.inserts.filter((w) => w.table === "booking_group_stops")).toHaveLength(4);
+    expect(writes.inserts.filter((w) => w.table === "services" && w.row.direction === "departure")).toHaveLength(4);
+  });
+
+  it("non genera nulla se return_date è null", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, return_date: null }],
+      booking_group_stops: arrivalStopsSeed(),
+      services: arrivalServicesSeed(),
+    });
+
+    const res = await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+
+    expect(res.ok).toBe(false);
+    expect(writes.inserts.filter((w) => w.table === "booking_group_stops")).toHaveLength(0);
+  });
+
+  it("non genera nulla se il gruppo non è bus_exclusive", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [{ ...GROUP, kind: "bus_group" }],
+      booking_group_stops: arrivalStopsSeed(),
+      services: arrivalServicesSeed(),
+    });
+
+    const res = await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+
+    expect(res.ok).toBe(false);
+    expect(writes.inserts.filter((w) => w.table === "booking_group_stops")).toHaveLength(0);
+  });
+
+  it("non genera nulla se non esistono fermate andata", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: [],
+      services: [],
+    });
+
+    const res = await generateReturnStopsFromArrival(admin as never, actor, GROUP_ID);
+
+    expect(res.ok).toBe(false);
+    expect(writes.inserts.filter((w) => w.table === "booking_group_stops")).toHaveLength(0);
   });
 });
