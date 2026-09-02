@@ -65,6 +65,15 @@ type IschiaDistVehicle = { id: string; label: string; plate: string; capacity: n
 type IschiaDistDriver = { id: string; full_name: string; phone: string | null };
 type HotelListItem = { id: string; name: string; zone: string };
 type BookingGroupReservation = { id: string; booking_group_id: string; bus_unit_id: string; service_date: string; exclusive: boolean | null; reserved_pax: number | null; booking_group_name: string | null; booking_group_kind: string | null };
+type ReservationConflictNotice = {
+  message: string;
+  removeOrphan?: {
+    reservationId: string;
+    orphanBookingGroupId: string;
+    realBookingGroupId: string;
+    orphanBookingGroupName: string;
+  };
+};
 type ApiPayload = { lines: BusLine[]; stops: BusStop[]; units: BusUnit[]; allocations: BusAllocation[]; allocation_details: AllocationDetail[]; booking_group_reservations?: BookingGroupReservation[]; moves: BusMove[]; services: BusService[]; unit_loads: UnitLoad[]; stop_loads: StopLoad[]; redistribution_suggestions: Array<{ source_label: string; target_label: string | null; reason: string }>; geographic_suggestions: Array<{ service_id: string; customer_name: string; stop_name: string; grouped_zone: string; suggested_vehicle_type: string; suggested_stop_order: number | null }>; arrival_windows: Array<{ time: string; totalPax: number; snavPax: number; medmarPax: number; otherPax: number }>; pending_passengers: PendingPassenger[]; ischia_dist_buses: IschiaDistBus[]; pozzuoli_dist_buses: IschiaDistBus[]; ischia_dist_allocations: IschiaDistAllocation[]; ischia_dist_vehicles: IschiaDistVehicle[]; ischia_dist_drivers: IschiaDistDriver[]; hotels_list: HotelListItem[]; bus_line_ferry_config: BusLineFerryConfig[]; user_role?: string };
 
 const emptyPayload: ApiPayload = { lines: [], stops: [], units: [], allocations: [], allocation_details: [], moves: [], services: [], unit_loads: [], stop_loads: [], redistribution_suggestions: [], geographic_suggestions: [], arrival_windows: [], pending_passengers: [], ischia_dist_buses: [], pozzuoli_dist_buses: [], ischia_dist_allocations: [], ischia_dist_vehicles: [], ischia_dist_drivers: [], hotels_list: [], bus_line_ferry_config: [], user_role: undefined };
@@ -614,16 +623,38 @@ export default function BusNetworkPage() {
   );
 
   const reservationConflictByUnit = useMemo(() => {
-    const map = new Map<string, string>();
+    const map = new Map<string, ReservationConflictNotice>();
     const conflicts = summarizeBusReservationConflicts(payload.booking_group_reservations ?? [], date);
+    const serviceCountByGroup = new Map<string, number>();
+    for (const service of payload.services) {
+      if (!service.booking_group_id || service.booking_group_kind !== "bus_exclusive") continue;
+      serviceCountByGroup.set(service.booking_group_id, (serviceCountByGroup.get(service.booking_group_id) ?? 0) + 1);
+    }
     for (const conflict of conflicts) {
       const groups = conflict.groupNames.join(" / ") || conflict.normalizedGroupName;
       const units = conflict.busUnitIds.join(", ");
       const message = `Conflitto reservation ${groups}: ${conflict.bookingGroupIds.length} gruppi diversi sulla stessa data (${units}).`;
-      for (const unitId of conflict.busUnitIds) map.set(unitId, message);
+      const orphanIds = conflict.bookingGroupIds.filter((id) => (serviceCountByGroup.get(id) ?? 0) === 0);
+      const realIds = conflict.bookingGroupIds.filter((id) => (serviceCountByGroup.get(id) ?? 0) > 0);
+      const orphanId = orphanIds.length === 1 && realIds.length === 1 ? orphanIds[0] : null;
+      const realId = orphanIds.length === 1 && realIds.length === 1 ? realIds[0] : null;
+      for (const unitId of conflict.busUnitIds) {
+        const reservation = (payload.booking_group_reservations ?? []).find(
+          (r) => r.bus_unit_id === unitId && r.service_date === date && r.booking_group_id === orphanId && r.exclusive,
+        );
+        map.set(unitId, {
+          message,
+          removeOrphan: reservation && orphanId && realId ? {
+            reservationId: reservation.id,
+            orphanBookingGroupId: orphanId,
+            realBookingGroupId: realId,
+            orphanBookingGroupName: reservation.booking_group_name?.trim() || "gruppo orfano",
+          } : undefined,
+        });
+      }
     }
     return map;
-  }, [payload.booking_group_reservations, date]);
+  }, [payload.booking_group_reservations, payload.services, date]);
 
   // Unassigned services for this date + direction + line family
   const allocatedServiceIds = useMemo(
@@ -1031,6 +1062,36 @@ export default function BusNetworkPage() {
       setSaving(false);
     }
   }, [orphanConflictByGroup, load]);
+
+  const handleRemoveOrphanReservation = useCallback(async (notice: ReservationConflictNotice) => {
+    if (!notice.removeOrphan) return;
+    const token = await getToken();
+    if (!token) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/ops/booking-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          action: "remove_orphan_reservation",
+          reservation_id: notice.removeOrphan.reservationId,
+          orphan_booking_group_id: notice.removeOrphan.orphanBookingGroupId,
+          real_booking_group_id: notice.removeOrphan.realBookingGroupId,
+        }),
+      });
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !body?.ok) {
+        setWholeGroupAssignResult((prev) => ({
+          ...prev,
+          [notice.removeOrphan!.realBookingGroupId]: body?.error ?? "Rimozione reservation orfana non riuscita.",
+        }));
+        return;
+      }
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  }, [load]);
 
   const confirmAssignGroup = useCallback(async () => {
     if (!assignGroupSelection || !assignUnitId || !assignStopId || !assignLineId) return;
@@ -3035,7 +3096,22 @@ export default function BusNetworkPage() {
                         </div>
                         {unit.reservation_conflict ? (
                           <div className={`mt-2 rounded-lg px-2 py-1 text-[11px] font-semibold ${selectedLineFerryConfig ? "bg-amber-100 text-amber-900" : "bg-amber-50 text-amber-700"}`}>
-                            {unit.reservation_conflict}
+                            <div>{unit.reservation_conflict.message}</div>
+                            {unit.reservation_conflict.removeOrphan ? (
+                              <button
+                                type="button"
+                                disabled={saving}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const notice = unit.reservation_conflict;
+                                  if (notice) void handleRemoveOrphanReservation(notice);
+                                }}
+                                className="mt-1 rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                                title={`Rimuove solo la reservation del gruppo orfano "${unit.reservation_conflict.removeOrphan.orphanBookingGroupName}" dopo i controlli server-side`}
+                              >
+                                {saving ? "Rimozione..." : "Rimuovi reservation orfana"}
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                         {/* Driver info */}

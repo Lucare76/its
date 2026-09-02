@@ -32,6 +32,7 @@ import {
   autoAssignBookingGroup,
   generateReturnStopsFromArrival,
   linkOrphanReservationToGroup,
+  removeOrphanReservationForGroup,
   findAvailableBusesForGroup,
   isSupportedBookingGroupDate,
   suggestBookingGroupCatalogStops,
@@ -224,6 +225,13 @@ const linkOrphanReservationSchema = z.object({
   real_booking_group_id: z.string().uuid(),
 });
 
+const removeOrphanReservationSchema = z.object({
+  action: z.literal("remove_orphan_reservation"),
+  reservation_id: z.string().uuid(),
+  orphan_booking_group_id: z.string().uuid(),
+  real_booking_group_id: z.string().uuid(),
+});
+
 const bodySchema = z.discriminatedUnion("action", [
   createGroupSchema,
   updateGroupSchema,
@@ -242,6 +250,7 @@ const bodySchema = z.discriminatedUnion("action", [
   autoAssignSchema,
   generateReturnStopsSchema,
   linkOrphanReservationSchema,
+  removeOrphanReservationSchema,
 ]);
 
 /** Mapping uniforme BgResult/BgOutcome -> NextResponse. Le chiavi di
@@ -721,6 +730,14 @@ export async function POST(request: NextRequest) {
   // dell'operatore). Non cancella il gruppo orfano, non tocca services.
   if (body.action === "link_orphan_reservation") {
     return toResponse(await linkOrphanReservationToGroup(admin, actor, {
+      reservationId: body.reservation_id,
+      orphanBookingGroupId: body.orphan_booking_group_id,
+      realBookingGroupId: body.real_booking_group_id,
+    }));
+  }
+
+  if (body.action === "remove_orphan_reservation") {
+    return toResponse(await removeOrphanReservationForGroup(admin, actor, {
       reservationId: body.reservation_id,
       orphanBookingGroupId: body.orphan_booking_group_id,
       realBookingGroupId: body.real_booking_group_id,

@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({ autoAllocateBusService: vi.fn() }));
 vi.mock("@/lib/server/bus-auto-allocation", () => ({ autoAllocateBusService: mocks.autoAllocateBusService }));
 
-import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup, generateReturnStopsFromArrival, linkOrphanReservationToGroup } from "@/lib/server/booking-groups-service";
+import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup, generateReturnStopsFromArrival, linkOrphanReservationToGroup, removeOrphanReservationForGroup } from "@/lib/server/booking-groups-service";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const GROUP_ID = "11111111-1111-4111-8111-111111111111";
@@ -27,13 +27,14 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     inserts: [] as Array<{ table: string; row: Row }>,
     updates: [] as Array<{ table: string; filters: Row; payload: Row }>,
     upserts: [] as Array<{ table: string; row: Row }>,
+    deletes: [] as Array<{ table: string; filters: Row }>,
     rpcs: [] as Array<{ name: string; args: Row }>,
   };
   let seq = 0;
 
   function builder(table: string) {
     const filters: Row = {};
-    let pending: { kind: "insert" | "update" | "upsert"; payload?: Row } | null = null;
+    let pending: { kind: "insert" | "update" | "upsert" | "delete"; payload?: Row } | null = null;
 
     const inFilters: Record<string, unknown[]> = {};
     const neqFilters: Record<string, unknown> = {};
@@ -68,6 +69,12 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
         }
         return { data: { id: filters.id, ...(pending.payload ?? {}) }, error: null };
       }
+      if (pending?.kind === "delete") {
+        writes.deletes.push({ table, filters: { ...filters } });
+        const existing = seed[table] ?? [];
+        seed[table] = existing.filter((row) => !Object.entries(filters).every(([k, v]) => row[k] === v));
+        return { data: null, error: null };
+      }
       return { data: null, error: null };
     };
 
@@ -83,6 +90,7 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     b.insert = (payload: Row) => { pending = { kind: "insert", payload }; return b; };
     b.update = (payload: Row) => { pending = { kind: "update", payload }; return b; };
     b.upsert = (payload: Row) => { pending = { kind: "upsert", payload }; return b; };
+    b.delete = () => { pending = { kind: "delete" }; return b; };
     b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
       if (pending) return Promise.resolve(finish()).then(resolve, reject);
       const rows = rowsForFilters();
@@ -322,6 +330,66 @@ describe("autoAssignBookingGroup - allocazioni mancanti su services gia operativ
     expect(writes.rpcs.filter((w) => w.name === "allocate_bus_service").map((w) => w.args.p_service_id)).toEqual(["svc-fano", "svc-marotta"]);
     expect(writes.rpcs.every((w) => w.args.p_bus_unit_id === BUS_B)).toBe(true);
   });
+
+  it("service draft completo con time 00:00 -> diventa operativo e viene allocato sul bus riservato", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: [
+        { id: "stop-pesaro", tenant_id: TENANT, booking_group_id: GROUP_ID, direction: "departure", city: "PESARO", pickup_point: "PARCHEGGIO CASELLO A14", stop_id: "canonical-pesaro", expected_pax: 6 },
+      ],
+      services: [
+        { id: "svc-pesaro", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: "stop-pesaro", customer_name: "GIACOMONI", pax: 6, date: "2026-09-13", direction: "departure", status: "needs_review", is_draft: true, bus_city_origin: "PESARO", meeting_point: "PARCHEGGIO CASELLO A14", booking_service_kind: "bus_hotel_city", time: "00:00" },
+      ],
+      booking_group_bus_reservations: [
+        { id: "r-return", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_B, service_date: "2026-09-13", exclusive: true, reserved_pax: 38 },
+      ],
+      tenant_bus_allocations: [],
+      tenant_bus_units: [
+        { id: BUS_B, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 1", capacity: 54, tag: "gruppi", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_line_stops: [
+        { id: "canonical-pesaro", tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, city: "PESARO", stop_name: "PESARO", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: "09:00" },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
+
+    expect(result.blocked).toEqual([]);
+    expect(result.allocations_created).toHaveLength(1);
+    expect(writes.updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: "services",
+        filters: expect.objectContaining({ id: "svc-pesaro", is_draft: true }),
+        payload: expect.objectContaining({ is_draft: false, status: "new" }),
+      }),
+    ]));
+    expect(writes.rpcs.filter((w) => w.name === "allocate_bus_service").map((w) => w.args.p_service_id)).toEqual(["svc-pesaro"]);
+  });
+
+  it("service draft incompleto -> resta bloccato con campi mancanti espliciti", async () => {
+    const { admin, writes } = makeAdmin({
+      booking_groups: [GROUP],
+      booking_group_stops: [],
+      services: [
+        { id: "svc-draft", tenant_id: TENANT, booking_group_id: GROUP_ID, booking_group_stop_id: null, customer_name: "GIACOMONI", pax: 6, date: "2026-09-13", direction: "departure", status: "needs_review", is_draft: true, bus_city_origin: null, meeting_point: null, time: "00:00" },
+      ],
+      booking_group_bus_reservations: [
+        { id: "r-return", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_B, service_date: "2026-09-13", exclusive: true, reserved_pax: 38 },
+      ],
+      tenant_bus_allocations: [],
+      tenant_bus_units: [
+        { id: BUS_B, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 1", capacity: 54, tag: "gruppi", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+    });
+
+    const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
+
+    expect(result.blocked[0].reason).toContain("manca fermata gruppo");
+    expect(result.blocked[0].reason).toContain("citta");
+    expect(writes.rpcs.filter((w) => w.name === "allocate_bus_service")).toHaveLength(0);
+  });
 });
 
 describe("linkOrphanReservationToGroup - evita doppia reservation sul reale", () => {
@@ -350,6 +418,63 @@ describe("linkOrphanReservationToGroup - evita doppia reservation sul reale", ()
     expect(res.ok).toBe(false);
     expect(res.status).toBe(409);
     expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+});
+
+describe("removeOrphanReservationForGroup - rimuove solo reservation orfane sicure", () => {
+  const ORPHAN_ID = "orphan-group-id";
+
+  function seed(overrides: Record<string, unknown[]> = {}) {
+    return {
+      booking_groups: [
+        { ...GROUP, name: "GIACOMONI", kind: "bus_exclusive", status: "to_complete" },
+        { id: ORPHAN_ID, tenant_id: TENANT, name: "GRUPPO GIACOMONI", kind: "bus_exclusive", status: "operational" },
+      ],
+      booking_group_bus_reservations: [
+        { id: "r-real", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_B, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+        { id: "r-orphan", tenant_id: TENANT, booking_group_id: ORPHAN_ID, bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+      services: [
+        { id: "svc-real", tenant_id: TENANT, booking_group_id: GROUP_ID, customer_name: "GIACOMONI", pax: 38, direction: "arrival", status: "new" },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("rimuove la reservation orfana quando il reale ha gia reservation sulla stessa data", async () => {
+    const { admin, writes } = makeAdmin(seed());
+
+    const res = await removeOrphanReservationForGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(writes.deletes).toEqual([
+      {
+        table: "booking_group_bus_reservations",
+        filters: expect.objectContaining({ id: "r-orphan", booking_group_id: ORPHAN_ID, tenant_id: TENANT }),
+      },
+    ]);
+  });
+
+  it("rifiuta se il gruppo orfano ha services attivi", async () => {
+    const { admin, writes } = makeAdmin(seed({
+      services: [
+        { id: "svc-real", tenant_id: TENANT, booking_group_id: GROUP_ID, customer_name: "GIACOMONI", pax: 38, direction: "arrival", status: "new" },
+        { id: "svc-orphan", tenant_id: TENANT, booking_group_id: ORPHAN_ID, customer_name: "GIACOMONI", pax: 1, direction: "arrival", status: "new" },
+      ],
+    }));
+
+    const res = await removeOrphanReservationForGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(writes.deletes).toHaveLength(0);
   });
 });
 

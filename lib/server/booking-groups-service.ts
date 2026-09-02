@@ -1678,7 +1678,7 @@ async function allocateUnassignedReservedBookingGroupServices(
   blocked: Array<{ service_date: string; reason: string }>;
 }> {
   const { tenantId, userId } = actor;
-  const [{ data: reservations }, { data: services }] = await Promise.all([
+  const [{ data: reservations }, { data: services }, { data: stops }] = await Promise.all([
     admin
       .from("booking_group_bus_reservations")
       .select("bus_unit_id, service_date, exclusive")
@@ -1686,10 +1686,15 @@ async function allocateUnassignedReservedBookingGroupServices(
       .eq("booking_group_id", bookingGroupId),
     admin
       .from("services")
-      .select("id, date, pax, status, is_draft")
+      .select("id, date, pax, status, is_draft, direction, booking_group_stop_id, bus_city_origin, meeting_point, customer_name")
       .eq("tenant_id", tenantId)
       .eq("booking_group_id", bookingGroupId)
       .neq("status", "cancelled"),
+    admin
+      .from("booking_group_stops")
+      .select("id, city, pickup_point, direction, expected_pax")
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", bookingGroupId),
   ]);
 
   const exclusiveReservationByDate = new Map(
@@ -1697,7 +1702,27 @@ async function allocateUnassignedReservedBookingGroupServices(
       .filter((r) => r.exclusive)
       .map((r) => [r.service_date, r.bus_unit_id]),
   );
-  const serviceRows = (services ?? []) as Array<{ id: string; date: string | null; pax: number | null; status: string | null; is_draft: boolean | null }>;
+  type AllocatableGroupService = {
+    id: string;
+    date: string | null;
+    pax: number | null;
+    status: string | null;
+    is_draft: boolean | null;
+    direction: "arrival" | "departure" | null;
+    booking_group_stop_id: string | null;
+    bus_city_origin: string | null;
+    meeting_point: string | null;
+    customer_name: string | null;
+  };
+  type GroupStopForAllocation = {
+    id: string;
+    city: string | null;
+    pickup_point: string | null;
+    direction: "arrival" | "departure" | null;
+    expected_pax: number | null;
+  };
+  const serviceRows = (services ?? []) as AllocatableGroupService[];
+  const stopById = new Map(((stops ?? []) as GroupStopForAllocation[]).map((s) => [s.id, s]));
   const serviceIds = serviceRows.map((s) => s.id);
   if (serviceIds.length === 0) return { allocated: [], blocked: [] };
 
@@ -1710,16 +1735,46 @@ async function allocateUnassignedReservedBookingGroupServices(
 
   const allocated: Array<{ service_id: string; service_date: string; bus_unit_id: string; bus_label: string; pax: number }> = [];
   const blocked: Array<{ service_date: string; reason: string }> = [];
+  const serviceLabel = (service: AllocatableGroupService) => {
+    const stop = service.booking_group_stop_id ? stopById.get(service.booking_group_stop_id) : null;
+    const city = (service.bus_city_origin ?? stop?.city ?? service.customer_name ?? service.id).trim();
+    const pax = service.pax && service.pax > 0 ? ` ${service.pax} pax` : "";
+    return `${city}${pax}`;
+  };
 
   for (const service of serviceRows) {
     if (!service.date || alreadyAllocated.has(service.id)) continue;
     if (service.is_draft) {
-      blocked.push({ service_date: service.date, reason: `Servizio ${service.id}: ancora draft, completa i campi mancanti prima dell'allocazione bus.` });
-      continue;
+      const linkedStop = service.booking_group_stop_id ? stopById.get(service.booking_group_stop_id) : null;
+      const missing: string[] = [];
+      if (!service.booking_group_stop_id || !linkedStop) missing.push("fermata gruppo");
+      if (!service.direction) missing.push("direzione");
+      if (!service.date) missing.push("data");
+      if (!service.pax || service.pax <= 0) missing.push("pax");
+      if (!(service.bus_city_origin ?? linkedStop?.city)?.trim()) missing.push("citta");
+      if (missing.length > 0) {
+        blocked.push({
+          service_date: service.date,
+          reason: `Servizio ${serviceLabel(service)} ancora draft: manca ${missing.join(", ")}.`,
+        });
+        continue;
+      }
+      const { error: promoteError } = await admin
+        .from("services")
+        .update({ is_draft: false, status: "new", updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId)
+        .eq("id", service.id)
+        .eq("is_draft", true);
+      if (promoteError) {
+        blocked.push({ service_date: service.date, reason: `Servizio ${serviceLabel(service)}: ${promoteError.message}` });
+        continue;
+      }
+      service.is_draft = false;
+      service.status = "new";
     }
     const busUnitId = exclusiveReservationByDate.get(service.date);
     if (!busUnitId) {
-      blocked.push({ service_date: service.date, reason: `Reservation esclusiva mancante per il servizio ${service.id}.` });
+      blocked.push({ service_date: service.date, reason: `Reservation esclusiva mancante per il servizio ${serviceLabel(service)}.` });
       continue;
     }
 
@@ -1738,7 +1793,7 @@ async function allocateUnassignedReservedBookingGroupServices(
         pax: outcome.pax,
       });
     } else if (outcome.reason !== "Già allocato") {
-      blocked.push({ service_date: service.date, reason: `Servizio ${service.id}: ${outcome.reason}` });
+      blocked.push({ service_date: service.date, reason: `Servizio ${serviceLabel(service)}: ${outcome.reason}` });
     }
   }
 
@@ -2121,6 +2176,13 @@ export type LinkOrphanReservationResult = {
   autoAssign?: AutoAssignBookingGroupResult;
 };
 
+export type RemoveOrphanReservationResult = {
+  removed: boolean;
+  reservation_id: string;
+  orphan_booking_group_id: string;
+  real_booking_group_id: string;
+};
+
 /**
  * Obiettivo C: azione ESPLICITA (mai automatica) — sposta UNA reservation
  * dal gruppo orfano al gruppo reale, solo se tutte le condizioni di
@@ -2228,6 +2290,98 @@ export async function linkOrphanReservationToGroup(
   }
 
   return ok({ linked: true, autoAssign });
+}
+
+export async function removeOrphanReservationForGroup(
+  admin: SupabaseClient,
+  actor: BgActor,
+  input: { reservationId: string; orphanBookingGroupId: string; realBookingGroupId: string },
+): Promise<BgOutcome<RemoveOrphanReservationResult>> {
+  const { tenantId, userId, role } = actor;
+
+  const { data: reservation } = await admin
+    .from("booking_group_bus_reservations")
+    .select("id, booking_group_id, bus_unit_id, service_date, exclusive, reserved_pax")
+    .eq("tenant_id", tenantId)
+    .eq("id", input.reservationId)
+    .maybeSingle();
+  const orphanReservation = reservation as { id: string; booking_group_id: string; bus_unit_id: string; service_date: string; exclusive: boolean | null; reserved_pax: number | null } | null;
+  if (!orphanReservation) return err(404, "Reservation non trovata.");
+  if (orphanReservation.booking_group_id !== input.orphanBookingGroupId) {
+    return err(409, "La reservation non appartiene piu' al gruppo orfano indicato: ricontrolla prima di ripetere.");
+  }
+  if (!orphanReservation.exclusive) return err(422, "La rimozione orfana e' consentita solo per reservation esclusive.");
+
+  const { data: groups } = await admin
+    .from("booking_groups")
+    .select("id, name, kind, status")
+    .eq("tenant_id", tenantId)
+    .in("id", [input.orphanBookingGroupId, input.realBookingGroupId]);
+  const groupRows = (groups ?? []) as Array<{ id: string; name: string | null; kind: string | null; status: string | null }>;
+  const orphan = groupRows.find((g) => g.id === input.orphanBookingGroupId);
+  const real = groupRows.find((g) => g.id === input.realBookingGroupId);
+  if (!orphan || !real) return err(404, "Gruppo orfano o gruppo reale non trovato per questo tenant.");
+  if (orphan.kind !== "bus_exclusive" || real.kind !== "bus_exclusive") {
+    return err(422, "La rimozione orfana e' consentita solo tra gruppi bus_exclusive.");
+  }
+  if (real.status === "cancelled") return err(422, "Il gruppo reale e' cancellato.");
+
+  const orphanName = normalizeGroupNameForCompare(orphan.name ?? "");
+  const realName = normalizeGroupNameForCompare(real.name ?? "");
+  if (!orphanName || !realName || (orphanName !== realName && !orphanName.includes(realName) && !realName.includes(orphanName))) {
+    return err(422, "I nomi dei due gruppi non sono abbastanza simili per rimuovere la reservation orfana: verifica manualmente.");
+  }
+
+  const { count: orphanServiceCount } = await admin
+    .from("services")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.orphanBookingGroupId)
+    .neq("status", "cancelled");
+  if ((orphanServiceCount ?? 0) > 0) {
+    return err(422, "Il gruppo orfano ha services attivi collegati: non e' sicuro rimuovere la reservation.");
+  }
+
+  const { count: realServiceCount } = await admin
+    .from("services")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.realBookingGroupId)
+    .neq("status", "cancelled");
+  if ((realServiceCount ?? 0) === 0) return err(422, "Il gruppo reale non ha services attivi: nulla da assegnare.");
+
+  const { data: realSameDateReservations } = await admin
+    .from("booking_group_bus_reservations")
+    .select("id, bus_unit_id")
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.realBookingGroupId)
+    .eq("service_date", orphanReservation.service_date)
+    .eq("exclusive", true);
+  if (((realSameDateReservations ?? []) as Array<{ id: string; bus_unit_id: string }>).length === 0) {
+    return err(409, "Il gruppo reale non ha una reservation esclusiva sulla stessa data: usa il collegamento reservation, non la rimozione.");
+  }
+
+  const { error: deleteError } = await admin
+    .from("booking_group_bus_reservations")
+    .delete()
+    .eq("tenant_id", tenantId)
+    .eq("id", input.reservationId)
+    .eq("booking_group_id", input.orphanBookingGroupId);
+  if (deleteError) return err(500, deleteError.message);
+
+  auditLog({
+    event: "booking_group_orphan_reservation_removed",
+    tenantId, userId, role,
+    outcome: "removed",
+    details: { reservation_id: input.reservationId, orphan_booking_group_id: input.orphanBookingGroupId, real_booking_group_id: input.realBookingGroupId, bus_unit_id: orphanReservation.bus_unit_id, service_date: orphanReservation.service_date },
+  });
+
+  return ok({
+    removed: true,
+    reservation_id: input.reservationId,
+    orphan_booking_group_id: input.orphanBookingGroupId,
+    real_booking_group_id: input.realBookingGroupId,
+  });
 }
 
 // ─── FASE A.5.1 §15 — allocazione su bus RISERVATO (predeterminato) ───────
