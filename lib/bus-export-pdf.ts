@@ -241,22 +241,52 @@ function buildRows(input: BusPdfInput) {
 
 function buildDepartureUnloadRows(input: BusPdfInput) {
   if (input.direction !== "departure") return "";
+  // FIX MIRATO "FORMATO SCARICO ATTESO": la fonte di verità è SEMPRE
+  // input.allocations (la tabella principale, sempre completa) — mai il
+  // catalogo tenant_bus_line_stops come filtro che può far sparire fermate
+  // (root cause del bug "solo MAROTTA": se una fermata mancava/non
+  // combaciava in input.stops, la riga veniva persa anche se l'allocazione
+  // esisteva). Il catalogo resta usato SOLO per arricchire ordine/pickup
+  // note quando disponibile, mai per decidere quali fermate mostrare.
   const paxByStop = new Map<string, number>();
+  const noteByStop = new Map<string, string | null>();
+  const firstSeenOrder = new Map<string, number>();
+  let seenIndex = 0;
   for (const alloc of input.allocations) {
     const key = alloc.stop_name.toUpperCase();
     paxByStop.set(key, (paxByStop.get(key) ?? 0) + alloc.pax_assigned);
+    if (!noteByStop.has(key)) noteByStop.set(key, alloc.stop_pickup_note ?? null);
+    if (!firstSeenOrder.has(key)) firstSeenOrder.set(key, seenIndex++);
   }
-  const usedStopNames = new Set(input.allocations.map((alloc) => alloc.stop_name.toUpperCase()));
-  const stops = (input.stops ?? [])
-    .filter((stop) => usedStopNames.has(stop.stop_name.toUpperCase()))
-    .sort((a, b) => a.stop_order - b.stop_order);
+  if (paxByStop.size === 0) return "";
 
-  if (stops.length === 0) return "";
+  const stopOrderByName = new Map((input.stops ?? []).map((stop) => [stop.stop_name.toUpperCase(), stop.stop_order]));
+  const catalogNoteByName = new Map((input.stops ?? []).map((stop) => [stop.stop_name.toUpperCase(), stop.pickup_note ?? null]));
+  const originalNameByKey = new Map<string, string>();
+  for (const alloc of input.allocations) {
+    const key = alloc.stop_name.toUpperCase();
+    if (!originalNameByKey.has(key)) originalNameByKey.set(key, alloc.stop_name);
+  }
 
-  const rows = stops.map((stop) => {
-    const pickupNote = visiblePickupNote(stop.stop_name, stop.pickup_note);
-    const label = pickupNote ? `${stop.stop_name} - ${pickupNote}` : stop.stop_name;
-    const pax = paxByStop.get(stop.stop_name.toUpperCase()) ?? 0;
+  // Regola fondamentale "ORDINE SCARICO RITORNO": booking_group_stops/
+  // tenant_bus_line_stops.sort_order se la fermata è in catalogo; le
+  // fermate SENZA catalogo (mai perse) restano in fondo, nell'ordine in cui
+  // compaiono nella tabella principale — mai alfabetico, mai per orario.
+  const orderedKeys = Array.from(paxByStop.keys()).sort((a, b) => {
+    const orderA = stopOrderByName.get(a);
+    const orderB = stopOrderByName.get(b);
+    if (orderA != null && orderB != null) return orderA - orderB;
+    if (orderA != null) return -1;
+    if (orderB != null) return 1;
+    return (firstSeenOrder.get(a) ?? 0) - (firstSeenOrder.get(b) ?? 0);
+  });
+
+  const rows = orderedKeys.map((key) => {
+    const stopName = originalNameByKey.get(key) ?? key;
+    const pickupNoteRaw = catalogNoteByName.get(key) ?? noteByStop.get(key) ?? null;
+    const pickupNote = visiblePickupNote(stopName, pickupNoteRaw);
+    const label = pickupNote ? `${stopName} - ${pickupNote}` : stopName;
+    const pax = paxByStop.get(key) ?? 0;
     return `<tr class="unload-row"><td colspan="8"><div class="unload-line"><span>${escapeHtml(label)}</span><strong>${pax} pax</strong></div></td></tr>`;
   }).join("");
 

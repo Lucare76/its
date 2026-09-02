@@ -95,6 +95,71 @@ describe("buildBusLinePdfHtml — Obiettivo B/C: note gruppo/fermata/servizio co
   });
 });
 
+describe("buildBusLinePdfHtml — FIX MIRATO \"FORMATO SCARICO ATTESO\": SCARICO PDF ritorno", () => {
+  const giacomoniStops = (direction: "arrival" | "departure") => [
+    { stop_name: "CATTOLICA", pickup_note: "CASELLO A14", pickup_time: "05:20", stop_order: 1 },
+    { stop_name: "PESARO", pickup_note: "CASELLO A14", pickup_time: "05:35", stop_order: 2 },
+    { stop_name: "FANO", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:00", stop_order: 3 },
+    { stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:20", stop_order: 4 },
+  ].map((s) => ({ ...s, stop_order: direction === "departure" ? 5 - s.stop_order : s.stop_order }));
+
+  const giacomoniAllocations = (): BusPdfAllocation[] => [
+    alloc({ stop_name: "MAROTTA", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 18, is_booking_group: true }),
+    alloc({ stop_name: "FANO", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 10, is_booking_group: true }),
+    alloc({ stop_name: "PESARO", stop_pickup_note: "CASELLO A14", pax_assigned: 6, is_booking_group: true }),
+    alloc({ stop_name: "CATTOLICA", stop_pickup_note: "CASELLO A14", pax_assigned: 4, is_booking_group: true }),
+  ];
+
+  it("mostra TUTTE le 4 fermate (mai solo MAROTTA) anche se il catalogo passato è incompleto", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Bus esclusivi gruppi",
+      dateIso: "2026-09-13",
+      busLabel: "GRUPPO EX 3",
+      allocations: giacomoniAllocations(),
+      // Catalogo incompleto (solo MAROTTA) — root cause del bug reale: le
+      // altre 3 fermate NON devono sparire dallo SCARICO solo perché
+      // mancano/non combaciano nel catalogo passato al PDF.
+      stops: [{ stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "09:00", stop_order: 1 }],
+    });
+    expect(html).toContain("SCARICO");
+    expect(html).toContain("MAROTTA - PARCHEGGIO CASELLO A14");
+    expect(html).toContain("FANO - PARCHEGGIO CASELLO A14");
+    expect(html).toContain("PESARO - CASELLO A14");
+    expect(html).toContain("CATTOLICA - CASELLO A14");
+    expect(html).toContain("18 pax");
+    expect(html).toContain("10 pax");
+    expect(html).toContain("6 pax");
+    expect(html).toContain("4 pax");
+  });
+
+  it("ordina lo SCARICO per sort_order (MAROTTA, FANO, PESARO, CATTOLICA), mai alfabetico né per orario", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Bus esclusivi gruppi",
+      dateIso: "2026-09-13",
+      busLabel: "GRUPPO EX 3",
+      allocations: giacomoniAllocations(),
+      stops: giacomoniStops("departure"),
+    });
+    const unloadSection = html.slice(html.indexOf("SCARICO"));
+    const order = ["MAROTTA", "FANO", "PESARO", "CATTOLICA"].map((city) => unloadSection.indexOf(city));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it("PDF Andata (arrival): nessuna sezione SCARICO", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "arrival",
+      lineName: "Bus esclusivi gruppi",
+      dateIso: "2026-09-06",
+      busLabel: "GRUPPO EX 1",
+      allocations: giacomoniAllocations(),
+      stops: giacomoniStops("arrival"),
+    });
+    expect(html).not.toContain("SCARICO");
+  });
+});
+
 describe("buildArrivalWorkbook/buildDepartureWorkbook — Obiettivo A/B/C nell'export Excel", () => {
   it("Andata: hotel del gruppo e note composte compaiono nelle celle corrette", async () => {
     const wb = await buildArrivalWorkbook(
