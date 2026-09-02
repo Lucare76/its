@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({ autoAllocateBusService: vi.fn() }));
 vi.mock("@/lib/server/bus-auto-allocation", () => ({ autoAllocateBusService: mocks.autoAllocateBusService }));
 
-import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup, generateReturnStopsFromArrival } from "@/lib/server/booking-groups-service";
+import { autoAssignBookingGroup, addBookingGroupPassengers, patchBookingGroup, generateReturnStopsFromArrival, linkOrphanReservationToGroup } from "@/lib/server/booking-groups-service";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const GROUP_ID = "11111111-1111-4111-8111-111111111111";
@@ -35,9 +35,11 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     let pending: { kind: "insert" | "update" | "upsert"; payload?: Row } | null = null;
 
     const inFilters: Record<string, unknown[]> = {};
+    const neqFilters: Record<string, unknown> = {};
     const rowsForFilters = () => (seed[table] ?? [])
       .filter((r) => Object.entries(filters).every(([k, v]) => r[k] === v))
-      .filter((r) => Object.entries(inFilters).every(([k, values]) => values.includes(r[k])));
+      .filter((r) => Object.entries(inFilters).every(([k, values]) => values.includes(r[k])))
+      .filter((r) => Object.entries(neqFilters).every(([k, v]) => r[k] !== v));
 
     const finish = () => {
       if (pending?.kind === "insert") {
@@ -74,6 +76,7 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     b.limit = () => b;
     b.eq = (col: string, val: unknown) => { filters[col] = val; return b; };
     b.in = (col: string, values: unknown[]) => { inFilters[col] = values; return b; };
+    b.neq = (col: string, val: unknown) => { neqFilters[col] = val; return b; };
     b.maybeSingle = async () => (pending ? finish() : { data: rowsForFilters()[0] ?? null, error: null });
     b.single = async () => (pending ? finish() : { data: rowsForFilters()[0] ?? null, error: null });
     b.insert = (payload: Row) => { pending = { kind: "insert", payload }; return b; };
@@ -81,7 +84,8 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     b.upsert = (payload: Row) => { pending = { kind: "upsert", payload }; return b; };
     b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
       if (pending) return Promise.resolve(finish()).then(resolve, reject);
-      return Promise.resolve({ data: rowsForFilters(), error: null }).then(resolve, reject);
+      const rows = rowsForFilters();
+      return Promise.resolve({ data: rows, error: null, count: rows.length }).then(resolve, reject);
     };
     return b;
   }
@@ -481,5 +485,174 @@ describe("generateReturnStopsFromArrival — Obiettivo B: fermate ritorno da and
 
     expect(res.ok).toBe(false);
     expect(writes.inserts.filter((w) => w.table === "booking_group_stops")).toHaveLength(0);
+  });
+});
+
+describe("autoAssignBookingGroup — Obiettivo C/D: rilevamento conflitto reservation orfana", () => {
+  const ORPHAN_ID = "orphan-group-id";
+
+  it("bus bloccato da un gruppo con 0 services attivi -> orphan_conflict rilevato", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [GROUP, { id: ORPHAN_ID, tenant_id: TENANT, name: "GRUPPO GIACOMONI", kind: "bus_exclusive" }],
+      booking_group_stops: ARRIVAL_ONLY_STOPS,
+      booking_group_bus_reservations: [
+        { id: "r-orphan", tenant_id: TENANT, booking_group_id: ORPHAN_ID, bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+      tenant_bus_units: [
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+      services: [], // il gruppo orfano non ha nessun service
+    });
+
+    const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
+
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0].orphan_conflict).toMatchObject({
+      busUnitId: BUS_A,
+      busLabel: "GRUPPO EX 3",
+      orphanBookingGroupId: ORPHAN_ID,
+      orphanBookingGroupName: "GRUPPO GIACOMONI",
+      reservationId: "r-orphan",
+    });
+  });
+
+  it("bus bloccato da un gruppo CON services attivi -> nessun orphan_conflict (non è sicuro considerarlo orfano)", async () => {
+    const { admin } = makeAdmin({
+      booking_groups: [GROUP, { id: ORPHAN_ID, tenant_id: TENANT, name: "ALTRO GRUPPO REALE", kind: "bus_exclusive" }],
+      booking_group_stops: ARRIVAL_ONLY_STOPS,
+      booking_group_bus_reservations: [
+        { id: "r-other", tenant_id: TENANT, booking_group_id: ORPHAN_ID, bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+      tenant_bus_units: [
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+      services: [
+        { id: "svc-other", tenant_id: TENANT, booking_group_id: ORPHAN_ID, customer_name: "Altro Gruppo", pax: 40, direction: "arrival", status: "needs_review" },
+      ],
+    });
+
+    const result = await autoAssignBookingGroup(admin as never, actor, GROUP_ID);
+
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0].orphan_conflict).toBeUndefined();
+  });
+});
+
+describe("linkOrphanReservationToGroup — Obiettivo C: azione sicura, mai automatica", () => {
+  const ORPHAN_ID = "orphan-group-id";
+  const REAL_STOPS = [
+    { id: "s1", tenant_id: TENANT, booking_group_id: GROUP_ID, direction: "arrival" },
+  ];
+
+  function baseSeed(overrides: Record<string, unknown[]> = {}) {
+    return {
+      booking_groups: [{ ...GROUP, name: "GIACOMONI" }, { id: ORPHAN_ID, tenant_id: TENANT, name: "GRUPPO GIACOMONI", kind: "bus_exclusive", status: "operational" }],
+      booking_group_bus_reservations: [
+        { id: "r-orphan", tenant_id: TENANT, booking_group_id: ORPHAN_ID, bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+      services: [
+        { id: "svc-real", tenant_id: TENANT, booking_group_id: GROUP_ID, customer_name: "GIACOMONI", pax: 38, direction: "arrival", status: "needs_review" },
+      ],
+      booking_group_stops: REAL_STOPS,
+      tenant_bus_units: [
+        { id: BUS_A, tenant_id: TENANT, bus_line_id: LINE_ESCLUSIVI, label: "GRUPPO EX 3", capacity: 54, tag: "esclusivo", status: "open", manual_close: false, active: true },
+      ],
+      tenant_bus_lines: [EXCLUSIVE_LINE],
+      ...overrides,
+    };
+  }
+
+  it("caso reale: sposta la reservation dal gruppo orfano (0 services, nome compatibile) al gruppo reale", async () => {
+    const { admin, writes } = makeAdmin(baseSeed());
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(true);
+    const reservationUpdate = writes.updates.find((w) => w.table === "booking_group_bus_reservations" && w.filters.id === "r-orphan");
+    expect(reservationUpdate?.payload.booking_group_id).toBe(GROUP_ID);
+  });
+
+  it("rifiuta se il gruppo orfano ha services attivi (non è sicuro considerarlo orfano)", async () => {
+    const { admin, writes } = makeAdmin(baseSeed({
+      services: [
+        { id: "svc-real", tenant_id: TENANT, booking_group_id: GROUP_ID, customer_name: "GIACOMONI", pax: 38, direction: "arrival", status: "needs_review" },
+        { id: "svc-orphan", tenant_id: TENANT, booking_group_id: ORPHAN_ID, customer_name: "GRUPPO GIACOMONI", pax: 5, direction: "arrival", status: "needs_review" },
+      ],
+    }));
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+
+  it("rifiuta se i nomi dei due gruppi non sono abbastanza simili", async () => {
+    const { admin, writes } = makeAdmin(baseSeed({
+      booking_groups: [GROUP, { id: ORPHAN_ID, tenant_id: TENANT, name: "PARROCCHIA SANTA BEATA", kind: "bus_exclusive", status: "operational" }],
+    }));
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+
+  it("rifiuta se il gruppo reale non ha services attivi", async () => {
+    const { admin, writes } = makeAdmin(baseSeed({ services: [] }));
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+
+  it("rifiuta se uno dei due gruppi non è bus_exclusive", async () => {
+    const { admin, writes } = makeAdmin(baseSeed({
+      booking_groups: [GROUP, { id: ORPHAN_ID, tenant_id: TENANT, name: "GRUPPO GIACOMONI", kind: "bus_group", status: "operational" }],
+    }));
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+  });
+
+  it("rifiuta se la reservation non appartiene più al gruppo orfano indicato (race condition)", async () => {
+    const { admin, writes } = makeAdmin(baseSeed({
+      booking_group_bus_reservations: [
+        { id: "r-orphan", tenant_id: TENANT, booking_group_id: "someone-else", bus_unit_id: BUS_A, service_date: "2026-09-06", exclusive: true, reserved_pax: 38 },
+      ],
+    }));
+
+    const res = await linkOrphanReservationToGroup(admin as never, actor, {
+      reservationId: "r-orphan",
+      orphanBookingGroupId: ORPHAN_ID,
+      realBookingGroupId: GROUP_ID,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(writes.updates.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
   });
 });

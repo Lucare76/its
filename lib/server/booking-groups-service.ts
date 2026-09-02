@@ -1542,7 +1542,7 @@ export async function reserveBookingGroupBus(
 export type AutoAssignBookingGroupResult = {
   attempted: boolean;
   reservations_created: Array<{ service_date: string; bus_unit_id: string; bus_label: string }>;
-  blocked: Array<{ service_date: string; reason: string }>;
+  blocked: Array<{ service_date: string; reason: string; orphan_conflict?: OrphanReservationConflict }>;
   operationalize?: OperationalizeResult;
 };
 
@@ -1617,8 +1617,8 @@ export async function autoAssignBookingGroup(
           exclusiveOnly: true,
         });
         if (candidates.length === 0) {
-          const reason = await describeNoExclusiveBusReason(admin, tenantId, serviceDate, requiredCapacity);
-          result.blocked.push({ service_date: serviceDate, reason });
+          const { reason, orphanConflict } = await describeNoExclusiveBusReason(admin, tenantId, serviceDate, requiredCapacity);
+          result.blocked.push({ service_date: serviceDate, reason, orphan_conflict: orphanConflict });
           continue;
         }
         if (candidates.length > 1) {
@@ -1807,21 +1807,32 @@ export async function findAvailableBusesForGroup(
     .sort((a, b) => a.capacity - b.capacity);
 }
 
-// Obiettivo D (bus-network zero-click): quando findAvailableBusesForGroup
-// non trova nulla, dice solo "nessun bus disponibile" — non basta per capire
-// se il problema è la capienza o un bus altrimenti compatibile già preso da
-// un ALTRO gruppo (es. il duplicato orfano GIACOMONI). Stessa identica
-// select di findAvailableBusesForGroup, riusata solo per diagnosticare il
-// motivo esatto — non introduce un secondo motore di scelta bus.
+// Obiettivo C/D (Prompt "GIACOMONI bus exclusive"): quando un bus altrimenti
+// compatibile è bloccato da UN SOLO altro gruppo che ha 0 services attivi
+// (l'orfano — mai un dato inventato: 0 services è un fatto verificabile), lo
+// segnala come conflitto strutturato così la UI può proporre "Collega
+// reservation al gruppo reale" invece di un generico "nessun bus
+// disponibile". Mai eseguito automaticamente: solo diagnosi.
+export type OrphanReservationConflict = {
+  busUnitId: string;
+  busLabel: string;
+  orphanBookingGroupId: string;
+  orphanBookingGroupName: string;
+  reservationId: string;
+};
+
+// Stessa identica select di findAvailableBusesForGroup, riusata solo per
+// diagnosticare il motivo esatto — non introduce un secondo motore di scelta
+// bus.
 async function describeNoExclusiveBusReason(
   admin: SupabaseClient,
   tenantId: string,
   serviceDate: string,
   requiredCapacity: number,
-): Promise<string> {
+): Promise<{ reason: string; orphanConflict?: OrphanReservationConflict }> {
   const [{ data: units }, { data: reservations }, { data: exclusiveLines }] = await Promise.all([
     admin.from("tenant_bus_units").select("id, bus_line_id, label, capacity, status, manual_close").eq("tenant_id", tenantId).eq("active", true),
-    admin.from("booking_group_bus_reservations").select("bus_unit_id, exclusive, booking_group_id").eq("tenant_id", tenantId).eq("service_date", serviceDate),
+    admin.from("booking_group_bus_reservations").select("id, bus_unit_id, exclusive, booking_group_id").eq("tenant_id", tenantId).eq("service_date", serviceDate),
     admin.from("tenant_bus_lines").select("id, code, family_code").eq("tenant_id", tenantId).eq("active", true),
   ]);
   const exclusiveLineIds = new Set(
@@ -1834,26 +1845,167 @@ async function describeNoExclusiveBusReason(
     .filter((u) => u.capacity >= requiredCapacity)
     .filter((u) => u.status !== "closed" && u.status !== "completed" && !u.manual_close);
   if (capableUnits.length === 0) {
-    return "Nessun bus esclusivo con capienza sufficiente per quella data.";
+    return { reason: "Nessun bus esclusivo con capienza sufficiente per quella data." };
   }
-  const reservedGroupIdByUnit = new Map(
-    ((reservations ?? []) as Array<{ bus_unit_id: string; exclusive: boolean | null; booking_group_id: string }>)
+  const reservationsByUnit = new Map(
+    ((reservations ?? []) as Array<{ id: string; bus_unit_id: string; exclusive: boolean | null; booking_group_id: string }>)
       .filter((r) => r.exclusive)
-      .map((r) => [r.bus_unit_id, r.booking_group_id]),
+      .map((r) => [r.bus_unit_id, r]),
   );
-  const blocked = capableUnits.filter((u) => reservedGroupIdByUnit.has(u.id));
+  const blocked = capableUnits.filter((u) => reservationsByUnit.has(u.id));
   if (blocked.length === 0 || blocked.length !== capableUnits.length) {
     // O nessuno è bloccato da reservation (capienza insufficiente altrove)
     // o solo alcuni lo sono ma resta comunque un candidato libero — non
     // dovrebbe capitare (findAvailableBusesForGroup li avrebbe trovati),
     // messaggio generico invariato per sicurezza.
-    return "Nessun bus esclusivo libero con capienza sufficiente per quella data.";
+    return { reason: "Nessun bus esclusivo libero con capienza sufficiente per quella data." };
   }
-  const otherGroupIds = Array.from(new Set(blocked.map((u) => reservedGroupIdByUnit.get(u.id)!)));
+  const otherGroupIds = Array.from(new Set(blocked.map((u) => reservationsByUnit.get(u.id)!.booking_group_id)));
   const { data: otherGroups } = await admin.from("booking_groups").select("id, name").in("id", otherGroupIds);
-  const nameById = new Map(((otherGroups ?? []) as Array<{ id: string; name: string }>).map((g) => [g.id, g.name]));
-  const details = blocked.map((u) => `${u.label} già riservato da ${nameById.get(reservedGroupIdByUnit.get(u.id)!) ?? "un altro gruppo"}`);
-  return details.join(" · ");
+  const otherGroupRows = (otherGroups ?? []) as Array<{ id: string; name: string }>;
+  const nameById = new Map(otherGroupRows.map((g) => [g.id, g.name]));
+  const details = blocked.map((u) => `${u.label} già riservato da ${nameById.get(reservationsByUnit.get(u.id)!.booking_group_id) ?? "un altro gruppo"}`);
+  const reason = details.join(" · ");
+
+  // Conflitto orfano riconoscibile in modo sicuro SOLO se: un unico bus
+  // bloccante, un unico altro gruppo coinvolto, e quel gruppo ha 0 services
+  // attivi (mai un'euristica sul nome — il fatto "0 services" è verificabile
+  // e sufficiente da solo).
+  if (blocked.length === 1 && otherGroupIds.length === 1) {
+    const orphanId = otherGroupIds[0];
+    const { count } = await admin
+      .from("services")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("booking_group_id", orphanId)
+      .neq("status", "cancelled");
+    if ((count ?? 0) === 0) {
+      const unit = blocked[0];
+      const reservation = reservationsByUnit.get(unit.id)!;
+      return {
+        reason,
+        orphanConflict: {
+          busUnitId: unit.id,
+          busLabel: unit.label,
+          orphanBookingGroupId: orphanId,
+          orphanBookingGroupName: nameById.get(orphanId) ?? "gruppo orfano",
+          reservationId: reservation.id,
+        },
+      };
+    }
+  }
+  return { reason };
+}
+
+function normalizeGroupNameForCompare(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\bgruppo\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+export type LinkOrphanReservationResult = {
+  linked: boolean;
+  autoAssign?: AutoAssignBookingGroupResult;
+};
+
+/**
+ * Obiettivo C: azione ESPLICITA (mai automatica) — sposta UNA reservation
+ * dal gruppo orfano al gruppo reale, solo se tutte le condizioni di
+ * sicurezza sono verificate qui stesso (mai fidarsi del solo input
+ * dell'operatore). Non tocca services, non tocca il gruppo orfano stesso,
+ * non lo cancella — sposta solo `booking_group_bus_reservations.booking_group_id`
+ * di UNA riga specifica.
+ */
+export async function linkOrphanReservationToGroup(
+  admin: SupabaseClient,
+  actor: BgActor,
+  input: { reservationId: string; orphanBookingGroupId: string; realBookingGroupId: string },
+): Promise<BgOutcome<LinkOrphanReservationResult>> {
+  const { tenantId, userId, role } = actor;
+
+  const { data: reservation } = await admin
+    .from("booking_group_bus_reservations")
+    .select("id, booking_group_id, bus_unit_id, service_date, exclusive, reserved_pax")
+    .eq("tenant_id", tenantId)
+    .eq("id", input.reservationId)
+    .maybeSingle();
+  if (!reservation) return err(404, "Reservation non trovata.");
+  if (reservation.booking_group_id !== input.orphanBookingGroupId) {
+    return err(409, "La reservation non appartiene più al gruppo orfano indicato: ricontrolla prima di ripetere.");
+  }
+
+  const { data: groups } = await admin
+    .from("booking_groups")
+    .select("id, kind, status")
+    .eq("tenant_id", tenantId)
+    .in("id", [input.orphanBookingGroupId, input.realBookingGroupId]);
+  const groupRows = (groups ?? []) as Array<{ id: string; kind: string | null; status: string | null }>;
+  const orphan = groupRows.find((g) => g.id === input.orphanBookingGroupId);
+  const real = groupRows.find((g) => g.id === input.realBookingGroupId);
+  if (!orphan || !real) return err(404, "Gruppo orfano o gruppo reale non trovato per questo tenant.");
+  if (orphan.kind !== "bus_exclusive" || real.kind !== "bus_exclusive") {
+    return err(422, "Il collegamento è consentito solo tra gruppi bus_exclusive.");
+  }
+  if (real.status === "cancelled") return err(422, "Il gruppo reale è cancellato.");
+
+  const { count: orphanServiceCount } = await admin
+    .from("services")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.orphanBookingGroupId)
+    .neq("status", "cancelled");
+  if ((orphanServiceCount ?? 0) > 0) {
+    return err(422, "Il gruppo orfano ha services attivi collegati: non è sicuro considerarlo orfano.");
+  }
+
+  const { count: realServiceCount } = await admin
+    .from("services")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("booking_group_id", input.realBookingGroupId)
+    .neq("status", "cancelled");
+  if ((realServiceCount ?? 0) === 0) {
+    return err(422, "Il gruppo reale non ha services attivi: nulla da assegnare.");
+  }
+
+  const { data: nameRows } = await admin
+    .from("booking_groups")
+    .select("id, name")
+    .eq("tenant_id", tenantId)
+    .in("id", [input.orphanBookingGroupId, input.realBookingGroupId]);
+  const namesById = new Map(((nameRows ?? []) as Array<{ id: string; name: string }>).map((g) => [g.id, g.name]));
+  const orphanName = normalizeGroupNameForCompare(namesById.get(input.orphanBookingGroupId) ?? "");
+  const realName = normalizeGroupNameForCompare(namesById.get(input.realBookingGroupId) ?? "");
+  if (!orphanName || !realName || (orphanName !== realName && !orphanName.includes(realName) && !realName.includes(orphanName))) {
+    return err(422, "I nomi dei due gruppi non sono abbastanza simili per collegarli in automatico: verifica manualmente.");
+  }
+
+  const { error: updateError } = await admin
+    .from("booking_group_bus_reservations")
+    .update({ booking_group_id: input.realBookingGroupId, updated_at: new Date().toISOString() })
+    .eq("tenant_id", tenantId)
+    .eq("id", input.reservationId);
+  if (updateError) return err(500, updateError.message);
+
+  auditLog({
+    event: "booking_group_orphan_reservation_linked",
+    tenantId, userId, role,
+    outcome: "linked",
+    details: { reservation_id: input.reservationId, orphan_booking_group_id: input.orphanBookingGroupId, real_booking_group_id: input.realBookingGroupId, bus_unit_id: reservation.bus_unit_id, service_date: reservation.service_date },
+  });
+
+  let autoAssign: AutoAssignBookingGroupResult | undefined;
+  try {
+    autoAssign = await autoAssignBookingGroup(admin, actor, input.realBookingGroupId);
+  } catch {
+    // best-effort: il collegamento reservation resta valido anche se questo fallisce.
+  }
+
+  return ok({ linked: true, autoAssign });
 }
 
 // ─── FASE A.5.1 §15 — allocazione su bus RISERVATO (predeterminato) ───────

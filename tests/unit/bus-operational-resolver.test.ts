@@ -132,4 +132,98 @@ describe("bus operational resolver", () => {
     expect(resolution.destinationLabel).toBe("CITTA NON CENSITA");
     expect(resolution.hotelPickupTime).toBe("07:20");
   });
+
+  describe("Obiettivo A: bus_exclusive vince sempre sulla città (mai Linea Adriatica per geografia)", () => {
+    const ADRIATICA_STOP = {
+      id: "stop-marotta-adriatica",
+      bus_line_id: "line-adriatica",
+      direction: "departure" as const,
+      stop_name: "MAROTTA",
+      city: "MAROTTA",
+      pickup_note: null,
+      pickup_time: "08:00",
+    };
+
+    it("service di gruppo bus_exclusive con fermata MAROTTA (reale su Linea Adriatica) NON diventa Linea Adriatica", () => {
+      const resolution = resolveBusOperationalService(
+        busService({ id: "svc-marotta", bus_city_origin: "MAROTTA", booking_group_id: "bg-giacomoni", transport_code: null, vessel: null }),
+        baseContext({
+          lineById: new Map([["line-adriatica", { id: "line-adriatica", family_code: "ADRIATICA", name: "Linea Adriatica" }]]),
+          stops: [ADRIATICA_STOP],
+          bookingGroupKindById: new Map([["bg-giacomoni", "bus_exclusive"]]),
+        }),
+      );
+      expect(resolution.familyCode).toBe("GRUPPI_ESCLUSIVI");
+      expect(resolution.lineName).not.toBe("Linea Adriatica");
+      expect(resolution.familyCode).not.toBe("ADRIATICA");
+    });
+
+    it("service di gruppo bus_exclusive con fermata PESARO -> resta Bus esclusivi gruppi", () => {
+      const resolution = resolveBusOperationalService(
+        busService({ id: "svc-pesaro", direction: "arrival", bus_city_origin: "PESARO", booking_group_id: "bg-giacomoni", transport_code: null, vessel: null }),
+        baseContext({
+          lineById: new Map([
+            ["line-adriatica", { id: "line-adriatica", family_code: "ADRIATICA", name: "Linea Adriatica" }],
+            ["line-esclusivi", { id: "line-esclusivi", family_code: "GRUPPI_ESCLUSIVI", name: "Bus esclusivi gruppi" }],
+          ]),
+          stops: [{ ...ADRIATICA_STOP, id: "stop-pesaro", stop_name: "PESARO", city: "PESARO", direction: "arrival" }],
+          bookingGroupKindById: new Map([["bg-giacomoni", "bus_exclusive"]]),
+        }),
+      );
+      expect(resolution.familyCode).toBe("GRUPPI_ESCLUSIVI");
+      expect(resolution.lineName).toBe("Bus esclusivi gruppi");
+      expect(resolution.destinationLabel).toBe("PESARO");
+    });
+
+    it("ritorno (departure) generato da ritorno invertito resta Bus esclusivi gruppi, non Linea Adriatica", () => {
+      const resolution = resolveBusOperationalService(
+        busService({ id: "svc-ret-fano", direction: "departure", bus_city_origin: "FANO", booking_group_id: "bg-giacomoni", transport_code: null, vessel: null }),
+        baseContext({
+          lineById: new Map([["line-adriatica", { id: "line-adriatica", family_code: "ADRIATICA", name: "Linea Adriatica" }]]),
+          stops: [{ ...ADRIATICA_STOP, id: "stop-fano", stop_name: "FANO", city: "FANO" }],
+          bookingGroupKindById: new Map([["bg-giacomoni", "bus_exclusive"]]),
+        }),
+      );
+      expect(resolution.familyCode).toBe("GRUPPI_ESCLUSIVI");
+    });
+
+    it("prenotazione individuale (booking_group_id null) con fermata PESARO resta Linea Adriatica (nessuna regressione)", () => {
+      const resolution = resolveBusOperationalService(
+        busService({ id: "svc-individuale", bus_city_origin: "PESARO", booking_group_id: null, transport_code: null, vessel: null }),
+        baseContext({
+          lineById: new Map([["line-adriatica", { id: "line-adriatica", family_code: "ADRIATICA", name: "Linea Adriatica" }]]),
+          stops: [{ ...ADRIATICA_STOP, id: "stop-pesaro", stop_name: "PESARO", city: "PESARO" }],
+          bookingGroupKindById: new Map(),
+        }),
+      );
+      expect(resolution.lineName).toBe("Linea Adriatica");
+      expect(resolution.familyCode).toBe("ADRIATICA");
+    });
+
+    it("gruppo non bus_exclusive con fermata su Linea Adriatica -> comportamento geografico invariato", () => {
+      const resolution = resolveBusOperationalService(
+        busService({ id: "svc-gruppo-normale", bus_city_origin: "MAROTTA", booking_group_id: "bg-altro", transport_code: null, vessel: null }),
+        baseContext({
+          lineById: new Map([["line-adriatica", { id: "line-adriatica", family_code: "ADRIATICA", name: "Linea Adriatica" }]]),
+          stops: [ADRIATICA_STOP],
+          bookingGroupKindById: new Map([["bg-altro", "bus_group"]]),
+        }),
+      );
+      expect(resolution.familyCode).toBe("ADRIATICA");
+    });
+
+    it("bus_exclusive CON allocazione reale -> l'allocazione resta autorevole (mai sovrascritta dal gate)", () => {
+      const resolution = resolveBusOperationalService(
+        busService({ id: "svc-allocated", bus_city_origin: "MAROTTA", booking_group_id: "bg-giacomoni", transport_code: null, vessel: null }),
+        baseContext({
+          allocationsByServiceId: new Map([
+            ["svc-allocated", [{ service_id: "svc-allocated", direction: "departure", family_code: "GRUPPI_ESCLUSIVI", line_name: "Bus esclusivi gruppi", stop_name: "MAROTTA", stop_city: "MAROTTA", stop_pickup_note: null, stop_pickup_time: "08:00", hotel_pickup_time: null }],
+          ]]),
+          bookingGroupKindById: new Map([["bg-giacomoni", "bus_exclusive"]]),
+        }),
+      );
+      expect(resolution.resolutionSource).toBe("allocation");
+      expect(resolution.familyCode).toBe("GRUPPI_ESCLUSIVI");
+    });
+  });
 });

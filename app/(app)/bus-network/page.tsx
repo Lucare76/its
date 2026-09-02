@@ -247,6 +247,10 @@ export default function BusNetworkPage() {
   // Obiettivo F/D: esito per-gruppo dell'auto-assegnazione "gruppo intero"
   // (bus_exclusive) — motivo del blocco se non riesce, mai un errore muto.
   const [wholeGroupAssignResult, setWholeGroupAssignResult] = useState<Record<string, string>>({});
+  // Obiettivo C/D: conflitto rilevato con un gruppo orfano a 0 services —
+  // abilita la CTA specifica "Collega reservation al gruppo reale" invece
+  // del generico retry.
+  const [orphanConflictByGroup, setOrphanConflictByGroup] = useState<Record<string, { reservationId: string; orphanBookingGroupId: string; orphanBookingGroupName: string; busLabel: string }>>({});
 
   // Modifica nome linea
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -923,6 +927,11 @@ export default function BusNetworkPage() {
       delete next[bookingGroupId];
       return next;
     });
+    setOrphanConflictByGroup((prev) => {
+      const next = { ...prev };
+      delete next[bookingGroupId];
+      return next;
+    });
     try {
       const res = await fetch("/api/ops/booking-groups", {
         method: "POST",
@@ -932,12 +941,23 @@ export default function BusNetworkPage() {
       const body = (await res.json().catch(() => null)) as ({
         ok?: boolean;
         error?: string;
-        blocked?: Array<{ service_date: string; reason: string }>;
+        blocked?: Array<{ service_date: string; reason: string; orphan_conflict?: { busUnitId: string; busLabel: string; orphanBookingGroupId: string; orphanBookingGroupName: string; reservationId: string } }>;
       }) | null;
       if (!res.ok || !body?.ok) {
         setWholeGroupAssignResult((prev) => ({ ...prev, [bookingGroupId]: body?.error ?? "Assegnazione non riuscita." }));
       } else if (body.blocked && body.blocked.length > 0) {
         setWholeGroupAssignResult((prev) => ({ ...prev, [bookingGroupId]: body.blocked!.map((b) => b.reason).join(" · ") }));
+        // Obiettivo C/D: mai un generico "Assegna gruppo" quando il blocco è
+        // riconducibile a un preciso gruppo orfano — CTA specifica.
+        const conflict = body.blocked.find((b) => b.orphan_conflict)?.orphan_conflict;
+        if (conflict) {
+          setOrphanConflictByGroup((prev) => ({ ...prev, [bookingGroupId]: {
+            reservationId: conflict.reservationId,
+            orphanBookingGroupId: conflict.orphanBookingGroupId,
+            orphanBookingGroupName: conflict.orphanBookingGroupName,
+            busLabel: conflict.busLabel,
+          } }));
+        }
       } else {
         await load();
       }
@@ -945,6 +965,42 @@ export default function BusNetworkPage() {
       setSaving(false);
     }
   }, [load]);
+
+  // Obiettivo C: azione ESPLICITA, mai automatica — sposta la reservation
+  // dal gruppo orfano (0 services, verificato server-side) al gruppo reale,
+  // poi ritenta l'auto-assegnazione.
+  const handleLinkOrphanReservation = useCallback(async (bookingGroupId: string) => {
+    const conflict = orphanConflictByGroup[bookingGroupId];
+    if (!conflict) return;
+    const token = await getToken();
+    if (!token) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/ops/booking-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          action: "link_orphan_reservation",
+          reservation_id: conflict.reservationId,
+          orphan_booking_group_id: conflict.orphanBookingGroupId,
+          real_booking_group_id: bookingGroupId,
+        }),
+      });
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !body?.ok) {
+        setWholeGroupAssignResult((prev) => ({ ...prev, [bookingGroupId]: body?.error ?? "Collegamento non riuscito." }));
+        return;
+      }
+      setOrphanConflictByGroup((prev) => {
+        const next = { ...prev };
+        delete next[bookingGroupId];
+        return next;
+      });
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  }, [orphanConflictByGroup, load]);
 
   const confirmAssignGroup = useCallback(async () => {
     if (!assignGroupSelection || !assignUnitId || !assignStopId || !assignLineId) return;
@@ -3985,7 +4041,14 @@ export default function BusNetworkPage() {
                           )}
                         </div>
                         <span className="text-sm text-slate-500">{group.totalPax} pax</span>
-                        {group.isWholeGroup ? (
+                        {group.isWholeGroup && orphanConflictByGroup[group.bookingGroupId] ? (
+                          <button onClick={() => void handleLinkOrphanReservation(group.bookingGroupId)}
+                            disabled={saving}
+                            title={`Reservation occupata dal gruppo orfano "${orphanConflictByGroup[group.bookingGroupId].orphanBookingGroupName}" (0 services) sul bus ${orphanConflictByGroup[group.bookingGroupId].busLabel}`}
+                            className="btn-primary bg-amber-600 hover:bg-amber-700 px-4 py-1.5 text-sm">
+                            {saving ? "Collegamento..." : "Collega reservation al gruppo reale →"}
+                          </button>
+                        ) : group.isWholeGroup ? (
                           <button onClick={() => void handleAssignWholeGroup(group.bookingGroupId)}
                             disabled={saving}
                             className="btn-primary px-4 py-1.5 text-sm">

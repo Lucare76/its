@@ -30,6 +30,7 @@ import {
   operationalizeBookingGroup,
   autoAssignBookingGroup,
   generateReturnStopsFromArrival,
+  linkOrphanReservationToGroup,
   findAvailableBusesForGroup,
   isSupportedBookingGroupDate,
   suggestBookingGroupCatalogStops,
@@ -196,6 +197,13 @@ const generateReturnStopsSchema = z.object({
   booking_group_id: z.string().uuid(),
 });
 
+const linkOrphanReservationSchema = z.object({
+  action: z.literal("link_orphan_reservation"),
+  reservation_id: z.string().uuid(),
+  orphan_booking_group_id: z.string().uuid(),
+  real_booking_group_id: z.string().uuid(),
+});
+
 const bodySchema = z.discriminatedUnion("action", [
   createGroupSchema,
   updateGroupSchema,
@@ -212,6 +220,7 @@ const bodySchema = z.discriminatedUnion("action", [
   operationalizeSchema,
   autoAssignSchema,
   generateReturnStopsSchema,
+  linkOrphanReservationSchema,
 ]);
 
 /** Mapping uniforme BgResult/BgOutcome -> NextResponse. Le chiavi di
@@ -613,6 +622,19 @@ export async function POST(request: NextRequest) {
   // Idempotente — vedi generateReturnStopsFromArrival.
   if (body.action === "generate_return_stops_from_arrival") {
     return toResponse(await generateReturnStopsFromArrival(admin, actor, body.booking_group_id));
+  }
+
+  // ── link_orphan_reservation (WRITE) — Obiettivo C ──────────────────────
+  // Azione ESPLICITA, mai automatica: sposta UNA reservation dal gruppo
+  // orfano al gruppo reale, con tutti i controlli di sicurezza rifatti
+  // server-side in linkOrphanReservationToGroup (mai fidarsi del solo input
+  // dell'operatore). Non cancella il gruppo orfano, non tocca services.
+  if (body.action === "link_orphan_reservation") {
+    return toResponse(await linkOrphanReservationToGroup(admin, actor, {
+      reservationId: body.reservation_id,
+      orphanBookingGroupId: body.orphan_booking_group_id,
+      realBookingGroupId: body.real_booking_group_id,
+    }));
   }
 
   return NextResponse.json({ ok: false, error: "Azione non riconosciuta." }, { status: 400 });

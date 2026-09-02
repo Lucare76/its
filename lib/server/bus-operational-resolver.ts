@@ -21,6 +21,10 @@ export type BusOperationalServiceInput = {
   vessel?: string | null;
   hotel_id?: string | null;
   meeting_point?: string | null;
+  // Obiettivo A (bus_exclusive vince sulla città): per risolvere il gruppo
+  // senza una query aggiuntiva per service, serve solo l'id — il kind si
+  // legge da context.bookingGroupKindById.
+  booking_group_id?: string | null;
 };
 
 export type BusOperationalResolution = {
@@ -80,7 +84,16 @@ export type BusOperationalResolverContext = {
   lineById: Map<string, BusLineRow>;
   hotelNameById: Map<string, string>;
   hotelPickupTimes: HotelPickupTimeRow[];
+  // Obiettivo A: kind del booking_group per service.booking_group_id — mai
+  // una query per service, un'unica select su booking_groups a monte.
+  bookingGroupKindById: Map<string, string | null>;
 };
+
+// Stesso codice/famiglia gia' usato altrove (bus-network-loader.ts,
+// booking-groups-service.ts) per la linea "Bus esclusivi gruppi" — non e'
+// un dato di business (nome gruppo/bus), e' il codice di sistema stabile
+// della linea dedicata ai gruppi esclusivi.
+const EXCLUSIVE_GROUP_FAMILY_CODE = "GRUPPI_ESCLUSIVI";
 
 export function normalizeBusOperationalNeedle(value?: string | null) {
   return String(value ?? "")
@@ -212,6 +225,29 @@ export function resolveBusOperationalService(
     };
   }
 
+  // Obiettivo A: bus_exclusive vince SEMPRE sulla città — senza
+  // un'allocazione reale (unico caso già gestito sopra, dati veri), mai
+  // ricadere sul match geografico per città (findStopFallback), che
+  // classificherebbe erroneamente Cattolica/Pesaro/Fano/Marotta come Linea
+  // Adriatica solo perché quei nomi coincidono con fermate reali di
+  // quell'altra linea.
+  const groupKind = service.booking_group_id ? context.bookingGroupKindById.get(service.booking_group_id) ?? null : null;
+  if (groupKind === "bus_exclusive") {
+    const exclusiveLine = Array.from(context.lineById.values())
+      .find((line) => line.family_code === EXCLUSIVE_GROUP_FAMILY_CODE);
+    const stopName = service.bus_city_origin ?? service.meeting_point ?? null;
+    return {
+      serviceId: service.id,
+      lineName: exclusiveLine?.name ?? "Bus esclusivi gruppi",
+      familyCode: EXCLUSIVE_GROUP_FAMILY_CODE,
+      stopName,
+      stopPickupNote: null,
+      hotelPickupTime: null,
+      destinationLabel: stopName,
+      resolutionSource: "service_fields",
+    };
+  }
+
   const stop = findStopFallback(service, context);
   if (stop) {
     const line = context.lineById.get(stop.bus_line_id);
@@ -270,7 +306,12 @@ export async function enrichServicesWithBusOperationalResolution<T extends Recor
   if (busServices.length === 0) return services;
 
   const serviceIds = busServices.map((service) => String(service.id)).filter(Boolean);
-  const [allocationsResult, linesResult, stopsResult, hotelsResult, pickupTimesResult] = await Promise.all([
+  const bookingGroupIds = Array.from(new Set(
+    busServices
+      .map((service) => (service as unknown as BusOperationalServiceInput).booking_group_id)
+      .filter((id): id is string => Boolean(id)),
+  ));
+  const [allocationsResult, linesResult, stopsResult, hotelsResult, pickupTimesResult, bookingGroupsResult] = await Promise.all([
     serviceIds.length > 0
       ? admin
           .from("ops_bus_allocation_details")
@@ -292,6 +333,10 @@ export async function enrichServicesWithBusOperationalResolution<T extends Recor
     admin
       .from("hotel_pickup_times")
       .select("hotel_name,pickup_time_linea_italia,pickup_time_linea_centro,pickup_time_linea_adriatica"),
+    // Obiettivo A: serve solo il kind, per il gate bus_exclusive.
+    bookingGroupIds.length > 0
+      ? admin.from("booking_groups").select("id,kind").eq("tenant_id", tenantId).in("id", bookingGroupIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
 
   const error =
@@ -299,7 +344,8 @@ export async function enrichServicesWithBusOperationalResolution<T extends Recor
     linesResult.error ??
     stopsResult.error ??
     hotelsResult.error ??
-    pickupTimesResult.error;
+    pickupTimesResult.error ??
+    bookingGroupsResult.error;
   if (error) throw new Error(error.message);
 
   const allocationsByServiceId = new Map<string, BusAllocationDetailRow[]>();
@@ -315,6 +361,7 @@ export async function enrichServicesWithBusOperationalResolution<T extends Recor
     lineById: new Map(((linesResult.data ?? []) as BusLineRow[]).map((line) => [line.id, line])),
     hotelNameById: new Map(((hotelsResult.data ?? []) as HotelRow[]).map((hotel) => [hotel.id, hotel.name])),
     hotelPickupTimes: (pickupTimesResult.data ?? []) as HotelPickupTimeRow[],
+    bookingGroupKindById: new Map(((bookingGroupsResult.data ?? []) as Array<{ id: string; kind: string | null }>).map((g) => [g.id, g.kind])),
   };
 
   return services.map((service) => {
