@@ -132,6 +132,47 @@ describe("resolveCanonicalBookingGroupStop — match esatto, mai fuzzy", () => {
     const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "MAROTTA", "departure", "PARCHEGGIO CASELLO A14");
     expect(res).toEqual({ stopId: "marotta-dep", pickupTime: "09:00" });
   });
+
+  // Obiettivo D (prompt "FIX MIRATO — CATALOGO FERMATE RITORNO BUS ESCLUSIVI"):
+  // catalogo ritorno completo (GIACOMONI, GRUPPI_ESCLUSIVI) — PESARO e
+  // CATTOLICA devono risolvere alla propria fermata, MAI a MAROTTA, e FANO
+  // resta risolto correttamente anche con più righe simili in catalogo.
+  describe("catalogo ritorno GRUPPI_ESCLUSIVI completo (MAROTTA + FANO + PESARO + CATTOLICA)", () => {
+    const returnCatalog = [
+      { id: "dep-marotta", tenant_id: TENANT, city: "MAROTTA", stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: "09:00" },
+      { id: "dep-fano", tenant_id: TENANT, city: "FANO", stop_name: "FANO", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: null },
+      { id: "dep-pesaro", tenant_id: TENANT, city: "PESARO", stop_name: "PESARO", pickup_note: "CASELLO A14", direction: "departure", active: true, pickup_time: null },
+      { id: "dep-cattolica", tenant_id: TENANT, city: "CATTOLICA", stop_name: "CATTOLICA", pickup_note: "CASELLO A14", direction: "departure", active: true, pickup_time: null },
+    ];
+
+    it("PESARO ritorno risolve alla propria fermata", async () => {
+      const { admin } = makeAdmin({ tenant_bus_line_stops: returnCatalog });
+      const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "PESARO", "departure", "CASELLO A14");
+      expect(res).toEqual({ stopId: "dep-pesaro", pickupTime: null });
+    });
+
+    it("CATTOLICA ritorno risolve alla propria fermata", async () => {
+      const { admin } = makeAdmin({ tenant_bus_line_stops: returnCatalog });
+      const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "CATTOLICA", "departure", "CASELLO A14");
+      expect(res).toEqual({ stopId: "dep-cattolica", pickupTime: null });
+    });
+
+    it("FANO ritorno resta risolto correttamente (mai confuso con MAROTTA/PESARO/CATTOLICA)", async () => {
+      const { admin } = makeAdmin({ tenant_bus_line_stops: returnCatalog });
+      const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "FANO", "departure", "PARCHEGGIO CASELLO A14");
+      expect(res).toEqual({ stopId: "dep-fano", pickupTime: null });
+    });
+
+    it("MAROTTA non viene mai usata come fallback per PESARO/CATTOLICA/FANO", async () => {
+      const { admin } = makeAdmin({ tenant_bus_line_stops: returnCatalog });
+      const pesaro = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "PESARO", "departure", "CASELLO A14");
+      const cattolica = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "CATTOLICA", "departure", "CASELLO A14");
+      const fano = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "FANO", "departure", "PARCHEGGIO CASELLO A14");
+      expect(pesaro?.stopId).not.toBe("dep-marotta");
+      expect(cattolica?.stopId).not.toBe("dep-marotta");
+      expect(fano?.stopId).not.toBe("dep-marotta");
+    });
+  });
 });
 
 describe("addBookingGroupStop — auto-risolve stop_id canonico (§E)", () => {
