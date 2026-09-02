@@ -103,6 +103,35 @@ describe("resolveCanonicalBookingGroupStop — match esatto, mai fuzzy", () => {
     const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "Roma", "arrival");
     expect(res).toBeNull();
   });
+
+  // Obiettivo A (prompt "FIX MIRATO — GIACOMONI: MAROTTA DUPLICATA"): regressione
+  // sul dato reale. Il catalogo departure aveva UN SOLO stop sotto la linea
+  // esclusiva (MAROTTA, pickup_note "PARCHEGGIO CASELLO A14"). Cercare la
+  // fermata canonica per FANO con lo stesso pickup_point testuale (copiato
+  // pari pari dall'andata da generateReturnStopsFromArrival) risolveva
+  // ERRONEAMENTE a MAROTTA — nessun controllo che la città combaciasse
+  // quando il match arrivava da pickup_point/stop_name. Risultato reale:
+  // l'allocazione del service FANO ritorno veniva salvata con
+  // stop_name="MAROTTA", duplicando visivamente MAROTTA nel bus.
+  it("città diversa con lo STESSO pickup_point testuale → null, mai un match cross-città (regressione MAROTTA/FANO)", async () => {
+    const { admin } = makeAdmin({
+      tenant_bus_line_stops: [
+        { id: "marotta-dep", tenant_id: TENANT, city: "MAROTTA", stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: "09:00" },
+      ],
+    });
+    const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "FANO", "departure", "PARCHEGGIO CASELLO A14");
+    expect(res).toBeNull();
+  });
+
+  it("stessa città + stesso pickup_point testuale → risolve correttamente (comportamento legittimo invariato)", async () => {
+    const { admin } = makeAdmin({
+      tenant_bus_line_stops: [
+        { id: "marotta-dep", tenant_id: TENANT, city: "MAROTTA", stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", direction: "departure", active: true, pickup_time: "09:00" },
+      ],
+    });
+    const res = await resolveCanonicalBookingGroupStop(admin as never, TENANT, "MAROTTA", "departure", "PARCHEGGIO CASELLO A14");
+    expect(res).toEqual({ stopId: "marotta-dep", pickupTime: "09:00" });
+  });
 });
 
 describe("addBookingGroupStop — auto-risolve stop_id canonico (§E)", () => {
