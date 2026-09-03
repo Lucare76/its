@@ -62,6 +62,34 @@ type ImportRow = {
   suggestedHotelName: string | null;   // Nome hotel suggerito
 };
 
+// Risposta dettagliata di import_excel_auto (vedi app/api/ops/bus-network/route.ts):
+// ogni riga finisce in uno stato esplicito, mai persa silenziosamente.
+type ImportRowDetail = {
+  customer_name: string;
+  pax: number;
+  city: string;
+  hotel: string | null;
+  status: "imported" | "reused_existing" | "duplicate" | "pending" | "error";
+  service_id: string | null;
+  allocation_id: string | null;
+  reason: string | null;
+};
+type ImportResult = {
+  received_rows: number;
+  received_pax: number;
+  imported_rows: number;
+  imported_pax: number;
+  reused_rows: number;
+  reused_pax: number;
+  duplicate_rows: number;
+  duplicate_pax: number;
+  pending_rows: number;
+  pending_pax: number;
+  error_rows: number;
+  error_pax: number;
+  details: ImportRowDetail[];
+};
+
 // Mappa alias agenzie: il nome raw nel file viene normalizzato al nome ufficiale
 const AGENCY_ALIASES: Record<string, string> = {
   "ischia enjoy": "ALESTE VIAGGI",
@@ -824,6 +852,115 @@ async function getToken() {
   return data.session?.access_token ?? null;
 }
 
+// Righe di piede/totale del foglio ("TOTALE", "TOT.", "TOTALI" ...) senza una
+// fermata associata: non sono un passeggero e non vanno importate come tale
+// (bug osservato 2026-09-06: un totale "TOTALE 76 pax" senza città finiva in
+// bus_import_pending come se fosse una prenotazione reale).
+const FOOTER_TOTAL_ROW_RE = /^(totale|total|tot\.?|totali)$/i;
+
+/**
+ * Estrae le righe passeggero da un foglio Excel già letto come matrice
+ * (`sheet_to_json(ws, { header: 1 })`). Pura funzione, testabile senza DOM/
+ * xlsx: individua l'intestazione, mappa le colonne e produce `ImportRow[]`
+ * con lo stesso matching fermata/hotel usato dall'anteprima.
+ */
+export function parseBusImportRows(
+  raw: unknown[][],
+  allStops: BusStop[],
+  allLines: BusLine[],
+  direction: "arrival" | "departure",
+  hotelsList: HotelListItem[]
+): { rows: ImportRow[]; error: string | null } {
+  if (raw.length < 2) return { rows: [], error: "File vuoto o senza dati." };
+
+  const KNOWN = HEADER_KEYWORDS;
+
+  let headerRowIdx = 0;
+  // Usa la PRIMA riga (entro le prime 3) che contiene almeno 2 parole chiave —
+  // così non si saltano dati nelle righe precedenti all'intestazione trovata
+  for (let ri = 0; ri < Math.min(3, raw.length); ri++) {
+    const r = Array.from(raw[ri] as ArrayLike<unknown>, (v) => String(v ?? "").toLowerCase().trim());
+    const score = r.filter((h) => KNOWN.some((k) => h.includes(k))).length;
+    if (score >= 2) { headerRowIdx = ri; break; }
+  }
+
+  const headerRow = Array.from(raw[headerRowIdx] as ArrayLike<unknown>, (v) => String(v ?? "").toLowerCase().trim());
+  const col = (patterns: string[]) => {
+    for (const p of patterns) {
+      const i = headerRow.findIndex((h) => h.includes(p));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
+  const nameCol   = col(["nominativo", "cognome", "nome", "passeggero", "cliente", "name", "beneficiario"]);
+  const phoneCol  = col(["cellulare", "cell", "telefono", "phone", "tel"]);
+  const cityCol   = col(["punto di carico", "destinazione", "carico", "città", "citta", "city", "fermata", "partenza", "localita", "località"]);
+  const paxCol    = col(["pax", "passeggeri", "n.", "num", "quantità", "persone"]);
+  const hotelCol  = col(["albergo", "hotel partenza", "hotel arrivo", "struttura", "hotel"]);
+  const notesCol  = col(["agenzia", "agency", "note", "notes", "annotazioni"]);
+  const orarioCol = col(["orario", "ora", "ora partenza", "ora ritiro", "time"]);
+  // Colonna J (indice 9) per agenzia speciale — letta sia per intestazione sia per posizione fissa
+  const agencyJCol = col(["touroperator", "operatore", "agenzia speciale", "t.o.", "to "]) >= 0
+    ? col(["touroperator", "operatore", "agenzia speciale", "t.o.", "to "])
+    : (headerRow.length > 9 ? 9 : -1);
+
+  if (nameCol < 0 && cityCol < 0) {
+    const found = headerRow.filter(Boolean).join(", ") || "(nessuna intestazione trovata)";
+    return { rows: [], error: `Intestazioni non riconosciute. Colonne trovate: ${found}.` };
+  }
+
+  const parsed: ImportRow[] = [];
+  for (let i = headerRowIdx + 1; i < raw.length; i++) {
+    const rowData = raw[i] as unknown[];
+    if (!Array.isArray(rowData) || rowData.every((c) => !String(c ?? "").trim())) continue;
+    const r0 = String(rowData[0] ?? "").toLowerCase().trim();
+    // Non scartare una riga dati "HH:MM <città>" solo perché contiene un
+    // token tipo "citta"/"city"/"nome" (bug CITTÀ DI CASTELLO).
+    if (isBusImportHeaderRow(r0)) continue;
+
+    const str = (idx: number) => (idx >= 0 ? String(rowData[idx] ?? "").trim() : "");
+    const hotel = str(hotelCol);
+    const cityRaw = str(cityCol);
+    const paxRaw = str(paxCol);
+    const pax = Math.max(1, parseInt(paxRaw || "1", 10) || 1);
+
+    // Accetta la riga se ha un nome OPPURE se ha fermata + pax validi (gruppi senza nominativo individuale)
+    const nameRaw = str(nameCol) || hotel || str(0);
+    const hasCity = cityRaw.trim().length > 0;
+    const hasPax = /^\d+$/.test(paxRaw) && parseInt(paxRaw, 10) > 0;
+    if (!nameRaw && !(hasCity && hasPax)) continue;
+    // Riga di totale/piede foglio senza fermata (es. "TOTALE" 76 pax): non è
+    // un passeggero, va scartata qui e non nell'import lato server.
+    if (!hasCity && FOOTER_TOTAL_ROW_RE.test(nameRaw.trim())) continue;
+    const name = nameRaw || `Gruppo ${pax} pax`;
+    const phone = str(phoneCol);
+    // Estrai orario e città dall'orario — alcuni file usano "04:30 ESINE" nello stesso campo
+    const rawOrarioRaw = str(orarioCol);
+    const orarioMatch = rawOrarioRaw.trim().match(/^(\d{1,2}:\d{2})(?::\d{2})?\s*(.*)$/);
+    const rawOrario = orarioMatch ? orarioMatch[1] : "";
+    const cityFromOrario = orarioMatch?.[2]?.trim() ?? "";
+    // La città esplicita nel campo ORARIO/CITTÀ ha priorità sulla deduzione
+    // dal punto di carico; il punto di carico resta come nota fermata.
+    const { city: cityNorm, pickupPoint } = resolveBusImportCity(cityRaw, cityFromOrario);
+    // Leggi agenzia da colonna notesCol e da colonna J (con alias mapping)
+    const agencyRaw = str(notesCol) || str(agencyJCol);
+    const agency = normalizeAgency(agencyRaw);
+    const notes = pickupPoint ? `Punto di carico: ${pickupPoint}` : "";
+
+    const { stop, line, status } = matchAcrossLines(cityFromOrario || cityNorm, allStops, allLines, direction);
+    // Fallback orario: usa la città canonica matchata (es. "BRESCIA" da "BORGOSATOLLO")
+    const canonicalCity = (stop?.city ?? cityNorm).toUpperCase().trim();
+    const catalogTime = CATALOG_CITY_TIME[canonicalCity] ?? "";
+    const orario = rawOrario || stop?.pickup_time || catalogTime;
+    const { matchedHotelId, suggestedHotelId, suggestedHotelName } = matchHotel(hotel, hotelsList);
+    parsed.push({ name, phone, hotel, agency, cityRaw, cityNorm, orario, pax, notes, status, matchedStop: stop, matchedLine: line, matchedHotelId, suggestedHotelId, suggestedHotelName });
+  }
+
+  if (parsed.length === 0) return { rows: [], error: "Nessuna riga valida trovata nel file." };
+  return { rows: parsed, error: null };
+}
+
 export default function BusImportModal({
   allLines,
   allStops,
@@ -844,7 +981,8 @@ export default function BusImportModal({
   const [step, setStep] = useState<"upload" | "preview" | "importing" | "done">("upload");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ assigned: number; pending: number } | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [showAlreadyPresent, setShowAlreadyPresent] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   // Ricerca per il selettore fermata manuale: mappa idx riga → testo ricerca
   const [stopSearch, setStopSearch] = useState<Record<number, string>>({});
@@ -954,92 +1092,9 @@ export default function BusImportModal({
       const wb = read(ab, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const raw = utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false }) as unknown[][];
-      if (raw.length < 2) { setError("File vuoto o senza dati."); return; }
-
-      const KNOWN = HEADER_KEYWORDS;
-
-      let headerRowIdx = 0;
-      // Usa la PRIMA riga (entro le prime 3) che contiene almeno 2 parole chiave —
-      // così non si saltano dati nelle righe precedenti all'intestazione trovata
-      for (let ri = 0; ri < Math.min(3, raw.length); ri++) {
-        const r = Array.from(raw[ri] as ArrayLike<unknown>, (v) => String(v ?? "").toLowerCase().trim());
-        const score = r.filter((h) => KNOWN.some((k) => h.includes(k))).length;
-        if (score >= 2) { headerRowIdx = ri; break; }
-      }
-
-      const headerRow = Array.from(raw[headerRowIdx] as ArrayLike<unknown>, (v) => String(v ?? "").toLowerCase().trim());
-      const col = (patterns: string[]) => {
-        for (const p of patterns) {
-          const i = headerRow.findIndex((h) => h.includes(p));
-          if (i >= 0) return i;
-        }
-        return -1;
-      };
-
-      const nameCol   = col(["nominativo", "cognome", "nome", "passeggero", "cliente", "name", "beneficiario"]);
-      const phoneCol  = col(["cellulare", "cell", "telefono", "phone", "tel"]);
-      const cityCol   = col(["punto di carico", "destinazione", "carico", "città", "citta", "city", "fermata", "partenza", "localita", "località"]);
-      const paxCol    = col(["pax", "passeggeri", "n.", "num", "quantità", "persone"]);
-      const hotelCol  = col(["albergo", "hotel partenza", "hotel arrivo", "struttura", "hotel"]);
-      const notesCol  = col(["agenzia", "agency", "note", "notes", "annotazioni"]);
-      const orarioCol = col(["orario", "ora", "ora partenza", "ora ritiro", "time"]);
-      // Colonna J (indice 9) per agenzia speciale — letta sia per intestazione sia per posizione fissa
-      const agencyJCol = col(["touroperator", "operatore", "agenzia speciale", "t.o.", "to "]) >= 0
-        ? col(["touroperator", "operatore", "agenzia speciale", "t.o.", "to "])
-        : (headerRow.length > 9 ? 9 : -1);
-
-      if (nameCol < 0 && cityCol < 0) {
-        const found = headerRow.filter(Boolean).join(", ") || "(nessuna intestazione trovata)";
-        setError(`Intestazioni non riconosciute. Colonne trovate: ${found}.`);
-        return;
-      }
-
-      const parsed: ImportRow[] = [];
-      for (let i = headerRowIdx + 1; i < raw.length; i++) {
-        const rowData = raw[i] as unknown[];
-        if (!Array.isArray(rowData) || rowData.every((c) => !String(c ?? "").trim())) continue;
-        const r0 = String(rowData[0] ?? "").toLowerCase().trim();
-        // Non scartare una riga dati "HH:MM <città>" solo perché contiene un
-        // token tipo "citta"/"city"/"nome" (bug CITTÀ DI CASTELLO).
-        if (isBusImportHeaderRow(r0)) continue;
-
-        const str = (idx: number) => (idx >= 0 ? String(rowData[idx] ?? "").trim() : "");
-        const hotel = str(hotelCol);
-        const cityRaw = str(cityCol);
-        const paxRaw = str(paxCol);
-        const pax = Math.max(1, parseInt(paxRaw || "1", 10) || 1);
-
-        // Accetta la riga se ha un nome OPPURE se ha fermata + pax validi (gruppi senza nominativo individuale)
-        const nameRaw = str(nameCol) || hotel || str(0);
-        const hasCity = cityRaw.trim().length > 0;
-        const hasPax = /^\d+$/.test(paxRaw) && parseInt(paxRaw, 10) > 0;
-        if (!nameRaw && !(hasCity && hasPax)) continue;
-        const name = nameRaw || `Gruppo ${pax} pax`;
-        const phone = str(phoneCol);
-        // Estrai orario e città dall'orario — alcuni file usano "04:30 ESINE" nello stesso campo
-        const rawOrarioRaw = str(orarioCol);
-        const orarioMatch = rawOrarioRaw.trim().match(/^(\d{1,2}:\d{2})(?::\d{2})?\s*(.*)$/);
-        const rawOrario = orarioMatch ? orarioMatch[1] : "";
-        const cityFromOrario = orarioMatch?.[2]?.trim() ?? "";
-        // La città esplicita nel campo ORARIO/CITTÀ ha priorità sulla deduzione
-        // dal punto di carico; il punto di carico resta come nota fermata.
-        const { city: cityNorm, pickupPoint } = resolveBusImportCity(cityRaw, cityFromOrario);
-        // Leggi agenzia da colonna notesCol e da colonna J (con alias mapping)
-        const agencyRaw = str(notesCol) || str(agencyJCol);
-        const agency = normalizeAgency(agencyRaw);
-        const notes = pickupPoint ? `Punto di carico: ${pickupPoint}` : "";
-
-        const { stop, line, status } = matchAcrossLines(cityFromOrario || cityNorm, allStops, allLines, direction);
-        // Fallback orario: usa la città canonica matchata (es. "BRESCIA" da "BORGOSATOLLO")
-        const canonicalCity = (stop?.city ?? cityNorm).toUpperCase().trim();
-        const catalogTime = CATALOG_CITY_TIME[canonicalCity] ?? "";
-        const orario = rawOrario || stop?.pickup_time || catalogTime;
-        const { matchedHotelId, suggestedHotelId, suggestedHotelName } = matchHotel(hotel, hotelsList);
-        parsed.push({ name, phone, hotel, agency, cityRaw, cityNorm, orario, pax, notes, status, matchedStop: stop, matchedLine: line, matchedHotelId, suggestedHotelId, suggestedHotelName });
-      }
-
-      if (parsed.length === 0) { setError("Nessuna riga valida trovata nel file."); return; }
-      setRows(parsed);
+      const { rows: parsedRows, error: parseError } = parseBusImportRows(raw, allStops, allLines, direction, hotelsList);
+      if (parseError) { setError(parseError); return; }
+      setRows(parsedRows);
       setStep("preview");
     } catch (e) {
       setError("Errore lettura file: " + (e instanceof Error ? e.message : String(e)));
@@ -1082,13 +1137,28 @@ export default function BusImportModal({
           rows: payload,
         }),
       });
-      const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; assigned?: number; pending?: number } | null;
+      const body = (await res.json().catch(() => null)) as ({ ok?: boolean; error?: string } & Partial<ImportResult>) | null;
       if (!res.ok || !body?.ok) {
         setError(body?.error ?? "Errore durante l'importazione.");
         setStep("preview");
         return;
       }
-      setResult({ assigned: body.assigned ?? 0, pending: body.pending ?? 0 });
+      setResult({
+        received_rows: body.received_rows ?? rows.length,
+        received_pax: body.received_pax ?? rows.reduce((s, r) => s + r.pax, 0),
+        imported_rows: body.imported_rows ?? 0,
+        imported_pax: body.imported_pax ?? 0,
+        reused_rows: body.reused_rows ?? 0,
+        reused_pax: body.reused_pax ?? 0,
+        duplicate_rows: body.duplicate_rows ?? 0,
+        duplicate_pax: body.duplicate_pax ?? 0,
+        pending_rows: body.pending_rows ?? 0,
+        pending_pax: body.pending_pax ?? 0,
+        error_rows: body.error_rows ?? 0,
+        error_pax: body.error_pax ?? 0,
+        details: body.details ?? [],
+      });
+      setShowAlreadyPresent(false);
       setStep("done");
       onImported();
     } catch (e) {
@@ -1405,29 +1475,89 @@ export default function BusImportModal({
           )}
 
           {/* STEP: done */}
-          {step === "done" && result && (
-            <div className="flex flex-col items-center gap-4 py-8 text-center">
-              <span className="text-5xl">✅</span>
-              <h3 className="text-lg font-bold text-slate-900">Importazione completata</h3>
-              <div className="flex gap-4">
-                <div className="rounded-xl bg-emerald-50 px-6 py-4 text-center">
-                  <div className="text-2xl font-bold text-emerald-700">{result.assigned}</div>
-                  <div className="text-sm text-emerald-600">Assegnati al bus</div>
+          {step === "done" && result && (() => {
+            const alreadyPresentRows = result.duplicate_rows;
+            const alreadyPresentPax = result.duplicate_pax;
+            const importedRows = result.imported_rows + result.reused_rows;
+            const importedPax = result.imported_pax + result.reused_pax;
+            const alreadyPresentDetails = result.details.filter((d) => d.status === "duplicate");
+            return (
+              <div className="flex flex-col items-center gap-4 py-8 text-center">
+                <span className="text-5xl">✅</span>
+                <h3 className="text-lg font-bold text-slate-900">Importazione completata</h3>
+                <p className="text-sm text-slate-500">
+                  Righe Excel: <strong>{result.received_rows}</strong> · Passeggeri Excel: <strong>{result.received_pax}</strong>
+                </p>
+                <div className="flex flex-wrap justify-center gap-4">
+                  <div className="rounded-xl bg-emerald-50 px-6 py-4 text-center">
+                    <div className="text-2xl font-bold text-emerald-700">{importedRows}</div>
+                    <div className="text-sm text-emerald-600">Importati ({importedPax} pax)</div>
+                  </div>
+                  {alreadyPresentRows > 0 && (
+                    <div className="rounded-xl bg-sky-50 px-6 py-4 text-center">
+                      <div className="text-2xl font-bold text-sky-700">{alreadyPresentRows}</div>
+                      <div className="text-sm text-sky-600">Già presenti ({alreadyPresentPax} pax)</div>
+                    </div>
+                  )}
+                  {result.pending_rows > 0 && (
+                    <div className="rounded-xl bg-amber-50 px-6 py-4 text-center">
+                      <div className="text-2xl font-bold text-amber-700">{result.pending_rows}</div>
+                      <div className="text-sm text-amber-600">Da validare ({result.pending_pax} pax)</div>
+                    </div>
+                  )}
+                  {result.error_rows > 0 && (
+                    <div className="rounded-xl bg-rose-50 px-6 py-4 text-center">
+                      <div className="text-2xl font-bold text-rose-700">{result.error_rows}</div>
+                      <div className="text-sm text-rose-600">Errori ({result.error_pax} pax)</div>
+                    </div>
+                  )}
                 </div>
-                {result.pending > 0 && (
-                  <div className="rounded-xl bg-amber-50 px-6 py-4 text-center">
-                    <div className="text-2xl font-bold text-amber-700">{result.pending}</div>
-                    <div className="text-sm text-amber-600">Da validare</div>
+                {result.pending_rows > 0 && (
+                  <p className="text-sm text-slate-500">
+                    I passeggeri da validare sono visibili nel tab <strong>Da validare</strong>.
+                  </p>
+                )}
+                {alreadyPresentRows > 0 && (
+                  <div className="w-full max-w-lg text-left">
+                    <button
+                      type="button"
+                      onClick={() => setShowAlreadyPresent((v) => !v)}
+                      className="flex w-full items-center justify-between rounded-lg border border-sky-100 bg-sky-50/60 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50"
+                    >
+                      <span>Già presenti ({alreadyPresentRows} righe / {alreadyPresentPax} pax)</span>
+                      <span>{showAlreadyPresent ? "▲" : "▼"}</span>
+                    </button>
+                    {showAlreadyPresent && (
+                      <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-slate-100">
+                        <table className="w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                            <tr>
+                              <th className="px-3 py-1.5 font-semibold">Cliente</th>
+                              <th className="px-3 py-1.5 font-semibold">Hotel</th>
+                              <th className="px-3 py-1.5 font-semibold">Fermata</th>
+                              <th className="px-3 py-1.5 font-semibold">Pax</th>
+                              <th className="px-3 py-1.5 font-semibold">Motivo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {alreadyPresentDetails.map((d, i) => (
+                              <tr key={i} className="border-t border-slate-100">
+                                <td className="px-3 py-1.5 text-slate-700">{d.customer_name}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{d.hotel ?? "—"}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{d.city}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{d.pax}</td>
+                                <td className="px-3 py-1.5 text-slate-400">{d.reason ?? "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-              {result.pending > 0 && (
-                <p className="text-sm text-slate-500">
-                  I passeggeri da validare sono visibili nel tab <strong>Da validare</strong>.
-                </p>
-              )}
-            </div>
-          )}
+            );
+          })()}
 
           {error && (
             <div className="mt-3 rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</div>

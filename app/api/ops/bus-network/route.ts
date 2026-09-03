@@ -148,6 +148,13 @@ async function findExistingBusCityHotelService(
     hotelId?: string | null;
   }
 ): Promise<{ id: string; allocated: boolean } | null> {
+  // Normalizzazione prudente: spazi iniziali/finali e maiuscole/minuscole non
+  // devono far sfuggire un duplicato reale (stesso cliente reimportato con
+  // "Franca " invece di "FRANCA"), ma il criterio resta multi-campo
+  // (nome+pax+città+hotel) — mai il solo nome cliente come chiave duplicato.
+  const normalizedName = input.customerName.trim();
+  const normalizedCity = input.city.trim();
+
   let query = auth.admin
     .from("services")
     .select("id, created_at")
@@ -155,9 +162,9 @@ async function findExistingBusCityHotelService(
     .eq("booking_service_kind", "bus_city_hotel")
     .eq("date", input.date)
     .eq("direction", input.direction)
-    .eq("customer_name", input.customerName)
+    .ilike("customer_name", normalizedName)
     .eq("pax", input.pax)
-    .eq("bus_city_origin", input.city)
+    .ilike("bus_city_origin", normalizedCity)
     .order("created_at", { ascending: false })
     .limit(5);
 
@@ -2122,16 +2129,61 @@ export async function POST(request: NextRequest) {
         return { stop: null, fuzzy: false };
       }
 
-      function pickBusForLine(lineId: string, stopId: string | null, pax: number): DBUnit2 | null {
-        return pickSameStopFirstBus(allUnits, datePaxMap2, stopBusMap2, {
+      // FIX AUDIT 2026-09-06 — "solo 4 pax Terni": pickSameStopFirstBus (usata
+      // qui prima del fix) richiedeva che UN SOLO bus contenesse l'intero
+      // groupPax della fermata; se il gruppo (es. 18 pax) non ci stava tutto
+      // su un bus, la riga veniva comunque assegnata a quel bus per TUTTE le
+      // righe del gruppo, e le prenotazioni oltre la capienza residua
+      // fallivano una a una sulla RPC (capienza superata) — passeggeri persi
+      // senza distinzione visibile. pickBusCandidatesOrdered valuta la
+      // capienza per singola riga (row.pax, non groupPax), preferisce sempre
+      // il bus già in uso per la stessa fermata quando ha posto (stessa
+      // regola di prima) ma, se quello è pieno, ritenta sui bus successivi
+      // della stessa linea — così un gruppo che non entra in un solo bus
+      // viene distribuito su più bus invece di essere scartato.
+      function pickBusCandidates(lineId: string, stopId: string | null, pax: number): DBUnit2[] {
+        return pickBusCandidatesOrdered(allUnits, datePaxMap2, stopBusMap2, new Set<string>(), {
           lineId,
           stopId,
           pax,
         });
       }
 
-      let assigned2 = 0;
-      let pending2 = 0;
+      type ImportRowStatus = "imported" | "reused_existing" | "duplicate" | "pending" | "error";
+      type ImportRowDetail = {
+        customer_name: string;
+        pax: number;
+        city: string;
+        hotel: string | null;
+        status: ImportRowStatus;
+        service_id: string | null;
+        allocation_id: string | null;
+        reason: string | null;
+      };
+
+      const details: ImportRowDetail[] = [];
+      let importedRows = 0, importedPax = 0;
+      let reusedRows = 0, reusedPax = 0;
+      let duplicateRows = 0, duplicatePax = 0;
+      let pendingRows = 0, pendingPax = 0;
+      let errorRows = 0, errorPax = 0;
+
+      function recordPending(row: (typeof parsed.rows)[number], reason: string, serviceId: string | null = null) {
+        pendingRows++; pendingPax += row.pax;
+        details.push({ customer_name: row.name, pax: row.pax, city: row.city, hotel: row.hotel ?? null, status: "pending", service_id: serviceId, allocation_id: null, reason });
+      }
+      function recordError(row: (typeof parsed.rows)[number], reason: string) {
+        errorRows++; errorPax += row.pax;
+        details.push({ customer_name: row.name, pax: row.pax, city: row.city, hotel: row.hotel ?? null, status: "error", service_id: null, allocation_id: null, reason });
+      }
+      function recordDuplicate(row: (typeof parsed.rows)[number], serviceId: string) {
+        duplicateRows++; duplicatePax += row.pax;
+        details.push({ customer_name: row.name, pax: row.pax, city: row.city, hotel: row.hotel ?? null, status: "duplicate", service_id: serviceId, allocation_id: null, reason: "Servizio già presente e allocato." });
+      }
+      function recordAllocated(row: (typeof parsed.rows)[number], serviceId: string, allocationId: string | null, reused: boolean) {
+        if (reused) { reusedRows++; reusedPax += row.pax; } else { importedRows++; importedPax += row.pax; }
+        details.push({ customer_name: row.name, pax: row.pax, city: row.city, hotel: row.hotel ?? null, status: reused ? "reused_existing" : "imported", service_id: serviceId, allocation_id: allocationId, reason: null });
+      }
 
       const resolvedRows2: Array<{ row: (typeof parsed.rows)[number]; stop: DBStop2 | null; fuzzy: boolean }> = [];
       for (const row of parsed.rows) {
@@ -2181,60 +2233,80 @@ export async function POST(request: NextRequest) {
               geo_suggested_stop: stop?.stop_name ?? null,
             });
           }
-          pending2++;
+          recordPending(row, "Fermata non trovata: in attesa di validazione manuale.");
         }
       }
 
+      // L'ordinamento per pax decrescente resta solo un'euristica di
+      // processing (i gruppi più grandi vedono per primi i bus vuoti); non è
+      // più un vincolo di capienza — ogni riga sceglie il proprio bus.
       const groupedRows2 = Array.from(rowsByStop2.values())
         .sort((a, b) => b.reduce((sum, item) => sum + item.row.pax, 0) - a.reduce((sum, item) => sum + item.row.pax, 0));
 
       for (const group of groupedRows2) {
         const stop = group[0].stop;
-        const groupPax = group.reduce((sum, item) => sum + item.row.pax, 0);
-        const bus = pickBusForLine(stop.bus_line_id, stop.id, groupPax);
-        if (bus) {
-          for (const { row } of group) {
-            const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
-            const hotelId = row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? null) : null;
-            const existing = await findExistingBusCityHotelService(auth, {
-              tenantId,
-              customerName: row.name,
-              date: parsed.travel_date,
+        for (const { row } of group) {
+          const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
+          const hotelId = row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? null) : null;
+          const existing = await findExistingBusCityHotelService(auth, {
+            tenantId,
+            customerName: row.name,
+            date: parsed.travel_date,
+            direction: parsed.direction,
+            pax: row.pax,
+            city: row.city,
+            hotelId,
+          });
+
+          // STEP 8 — già presente e già allocato: nessuna riga persa
+          // silenziosamente, contata come duplicate.
+          if (existing?.allocated) {
+            recordDuplicate(row, existing.id);
+            continue;
+          }
+
+          // STEP 7 — presente ma non allocato: riusa il service_id esistente
+          // invece di crearne uno nuovo, poi tenta l'allocazione.
+          const isReuse = Boolean(existing?.id);
+          let createdServiceId: string | null = null;
+          let serviceId = existing?.id ?? null;
+          if (!serviceId) {
+            const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
+              tenant_id: tenantId,
+              customer_name: row.name,
+              phone: row.phone ?? "",
               direction: parsed.direction,
+              date: parsed.travel_date,
+              time: pickupTime,
+              pickup_time: parsed.direction === "departure" ? pickupTime : null,
+              vessel: "Linea bus",
               pax: row.pax,
-              city: row.city,
-              hotelId,
-            });
-            if (existing?.allocated) continue;
-
-            let createdServiceId: string | null = null;
-            let serviceId = existing?.id ?? null;
-            if (!serviceId) {
-              const { data: svc, error: svcErr } = await auth.admin.from("services").insert({
-                tenant_id: tenantId,
-                customer_name: row.name,
-                phone: row.phone ?? "",
-                direction: parsed.direction,
-                date: parsed.travel_date,
-                time: pickupTime,
-                pickup_time: parsed.direction === "departure" ? pickupTime : null,
-                vessel: "Linea bus",
-                pax: row.pax,
-                bus_city_origin: row.city,
-                booking_service_kind: "bus_city_hotel",
-                status: "new",
-                billing_party_name: row.agency ?? null,
-                hotel_id: hotelId ?? undefined,
-              }).select("id").single();
-              if (svcErr || !svc) {
-                console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
-                pending2++; continue;
-              }
-              serviceId = svc.id as string;
-              createdServiceId = serviceId;
+              bus_city_origin: row.city,
+              booking_service_kind: "bus_city_hotel",
+              status: "new",
+              billing_party_name: row.agency ?? null,
+              hotel_id: hotelId ?? undefined,
+            }).select("id").single();
+            if (svcErr || !svc) {
+              console.error(`[import_excel_auto] insert services fallita per "${row.name}" (${row.city}): ${svcErr?.message}`);
+              recordError(row, svcErr?.message ?? "Errore creazione servizio.");
+              continue;
             }
+            serviceId = svc.id as string;
+            createdServiceId = serviceId;
+          }
 
-            const { error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
+          // STEP 9 — un solo bus può non bastare per l'intero gruppo fermata:
+          // proviamo tutti i bus candidati della linea (stessa fermata prima,
+          // poi gli altri in ordine) per QUESTA riga, non per il gruppo
+          // intero, così le prenotazioni in eccesso si distribuiscono su un
+          // altro bus invece di sparire in "capienza superata".
+          const candidates = pickBusCandidates(stop.bus_line_id, stop.id, row.pax);
+          let allocationId: string | null = null;
+          let usedBus: DBUnit2 | null = null;
+          let lastAllocError: string | null = null;
+          for (const bus of candidates) {
+            const { data: allocResult, error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
               p_tenant_id: tenantId,
               p_service_id: serviceId,
               p_bus_line_id: stop.bus_line_id,
@@ -2246,43 +2318,22 @@ export async function POST(request: NextRequest) {
               p_notes: row.hotel ? `Hotel: ${row.hotel}` : (row.notes ?? null),
               p_created_by_user_id: auth.user.id,
             });
-            if (allocErr) {
-              console.error(`[import_excel_auto] allocate_bus_service fallita per "${row.name}" (${row.city}): ${allocErr.message}`);
-              // Elimina il servizio appena creato e metti il passeggero in pending.
-              // Se il servizio esisteva già, lo lasciamo intatto per evitare cancellazioni inattese.
-              if (createdServiceId) await auth.admin.from("services").delete().eq("id", createdServiceId);
-              await auth.admin.from("bus_import_pending").insert({
-                tenant_id: tenantId,
-                bus_line_id: stop.bus_line_id,
-                direction: parsed.direction,
-                travel_date: parsed.travel_date,
-                passenger_name: row.name,
-                passenger_phone: row.phone ?? null,
-                city_original: row.city,
-                pax: row.pax,
-                notes: (row.notes ? row.notes + " | " : "") + `Errore: ${allocErr.message}`,
-                geo_suggested_stop: stop.stop_name,
-              });
-              pending2++;
-              continue;
+            if (!allocErr) {
+              allocationId = (allocResult as { allocation_id?: string } | null)?.allocation_id ?? null;
+              usedBus = bus;
+              break;
             }
-
-            ensureWhatsAppContact(auth.admin, {
-              tenantId,
-              phone: row.phone,
-              profileName: row.name,
-            }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
-
-            datePaxMap2.set(bus.id, (datePaxMap2.get(bus.id) ?? 0) + row.pax);
-            const stopKey = `${stop.bus_line_id}:${stop.id}`;
-            const busIds = stopBusMap2.get(stopKey) ?? new Set<string>();
-            busIds.add(bus.id);
-            stopBusMap2.set(stopKey, busIds);
-            assigned2++;
+            lastAllocError = allocErr.message;
           }
-        } else {
-          // Nessun bus disponibile per l'intero gruppo fermata → da validare
-          for (const { row } of group) {
+
+          if (!usedBus) {
+            console.error(`[import_excel_auto] allocate_bus_service fallita per "${row.name}" (${row.city}): ${lastAllocError ?? "nessun bus con posti disponibili"}`);
+            // Elimina il servizio appena creato e metti il passeggero in pending.
+            // Se il servizio esisteva già, lo lasciamo intatto per evitare cancellazioni inattese.
+            if (createdServiceId) await auth.admin.from("services").delete().eq("id", createdServiceId);
+            const reason = candidates.length === 0
+              ? "Nessun bus con posti disponibili per questa fermata/data."
+              : `Errore: ${lastAllocError ?? "Capienza bus superata per questa data."}`;
             await auth.admin.from("bus_import_pending").insert({
               tenant_id: tenantId,
               bus_line_id: stop.bus_line_id,
@@ -2292,15 +2343,51 @@ export async function POST(request: NextRequest) {
               passenger_phone: row.phone ?? null,
               city_original: row.city,
               pax: row.pax,
-              notes: row.notes ?? null,
+              notes: (row.notes ? row.notes + " | " : "") + reason,
               geo_suggested_stop: stop.stop_name,
             });
-            pending2++;
+            recordPending(row, reason, isReuse ? serviceId : null);
+            continue;
           }
+
+          ensureWhatsAppContact(auth.admin, {
+            tenantId,
+            phone: row.phone,
+            profileName: row.name,
+          }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+
+          datePaxMap2.set(usedBus.id, (datePaxMap2.get(usedBus.id) ?? 0) + row.pax);
+          const stopKey = `${stop.bus_line_id}:${stop.id}`;
+          const busIds = stopBusMap2.get(stopKey) ?? new Set<string>();
+          busIds.add(usedBus.id);
+          stopBusMap2.set(stopKey, busIds);
+          recordAllocated(row, serviceId, allocationId, isReuse);
         }
       }
 
-      return NextResponse.json({ ok: true, assigned: assigned2, pending: pending2, ...(await loadBusNetwork(auth)) });
+      const receivedRows = parsed.rows.length;
+      const receivedPax = parsed.rows.reduce((sum, row) => sum + row.pax, 0);
+
+      return NextResponse.json({
+        ok: true,
+        received_rows: receivedRows,
+        received_pax: receivedPax,
+        imported_rows: importedRows,
+        imported_pax: importedPax,
+        reused_rows: reusedRows,
+        reused_pax: reusedPax,
+        duplicate_rows: duplicateRows,
+        duplicate_pax: duplicatePax,
+        pending_rows: pendingRows,
+        pending_pax: pendingPax,
+        error_rows: errorRows,
+        error_pax: errorPax,
+        details,
+        // Campi legacy mantenuti per compatibilità con la UI esistente.
+        assigned: importedRows + reusedRows,
+        pending: pendingRows,
+        ...(await loadBusNetwork(auth)),
+      });
     }
 
     if (action === "approve_pending") {
