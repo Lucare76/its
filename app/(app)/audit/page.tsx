@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { formatItalianDateTime } from "@/lib/date-format";
 
 type AuditSummary = {
   ops_audits: number;
@@ -157,7 +158,7 @@ export default function AuditPage() {
                 </div>
                 <div className="mt-3 grid gap-1 text-xs text-muted md:grid-cols-2">
                   <p>Attore: {item.actor}</p>
-                  <p>Quando: {new Date(item.at).toLocaleString("it-IT")}</p>
+                  <p>Quando: {formatItalianDateTime(item.at)}</p>
                 </div>
                 {Object.keys(item.meta ?? {}).length > 0 ? (
                   <pre className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700">

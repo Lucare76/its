@@ -656,10 +656,18 @@ export default function BusNetworkPage() {
     return map;
   }, [payload.booking_group_reservations, payload.services, date]);
 
-  // Unassigned services for this date + direction + line family
-  const allocatedServiceIds = useMemo(
-    () => new Set(allDateAllocations.map((a) => a.service_id)),
-    [allDateAllocations]
+  // Unassigned services for this date + direction + line family.
+  // Scoped su TUTTE le allocazioni della data/direzione (non sulla sola
+  // selectedLine): un servizio spostato su un bus di un'altra linea deve
+  // sparire dai "da assegnare" ovunque, non solo quando quella linea è
+  // selezionata in UI.
+  const allocatedServiceIdsGlobal = useMemo(
+    () => new Set(
+      payload.allocation_details
+        .filter((a) => a.service_date === date && a.direction === direction)
+        .map((a) => a.service_id)
+    ),
+    [payload.allocation_details, date, direction]
   );
   const serviceBelongsToLine = useCallback((service: BusService, line: BusLine | null | undefined) => {
     if (!line) return false;
@@ -677,9 +685,9 @@ export default function BusNetworkPage() {
     () => payload.services.filter(
       (s) => s.date === date && s.direction === direction &&
         serviceBelongsToLine(s, selectedLine) &&
-        !allocatedServiceIds.has(s.id)
+        !allocatedServiceIdsGlobal.has(s.id)
     ),
-    [payload.services, date, direction, selectedLine, allocatedServiceIds, serviceBelongsToLine]
+    [payload.services, date, direction, selectedLine, allocatedServiceIdsGlobal, serviceBelongsToLine]
   );
 
   // Fix C / Obiettivo F — passeggeri di gruppo aggregati: per bus_exclusive
@@ -833,7 +841,7 @@ export default function BusNetworkPage() {
     const unassignedServices = payload.services.filter(
       (s) => s.date === date && s.direction === direction &&
         serviceBelongsToLine(s, line) &&
-        !allocatedServiceIds.has(s.id)
+        !allocatedServiceIdsGlobal.has(s.id)
     );
     const unassignedSummary = summarizeBusNetworkUnassigned(unassignedServices);
     const totalCapacity = payload.units
@@ -847,7 +855,7 @@ export default function BusNetworkPage() {
       unassignedLabel: formatBusNetworkUnassignedSummary(unassignedSummary),
       totalCapacity,
     };
-  }), [payload.lines, payload.allocation_details, payload.services, payload.units, date, direction, allocatedServiceIds, serviceBelongsToLine]);
+  }), [payload.lines, payload.allocation_details, payload.services, payload.units, date, direction, allocatedServiceIdsGlobal, serviceBelongsToLine]);
 
   const totalPaxToday = dateAllocations.reduce((sum, a) => sum + a.pax_assigned, 0);
 
