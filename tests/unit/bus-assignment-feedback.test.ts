@@ -23,6 +23,7 @@ const UNIT_ITALIA = "33333333-3333-4333-8333-333333333333";
 const UNIT_ITALIA_2 = "33333333-3333-4333-8333-333333333334";
 const UNIT_CENTRO = "44444444-4444-4444-8444-444444444444";
 const STOP_ITALIA = "55555555-5555-4555-8555-555555555555";
+const STOP_CENTRO = "55555555-5555-4555-8555-555555555556";
 const SVC_1 = "66666666-6666-4666-8666-666666666666";
 const ALLOC_1 = "77777777-7777-4777-8777-777777777777";
 
@@ -37,7 +38,7 @@ function makeAdmin(seed: Record<string, Row[]>) {
   function builder(table: string) {
     const filters: Row = {};
     const inFilters: Array<{ col: string; vals: unknown[] }> = [];
-    let pending: { kind: "insert"; payload: Row } | { kind: "delete" } | null = null;
+    let pending: { kind: "insert"; payload: Row } | { kind: "delete" } | { kind: "update"; payload: Row } | null = null;
     const rowsForFilters = () =>
       (seed[table] ?? []).filter(
         (r) =>
@@ -65,6 +66,7 @@ function makeAdmin(seed: Record<string, Row[]>) {
     b.in = (col: string, vals: unknown[]) => { inFilters.push({ col, vals }); return b; };
     b.insert = (payload: Row) => { pending = { kind: "insert", payload }; return b; };
     b.delete = () => { pending = { kind: "delete" }; return b; };
+    b.update = (payload: Row) => { pending = { kind: "update", payload }; return b; };
     b.maybeSingle = async () => (pending ? finish() : { data: rowsForFilters()[0] ?? null, error: null });
     b.single = async () => (pending ? finish() : { data: rowsForFilters()[0] ?? null, error: null });
     b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
@@ -106,6 +108,7 @@ function baseSeed(overrides: Partial<Record<string, Row[]>> = {}): Record<string
     ],
     tenant_bus_line_stops: [
       { id: STOP_ITALIA, tenant_id: TENANT, bus_line_id: LINE_ITALIA, direction: "arrival", stop_name: "Roma", city: "Roma", active: true },
+      { id: STOP_CENTRO, tenant_id: TENANT, bus_line_id: LINE_CENTRO, direction: "arrival", stop_name: "Terni", city: "Terni", active: true },
     ],
     tenant_bus_allocations: [],
     ops_bus_allocation_details: [],
@@ -258,5 +261,83 @@ describe("ML STEP 1 — feedback su delete_allocation (cancellazione)", () => {
     expect(row.new_bus_unit_id).toBeNull();
     expect(row.tenant_id).toBe(TENANT);
     expect(row.created_by_user_id).toBe(USER_ID);
+  });
+});
+
+describe("ML STEP 1 (fix) — feedback su transfer_allocation_line (\"↔ Cambia linea\")", () => {
+  function seedWithExistingAllocation() {
+    return baseSeed({
+      tenant_bus_allocations: [
+        { id: ALLOC_1, tenant_id: TENANT, service_id: SVC_1, bus_line_id: LINE_ITALIA, bus_unit_id: UNIT_ITALIA, stop_id: STOP_ITALIA, stop_name: "Roma", direction: "arrival", pax_assigned: 2 },
+      ],
+    });
+  }
+
+  it("transfer riuscito: scrive UNA riga cross_line_move/manual con old/new bus, linea, fermata, tenant_id e created_by_user_id", async () => {
+    const { admin, writes } = makeAdmin(seedWithExistingAllocation());
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin, "admin"));
+
+    const res = await POST(post({
+      action: "transfer_allocation_line",
+      allocation_id: ALLOC_1,
+      target_bus_line_id: LINE_CENTRO,
+      target_bus_unit_id: UNIT_CENTRO,
+      target_stop_id: STOP_CENTRO,
+    }));
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+
+    const feedbackWrites = writes.inserts.filter((w) => w.table === "bus_assignment_feedback");
+    expect(feedbackWrites).toHaveLength(1); // #11 nessun doppio log
+    const row = feedbackWrites[0].payload;
+    expect(row.action_type).toBe("cross_line_move"); // #2
+    expect(row.source).toBe("manual"); // #3
+    expect(row.old_bus_line_id).toBe(LINE_ITALIA); // #4
+    expect(row.new_bus_line_id).toBe(LINE_CENTRO); // #4
+    expect(row.old_bus_unit_id).toBe(UNIT_ITALIA); // #5
+    expect(row.new_bus_unit_id).toBe(UNIT_CENTRO); // #5
+    expect(row.old_stop_id).toBe(STOP_ITALIA); // #6
+    expect(row.new_stop_id).toBe(STOP_CENTRO); // #6
+    expect(row.tenant_id).toBe(TENANT); // #7
+    expect(row.created_by_user_id).toBe(USER_ID); // #8
+    expect(row.pax).toBe(2);
+    expect(row.customer_name).toBe("Rossi Mario");
+    expect(row.hotel_name).toBe("Hotel Test");
+    expect(row.final_family_code).toBe("CENTRO");
+
+    // Nessun'altra scrittura bus_assignment_feedback da altri writer per questa azione (#11)
+    expect(writes.inserts.filter((w) => w.table === "tenant_bus_allocation_moves")).toHaveLength(1);
+  });
+
+  it("transfer fallito (fermata destinazione inesistente): nessuna riga bus_assignment_feedback scritta", async () => {
+    const { admin, writes } = makeAdmin(seedWithExistingAllocation());
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin, "admin"));
+
+    const res = await POST(post({
+      action: "transfer_allocation_line",
+      allocation_id: ALLOC_1,
+      target_bus_line_id: LINE_CENTRO,
+      target_bus_unit_id: UNIT_CENTRO,
+      target_stop_id: "99999999-9999-4999-8999-999999999999", // non seedata
+    }));
+    const json = await res.json();
+    expect(json.ok).toBe(false); // #9
+
+    const feedbackWrites = writes.inserts.filter((w) => w.table === "bus_assignment_feedback");
+    expect(feedbackWrites).toHaveLength(0); // #9
+  });
+
+  it("move_allocation same-line dopo il fix: continua a scrivere action_type=move, non cross_line_move (nessuna regressione)", async () => {
+    const { admin, writes } = makeAdmin(seedWithExistingAllocation());
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+
+    const res = await POST(post({
+      action: "move_allocation", allocation_id: ALLOC_1, to_bus_unit_id: UNIT_ITALIA_2, pax_moved: 2,
+    }));
+    expect((await res.json()).ok).toBe(true);
+
+    const feedbackWrites = writes.inserts.filter((w) => w.table === "bus_assignment_feedback");
+    expect(feedbackWrites).toHaveLength(1); // #10, #11
+    expect(feedbackWrites[0].payload.action_type).toBe("move"); // #10
   });
 });

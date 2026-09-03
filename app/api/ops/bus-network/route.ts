@@ -2494,7 +2494,7 @@ export async function POST(request: NextRequest) {
         .single();
       if (allocReadErr || !alloc) return NextResponse.json({ ok: false, error: "Allocazione non trovata." }, { status: 404 });
 
-      const a = alloc as { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; direction: string; pax_assigned: number; notes?: string | null };
+      const a = alloc as { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id: string | null; direction: string; pax_assigned: number; notes?: string | null };
 
       // Leggi fermata e bus destinazione prima di toccare l'allocazione corrente.
       const [{ data: targetStop, error: targetStopErr }, { data: targetUnit, error: targetUnitErr }] = await Promise.all([
@@ -2625,6 +2625,41 @@ export async function POST(request: NextRequest) {
         pax_moved: a.pax_assigned,
         reason: `Trasferito a linea diversa`,
         created_by_user_id: auth.user.id,
+      });
+
+      // ML STEP 1 — feedback strutturato: unico writer per transfer_allocation_line
+      // (nessun altro punto del codice scrive bus_assignment_feedback per questa
+      // azione, quindi nessun rischio di doppio log). Scritto solo qui, dopo che
+      // l'UPDATE su tenant_bus_allocations e' andato a buon fine — se la route
+      // e' uscita prima (allocazione/fermata/bus non trovati, capienza superata,
+      // fermata gia' occupata) questo punto non viene mai raggiunto.
+      const [transferContexts, transferLineFamilyCodes] = await Promise.all([
+        loadServiceFeedbackContexts(auth, tenantId, [a.service_id]),
+        loadBusLineFamilyCodes(auth, tenantId, [a.bus_line_id, parsed.target_bus_line_id]),
+      ]);
+      const transferContext = transferContexts.get(a.service_id) ?? null;
+      await recordBusAssignmentFeedback(auth, {
+        tenantId,
+        serviceId: a.service_id,
+        actionType: "cross_line_move",
+        source: "manual",
+        oldBusUnitId: a.bus_unit_id,
+        newBusUnitId: unitRow.id,
+        oldBusLineId: a.bus_line_id,
+        newBusLineId: parsed.target_bus_line_id,
+        oldStopId: a.stop_id,
+        newStopId: parsed.target_stop_id,
+        oldDirection: a.direction,
+        newDirection: a.direction,
+        oldDate: transferContext?.date ?? null,
+        newDate: transferContext?.date ?? null,
+        pax: a.pax_assigned,
+        customerName: transferContext?.customerName ?? null,
+        hotelName: transferContext?.hotelName ?? null,
+        derivedFamilyCode: transferContext?.derivedFamilyCode ?? null,
+        finalFamilyCode: transferLineFamilyCodes.get(parsed.target_bus_line_id) ?? null,
+        reason: "Trasferito a linea diversa",
+        createdByUserId: auth.user.id,
       });
 
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });

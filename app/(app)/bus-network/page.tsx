@@ -3364,13 +3364,15 @@ export default function BusNetworkPage() {
                                   )}
                                   <div className="flex gap-1">
                                     <button onClick={() => openMoveModal(alloc)}
+                                      title="Sposta su un altro bus della stessa linea"
                                       className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
                                       Sposta
                                     </button>
                                     {isAdmin && (
                                       <button onClick={() => openTransferModal(alloc)}
+                                        title="Cambia linea: sposta questo servizio su un'altra linea (con nuova fermata)"
                                         className="rounded border border-violet-200 px-1.5 py-0.5 text-xs text-violet-600 opacity-0 transition-opacity hover:bg-violet-50 group-hover:opacity-100">
-                                        ↔ Linea
+                                        ↔ Cambia linea
                                       </button>
                                     )}
                                     {deleteConfirmId === alloc.allocation_id ? (
@@ -3513,13 +3515,15 @@ export default function BusNetworkPage() {
                                 )}
                                 <div className="flex gap-1">
                                   <button onClick={() => openMoveModal(alloc)}
+                                    title="Sposta su un altro bus della stessa linea"
                                     className="rounded border border-indigo-200 px-1.5 py-0.5 text-xs text-indigo-600 opacity-0 transition-opacity hover:bg-indigo-50 group-hover:opacity-100">
                                     Sposta
                                   </button>
                                   {isAdmin && (
                                     <button onClick={() => openTransferModal(alloc)}
+                                      title="Cambia linea: sposta questo servizio su un'altra linea (con nuova fermata)"
                                       className="rounded border border-violet-200 px-1.5 py-0.5 text-xs text-violet-600 opacity-0 transition-opacity hover:bg-violet-50 group-hover:opacity-100">
-                                      ↔ Linea
+                                      ↔ Cambia linea
                                     </button>
                                   )}
                                   {deleteConfirmId === alloc.allocation_id ? (
