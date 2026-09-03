@@ -222,6 +222,29 @@ function InlineCityEdit({ serviceId, currentCity, onSave, saving }: { serviceId:
   );
 }
 
+// Preferenza UI "sezione compressa" (OBIETTIVO B) — solo localStorage, mai
+// DB/API: non critica, se non disponibile la sezione parte sempre aperta.
+const RETURN_COLLECTION_COLLAPSE_KEY = "bus-network:return-collection-collapsed";
+const LINE_BUSES_COLLAPSE_KEY = "bus-network:line-buses-collapsed";
+
+function readCollapsedPref(key: string): boolean {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return false;
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeCollapsedPref(key: string, value: boolean) {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    // localStorage non disponibile: preferenza non critica, si ignora.
+  }
+}
+
 export default function BusNetworkPage() {
   const [payload, setPayload] = useState<ApiPayload>(emptyPayload);
   const [loading, setLoading] = useState(true);
@@ -266,6 +289,19 @@ export default function BusNetworkPage() {
   // Modifica nome linea
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [editingLineName, setEditingLineName] = useState("");
+
+  // Sezioni comprimibili (OBIETTIVO B) — due stati indipendenti, solo UI,
+  // preferenza persistita in localStorage (non critica).
+  const [returnCollectionCollapsed, setReturnCollectionCollapsedState] = useState(() => readCollapsedPref(RETURN_COLLECTION_COLLAPSE_KEY));
+  const [lineBusesCollapsed, setLineBusesCollapsedState] = useState(() => readCollapsedPref(LINE_BUSES_COLLAPSE_KEY));
+  const setReturnCollectionCollapsed = useCallback((value: boolean) => {
+    setReturnCollectionCollapsedState(value);
+    writeCollapsedPref(RETURN_COLLECTION_COLLAPSE_KEY, value);
+  }, []);
+  const setLineBusesCollapsed = useCallback((value: boolean) => {
+    setLineBusesCollapsedState(value);
+    writeCollapsedPref(LINE_BUSES_COLLAPSE_KEY, value);
+  }, []);
 
   // Stop manager
   const [showStopManager, setShowStopManager] = useState(false);
@@ -803,6 +839,12 @@ export default function BusNetworkPage() {
     [dateUnitLoads, allDateAllocations]
   );
 
+  // Totale pax per la barra compatta quando "Bus linea" è compresso (OBIETTIVO B).
+  const lineBusesTotalPax = useMemo(
+    () => allDateAllocations.reduce((sum, a) => sum + a.pax_assigned, 0),
+    [allDateAllocations]
+  );
+
   const toggleSmistamentoBusUnit = useCallback((unitId: string) => {
     setSmistamentoBusUnitIds((current) =>
       current.includes(unitId)
@@ -817,6 +859,14 @@ export default function BusNetworkPage() {
       .sort((a, b) => a.sort_order - b.sort_order),
     [payload.pozzuoli_dist_buses, date, selectedLine]
   );
+
+  // Totale pax per la barra compatta quando la sezione è compressa (OBIETTIVO B).
+  const returnCollectionTotalPax = useMemo(() => {
+    const busIds = new Set(returnCollectionBuses.map((bus) => bus.id));
+    return payload.ischia_dist_allocations
+      .filter((a) => busIds.has(a.dist_bus_id))
+      .reduce((sum, a) => sum + a.pax_assigned, 0);
+  }, [returnCollectionBuses, payload.ischia_dist_allocations]);
 
   const arrivalDistributionBuses = useMemo(
     () => payload.ischia_dist_buses
@@ -2700,10 +2750,16 @@ export default function BusNetworkPage() {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="flex items-center gap-1.5 text-base font-bold text-slate-800"><FerryIcon size={22} /> Raccolta Ischia per ritorno</span>
-                      <span className="text-xs text-slate-400">Prima divide tutte le partenze per comune/zona hotel, poi le porta sui bus linea</span>
+                      {returnCollectionCollapsed ? (
+                        <span className="text-xs text-slate-400">
+                          {returnCollectionBuses.length} bus · {returnCollectionTotalPax} pax
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">Prima divide tutte le partenze per comune/zona hotel, poi le porta sui bus linea</span>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      {returnCollectionBuses.length > 0 && (
+                      {!returnCollectionCollapsed && returnCollectionBuses.length > 0 && (
                         <>
                           <button
                             onClick={() => void printReturnCollection()}
@@ -2721,21 +2777,31 @@ export default function BusNetworkPage() {
                           </button>
                         </>
                       )}
+                      {!returnCollectionCollapsed && (
+                        <button
+                          onClick={() => {
+                            const hasExisting = payload.pozzuoli_dist_buses.some(b => b.date === date);
+                            if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
+                            setSmistamentoConfirm(false);
+                            void post("smista_ischia", { date, direction: "departure" });
+                          }}
+                          disabled={saving}
+                          className={`rounded-xl px-4 py-2 text-sm font-bold text-white shadow-lg disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 shadow-rose-100 hover:bg-rose-700" : "bg-gradient-to-r from-emerald-600 to-teal-600 shadow-emerald-200 hover:from-emerald-700 hover:to-teal-700"}`}
+                        >
+                          {smistamentoConfirm ? "Conferma raccolta" : "Raccolta per smistamento"}
+                        </button>
+                      )}
                       <button
-                        onClick={() => {
-                          const hasExisting = payload.pozzuoli_dist_buses.some(b => b.date === date);
-                          if (hasExisting && !smistamentoConfirm) { setSmistamentoConfirm(true); return; }
-                          setSmistamentoConfirm(false);
-                          void post("smista_ischia", { date, direction: "departure" });
-                        }}
-                        disabled={saving}
-                        className={`rounded-xl px-4 py-2 text-sm font-bold text-white shadow-lg disabled:opacity-40 ${smistamentoConfirm ? "bg-rose-600 shadow-rose-100 hover:bg-rose-700" : "bg-gradient-to-r from-emerald-600 to-teal-600 shadow-emerald-200 hover:from-emerald-700 hover:to-teal-700"}`}
+                        type="button"
+                        onClick={() => setReturnCollectionCollapsed(!returnCollectionCollapsed)}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-50"
                       >
-                        {smistamentoConfirm ? "Conferma raccolta" : "Raccolta per smistamento"}
+                        {returnCollectionCollapsed ? "Espandi ↓" : "Comprimi ↑"}
                       </button>
                     </div>
                   </div>
 
+                  {!returnCollectionCollapsed && (<>
                   {returnCollectionBuses.length === 0 ? (
                     <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
                       Nessuna raccolta Ischia per questa linea. Usa “Raccolta per smistamento” per dividere automaticamente tutte le partenze per comune, oppure aggiungi un bus manuale.
@@ -2924,6 +2990,7 @@ export default function BusNetworkPage() {
                       + Aggiungi bus raccolta
                     </button>
                   </div>
+                  </>)}
                 </div>
               )}
 
@@ -2940,8 +3007,19 @@ export default function BusNetworkPage() {
                     <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">● Quasi pieno</span>
                     <span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-700">● Pieno</span>
                     <span className="rounded-full bg-slate-100 px-2.5 py-1">{busCards.length} bus</span>
+                    <button
+                      type="button"
+                      onClick={() => setLineBusesCollapsed(!lineBusesCollapsed)}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1 font-bold text-slate-600 hover:bg-slate-50"
+                    >
+                      {lineBusesCollapsed ? "Espandi ↓" : "Comprimi ↑"}
+                    </button>
                   </div>
                 </div>
+                {lineBusesCollapsed && (
+                  <p className="text-xs text-slate-400">{busCards.length} bus · {lineBusesTotalPax} pax</p>
+                )}
+              {!lineBusesCollapsed && <>
               <div ref={topScrollRef} className="overflow-x-auto rounded-full bg-slate-100/70 p-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-indigo-300 [&::-webkit-scrollbar-track]:bg-transparent" onScroll={() => syncScroll("top")}>
                 <div ref={topScrollInnerRef} style={{ height: 1 }} />
               </div>
@@ -3587,6 +3665,7 @@ export default function BusNetworkPage() {
                   </button>
                 </div>
               </div>
+              </>}
               </div></>}
 
               {/* ── Distribuzione Ischia ── */}

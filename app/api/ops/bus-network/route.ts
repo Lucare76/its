@@ -277,6 +277,124 @@ function pickSameStopFirstBus<T extends { id: string; bus_line_id: string; capac
   return firstWithRoom;
 }
 
+/**
+ * FIX MIRATO #2 — PLANNER BUS-CENTRICO PER LE PARTENZE (audit successivo al
+ * fix "dispersione pax stessa fermata"). Usata SOLO per import_excel_auto in
+ * direzione departure — arrival continua a usare pickBusCandidatesOrdered
+ * riga per riga, invariata.
+ *
+ * Il primo fix (pickBusesForDepartureStopGroup, ora sostituita) era ancora
+ * FERMATA-CENTRICO: per ogni fermata cercava "il primo bus con capienza per
+ * l'intero gruppo", indipendentemente dalle altre fermate — comportamento
+ * operativo non desiderato perché poteva far ripartire l'assegnazione da un
+ * bus più avanti (es. CENTRO 3) lasciando CENTRO 1/2 con posti liberi che
+ * altri gruppi più piccoli avrebbero potuto occupare.
+ *
+ * Questa funzione è BUS-CENTRICA: elabora un'INTERA linea in un colpo solo,
+ * un bus alla volta, in sort_order:
+ *  1. parte SEMPRE dal primo bus utilizzabile della linea;
+ *  2. per il bus corrente, inserisce ripetutamente il gruppo fermata NON
+ *     ancora assegnato più grande che entra per intero nei posti residui
+ *     (mai una fermata spezzata in questa fase — "mantenimento fermata
+ *     unita"), finché nessun gruppo completo rimasto entra più;
+ *  3. passa al bus successivo e ripete, SENZA MAI saltare un bus utilizzabile
+ *     con posto residuo — un bus pieno (0 posti) o escluso (chiuso/completed
+ *     già filtrato a monte, riservato in esclusiva via `lockedBusIds`, o
+ *     dedicato Puglia via `excludedLabels`) è l'unico caso in cui si passa
+ *     oltre senza tentare;
+ *  4. solo DOPO aver tentato il posizionamento intero di ogni gruppo su ogni
+ *     bus, i gruppi rimasti (troppo grandi per qualunque bus disponibile, o
+ *     rimasti per combinazione sfavorevole) vengono distribuiti come
+ *     fallback: righe mai spezzate al loro interno, riempimento in
+ *     sort_order senza saltare un bus con posto libero — stessa regola "no
+ *     gap" della versione precedente, ma solo come ultima risorsa.
+ *
+ * Non cerca l'ottimo matematico globale (bin packing NP-hard): usa una
+ * euristica greedy deterministica (gruppo più grande che entra, per bus, in
+ * ordine) — sufficiente per l'uso operativo reale e stabile a parità di dati.
+ *
+ * L'RPC `allocate_bus_service` resta comunque l'ultima barriera: il
+ * chiamante deve ritentare sul prossimo candidato se il piano viene
+ * rifiutato (race condition, vincolo non ancora noto al planner, ecc.).
+ */
+function planDepartureBusAssignments<T extends { id: string; bus_line_id: string; capacity: number; label?: string }>(
+  units: T[],
+  datePaxMap: Map<string, number>,
+  lockedBusIds: Set<string>,
+  input: {
+    lineId: string;
+    groups: Array<{ groupKey: string; rows: Array<{ key: number; pax: number }> }>;
+    excludedLabels?: Set<string>;
+  }
+): Map<number, T> {
+  const lineUnits = units.filter((unit) =>
+    unit.bus_line_id === input.lineId &&
+    !lockedBusIds.has(unit.id) &&
+    !input.excludedLabels?.has(unit.label ?? "")
+  );
+  const assignment = new Map<number, T>();
+  if (lineUnits.length === 0) return assignment;
+
+  // Consumo locale a questa pianificazione: datePaxMap (stato reale prima di
+  // qualunque RPC) non viene mai mutato qui — solo il chiamante lo aggiorna,
+  // e solo dopo un'allocazione RPC riuscita.
+  const consumed = new Map<string, number>();
+  const remaining = (bus: T) => bus.capacity - (datePaxMap.get(bus.id) ?? 0) - (consumed.get(bus.id) ?? 0);
+
+  type Group = { groupKey: string; rows: Array<{ key: number; pax: number }>; totalPax: number };
+  const groups: Group[] = input.groups
+    .map((g) => ({ ...g, totalPax: g.rows.reduce((sum, r) => sum + r.pax, 0) }))
+    .filter((g) => g.totalPax > 0);
+  const pending = new Set(groups.map((g) => g.groupKey));
+  // Ordine deterministico di valutazione per ogni bus: gruppo più grande
+  // prima (minimizza i posti inutilizzati), a parità di pax nell'ordine
+  // originale (fermate) — mai il solo ordine casuale di iterazione.
+  const orderedByPax = [...groups].sort((a, b) => b.totalPax - a.totalPax);
+
+  // FASE 1 — bus-centrica: un bus alla volta, in sort_order, riempito con
+  // gruppi fermata interi finché ce ne stanno.
+  for (const bus of lineUnits) {
+    let room = remaining(bus);
+    if (room <= 0) continue; // bus pieno: non è "saltato", semplicemente non ha posto
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      for (const group of orderedByPax) {
+        if (!pending.has(group.groupKey) || group.totalPax > room) continue;
+        for (const row of group.rows) assignment.set(row.key, bus);
+        consumed.set(bus.id, (consumed.get(bus.id) ?? 0) + group.totalPax);
+        room -= group.totalPax;
+        pending.delete(group.groupKey);
+        progressed = true;
+        break; // ricomincia dal gruppo più grande ancora idoneo per il posto residuo
+      }
+    }
+  }
+
+  // FASE 2 — fallback split per i gruppi rimasti (nessun bus, da solo,
+  // aveva capienza sufficiente per l'intero gruppo): righe mai spezzate,
+  // riempimento in sort_order senza saltare un bus con posto libero.
+  const leftoverRows = orderedByPax
+    .filter((group) => pending.has(group.groupKey))
+    .flatMap((group) => group.rows);
+  if (leftoverRows.length > 0) {
+    let busIdx = 0;
+    let currentRoom = remaining(lineUnits[0]);
+    for (const row of leftoverRows) {
+      while (busIdx < lineUnits.length && currentRoom < row.pax) {
+        busIdx++;
+        currentRoom = busIdx < lineUnits.length ? remaining(lineUnits[busIdx]) : 0;
+      }
+      if (busIdx >= lineUnits.length) continue; // non pianificabile: resta al fallback riga-per-riga del chiamante
+      assignment.set(row.key, lineUnits[busIdx]);
+      consumed.set(lineUnits[busIdx].id, (consumed.get(lineUnits[busIdx].id) ?? 0) + row.pax);
+      currentRoom -= row.pax;
+    }
+  }
+
+  return assignment;
+}
+
 const unitUpdateSchema = z.object({
   unit_id: z.string().uuid(),
   capacity: z.number().int().min(1).max(120),
@@ -1984,18 +2102,33 @@ export async function POST(request: NextRequest) {
       }
 
       // Carica tutte le fermate attive del tenant per la direzione richiesta
-      const [allStopsRes, allUnitsRes, existingSvcRes, hotelsRes] = await Promise.all([
+      const [allStopsRes, allUnitsRes, existingSvcRes, hotelsRes, exclusiveRes] = await Promise.all([
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,stop_name,city,stop_order,pickup_note")
           .eq("tenant_id", tenantId).eq("direction", parsed.direction).eq("active", true).order("stop_order"),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status")
           .eq("tenant_id", tenantId).not("status", "in", '("closed","completed")').order("sort_order"),
         auth.admin.from("services").select("id").eq("tenant_id", tenantId).eq("date", parsed.travel_date).eq("direction", parsed.direction),
         auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId),
+        // Bus riservati in esclusiva per un booking_group in questa data —
+        // i service bus_city_hotel dell'import Excel non appartengono MAI a
+        // un booking_group, quindi un bus con reservation esclusiva va
+        // sempre escluso dal piano di gruppo delle partenze (STEP A#7 /
+        // CASO 6): stessa condizione di lockedBusIdsFor(null) in
+        // auto_assign_date, senza duplicarne il codice.
+        auth.admin.from("booking_group_bus_reservations").select("bus_unit_id")
+          .eq("tenant_id", tenantId).eq("service_date", parsed.travel_date).eq("exclusive", true),
       ]);
       if (allStopsRes.error) throw new Error(allStopsRes.error.message);
       if (allUnitsRes.error) throw new Error(allUnitsRes.error.message);
       if (existingSvcRes.error) throw new Error(existingSvcRes.error.message);
       const importHotels = (hotelsRes.data ?? []) as Array<{ id: string; name: string; zone: string | null }>;
+      const lockedBusIds = new Set(
+        ((exclusiveRes.data ?? []) as Array<{ bus_unit_id: string }>).map((r) => r.bus_unit_id)
+      );
+      // Bus dedicati ai gruppi Puglia (vedi auto_assign_date): l'import Excel
+      // bus_city_hotel non produce mai prenotazioni Puglia, quindi questi bus
+      // restano sempre esclusi dal piano di gruppo delle partenze.
+      const PUGLIA_RESERVED_LABELS = new Set(["ITALIA PUGLIA", "ITALIA PUGLIA 2"]);
 
       const [pickupTimesRes, linesRes] = await Promise.all([
         auth.admin.from("hotel_pickup_times").select("hotel_name, pickup_time_linea_italia, pickup_time_linea_centro, pickup_time_linea_adriatica"),
@@ -2243,10 +2376,103 @@ export async function POST(request: NextRequest) {
       const groupedRows2 = Array.from(rowsByStop2.values())
         .sort((a, b) => b.reduce((sum, item) => sum + item.row.pax, 0) - a.reduce((sum, item) => sum + item.row.pax, 0));
 
+      const isDeparture = parsed.direction === "departure";
+
+      type ToAllocate = { row: (typeof parsed.rows)[number]; stop: DBStop2; serviceId: string; createdServiceId: string | null; isReuse: boolean };
+
+      // Capturati in const locali: TS non mantiene il narrowing di `auth`
+      // (PricingAuthContext | NextResponse) dentro una closure/funzione
+      // annidata come allocateToAllocateItem qui sotto.
+      const admin = auth.admin;
+      const currentUserId = auth.user.id;
+
+      // Allocazione effettiva di UNA riga già dedup/riusata, con un bus
+      // "pianificato" opzionale da tentare per primo. Condivisa da arrival
+      // (planned sempre null, comportamento identico a prima di questo fix)
+      // e dalla fase finale bus-centrica delle partenze.
+      async function allocateToAllocateItem(item: ToAllocate, plannedBus: DBUnit2 | null) {
+        const { row, stop, serviceId, createdServiceId, isReuse } = item;
+        const rowCandidates = pickBusCandidates(stop.bus_line_id, stop.id, row.pax);
+        const candidates = plannedBus
+          ? [plannedBus, ...rowCandidates.filter((bus) => bus.id !== plannedBus.id)]
+          : rowCandidates;
+
+        let allocationId: string | null = null;
+        let usedBus: DBUnit2 | null = null;
+        let lastAllocError: string | null = null;
+        for (const bus of candidates) {
+          const { data: allocResult, error: allocErr } = await admin.rpc("allocate_bus_service", {
+            p_tenant_id: tenantId,
+            p_service_id: serviceId,
+            p_bus_line_id: stop.bus_line_id,
+            p_bus_unit_id: bus.id,
+            p_stop_id: stop.id,
+            p_stop_name: stop.stop_name,
+            p_direction: parsed.direction,
+            p_pax_assigned: row.pax,
+            p_notes: row.hotel ? `Hotel: ${row.hotel}` : (row.notes ?? null),
+            p_created_by_user_id: currentUserId,
+          });
+          if (!allocErr) {
+            allocationId = (allocResult as { allocation_id?: string } | null)?.allocation_id ?? null;
+            usedBus = bus;
+            break;
+          }
+          lastAllocError = allocErr.message;
+        }
+
+        if (!usedBus) {
+          console.error(`[import_excel_auto] allocate_bus_service fallita per "${row.name}" (${row.city}): ${lastAllocError ?? "nessun bus con posti disponibili"}`);
+          // Elimina il servizio appena creato e metti il passeggero in pending.
+          // Se il servizio esisteva già, lo lasciamo intatto per evitare cancellazioni inattese.
+          if (createdServiceId) await admin.from("services").delete().eq("id", createdServiceId);
+          const reason = candidates.length === 0
+            ? "Nessun bus con posti disponibili per questa fermata/data."
+            : `Errore: ${lastAllocError ?? "Capienza bus superata per questa data."}`;
+          await admin.from("bus_import_pending").insert({
+            tenant_id: tenantId,
+            bus_line_id: stop.bus_line_id,
+            direction: parsed.direction,
+            travel_date: parsed.travel_date,
+            passenger_name: row.name,
+            passenger_phone: row.phone ?? null,
+            city_original: row.city,
+            pax: row.pax,
+            notes: (row.notes ? row.notes + " | " : "") + reason,
+            geo_suggested_stop: stop.stop_name,
+          });
+          recordPending(row, reason, isReuse ? serviceId : null);
+          return;
+        }
+
+        ensureWhatsAppContact(admin, {
+          tenantId,
+          phone: row.phone,
+          profileName: row.name,
+        }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+
+        datePaxMap2.set(usedBus.id, (datePaxMap2.get(usedBus.id) ?? 0) + row.pax);
+        const stopKey = `${stop.bus_line_id}:${stop.id}`;
+        const busIds = stopBusMap2.get(stopKey) ?? new Set<string>();
+        busIds.add(usedBus.id);
+        stopBusMap2.set(stopKey, busIds);
+        recordAllocated(row, serviceId, allocationId, isReuse);
+      }
+
+      // FASE 1 — dedup/riuso per ogni riga di ogni gruppo fermata, PRIMA di
+      // decidere il bus. Per le partenze le righe da allocare NON vengono
+      // assegnate subito: vengono accumulate in departureQueue così il
+      // planner bus-centrico (fase 2) può ragionare su TUTTE le fermate
+      // della linea insieme, non una alla volta. Per gli arrivi il
+      // comportamento resta IDENTICO a prima: allocazione riga per riga
+      // subito dopo il dedup dello stesso gruppo fermata.
+      const departureQueue: ToAllocate[] = [];
       for (const group of groupedRows2) {
         const stop = group[0].stop;
+
+        const toAllocate: ToAllocate[] = [];
         for (const { row } of group) {
-          const pickupTime = parsed.direction === "departure" ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
+          const pickupTime = isDeparture ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
           const hotelId = row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? null) : null;
           const existing = await findExistingBusCityHotelService(auth, {
             tenantId,
@@ -2278,7 +2504,7 @@ export async function POST(request: NextRequest) {
               direction: parsed.direction,
               date: parsed.travel_date,
               time: pickupTime,
-              pickup_time: parsed.direction === "departure" ? pickupTime : null,
+              pickup_time: isDeparture ? pickupTime : null,
               vessel: "Linea bus",
               pax: row.pax,
               bus_city_origin: row.city,
@@ -2295,73 +2521,57 @@ export async function POST(request: NextRequest) {
             serviceId = svc.id as string;
             createdServiceId = serviceId;
           }
+          toAllocate.push({ row, stop, serviceId, createdServiceId, isReuse });
+        }
 
-          // STEP 9 — un solo bus può non bastare per l'intero gruppo fermata:
-          // proviamo tutti i bus candidati della linea (stessa fermata prima,
-          // poi gli altri in ordine) per QUESTA riga, non per il gruppo
-          // intero, così le prenotazioni in eccesso si distribuiscono su un
-          // altro bus invece di sparire in "capienza superata".
-          const candidates = pickBusCandidates(stop.bus_line_id, stop.id, row.pax);
-          let allocationId: string | null = null;
-          let usedBus: DBUnit2 | null = null;
-          let lastAllocError: string | null = null;
-          for (const bus of candidates) {
-            const { data: allocResult, error: allocErr } = await auth.admin.rpc("allocate_bus_service", {
-              p_tenant_id: tenantId,
-              p_service_id: serviceId,
-              p_bus_line_id: stop.bus_line_id,
-              p_bus_unit_id: bus.id,
-              p_stop_id: stop.id,
-              p_stop_name: stop.stop_name,
-              p_direction: parsed.direction,
-              p_pax_assigned: row.pax,
-              p_notes: row.hotel ? `Hotel: ${row.hotel}` : (row.notes ?? null),
-              p_created_by_user_id: auth.user.id,
-            });
-            if (!allocErr) {
-              allocationId = (allocResult as { allocation_id?: string } | null)?.allocation_id ?? null;
-              usedBus = bus;
-              break;
-            }
-            lastAllocError = allocErr.message;
-          }
+        if (toAllocate.length === 0) continue;
 
-          if (!usedBus) {
-            console.error(`[import_excel_auto] allocate_bus_service fallita per "${row.name}" (${row.city}): ${lastAllocError ?? "nessun bus con posti disponibili"}`);
-            // Elimina il servizio appena creato e metti il passeggero in pending.
-            // Se il servizio esisteva già, lo lasciamo intatto per evitare cancellazioni inattese.
-            if (createdServiceId) await auth.admin.from("services").delete().eq("id", createdServiceId);
-            const reason = candidates.length === 0
-              ? "Nessun bus con posti disponibili per questa fermata/data."
-              : `Errore: ${lastAllocError ?? "Capienza bus superata per questa data."}`;
-            await auth.admin.from("bus_import_pending").insert({
-              tenant_id: tenantId,
-              bus_line_id: stop.bus_line_id,
-              direction: parsed.direction,
-              travel_date: parsed.travel_date,
-              passenger_name: row.name,
-              passenger_phone: row.phone ?? null,
-              city_original: row.city,
-              pax: row.pax,
-              notes: (row.notes ? row.notes + " | " : "") + reason,
-              geo_suggested_stop: stop.stop_name,
-            });
-            recordPending(row, reason, isReuse ? serviceId : null);
-            continue;
-          }
+        if (isDeparture) {
+          departureQueue.push(...toAllocate);
+          continue;
+        }
 
-          ensureWhatsAppContact(auth.admin, {
-            tenantId,
-            phone: row.phone,
-            profileName: row.name,
-          }).catch((contactError) => console.error("WhatsApp contact creation failed:", contactError));
+        // ARRIVAL — invariato: allocazione riga per riga, subito, nessun
+        // piano di gruppo (mai toccato da questo fix).
+        for (const item of toAllocate) {
+          await allocateToAllocateItem(item, null);
+        }
+      }
 
-          datePaxMap2.set(usedBus.id, (datePaxMap2.get(usedBus.id) ?? 0) + row.pax);
-          const stopKey = `${stop.bus_line_id}:${stop.id}`;
-          const busIds = stopBusMap2.get(stopKey) ?? new Set<string>();
-          busIds.add(usedBus.id);
-          stopBusMap2.set(stopKey, busIds);
-          recordAllocated(row, serviceId, allocationId, isReuse);
+      // FASE 2 — PARTENZE: planner BUS-CENTRICO su TUTTA la linea (non più
+      // fermata per fermata). Raggruppa la coda per linea+fermata e, per
+      // ogni linea coinvolta, chiede a planDepartureBusAssignments un piano
+      // che riempie i bus in sort_order con gruppi fermata interi prima di
+      // passare al successivo — vedi commento della funzione per il
+      // dettaglio dell'algoritmo e degli esempi attesi.
+      if (isDeparture && departureQueue.length > 0) {
+        const groupsByLine = new Map<string, Map<string, { rows: Array<{ key: number; pax: number }> }>>();
+        departureQueue.forEach((item, key) => {
+          const lineId = item.stop.bus_line_id;
+          const stopId = item.stop.id;
+          const byStop = groupsByLine.get(lineId) ?? new Map<string, { rows: Array<{ key: number; pax: number }> }>();
+          const entry = byStop.get(stopId) ?? { rows: [] };
+          entry.rows.push({ key, pax: item.row.pax });
+          byStop.set(stopId, entry);
+          groupsByLine.set(lineId, byStop);
+        });
+
+        const plan = new Map<number, DBUnit2>();
+        for (const [lineId, byStop] of groupsByLine) {
+          const linePlan = planDepartureBusAssignments(allUnits, datePaxMap2, lockedBusIds, {
+            lineId,
+            groups: Array.from(byStop.entries()).map(([stopId, { rows }]) => ({ groupKey: stopId, rows })),
+            excludedLabels: PUGLIA_RESERVED_LABELS,
+          });
+          for (const [key, bus] of linePlan) plan.set(key, bus);
+        }
+
+        // FASE 3 — allocazione effettiva: prova prima il bus pianificato in
+        // fase 2 (se presente), poi i candidati riga-per-riga come
+        // fallback/retry — la RPC allocate_bus_service resta sempre
+        // l'ultima barriera.
+        for (let key = 0; key < departureQueue.length; key++) {
+          await allocateToAllocateItem(departureQueue[key], plan.get(key) ?? null);
         }
       }
 

@@ -191,7 +191,7 @@ function importPayload() {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe("POST import_excel_auto — regressione Terni 2026-09-06 (audit reale)", () => {
-  it("primo import: tutte le 8 righe Terni (18 pax) vengono assegnate, distribuite su più bus se un solo bus non basta", async () => {
+  it("primo import: tutte le 8 righe Terni (18 pax) vengono assegnate su UN SOLO bus capiente (OBIETTIVO A), non sparse solo perché il primo bus ha 4 posti liberi", async () => {
     const { admin, seed } = makeAdmin(baseSeed());
     mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
 
@@ -219,11 +219,13 @@ describe("POST import_excel_auto — regressione Terni 2026-09-06 (audit reale)"
       .reduce((sum, a) => sum + Number(a.pax_assigned), 0);
     expect(terniPax).toBe(24);
 
-    // Distribuito su entrambi i bus (non scartato perché un solo bus non basta).
+    // OBIETTIVO A: BUS_1 ha solo 4 posti liberi (non basta per l'intero
+    // gruppo di 18) -> il gruppo NON va sparso 4+14, va tutto su BUS_2 che
+    // da solo può contenerlo. BUS_1 resta invariato (solo il pre-esistente).
     const bus1Pax = seed.tenant_bus_allocations.filter((a) => a.bus_unit_id === BUS_1).reduce((s, a) => s + Number(a.pax_assigned), 0);
     const bus2Pax = seed.tenant_bus_allocations.filter((a) => a.bus_unit_id === BUS_2).reduce((s, a) => s + Number(a.pax_assigned), 0);
-    expect(bus1Pax).toBe(10); // pieno (6 pre + 4 nuovi)
-    expect(bus2Pax).toBe(14); // resto del gruppo (18 - 4)
+    expect(bus1Pax).toBe(6); // invariato: solo il pre-esistente, nessun Terni nuovo
+    expect(bus2Pax).toBe(18); // l'intera fermata, su un unico bus
     expect(bus1Pax + bus2Pax).toBe(24);
   });
 
