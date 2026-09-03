@@ -224,6 +224,101 @@ describe("findFerryPickupRule — OBIETTIVO 5 (regressione matcher + ambiguità 
   });
 });
 
+describe("findFerryPickupRule — gap voluti tra fasce consecutive (fix 2026-09-03)", () => {
+  // Riproduce le 4 fasce reali del seed di produzione (agency_logic=aleste,
+  // transport_type=train, boat_type=traghetto, stagione estiva 2026):
+  // 12:15-13:30 / 13:35-13:55 / 14:00-14:15 / 14:20-15:45, con gap voluti tra
+  // una fascia e la successiva (mai errori di configurazione).
+  const windows = [
+    rule({ transport_type: "train", transport_from: "12:15", transport_to: "13:30", departure_time: "13:00", company: "medmar-a" }),
+    rule({ transport_type: "train", transport_from: "13:35", transport_to: "13:55", departure_time: "14:20", company: "medmar-b" }),
+    rule({ transport_type: "train", transport_from: "14:00", transport_to: "14:15", departure_time: "14:45", company: "medmar-c" }),
+    rule({ transport_type: "train", transport_from: "14:20", transport_to: "15:45", departure_time: "16:00", company: "medmar-d" }),
+  ];
+
+  it("match normale invariato: 13:40 usa la fascia 13:35-13:55", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "13:40", "2026-08-30");
+    expect(match?.company).toBe("medmar-b");
+  });
+
+  it("primo gap: 13:32 (tra 13:30 e 13:35) usa la fascia successiva 13:35-13:55", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "13:32", "2026-08-30");
+    expect(match?.company).toBe("medmar-b");
+  });
+
+  it("caso GALLINA ROSELLA: 13:58 (tra 13:55 e 14:00) usa la fascia successiva 14:00-14:15", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "13:58", "2026-08-30");
+    expect(match?.company).toBe("medmar-c");
+    expect(match?.departureTime).toBe("14:45");
+  });
+
+  it("altro gap: 14:18 (tra 14:15 e 14:20) usa la fascia successiva 14:20-15:45", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "14:18", "2026-08-30");
+    expect(match?.company).toBe("medmar-d");
+  });
+
+  it("boundary esatto fine fascia: 13:55 resta nella fascia 13:35-13:55 (non scavalca al gap)", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "13:55", "2026-08-30");
+    expect(match?.company).toBe("medmar-b");
+  });
+
+  it("boundary esatto inizio fascia: 14:00 usa la fascia 14:00-14:15 (match diretto, non gap)", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "14:00", "2026-08-30");
+    expect(match?.company).toBe("medmar-c");
+  });
+
+  it("dopo l'ultima fascia: nessuna invenzione, comportamento invariato (null)", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "16:00", "2026-08-30");
+    expect(match).toBeNull();
+  });
+
+  it("prima della prima fascia: nessuna invenzione, comportamento invariato (null)", () => {
+    const match = findFerryPickupRule(windows, "aleste", "train", "traghetto", "10:00", "2026-08-30");
+    expect(match).toBeNull();
+  });
+
+  it("il gap non salta verso un agency_logic diverso: una regola sosandra nel gap non viene mai proposta per aleste", () => {
+    const rulesWithForeignAgency = [
+      windows[0]!,
+      rule({ transport_type: "train", agency_logic: "sosandra", transport_from: "13:35", transport_to: "13:55", departure_time: "99:99", company: "sosandra-only" }),
+      windows[2]!,
+    ];
+    const match = findFerryPickupRule(rulesWithForeignAgency, "aleste", "train", "traghetto", "13:32", "2026-08-30");
+    // Nessuna fascia 'aleste' valida dopo 13:32 se non quella di livello 3 (14:00-14:15): il gap salta quella, non la sosandra.
+    expect(match?.company).toBe("medmar-c");
+  });
+
+  it("il gap non salta verso un transport_type diverso: una regola 'flight' nel gap non viene mai proposta per 'train'", () => {
+    const rulesWithForeignType = [
+      windows[0]!,
+      rule({ transport_type: "flight", transport_from: "13:35", transport_to: "13:55", departure_time: "99:99", company: "flight-only" }),
+      windows[2]!,
+    ];
+    const match = findFerryPickupRule(rulesWithForeignType, "aleste", "train", "traghetto", "13:32", "2026-08-30");
+    expect(match?.company).toBe("medmar-c");
+  });
+
+  it("il gap non salta verso un boat_type diverso: una regola 'aliscafo' nel gap non viene mai proposta per 'traghetto'", () => {
+    const rulesWithForeignBoat = [
+      windows[0]!,
+      rule({ transport_type: "train", boat_type: "aliscafo", transport_from: "13:35", transport_to: "13:55", departure_time: "99:99", company: "aliscafo-only" }),
+      windows[2]!,
+    ];
+    const match = findFerryPickupRule(rulesWithForeignBoat, "aleste", "train", "traghetto", "13:32", "2026-08-30");
+    expect(match?.company).toBe("medmar-c");
+  });
+
+  it("il gap non salta verso una stagione diversa: una regola fuori stagione nel gap non viene mai proposta", () => {
+    const rulesWithOffSeason = [
+      windows[0]!,
+      rule({ transport_type: "train", transport_from: "13:35", transport_to: "13:55", departure_time: "99:99", company: "winter-only", valid_from: "2026-09-16", valid_to: "2027-04-30" }),
+      windows[2]!,
+    ];
+    const match = findFerryPickupRule(rulesWithOffSeason, "aleste", "train", "traghetto", "13:32", "2026-08-30");
+    expect(match?.company).toBe("medmar-c");
+  });
+});
+
 describe("resolveAgencyLogic — VINCOLO 2 (SNAV non è esclusiva di Sosandra)", () => {
   it("riconosce 'sosandra' solo dal nome dell'agenzia, non dalla compagnia nave usata nelle sue regole", () => {
     expect(resolveAgencyLogic("Sosandra Viaggi")).toBe("sosandra");

@@ -239,6 +239,61 @@ export interface FerryPickupMatch {
   arrivalTime: string | null;
 }
 
+function toMinutesForWindow(hhmm: string): number {
+  const [h, m] = hhmm.slice(0, 5).split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/**
+ * Risolve UNA regola da un insieme di candidate GIÀ filtrate per contesto
+ * (agency_logic/transport_type/boat_type/direction/stagione/giorno/hotel-
+ * zona — tutto tranne la finestra oraria), gestendo esplicitamente i gap
+ * VOLUTI tra fasce consecutive (audit 2026-09-03: `ferry_pickup_rules` è
+ * configurata di proposito con piccoli vuoti tra una fascia e la successiva,
+ * es. 12:15-13:30 / 13:35-13:55 / 14:00-14:15 — non sono errori di seed).
+ *
+ * Passo 1 — match diretto: T dentro [from, to] di una o più candidate
+ * (tie-break demandato al chiamante via `pickBest`, invariato rispetto a
+ * prima — questa funzione non introduce alcuna differenza quando esiste già
+ * un match diretto).
+ * Passo 2 — SOLO se il passo 1 non produce nulla, "gap -> fascia
+ * successiva": se tra le candidate esiste almeno una fascia che finisce
+ * PRIMA di T e almeno una che inizia DOPO T, si usa la candidata con
+ * transport_from più vicino (più basso) tra quelle successive. Se T precede
+ * la primissima fascia, o segue l'ultima, il comportamento resta invariato
+ * (null: nessuna fascia "successiva" da usare, mai un'invenzione).
+ *
+ * Generico e riusabile da entrambi i motori (ARRIVI in questo file,
+ * PARTENZE in lib/operational-connection-resolver.ts) — la nozione di "gap
+ * tra fasce" è unica, non va duplicata per ogni resolver.
+ */
+export function resolveTimeWindowRule<T>(
+  candidates: T[],
+  getFrom: (rule: T) => string,
+  getTo: (rule: T) => string,
+  time: string,
+  pickBest: (matches: T[]) => T | null
+): T | null {
+  const t = toMinutesForWindow(time);
+
+  const direct = candidates.filter((c) => {
+    const from = toMinutesForWindow(getFrom(c));
+    const to = toMinutesForWindow(getTo(c));
+    return t >= from && t <= to;
+  });
+  if (direct.length > 0) return pickBest(direct);
+
+  const hasEarlierWindow = candidates.some((c) => toMinutesForWindow(getTo(c)) < t);
+  if (!hasEarlierWindow) return null; // T precede la prima fascia: comportamento invariato
+
+  const laterCandidates = candidates.filter((c) => toMinutesForWindow(getFrom(c)) > t);
+  if (laterCandidates.length === 0) return null; // T segue l'ultima fascia: comportamento invariato
+
+  const minFrom = Math.min(...laterCandidates.map((c) => toMinutesForWindow(getFrom(c))));
+  const nextWindowCandidates = laterCandidates.filter((c) => toMinutesForWindow(getFrom(c)) === minFrom);
+  return pickBest(nextWindowCandidates);
+}
+
 /**
  * Trova la corsa nave per un cliente che arriva con treno o volo (ARRIVO,
  * mainland -> Ischia). Filtra sempre `direction === 'to_ischia'` in modo
@@ -264,7 +319,10 @@ export function findFerryPickupRule(
 ): FerryPickupMatch | null {
   const time = normalizeTime(transportArrivalTime);
 
-  const matches = rules.filter((r) => {
+  // Candidate di contesto: tutto tranne la finestra oraria (from/to), che è
+  // demandata a resolveTimeWindowRule (match diretto + gap -> fascia
+  // successiva).
+  const contextCandidates = rules.filter((r) => {
     if ((r.direction ?? "to_ischia") !== "to_ischia") return false;
     if (r.agency_logic !== agencyLogic) return false;
     if (r.transport_type !== transportType) return false;
@@ -273,20 +331,25 @@ export function findFerryPickupRule(
     // (introdotte solo per direction='from_ischia'), quindi transport_from/to
     // sono sempre presenti qui — la guardia serve solo a soddisfare i tipi.
     if (r.transport_from == null || r.transport_to == null) return false;
-    if (time < normalizeTime(r.transport_from)) return false;
-    if (time > normalizeTime(r.transport_to)) return false;
     return isRuleActiveOnDate(r, bookingDate);
   });
 
-  if (matches.length === 0) return null;
-
   // Se ci sono più match sovrapposti per date stagionali, vince il più specifico
-  // (valid_from più recente = regola più specifica)
-  const best = matches.sort((a, b) => {
-    const af = a.valid_from ?? "0000-00-00";
-    const bf = b.valid_from ?? "0000-00-00";
-    return bf.localeCompare(af);
-  })[0]!;
+  // (valid_from più recente = regola più specifica) — tie-break invariato.
+  const best = resolveTimeWindowRule(
+    contextCandidates,
+    (r) => normalizeTime(r.transport_from!),
+    (r) => normalizeTime(r.transport_to!),
+    time,
+    (matches) =>
+      matches.sort((a, b) => {
+        const af = a.valid_from ?? "0000-00-00";
+        const bf = b.valid_from ?? "0000-00-00";
+        return bf.localeCompare(af);
+      })[0] ?? null
+  );
+
+  if (!best) return null;
 
   return {
     rule: best,

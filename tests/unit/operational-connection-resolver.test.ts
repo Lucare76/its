@@ -427,6 +427,71 @@ describe("resolveOperationalConnection — NIKOLAENKO (arrivo in volo, regola co
   });
 });
 
+describe("resolveOperationalConnection — gap voluti tra fasce consecutive from_ischia (fix 2026-09-03)", () => {
+  const windows = [
+    rule({ hotel_id: null, zone: "forio", transport_from: "12:15", transport_to: "13:30", departure_time: "13:00", pickup_time: "11:30" }),
+    rule({ hotel_id: null, zone: "forio", transport_from: "13:35", transport_to: "13:55", departure_time: "14:20", pickup_time: "12:45" }),
+    rule({ hotel_id: null, zone: "forio", transport_from: "14:00", transport_to: "14:15", departure_time: "14:45", pickup_time: "13:10" }),
+  ];
+  const base = {
+    direction: "from_ischia" as const,
+    bookingServiceKind: "transfer_train_hotel",
+    date: DATE,
+    zone: "forio",
+    agencyName: "ALESTE VIAGGI",
+    operationalRules: windows,
+    ferrySchedules: [],
+  };
+
+  it("gap: 13:32 (tra 13:30 e 13:35) usa la fascia successiva 13:35-13:55", () => {
+    const result = resolveOperationalConnection({ ...base, transportTime: "13:32" });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.pickupTime).toBe("12:45");
+    expect(result.ferryDepartureTime).toBe("14:20");
+  });
+
+  it("gap: 13:58 (equivalente al caso GALLINA) usa la fascia successiva 14:00-14:15", () => {
+    const result = resolveOperationalConnection({ ...base, transportTime: "13:58" });
+    expect(result.source).toBe("canonical_rule");
+    expect(result.pickupTime).toBe("13:10");
+    expect(result.ferryDepartureTime).toBe("14:45");
+  });
+
+  it("il gap non salta verso una zona incompatibile: una regola di un'altra zona nel gap non viene mai proposta", () => {
+    const rulesWithForeignZone = [
+      windows[0]!,
+      rule({ hotel_id: null, zone: "lacco", transport_from: "13:35", transport_to: "13:55", pickup_time: "99:99" }),
+      windows[2]!,
+    ];
+    const result = resolveOperationalConnection({ ...base, operationalRules: rulesWithForeignZone, transportTime: "13:32" });
+    // Nessuna fascia 'forio' valida dopo 13:32 se non quella successiva (14:00-14:15): il gap salta la zona 'lacco', non la 'forio'.
+    expect(result.pickupTime).toBe("13:10");
+  });
+
+  it("il gap non salta verso un hotel_id incompatibile: una regola hotel-specifica di un altro hotel nel gap resta a livello 1, non contamina il livello 2 (zona) usato per questo hotel", () => {
+    const rulesWithForeignHotel = [
+      windows[0]!,
+      rule({ hotel_id: HOTEL_LA_VILLA_ID, zone: "forio", transport_from: "13:35", transport_to: "13:55", pickup_time: "99:99" }),
+      windows[2]!,
+    ];
+    const result = resolveOperationalConnection({
+      ...base,
+      hotelId: HOTEL_COLELLA_ID, // hotel diverso da HOTEL_LA_VILLA_ID: nessuna regola di livello 1 per questo hotel
+      operationalRules: rulesWithForeignHotel,
+      transportTime: "13:32",
+    });
+    // Il gap deve risolversi sul livello 2 (zona 'forio', windows[2]), mai sulla regola hotel-specifica di un altro hotel.
+    expect(result.pickupTime).toBe("13:10");
+  });
+
+  it("prima della prima fascia e dopo l'ultima: comportamento invariato (fallback legacy, nessuna invenzione)", () => {
+    const before = resolveOperationalConnection({ ...base, transportTime: "10:00" });
+    expect(before.source).toBe("legacy_fallback");
+    const after = resolveOperationalConnection({ ...base, transportTime: "16:00" });
+    expect(after.source).toBe("legacy_fallback");
+  });
+});
+
 describe("resolveOperationalConnection — kind non treno/aereo", () => {
   it("nessun collegamento calcolato, confidence NESSUNA", () => {
     const result = resolveOperationalConnection({

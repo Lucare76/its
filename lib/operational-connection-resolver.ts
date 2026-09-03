@@ -35,6 +35,7 @@ import {
   type ConnectionConfidence,
 } from "@/lib/travel-connection-resolver";
 import { derivePortCarrier } from "@/lib/departure-pickup-rules";
+import { resolveTimeWindowRule } from "@/lib/ferry-pickup-rules";
 
 export type OperationalDirection = "to_ischia" | "from_ischia";
 
@@ -196,8 +197,11 @@ function findCanonicalRule(
     date: string;
   }
 ): OperationalPickupRule | null {
-  const t = toMinutes(args.transportTime);
-  const baseMatch = (r: OperationalPickupRule) => {
+  // Contesto: tutto tranne la finestra oraria (from/to), che è demandata a
+  // resolveTimeWindowRule (match diretto + gap -> fascia successiva, vedi
+  // audit 2026-09-03: i piccoli vuoti tra fasce consecutive in
+  // ferry_pickup_rules sono voluti, non errori di seed).
+  const contextMatch = (r: OperationalPickupRule) => {
     if (r.agency_logic !== args.agencyLogic) return false;
     if (r.direction !== args.direction) return false;
     if (r.transport_type !== args.transportType) return false;
@@ -205,7 +209,6 @@ function findCanonicalRule(
     // transport_from/to sono null solo per transport_type='direct', escluso
     // qui da args.transportType: 'train'|'flight'. Guardia solo per i tipi.
     if (r.transport_from == null || r.transport_to == null) return false;
-    if (t < toMinutes(r.transport_from) || t > toMinutes(r.transport_to)) return false;
     return isRuleActiveOnDate(r, args.date);
   };
 
@@ -215,25 +218,34 @@ function findCanonicalRule(
     return 3; // hotel_id null + zone null = generale, jolly universale
   };
 
-  const matches = rules
-    .filter(baseMatch)
-    .map((r) => ({ r, level: specificity(r) }))
-    .filter((m) => m.level !== 0);
+  const pickBest = (matches: OperationalPickupRule[]): OperationalPickupRule | null =>
+    matches.sort((a, b) => {
+      // Non-null: contextMatch ha già scartato le righe con transport_from/to null.
+      const widthA = toMinutes(a.transport_to!) - toMinutes(a.transport_from!);
+      const widthB = toMinutes(b.transport_to!) - toMinutes(b.transport_from!);
+      if (widthA !== widthB) return widthA - widthB; // fascia più stretta vince
+      const af = a.valid_from ?? "0000-00-00";
+      const bf = b.valid_from ?? "0000-00-00";
+      return bf.localeCompare(af);
+    })[0] ?? null;
 
-  if (matches.length === 0) return null;
-
-  const bestLevel = Math.min(...matches.map((m) => m.level));
-  const atBestLevel = matches.filter((m) => m.level === bestLevel);
-
-  return atBestLevel.sort((a, b) => {
-    // Non-null: baseMatch ha già scartato le righe con transport_from/to null.
-    const widthA = toMinutes(a.r.transport_to!) - toMinutes(a.r.transport_from!);
-    const widthB = toMinutes(b.r.transport_to!) - toMinutes(b.r.transport_from!);
-    if (widthA !== widthB) return widthA - widthB; // fascia più stretta vince
-    const af = a.r.valid_from ?? "0000-00-00";
-    const bf = b.r.valid_from ?? "0000-00-00";
-    return bf.localeCompare(af);
-  })[0]!.r;
+  // Una regola di Livello 1 batte SEMPRE una di Livello 2/3 (priorità
+  // invariata): si prova il gap-fill per livello 1 (hotel) prima di scendere
+  // a livello 2 (zona) e poi 3 (generale) — mai un salto di gap tra scope
+  // diversi (hotel/zona/generale restano candidate-set separati).
+  for (const level of [1, 2, 3] as const) {
+    const atLevel = rules.filter((r) => contextMatch(r) && specificity(r) === level);
+    if (atLevel.length === 0) continue;
+    const picked = resolveTimeWindowRule(
+      atLevel,
+      (r) => r.transport_from!,
+      (r) => r.transport_to!,
+      args.transportTime,
+      pickBest
+    );
+    if (picked) return picked;
+  }
+  return null;
 }
 
 /**
