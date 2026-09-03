@@ -167,13 +167,19 @@ export async function POST(request: NextRequest) {
     // regola e' configurata — vedi lib/server/apply-pickup-calc.ts.
     const isTrainOrFlightKind = bookingKind === "transfer_train_hotel" || bookingKind === "transfer_train_hotel_exclusive" || bookingKind === "transfer_train_hotel_aliscafo"
       || bookingKind === "transfer_airport_hotel" || bookingKind === "transfer_airport_hotel_exclusive" || bookingKind === "transfer_airport_hotel_aliscafo";
+    // isFerryKind (Formula SNAV/MEDMAR diretta, definito sopra) copre ESATTAMENTE
+    // formula_snav/formula_medmar_napoli/formula_medmar_pozzuoli — le uniche righe
+    // transport_type='direct' in ferry_pickup_rules. transfer_port_hotel resta
+    // fuori (kind diverso, non incluso in isFerryKind) e continua a usare solo il
+    // fallback statico in questo step — vedi apply-pickup-calc.ts dominio B.
+    const needsOperationalRules = isTrainOrFlightKind || isFerryKind;
     const [scheduleRows, operationalRulesRows] = await Promise.all([
-      (isFerryKind || isTrainOrFlightKind)
+      needsOperationalRules
         ? auth.admin.from("ferry_schedules")
             .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
             .then((r) => r.data ?? [])
         : Promise.resolve([]),
-      isTrainOrFlightKind
+      needsOperationalRules
         ? auth.admin.from("ferry_pickup_rules").select("*").then((r) => r.data ?? [])
         : Promise.resolve([]),
     ]);
@@ -191,7 +197,7 @@ export async function POST(request: NextRequest) {
       vessel: baseVessel,
       hotel_zone: hotelData?.zone ?? null,
       hotel_name: hotelData?.name ?? null,
-      context: isTrainOrFlightKind
+      context: needsOperationalRules
         ? {
             operationalRules: operationalRulesRows as never,
             ferrySchedules: scheduleRows as never,
