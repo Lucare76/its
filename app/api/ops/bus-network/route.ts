@@ -15,6 +15,11 @@ import { validateBusAllocationRequest, validateBusMoveRequest } from "@/lib/serv
 import { sendBusLowSeatAlertEmail } from "@/lib/server/bus-alert-email";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 import { loadBusNetwork } from "@/lib/server/bus-network-loader";
+import {
+  recordBusAssignmentFeedback,
+  loadServiceFeedbackContexts,
+  loadBusLineFamilyCodes,
+} from "@/lib/server/bus-assignment-feedback";
 
 // ── Helper geografico per ordinamento fermate Ischia ────────────────────────
 const PORTO_ISCHIA = { lat: 40.7427, lng: 13.9567 };
@@ -660,6 +665,35 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
+
+      // ML STEP 1 — feedback strutturato: prima assegnazione manuale.
+      // Un solo punto di scrittura per questa azione (qui, non nella RPC
+      // allocate_bus_service, per non introdurre un secondo path di
+      // scrittura/rischio su una funzione SQL già in uso da più chiamanti).
+      const [initialAllocationContexts, initialAllocationLineFamilyCodes] = await Promise.all([
+        loadServiceFeedbackContexts(auth, tenantId, [parsed.service_id]),
+        loadBusLineFamilyCodes(auth, tenantId, [parsed.bus_line_id]),
+      ]);
+      const initialAllocationContext = initialAllocationContexts.get(parsed.service_id) ?? null;
+      await recordBusAssignmentFeedback(auth, {
+        tenantId,
+        serviceId: parsed.service_id,
+        actionType: "initial_allocation",
+        source: "manual",
+        newBusUnitId: parsed.bus_unit_id,
+        newBusLineId: parsed.bus_line_id,
+        newStopId: parsed.stop_id,
+        newDirection: parsed.direction,
+        newDate: initialAllocationContext?.date ?? null,
+        pax: parsed.pax_assigned,
+        customerName: initialAllocationContext?.customerName ?? null,
+        hotelName: initialAllocationContext?.hotelName ?? null,
+        derivedFamilyCode: initialAllocationContext?.derivedFamilyCode ?? null,
+        finalFamilyCode: initialAllocationLineFamilyCodes.get(parsed.bus_line_id) ?? null,
+        reason: parsed.notes ?? null,
+        createdByUserId: auth.user.id,
+      });
+
       // Obiettivo E: niente piu' scrittura permanente di group_name su
       // tenant_bus_units qui — il nome del gruppo per la card bus si deriva
       // SEMPRE live, per la data selezionata, dalle allocazioni correnti
@@ -684,6 +718,7 @@ export async function POST(request: NextRequest) {
       }
 
       const errors: Array<{ service_id: string; message: string }> = [];
+      const succeededItems: Array<{ service_id: string; pax_assigned: number }> = [];
       for (const item of parsed.services) {
         try {
           await validateBusAllocationRequest(auth, {
@@ -711,6 +746,7 @@ export async function POST(request: NextRequest) {
             errors.push({ service_id: item.service_id, message: error.message });
             continue;
           }
+          succeededItems.push(item);
         } catch (itemError) {
           errors.push({ service_id: item.service_id, message: itemError instanceof Error ? itemError.message : "Errore sconosciuto." });
         }
@@ -719,6 +755,39 @@ export async function POST(request: NextRequest) {
       if (errors.length === parsed.services.length) {
         return NextResponse.json({ ok: false, error: errors[0]?.message ?? "Assegnazione non riuscita." }, { status: 400 });
       }
+
+      // ML STEP 1 — feedback strutturato: una riga per ogni service assegnato
+      // con successo in questo blocco (stesso action_type/source del path
+      // singolo). Batch (una query services + una hotels + una linee) per
+      // evitare N+1 su blocchi fino a 200 services.
+      if (succeededItems.length > 0) {
+        const [bulkAllocationContexts, bulkAllocationLineFamilyCodes] = await Promise.all([
+          loadServiceFeedbackContexts(auth, tenantId, succeededItems.map((item) => item.service_id)),
+          loadBusLineFamilyCodes(auth, tenantId, [parsed.bus_line_id]),
+        ]);
+        const finalFamilyCode = bulkAllocationLineFamilyCodes.get(parsed.bus_line_id) ?? null;
+        for (const item of succeededItems) {
+          const context = bulkAllocationContexts.get(item.service_id) ?? null;
+          await recordBusAssignmentFeedback(auth, {
+            tenantId,
+            serviceId: item.service_id,
+            actionType: "initial_allocation",
+            source: "manual",
+            newBusUnitId: parsed.bus_unit_id,
+            newBusLineId: parsed.bus_line_id,
+            newStopId: parsed.stop_id,
+            newDirection: parsed.direction,
+            newDate: context?.date ?? null,
+            pax: item.pax_assigned,
+            customerName: context?.customerName ?? null,
+            hotelName: context?.hotelName ?? null,
+            derivedFamilyCode: context?.derivedFamilyCode ?? null,
+            finalFamilyCode,
+            createdByUserId: auth.user.id,
+          });
+        }
+      }
+
       // Obiettivo E: niente piu' scrittura permanente di group_name su
       // tenant_bus_units qui — vedi commento gemello in allocate_service.
       const [networkPayload, allocateAlert] = await Promise.all([
@@ -743,6 +812,19 @@ export async function POST(request: NextRequest) {
         paxMoved: parsed.pax_moved
       });
 
+      // ML STEP 1 — stato "prima" catturato ORA, sotto lo stesso lock
+      // implicito della validazione appena eseguita: se la RPC fallisce
+      // sotto, semplicemente non scriviamo feedback (nessun doppio log,
+      // nessuna riga per un'azione che non e' realmente avvenuta).
+      const [{ data: moveAllocBefore }, { data: moveTargetUnit }] = await Promise.all([
+        auth.admin.from("tenant_bus_allocations")
+          .select("service_id,bus_unit_id,bus_line_id,stop_id,direction")
+          .eq("tenant_id", tenantId).eq("id", parsed.allocation_id).maybeSingle(),
+        auth.admin.from("tenant_bus_units")
+          .select("bus_line_id")
+          .eq("tenant_id", tenantId).eq("id", parsed.to_bus_unit_id).maybeSingle(),
+      ]);
+
       const { error } = await auth.admin.rpc("move_bus_allocation", {
         p_tenant_id: tenantId,
         p_allocation_id: parsed.allocation_id,
@@ -754,6 +836,37 @@ export async function POST(request: NextRequest) {
       if (error) {
         return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
       }
+
+      if (moveAllocBefore && moveTargetUnit) {
+        const crossLine = moveAllocBefore.bus_line_id !== moveTargetUnit.bus_line_id;
+        const [moveContexts, moveLineFamilyCodes] = await Promise.all([
+          loadServiceFeedbackContexts(auth, tenantId, [moveAllocBefore.service_id]),
+          loadBusLineFamilyCodes(auth, tenantId, [moveAllocBefore.bus_line_id, moveTargetUnit.bus_line_id]),
+        ]);
+        const moveContext = moveContexts.get(moveAllocBefore.service_id) ?? null;
+        await recordBusAssignmentFeedback(auth, {
+          tenantId,
+          serviceId: moveAllocBefore.service_id,
+          actionType: crossLine ? "cross_line_move" : "move",
+          source: "manual",
+          oldBusUnitId: moveAllocBefore.bus_unit_id,
+          newBusUnitId: parsed.to_bus_unit_id,
+          oldBusLineId: moveAllocBefore.bus_line_id,
+          newBusLineId: moveTargetUnit.bus_line_id,
+          oldStopId: moveAllocBefore.stop_id,
+          newStopId: moveAllocBefore.stop_id,
+          oldDirection: moveAllocBefore.direction,
+          newDirection: moveAllocBefore.direction,
+          pax: parsed.pax_moved,
+          customerName: moveContext?.customerName ?? null,
+          hotelName: moveContext?.hotelName ?? null,
+          derivedFamilyCode: moveContext?.derivedFamilyCode ?? null,
+          finalFamilyCode: moveLineFamilyCodes.get(moveTargetUnit.bus_line_id) ?? null,
+          reason: parsed.reason ?? null,
+          createdByUserId: auth.user.id,
+        });
+      }
+
       const [networkPayload, moveAlert] = await Promise.all([
         loadBusNetwork(auth),
         checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
@@ -763,7 +876,25 @@ export async function POST(request: NextRequest) {
 
     if (action === "move_allocations_bulk") {
       const parsed = bulkMoveSchema.parse(body);
+
+      // ML STEP 1 — stato "prima" per tutte le allocazioni coinvolte,
+      // catturato prima del loop di RPC (stesso principio del path singolo).
+      const { data: bulkMoveAllocsBefore } = await auth.admin
+        .from("tenant_bus_allocations")
+        .select("id,service_id,bus_unit_id,bus_line_id,stop_id,direction")
+        .eq("tenant_id", tenantId)
+        .in("id", parsed.allocations.map((item) => item.allocation_id));
+      type BulkMoveAllocBefore = { id: string; service_id: string; bus_unit_id: string; bus_line_id: string; stop_id: string | null; direction: string };
+      const bulkMoveAllocBeforeById = new Map<string, BulkMoveAllocBefore>(
+        ((bulkMoveAllocsBefore ?? []) as BulkMoveAllocBefore[]).map((row) => [row.id, row])
+      );
+      const { data: bulkMoveTargetUnit } = await auth.admin
+        .from("tenant_bus_units")
+        .select("bus_line_id")
+        .eq("tenant_id", tenantId).eq("id", parsed.to_bus_unit_id).maybeSingle();
+
       const errors: string[] = [];
+      const succeededMoves: Array<{ allocation_id: string; pax_moved: number }> = [];
       for (const item of parsed.allocations) {
         const { error } = await auth.admin.rpc("move_bus_allocation", {
           p_tenant_id: tenantId,
@@ -773,11 +904,54 @@ export async function POST(request: NextRequest) {
           p_reason: parsed.reason ?? null,
           p_created_by_user_id: auth.user.id
         });
-        if (error) errors.push(error.message);
+        if (error) { errors.push(error.message); continue; }
+        succeededMoves.push(item);
       }
       if (errors.length === parsed.allocations.length) {
         return NextResponse.json({ ok: false, error: errors[0] }, { status: 400 });
       }
+
+      if (succeededMoves.length > 0 && bulkMoveTargetUnit) {
+        const succeededServiceIds = succeededMoves
+          .map((item) => bulkMoveAllocBeforeById.get(item.allocation_id)?.service_id)
+          .filter((id): id is string => Boolean(id));
+        const oldLineIds = succeededMoves
+          .map((item) => bulkMoveAllocBeforeById.get(item.allocation_id)?.bus_line_id)
+          .filter((id): id is string => Boolean(id));
+        const [bulkMoveContexts, bulkMoveLineFamilyCodes] = await Promise.all([
+          loadServiceFeedbackContexts(auth, tenantId, succeededServiceIds),
+          loadBusLineFamilyCodes(auth, tenantId, [...oldLineIds, bulkMoveTargetUnit.bus_line_id]),
+        ]);
+        const finalFamilyCode = bulkMoveLineFamilyCodes.get(bulkMoveTargetUnit.bus_line_id) ?? null;
+        for (const item of succeededMoves) {
+          const before = bulkMoveAllocBeforeById.get(item.allocation_id);
+          if (!before) continue;
+          const crossLine = before.bus_line_id !== bulkMoveTargetUnit.bus_line_id;
+          const context = bulkMoveContexts.get(before.service_id) ?? null;
+          await recordBusAssignmentFeedback(auth, {
+            tenantId,
+            serviceId: before.service_id,
+            actionType: crossLine ? "cross_line_move" : "move",
+            source: "manual",
+            oldBusUnitId: before.bus_unit_id,
+            newBusUnitId: parsed.to_bus_unit_id,
+            oldBusLineId: before.bus_line_id,
+            newBusLineId: bulkMoveTargetUnit.bus_line_id,
+            oldStopId: before.stop_id,
+            newStopId: before.stop_id,
+            oldDirection: before.direction,
+            newDirection: before.direction,
+            pax: item.pax_moved,
+            customerName: context?.customerName ?? null,
+            hotelName: context?.hotelName ?? null,
+            derivedFamilyCode: context?.derivedFamilyCode ?? null,
+            finalFamilyCode,
+            reason: parsed.reason ?? null,
+            createdByUserId: auth.user.id,
+          });
+        }
+      }
+
       const [networkPayload, moveAlert] = await Promise.all([
         loadBusNetwork(auth),
         checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
@@ -795,7 +969,7 @@ export async function POST(request: NextRequest) {
       // Verify ownership before deleting
       const { data: alloc, error: fetchErr } = await auth.admin
         .from("tenant_bus_allocations")
-        .select("id, bus_unit_id")
+        .select("id, service_id, bus_unit_id, bus_line_id, stop_id, direction")
         .eq("tenant_id", tenantId)
         .eq("id", allocationId)
         .maybeSingle();
@@ -808,6 +982,30 @@ export async function POST(request: NextRequest) {
         .eq("tenant_id", tenantId)
         .eq("id", allocationId);
       if (delErr) throw new Error(delErr.message);
+
+      // ML STEP 1 — feedback strutturato: cancellazione allocazione.
+      const [deleteContexts, deleteLineFamilyCodes] = await Promise.all([
+        loadServiceFeedbackContexts(auth, tenantId, [alloc.service_id]),
+        loadBusLineFamilyCodes(auth, tenantId, [alloc.bus_line_id]),
+      ]);
+      const deleteContext = deleteContexts.get(alloc.service_id) ?? null;
+      await recordBusAssignmentFeedback(auth, {
+        tenantId,
+        serviceId: alloc.service_id,
+        actionType: "delete_allocation",
+        source: "manual",
+        oldBusUnitId: alloc.bus_unit_id,
+        oldBusLineId: alloc.bus_line_id,
+        oldStopId: alloc.stop_id,
+        oldDirection: alloc.direction,
+        pax: deleteContext?.pax ?? null,
+        customerName: deleteContext?.customerName ?? null,
+        hotelName: deleteContext?.hotelName ?? null,
+        derivedFamilyCode: deleteContext?.derivedFamilyCode ?? null,
+        finalFamilyCode: deleteLineFamilyCodes.get(alloc.bus_line_id) ?? null,
+        createdByUserId: auth.user.id,
+      });
+
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
@@ -1146,7 +1344,7 @@ export async function POST(request: NextRequest) {
 
       // Carica dati necessari
       const [svcRes, linesRes, stopsRes, unitsRes, allocRes, exclusiveRes] = await Promise.all([
-        auth.admin.from("services").select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id")
+        auth.admin.from("services").select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id,hotel_id")
           .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction)
           .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
           .order("time"),
@@ -1190,6 +1388,20 @@ export async function POST(request: NextRequest) {
       const units = unitsRes.data ?? [];
       const allocatedIds = new Set((allocRes.data ?? []).map((a: { service_id: string }) => a.service_id));
 
+      // ML STEP 1 — nomi hotel per il feedback delle assegnazioni automatiche
+      // (batch, una sola query indipendentemente dal numero di services).
+      const autoAssignHotelIds = [...new Set(
+        (services as Array<{ hotel_id?: string | null }>).map((s) => s.hotel_id).filter((id): id is string => Boolean(id))
+      )];
+      const autoAssignHotelNameById = new Map<string, string>();
+      if (autoAssignHotelIds.length > 0) {
+        const { data: autoAssignHotels } = await auth.admin
+          .from("hotels").select("id,name").eq("tenant_id", tenantId).in("id", autoAssignHotelIds);
+        for (const hotel of (autoAssignHotels ?? []) as Array<{ id: string; name: string }>) {
+          autoAssignHotelNameById.set(hotel.id, hotel.name);
+        }
+      }
+
       // Capienza per data
       const datePax = new Map<string, number>();
       for (const a of (allocRes.data ?? []) as Array<{ bus_unit_id: string; pax_assigned: number }>) {
@@ -1224,7 +1436,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      type SvcRow = { id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null; booking_group_id?: string | null };
+      type SvcRow = { id: string; customer_name: string; pax: number; direction: string; bus_city_origin?: string | null; transport_code?: string | null; time?: string | null; outbound_time?: string | null; service_type_code?: string | null; booking_service_kind?: string | null; booking_group_id?: string | null; hotel_id?: string | null };
       const sortedServices = [...(services as SvcRow[])].sort((a, b) => {
         const ca = normCity(a.bus_city_origin); const cb = normCity(b.bus_city_origin);
         if (ca !== cb) return ca.localeCompare(cb);
@@ -1329,6 +1541,26 @@ export async function POST(request: NextRequest) {
         chosenBus.remaining -= svc.pax;
         datePax.set(chosenBus.id, (datePax.get(chosenBus.id) ?? 0) + svc.pax);
         assigned.push({ serviceId: svc.id, customerName: svc.customer_name, busUnitId: chosenBus.id, busLabel: chosenBus.label, stopId: stop.id, stopName: stop.stop_name, pax: svc.pax });
+
+        // ML STEP 1 — feedback strutturato: prima assegnazione automatica.
+        // Nessuna query aggiuntiva per riga: linea/fermata/hotel già in
+        // scope da questo stesso ciclo (auto_assign_date).
+        await recordBusAssignmentFeedback(auth, {
+          tenantId,
+          serviceId: svc.id,
+          actionType: "initial_allocation",
+          source: "auto_assignment",
+          newBusUnitId: chosenBus.id,
+          newBusLineId: line.id,
+          newStopId: stop.id.startsWith("new-") ? null : stop.id,
+          newDirection: parsed.direction,
+          pax: svc.pax,
+          customerName: svc.customer_name,
+          hotelName: svc.hotel_id ? autoAssignHotelNameById.get(svc.hotel_id) ?? null : null,
+          derivedFamilyCode: identity.family_code ?? null,
+          finalFamilyCode: line.family_code ?? null,
+          createdByUserId: auth.user.id,
+        });
       }
 
       return NextResponse.json({
