@@ -28,7 +28,7 @@ type CatalogStopLink = {
   pickup_note?: string | null;
 };
 
-function normalizeStopText(value?: string | null) {
+export function normalizeStopText(value?: string | null) {
   return (value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")

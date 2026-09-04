@@ -214,6 +214,13 @@ export function renderNavIcon(icon: string) {
           <path d="M5 5a4.2 4.2 0 0 1 6 0M3.5 3.5a6.4 6.4 0 0 1 9 0M11 11a4.2 4.2 0 0 1-6 0M12.5 12.5a6.4 6.4 0 0 1-9 0" />
         </svg>
       );
+    case "PIN":
+      return (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className={common} aria-hidden="true">
+          <path d="M8 14.5s4.5-4.3 4.5-7.8A4.5 4.5 0 1 0 3.5 6.7c0 3.5 4.5 7.8 4.5 7.8Z" />
+          <circle cx="8" cy="6.7" r="1.6" />
+        </svg>
+      );
     default:
       return <span className="text-[11px] font-semibold">{icon}</span>;
   }
@@ -373,6 +380,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/arrivals-clock", label: "Arrivi a orario", icon: "@" },
       { href: "/report-center", label: "Centro report", icon: "Y" },
       { href: "/bus-tours", label: "Controllo bus", icon: "B" },
+      { href: "/bus-stops", label: "Fermate bus", icon: "PIN" },
       { href: "/analytics", label: "Analisi", icon: "Y" },
       { href: "/analytics-yoy", label: "Anno su anno", icon: "↕" },
       { href: "/audit", label: "Audit", icon: "Q" },

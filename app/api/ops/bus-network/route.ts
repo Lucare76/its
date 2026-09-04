@@ -24,6 +24,11 @@ import {
   buildBusImportPickupTimesMap,
   resolveBusImportDeparturePickupTime,
 } from "@/lib/server/bus-import-pickup";
+import {
+  createBusLineStop,
+  updateBusLineStop,
+  deleteBusLineStop,
+} from "@/lib/server/bus-line-stops";
 
 // ── Helper geografico per ordinamento fermate Ischia ────────────────────────
 const PORTO_ISCHIA = { lat: 40.7427, lng: 13.9567 };
@@ -1356,6 +1361,132 @@ export async function POST(request: NextRequest) {
         .eq("tenant_id", tenantId).eq("id", parsed.stop_id);
       if (error) throw new Error(error.message);
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    // Pagina /bus-stops — anagrafica fermate, indipendente da data/direzione
+    // selezionata: legge TUTTE le fermate del tenant + conteggio servizi
+    // collegati (via tenant_bus_allocations.stop_id), mai loadBusNetwork
+    // (troppo pesante e scoped a una data).
+    if (action === "list_bus_line_stops") {
+      const [linesRes, stopsRes, allocRes] = await Promise.all([
+        auth.admin.from("tenant_bus_lines").select("id,code,name,family_code,active").eq("tenant_id", tenantId).order("code"),
+        auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,pickup_note,pickup_time,stop_order,lat,lng,is_manual,active").eq("tenant_id", tenantId),
+        auth.admin.from("tenant_bus_allocations").select("stop_id").eq("tenant_id", tenantId),
+      ]);
+      if (linesRes.error) throw new Error(linesRes.error.message);
+      if (stopsRes.error) throw new Error(stopsRes.error.message);
+      if (allocRes.error) throw new Error(allocRes.error.message);
+
+      const serviceCountByStopId = new Map<string, number>();
+      for (const row of (allocRes.data ?? []) as Array<{ stop_id: string | null }>) {
+        if (!row.stop_id) continue;
+        serviceCountByStopId.set(row.stop_id, (serviceCountByStopId.get(row.stop_id) ?? 0) + 1);
+      }
+      const stops = ((stopsRes.data ?? []) as Array<{ id: string }>).map((stop) => ({
+        ...stop,
+        service_count: serviceCountByStopId.get(stop.id) ?? 0,
+      }));
+
+      return NextResponse.json({ ok: true, lines: linesRes.data ?? [], stops });
+    }
+
+    // Fase 8/9 — /bus-stops "+ Nuova fermata": creazione singola (una sola
+    // direzione), passa dall'helper condiviso createBusLineStop (stessa
+    // logica anti-duplicato di create_stop_for_transfer). Mai un secondo
+    // percorso di creazione con regole diverse.
+    if (action === "create_bus_line_stop") {
+      const parsed = z.object({
+        bus_line_id: z.string().uuid(),
+        direction: z.enum(["arrival", "departure"]),
+        stop_name: z.string().trim().min(1).max(200),
+        city: z.string().trim().min(1).max(200),
+        pickup_note: z.string().max(500).optional().nullable(),
+        pickup_time: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+        stop_order: z.number().int().min(1).optional().nullable(),
+        lat: z.number().optional().nullable(),
+        lng: z.number().optional().nullable(),
+      }).parse(body);
+
+      const result = await createBusLineStop(auth.admin, {
+        tenantId,
+        busLineId: parsed.bus_line_id,
+        direction: parsed.direction,
+        stopName: parsed.stop_name,
+        city: parsed.city,
+        pickupNote: parsed.pickup_note,
+        pickupTime: parsed.pickup_time,
+        stopOrder: parsed.stop_order,
+        lat: parsed.lat,
+        lng: parsed.lng,
+      });
+      if (!result.ok) {
+        if (result.reason === "duplicate") {
+          return NextResponse.json({ ok: false, error: "Questa fermata esiste già.", existing_stop_id: result.existingStopId }, { status: 409 });
+        }
+        return NextResponse.json({ ok: false, error: result.message }, { status: 400 });
+      }
+      return NextResponse.json({
+        ok: true,
+        stop: result.stop,
+        near_duplicates: result.nearDuplicates.map((d) => ({ id: d.id, stop_name: d.stopName, city: d.city })),
+      });
+    }
+
+    // Fase 10 — modifica fermata. Cambio linea/direzione su fermata in uso
+    // e' bloccato dentro updateBusLineStop (mai silenzioso).
+    if (action === "update_bus_line_stop") {
+      const parsed = z.object({
+        stop_id: z.string().uuid(),
+        bus_line_id: z.string().uuid().optional(),
+        direction: z.enum(["arrival", "departure"]).optional(),
+        stop_name: z.string().trim().min(1).max(200).optional(),
+        city: z.string().trim().min(1).max(200).optional(),
+        pickup_note: z.string().max(500).optional().nullable(),
+        pickup_time: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+        stop_order: z.number().int().min(1).optional(),
+        lat: z.number().optional().nullable(),
+        lng: z.number().optional().nullable(),
+        active: z.boolean().optional(),
+      }).parse(body);
+
+      const result = await updateBusLineStop(auth.admin, {
+        tenantId,
+        stopId: parsed.stop_id,
+        busLineId: parsed.bus_line_id,
+        direction: parsed.direction,
+        stopName: parsed.stop_name,
+        city: parsed.city,
+        pickupNote: parsed.pickup_note,
+        pickupTime: parsed.pickup_time,
+        stopOrder: parsed.stop_order,
+        lat: parsed.lat,
+        lng: parsed.lng,
+        active: parsed.active,
+      });
+      if (!result.ok) {
+        if (result.reason === "not_found") return NextResponse.json({ ok: false, error: "Fermata non trovata." }, { status: 404 });
+        if (result.reason === "line_direction_locked") {
+          return NextResponse.json({ ok: false, error: `Fermata usata da ${result.usageCount} servizi: non e' possibile cambiare linea/direzione da qui.` }, { status: 409 });
+        }
+        if (result.reason === "duplicate") {
+          return NextResponse.json({ ok: false, error: "Esiste già una fermata con questo nome su questa linea/direzione." }, { status: 409 });
+        }
+        return NextResponse.json({ ok: false, error: result.message }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true, stop: result.stop });
+    }
+
+    // Fase 12 — mai eliminazione fisica se referenziata da allocazioni.
+    if (action === "delete_bus_line_stop") {
+      const parsed = z.object({ stop_id: z.string().uuid() }).parse(body);
+      const result = await deleteBusLineStop(auth.admin, tenantId, parsed.stop_id);
+      if (!result.ok) {
+        if (result.reason === "in_use") {
+          return NextResponse.json({ ok: false, error: `Fermata utilizzata da ${result.usageCount} servizi. Non può essere eliminata.` }, { status: 409 });
+        }
+        return NextResponse.json({ ok: false, error: result.message }, { status: 400 });
+      }
+      return NextResponse.json({ ok: true });
     }
 
     // Riordina fermate in base al pickup_time (orario crescente)

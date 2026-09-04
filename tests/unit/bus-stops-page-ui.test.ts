@@ -1,0 +1,63 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * PROMPT "Fermate bus" — Fase 22: app/(app)/bus-stops/page.tsx è "use
+ * client" con hook React: nessun harness di render component in questo
+ * progetto (stesso vincolo già documentato in
+ * tests/unit/booking-groups-hotel-ui.test.ts e
+ * tests/unit/bus-tours-pickup-note-ui.test.ts). Questi test verificano il
+ * contratto a livello di sorgente: wiring dei filtri, della tabella, del
+ * riordino e della source of truth (mai un secondo campo).
+ */
+const source = readFileSync(join(process.cwd(), "app/(app)/bus-stops/page.tsx"), "utf8");
+
+describe("bus-stops/page.tsx — wiring lista/filtri/riordino (Fase 22)", () => {
+  it("1. la tabella renderizza pageStops (lista fermate) con nome fermata sempre uppercase", () => {
+    expect(source).toMatch(/pageStops\.map\(\(\{ stop, status \}\) => \{/);
+    expect(source).toMatch(/\{stop\.stop_name\.toUpperCase\(\)\}/);
+  });
+
+  it("2. filtro Linea: filteredStops esclude gli stop di linee diverse da lineFilter", () => {
+    expect(source).toMatch(/if \(lineFilter !== "all" && stop\.bus_line_id !== lineFilter\) return false;/);
+  });
+
+  it("3. filtro Direzione: filteredStops esclude le direzioni diverse da directionFilter", () => {
+    expect(source).toMatch(/if \(directionFilter !== "all" && stop\.direction !== directionFilter\) return false;/);
+  });
+
+  it("4. ricerca: il testo digitato viene confrontato con stop_name + city (mai altri campi)", () => {
+    expect(source).toMatch(/const haystack = `\$\{stop\.stop_name\} \$\{stop\.city\}`\.toLowerCase\(\);/);
+  });
+
+  it("11. riordino: il campo Ordine fermata è collegato a stopOrder del draft e salvato con update_bus_line_stop", () => {
+    expect(source).toMatch(/Ordine fermata/);
+    expect(source).toMatch(/value=\{draft\.stopOrder\}/);
+    expect(source).toMatch(/stop_order: stopOrderNum/);
+    expect(source).toMatch(/"update_bus_line_stop"/);
+  });
+
+  it("17. una fermata senza pickup_note mostra il badge 'Punto di carico mancante' in tabella (caso NARNI)", () => {
+    expect(source).toMatch(/Punto di carico mancante/);
+    expect(source).toMatch(/stop\.pickup_note && stop\.pickup_note\.trim\(\)/);
+  });
+
+  it("source of truth: legge/scrive sempre tenant_bus_line_stops via le action condivise, mai services.meeting_point o bus_lot_configs", () => {
+    expect(source).toMatch(/"list_bus_line_stops"/);
+    expect(source).toMatch(/"create_bus_line_stop"/);
+    expect(source).toMatch(/"update_bus_line_stop"/);
+    expect(source).toMatch(/"delete_bus_line_stop"/);
+    expect(source).not.toMatch(/meeting_point/);
+    expect(source).not.toMatch(/bus_lot_configs/);
+  });
+
+  it("near-duplicate: warning mostrato ma la creazione non unisce mai automaticamente", () => {
+    expect(source).toMatch(/Esiste una fermata simile/);
+    expect(source).toMatch(/findNearDuplicateStopNamesClient/);
+  });
+
+  it("delete bloccato in UI se la fermata ha servizi collegati (service_count > 0)", () => {
+    expect(source).toMatch(/disabled=\{busy \|\| selectedStop\.service_count > 0\}/);
+  });
+});
