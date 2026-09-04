@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { PageHeader, EmptyState } from "@/components/ui";
+import { EmptyState } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import {
   classifyBusStopStatus,
@@ -54,7 +54,12 @@ const LINE_BADGE_CLASSNAME: Record<string, string> = {
 };
 
 function lineBadgeClassName(familyCode: string) {
-  return LINE_BADGE_CLASSNAME[familyCode] ?? "bg-slate-100 text-slate-700";
+  const color = LINE_BADGE_CLASSNAME[familyCode] ?? "bg-slate-100 text-slate-700";
+  // Fase C/E — il badge non deve MAI spezzarsi su più righe (es. "ADRIATICA"
+  // che va a capo dentro la pillola): whitespace-nowrap + inline-flex
+  // garantiscono che il testo resti su una riga sola indipendentemente dallo
+  // spazio disponibile nella cella/contenitore.
+  return `inline-flex items-center whitespace-nowrap ${color}`;
 }
 
 function lineShortLabel(line: Pick<BusLineRow, "code" | "family_code">) {
@@ -486,79 +491,72 @@ export default function BusStopsPage() {
 
   return (
     <section className="page-section">
-      <PageHeader
-        title="Fermate bus"
-        subtitle="Gestisci tutte le fermate delle linee bus. Puoi aggiungere, modificare o disattivare le fermate e definire il punto di carico."
-        actions={
-          <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={startCreate}>
-            + Nuova fermata
-          </button>
-        }
-      />
+      {/* Fase C/A — il titolo "Fermate bus" è già mostrato dall'header
+          condiviso (eyebrow "Vista operativa" + h2, in app/(app)/layout.tsx):
+          qui niente h1 duplicato, solo sottotitolo + CTA integrata. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+        <p className="max-w-2xl text-sm text-muted">
+          Gestisci tutte le fermate delle linee bus: aggiungi, modifica o disattiva le fermate e definisci il punto di carico.
+        </p>
+        <button type="button" className="btn-primary shrink-0 px-4 py-2 text-sm" onClick={startCreate}>
+          + Nuova fermata
+        </button>
+      </div>
 
       <div className="grid gap-3 md:grid-cols-4">
-        <article className="card p-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
-            </span>
-            <div>
-              <p className="text-2xl font-bold text-text">{kpi.totalStops}</p>
-              <p className="text-xs text-muted">Fermate totali</p>
-            </div>
+        <article className="card flex items-center gap-3 p-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
+          </span>
+          <div className="min-w-0 leading-tight">
+            <p className="text-xl font-bold text-text">{kpi.totalStops}</p>
+            <p className="truncate text-[11px] text-muted">Fermate totali</p>
           </div>
         </article>
-        <article className="card p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 12l4 4 10-10" /></svg>
-              </span>
-              <div>
-                <p className="text-2xl font-bold text-text">{kpi.withNote}</p>
-                <p className="text-xs text-muted">Con punto di carico</p>
-              </div>
+        <article className="card flex items-center gap-3 p-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 12l4 4 10-10" /></svg>
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="flex items-baseline justify-between gap-1">
+              <p className="text-xl font-bold text-text">{kpi.withNote}</p>
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">{kpi.withNotePct}%</span>
             </div>
-            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{kpi.withNotePct}%</span>
+            <p className="truncate text-[11px] text-muted">Con punto di carico</p>
           </div>
         </article>
-        <article className="card p-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
-            </span>
-            <div>
-              <p className="text-2xl font-bold text-text">{kpi.activeLinesCount}</p>
-              <p className="text-xs text-muted">Linee attive</p>
-            </div>
+        <article className="card flex items-center gap-3 p-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
+          </span>
+          <div className="min-w-0 leading-tight">
+            <p className="text-xl font-bold text-text">{kpi.activeLinesCount}</p>
+            <p className="truncate text-[11px] text-muted" title={kpi.activeLinesLabel}>{kpi.activeLinesLabel || "Linee attive"}</p>
           </div>
-          <p className="mt-2 text-[11px] text-muted">{kpi.activeLinesLabel}</p>
         </article>
-        <article className="card p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="8" r="3" /><path d="M2 20a7 7 0 0 1 14 0M16 8a3 3 0 1 1 0 6M22 20a6.5 6.5 0 0 0-5-6.3" /></svg>
-              </span>
-              <div>
-                <p className="text-2xl font-bold text-text">{kpi.linkedServicesTotal}</p>
-                <p className="text-xs text-muted">Servizi collegati</p>
-              </div>
+        <article className="card flex items-center gap-3 p-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="8" r="3" /><path d="M2 20a7 7 0 0 1 14 0M16 8a3 3 0 1 1 0 6M22 20a6.5 6.5 0 0 0-5-6.3" /></svg>
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="flex items-baseline justify-between gap-1">
+              <p className="text-xl font-bold text-text">{kpi.linkedServicesTotal}</p>
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">{kpi.coveragePct}%</span>
             </div>
-            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{kpi.coveragePct}%</span>
+            <p className="truncate text-[11px] text-muted">Servizi collegati</p>
           </div>
         </article>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_380px]">
+      <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
         {/* Colonna sinistra: filtri */}
         <div className="space-y-3">
-          <div className="card space-y-3 p-4">
+          <div className="card space-y-4 p-4">
             <div className="flex items-center justify-between">
-              <h2 className="font-semibold">Filtri</h2>
+              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Filtri</h2>
               <button
                 type="button"
-                className="text-xs text-accent hover:underline"
+                className="rounded-md px-1.5 py-0.5 text-xs font-semibold text-accent hover:bg-blue-50 hover:underline"
                 onClick={() => {
                   setLineFilter("all");
                   setDirectionFilter("all");
@@ -570,26 +568,26 @@ export default function BusStopsPage() {
                 Pulisci
               </button>
             </div>
-            <label className="block text-xs text-muted">
+            <label className="block text-xs font-medium text-muted">
               Linea
-              <select className="input-saas mt-1 w-full" value={lineFilter} onChange={(e) => setLineFilter(e.target.value)}>
+              <select className="input-saas mt-1.5 w-full" value={lineFilter} onChange={(e) => setLineFilter(e.target.value)}>
                 <option value="all">Tutte le linee</option>
                 {lines.map((line) => (
                   <option key={line.id} value={line.id}>{line.name}</option>
                 ))}
               </select>
             </label>
-            <label className="block text-xs text-muted">
+            <label className="block text-xs font-medium text-muted">
               Direzione
-              <select className="input-saas mt-1 w-full" value={directionFilter} onChange={(e) => setDirectionFilter(e.target.value as "all" | Direction)}>
+              <select className="input-saas mt-1.5 w-full" value={directionFilter} onChange={(e) => setDirectionFilter(e.target.value as "all" | Direction)}>
                 <option value="all">Tutte</option>
                 <option value="arrival">Andata</option>
                 <option value="departure">Ritorno</option>
               </select>
             </label>
-            <label className="block text-xs text-muted">
+            <label className="block text-xs font-medium text-muted">
               Stato
-              <select className="input-saas mt-1 w-full" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | BusStopStatus)}>
+              <select className="input-saas mt-1.5 w-full" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | BusStopStatus)}>
                 <option value="all">Tutte</option>
                 <option value="active">Solo attive</option>
                 <option value="incomplete">Da completare</option>
@@ -597,27 +595,34 @@ export default function BusStopsPage() {
                 <option value="review">Da verificare</option>
               </select>
             </label>
-            <label className="block text-xs text-muted">
+            <label className="block text-xs font-medium text-muted">
               Cerca
-              <input className="input-saas mt-1 w-full" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nome fermata, città..." />
+              <input className="input-saas mt-1.5 w-full" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nome fermata, città..." />
             </label>
-            <button type="button" className="w-full rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100" onClick={() => setShowMoreFilters((v) => !v)}>
-              Altri filtri
-            </button>
-            {showMoreFilters ? (
-              <label className="flex items-center gap-2 text-xs text-muted">
-                <input type="checkbox" checked={manualOnly} onChange={(e) => setManualOnly(e.target.checked)} />
-                Solo fermate create manualmente
-              </label>
-            ) : null}
+            <div className="border-t border-slate-100 pt-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                onClick={() => setShowMoreFilters((v) => !v)}
+              >
+                <span>Altri filtri</span>
+                <span className={`transition-transform ${showMoreFilters ? "rotate-180" : ""}`} aria-hidden>⌄</span>
+              </button>
+              {showMoreFilters ? (
+                <label className="mt-3 flex items-center gap-2 text-xs text-muted">
+                  <input type="checkbox" checked={manualOnly} onChange={(e) => setManualOnly(e.target.checked)} />
+                  Solo fermate create manualmente
+                </label>
+              ) : null}
+            </div>
           </div>
 
           <div className="card space-y-1 p-4">
-            <h2 className="mb-2 font-semibold">Linee</h2>
+            <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Linee</h2>
             <button
               type="button"
               onClick={() => setLineFilter("all")}
-              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm ${lineFilter === "all" ? "bg-blue-50 font-semibold text-blue-700" : "hover:bg-slate-50"}`}
+              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition ${lineFilter === "all" ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
             >
               <span>Tutte le linee</span>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{stops.length}</span>
@@ -627,7 +632,7 @@ export default function BusStopsPage() {
                 key={line.id}
                 type="button"
                 onClick={() => setLineFilter(line.id)}
-                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm ${lineFilter === line.id ? "bg-blue-50 font-semibold text-blue-700" : "hover:bg-slate-50"}`}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition ${lineFilter === line.id ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
               >
                 <span className="truncate">{line.name}</span>
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{lineCounts.get(line.id) ?? 0}</span>
@@ -681,18 +686,19 @@ export default function BusStopsPage() {
           ) : (
             <>
               {/* Desktop/tablet: tabella */}
-              <div className="hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
-                <table className="min-w-[900px] table-auto whitespace-nowrap text-sm">
-                  <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+              <div className="hidden max-h-[560px] overflow-auto rounded-xl border border-slate-200 md:block">
+                <table className="min-w-[980px] table-auto whitespace-nowrap text-sm">
+                  <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-3 py-2.5">Linea</th>
                       <th className="px-3 py-2">Direzione</th>
-                      <th className="px-3 py-2">Ord.</th>
+                      <th className="px-3 py-2 text-right">Ord.</th>
                       <th className="px-3 py-2">Nome fermata</th>
                       <th className="px-3 py-2">Città</th>
                       <th className="px-3 py-2">Punto di carico</th>
                       <th className="px-3 py-2">Stato</th>
-                      <th className="px-3 py-2">Servizi</th>
+                      <th className="px-3 py-2 text-right">Servizi</th>
+                      <th className="px-3 py-2 text-right">Azioni</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -708,15 +714,15 @@ export default function BusStopsPage() {
                           onDragOver={canReorder ? handleDragOver(stop.id) : undefined}
                           onDragLeave={canReorder ? handleDragLeave(stop.id) : undefined}
                           onDrop={canReorder ? handleDrop(stop.id) : undefined}
-                          className={`cursor-pointer border-t transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50"} ${
-                            isDropTarget ? "border-t-2 border-t-blue-500" : "border-slate-100"
-                          } ${isDragging ? "opacity-40" : ""}`}
+                          className={`cursor-pointer border-t transition-colors ${
+                            isSelected ? "border-l-2 border-l-blue-500 bg-blue-50/70" : "border-l-2 border-l-transparent hover:bg-slate-50"
+                          } ${isDropTarget ? "border-t-2 border-t-blue-500" : "border-slate-100"} ${isDragging ? "opacity-40" : ""}`}
                         >
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-1.5">
                             {line ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold uppercase ${lineBadgeClassName(line.family_code)}`}>{lineShortLabel(line)}</span> : "N/D"}
                           </td>
-                          <td className="px-3 py-2 text-slate-700">{DIRECTION_LABEL[stop.direction]}</td>
-                          <td className="px-3 py-2 text-slate-500">
+                          <td className="px-3 py-1.5 text-slate-700">{DIRECTION_LABEL[stop.direction]}</td>
+                          <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">
                             {canReorder ? (
                               <span
                                 draggable
@@ -732,19 +738,30 @@ export default function BusStopsPage() {
                             ) : null}
                             {stop.stop_order}
                           </td>
-                          <td className="px-3 py-2 font-semibold text-slate-800">{stop.stop_name.toUpperCase()}</td>
-                          <td className="px-3 py-2 text-slate-600">{stop.city}</td>
-                          <td className="max-w-[240px] truncate px-3 py-2 text-slate-600" title={stop.pickup_note ?? ""}>
+                          <td className="px-3 py-1.5 font-semibold text-slate-800">{stop.stop_name.toUpperCase()}</td>
+                          <td className="px-3 py-1.5 text-slate-600">{stop.city}</td>
+                          <td className="max-w-[220px] truncate px-3 py-1.5 text-slate-600" title={stop.pickup_note ?? ""}>
                             {stop.pickup_note && stop.pickup_note.trim() ? (
                               stop.pickup_note
                             ) : (
                               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Punto di carico mancante</span>
                             )}
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-1.5">
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${BUS_STOP_STATUS_BADGE_CLASSNAME[status]}`}>{BUS_STOP_STATUS_LABELS[status]}</span>
                           </td>
-                          <td className="px-3 py-2 text-slate-600">{stop.service_count}</td>
+                          <td className="px-3 py-1.5 text-right text-slate-600 tabular-nums">{stop.service_count}</td>
+                          <td className="px-3 py-1.5 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); selectStop(stop); }}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              title="Modifica fermata"
+                              aria-label="Modifica fermata"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -797,19 +814,32 @@ export default function BusStopsPage() {
           )}
         </div>
 
-        {/* Colonna destra: pannello modifica/creazione */}
-        <div className="card space-y-3 p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold">{mode === "create" ? "Nuova fermata" : "Modifica fermata"}</h2>
-            {draft ? (
-              <button type="button" className="text-sm text-muted hover:text-text" onClick={closePanel} aria-label="Chiudi">✕</button>
-            ) : null}
-          </div>
-
+        {/* Colonna destra: pannello modifica/creazione. Fase C/B — quando
+            nessuna fermata è selezionata, niente header/area vuota: un
+            empty state compatto e intenzionale (icona + titolo + CTA), mai
+            un grande riquadro bianco senza contenuto. */}
+        <div className="card p-4">
           {!draft ? (
-            <p className="text-sm text-muted">Seleziona una fermata dalla tabella, oppure crea una nuova fermata.</p>
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-500">
+                <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
+              </span>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-text">Seleziona una fermata</p>
+                <p className="max-w-[240px] text-xs text-muted">
+                  Seleziona una fermata dalla tabella per modificarla, oppure crea una nuova fermata.
+                </p>
+              </div>
+              <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={startCreate}>
+                + Nuova fermata
+              </button>
+            </div>
           ) : (
-            <>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold">{mode === "create" ? "Nuova fermata" : "Modifica fermata"}</h2>
+                <button type="button" className="text-sm text-muted hover:text-text" onClick={closePanel} aria-label="Chiudi">✕</button>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="text-sm">Linea
                   <select className="input-saas mt-1 w-full" value={draft.busLineId} onChange={(e) => updateDraft({ busLineId: e.target.value })} disabled={mode === "view" && !!selectedStop && selectedStop.service_count > 0}>
@@ -910,7 +940,7 @@ export default function BusStopsPage() {
                   {busy ? "Salvataggio..." : mode === "create" ? "Crea fermata" : "Salva modifiche"}
                 </button>
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
