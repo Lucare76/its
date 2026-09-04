@@ -72,3 +72,27 @@ describe("bus-tours/page.tsx — campo Punto di carico (Fase 2/3)", () => {
     expect(source).toMatch(/from\("tenant_bus_line_stops"\)/);
   });
 });
+
+describe("bus-tours/page.tsx — etichetta Meeting point legacy (fermata non collegata)", () => {
+  const legacyLabelBlock = bodyOf(
+    source,
+    'selectedLotStopLink?.status === "linked" ? null : (',
+    '<div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">'
+  );
+
+  it("1. lotto unlinked + meeting_point valorizzato -> etichetta 'Meeting point storico/non collegato'", () => {
+    expect(legacyLabelBlock).toMatch(/selectedLot\.meeting_point \? "Meeting point storico\/non collegato:" : "Meeting point:"/);
+    expect(legacyLabelBlock).toMatch(/\{selectedLot\.meeting_point \?\? "N\/D"\}/);
+  });
+
+  it("2. lotto linked -> nessuna etichetta legacy (il blocco Meeting point non viene renderizzato)", () => {
+    expect(source).toMatch(/\{selectedLotStopLink\?\.status === "linked" \? null : \(/);
+  });
+
+  it("3. lotto unlinked senza meeting_point -> resta l'etichetta 'Meeting point:' con N/D (comportamento attuale coerente, mai testo inventato)", () => {
+    // Stessa espressione ternaria: quando selectedLot.meeting_point è falsy,
+    // il ramo else usa la label neutra "Meeting point:" e il valore cade su "N/D".
+    expect(legacyLabelBlock).toMatch(/: "Meeting point:"/);
+    expect(legacyLabelBlock).not.toMatch(/Meeting point storico\/non collegato:<\/span>/);
+  });
+});

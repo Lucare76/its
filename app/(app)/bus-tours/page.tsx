@@ -618,7 +618,14 @@ export default function BusToursPage() {
               <p className="text-sm"><span className="font-medium">Agenzie:</span> {selectedLot.billing_party_name ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Origine:</span> {selectedLot.bus_city_origin ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Codice bus:</span> {selectedLot.transport_code ?? "N/D"}</p>
-              <p className="text-sm"><span className="font-medium">Meeting point:</span> {selectedLot.meeting_point ?? "N/D"}</p>
+              {selectedLotStopLink?.status === "linked" ? null : (
+                <p className="text-sm">
+                  <span className="font-medium">
+                    {selectedLot.meeting_point ? "Meeting point storico/non collegato:" : "Meeting point:"}
+                  </span>{" "}
+                  {selectedLot.meeting_point ?? "N/D"}
+                </p>
+              )}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
                 <p className="text-sm">
                   <span className="font-medium">Fermata:</span>{" "}
