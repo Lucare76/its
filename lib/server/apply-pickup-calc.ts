@@ -72,6 +72,17 @@ export type PickupCalcCanonicalContext = {
   date: string; // YYYY-MM-DD
   hotelId?: string | null;
   currentOverride?: OperationalConnectionInput["currentOverride"];
+  /**
+   * STEP C (telemetria fallback statico Formula direct): true se il
+   * caricamento di ferry_pickup_rules e' fallito lato DB (query error),
+   * invece di aver semplicemente restituito zero righe. Il chiamante
+   * collassa comunque su `operationalRules: []` in entrambi i casi
+   * (comportamento di calcolo invariato — vedi lib/server/ferry-connection-lookup.ts
+   * e app/api/ops/new-booking/route.ts): questo flag serve SOLO a permettere
+   * alla telemetria sotto di distinguere "errore DB" da "nessuna regola",
+   * mai a cambiare quale ramo (DB/fallback) viene effettivamente usato.
+   */
+  rulesLoadError?: boolean;
 };
 
 const RECOGNIZED_ZONES = /forio|lacco|casamicciola|barano|ischia/;
@@ -260,13 +271,35 @@ export function applyPickupCalc(opts: {
     if (connection.source === "canonical_rule" && connection.pickupTime) {
       return { pickup_hotel: connection.pickupTime, pickup_alert: connection.warnings.join(" ") || null };
     }
-    // eslint-disable-next-line no-console -- log deliberato: traccia l'uso del
-    // fallback legacy (departure-pickup-rules.ts) per capire quando il seed
-    // DB è stato applicato e la regola non è (ancora) migrata/configurata.
-    console.warn(
-      `[applyPickupCalc] Dominio B (${carrier}): nessuna regola canonica DB per kind='${opts.booking_service_kind}' ` +
-        `orario='${opts.time}' zona='${zona}' — uso fallback legacy lib/departure-pickup-rules.ts.`
-    );
+    if (isFormulaKind) {
+      // STEP C — telemetria strutturata SOLO per Formula direct (formula_snav/
+      // formula_medmar_napoli/formula_medmar_pozzuoli): un evento quando il
+      // fallback statico (departure-pickup-rules.ts) viene REALMENTE usato al
+      // posto della direct rule DB, condiviso da CREATE (new-booking) ed EDIT
+      // (recalculate-formula-pickup.ts) perche' entrambi passano da qui.
+      // transfer_port_hotel resta sul warning legacy sotto (fuori scope
+      // Step C). Nessun dato del cliente: solo input tecnici del calcolo —
+      // opts qui non riceve mai customer_name/phone/email/notes.
+      console.warn(JSON.stringify({
+        event: "formula_direct_static_fallback",
+        booking_service_kind: opts.booking_service_kind,
+        agency_logic: billingToAgencyKey(opts.billing_party_name),
+        direction: opts.direction,
+        date: opts.context.date,
+        time: opts.time,
+        hotel_id: opts.context.hotelId ?? null,
+        zone: zona,
+        reason: opts.context.rulesLoadError ? "db_error" : "no_match",
+      }));
+    } else {
+      // log deliberato invariato per transfer_port_hotel (fuori scope Step
+      // C): traccia l'uso del fallback legacy (departure-pickup-rules.ts)
+      // quando nessuna regola canonica DB e' configurata per questo kind.
+      console.warn(
+        `[applyPickupCalc] Dominio B (${carrier}): nessuna regola canonica DB per kind='${opts.booking_service_kind}' ` +
+          `orario='${opts.time}' zona='${zona}' — uso fallback legacy lib/departure-pickup-rules.ts.`
+      );
+    }
   }
 
   const rule = getPickupRule(opts.billing_party_name ?? "", carrier, opts.time, zona);

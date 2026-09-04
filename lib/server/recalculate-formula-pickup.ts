@@ -124,6 +124,7 @@ export async function recalculateDirectFormulaPickupForEdit(
           ferrySchedules: context.ferrySchedules,
           date,
           hotelId,
+          rulesLoadError: context.rulesLoadError,
         }
       : undefined,
   });

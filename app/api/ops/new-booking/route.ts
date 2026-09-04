@@ -173,16 +173,22 @@ export async function POST(request: NextRequest) {
     // fuori (kind diverso, non incluso in isFerryKind) e continua a usare solo il
     // fallback statico in questo step — vedi apply-pickup-calc.ts dominio B.
     const needsOperationalRules = isTrainOrFlightKind || isFerryKind;
-    const [scheduleRows, operationalRulesRows] = await Promise.all([
+    const [scheduleRows, operationalRulesResult] = await Promise.all([
       needsOperationalRules
         ? auth.admin.from("ferry_schedules")
             .select("company, departure_port, arrival_port, departure_time, arrival_time, direction, days_of_week, valid_from, valid_to")
             .then((r) => r.data ?? [])
         : Promise.resolve([]),
       needsOperationalRules
-        ? auth.admin.from("ferry_pickup_rules").select("*").then((r) => r.data ?? [])
-        : Promise.resolve([]),
+        ? auth.admin.from("ferry_pickup_rules").select("*").then((r) => ({ data: r.data ?? [], error: r.error }))
+        : Promise.resolve({ data: [] as unknown[], error: null }),
     ]);
+    const operationalRulesRows = operationalRulesResult.data;
+    // STEP C: distingue "query fallita" da "zero righe" per la telemetria del
+    // fallback statico Formula direct (vedi apply-pickup-calc.ts) — non
+    // cambia in alcun modo quale ramo (DB/fallback) viene usato, ne' qui ne'
+    // in applyPickupCalc: operationalRulesRows resta [] in entrambi i casi.
+    const ferryRulesLoadError = Boolean(operationalRulesResult.error);
     // Pickup automatico: canonico via apply-pickup-calc.ts, che ora copre sia
     // treno/aeroporto (transfer_train_hotel*/transfer_airport_hotel*) sia
     // Formula SNAV/MEDMAR diretta — stessa funzione, stesso risultato del
@@ -203,6 +209,7 @@ export async function POST(request: NextRequest) {
             ferrySchedules: scheduleRows as never,
             date: tripLeg === "return_only" ? d.departure_date : d.arrival_date,
             hotelId: hotelData?.id ?? null,
+            rulesLoadError: ferryRulesLoadError,
           }
         : undefined,
     });

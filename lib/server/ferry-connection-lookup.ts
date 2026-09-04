@@ -38,6 +38,8 @@ const ZONE_PATTERN = /forio|lacco|casamicciola|barano|ischia/;
 export type FerryConnectionContext = {
   operationalRules: OperationalPickupRule[];
   ferrySchedules: FerryScheduleRow[];
+  /** STEP C: true se la query ferry_pickup_rules e' fallita lato DB (vedi apply-pickup-calc.ts). */
+  rulesLoadError?: boolean;
 };
 
 /**
@@ -59,6 +61,7 @@ export async function loadFerryConnectionContext(admin: SupabaseClient): Promise
   return {
     operationalRules: (rulesRes.data ?? []) as OperationalPickupRule[],
     ferrySchedules: (schedulesRes.data ?? []) as FerryScheduleRow[],
+    rulesLoadError: Boolean(rulesRes.error),
   };
 }
 
