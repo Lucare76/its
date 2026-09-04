@@ -5,6 +5,10 @@ import { parseRole } from "@/lib/rbac";
 import { auditLog } from "@/lib/server/ops-audit";
 import { sendEmail } from "@/lib/server/send-email";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
+import {
+  recalculateDirectFormulaPickupForEdit,
+  type FormulaPickupEditState,
+} from "@/lib/server/recalculate-formula-pickup";
 
 export const runtime = "nodejs";
 
@@ -66,7 +70,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const { id: serviceId } = await params;
     let existingQuery = admin
       .from("services")
-      .select("id, tenant_id, customer_first_name, customer_last_name, phone, booking_service_kind")
+      .select("id, tenant_id, customer_first_name, customer_last_name, phone, booking_service_kind, direction, hotel_id, billing_party_name, orario_barca, departure_date, departure_time, date")
       .eq("id", serviceId)
       .eq("tenant_id", membership.tenant_id);
 
@@ -118,6 +122,37 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "Nessun campo da aggiornare." }, { status: 400 });
+    }
+
+    // Step B — ricalcolo write-time pickup Formula direct: l'agenzia NON può
+    // riassegnare agency_id/billing_party_name (nessun campo simile in
+    // bookingPatchSchema — permessi invariati), quindi qui l'unico trigger
+    // possibile è hotel_id e/o la data/orario di partenza. Nessuna query a
+    // ferry_pickup_rules se nessuno di questi è realmente cambiato.
+    const agencyCurrentPickupState: FormulaPickupEditState = {
+      booking_service_kind: existing.booking_service_kind as string | null,
+      direction: existing.direction as string | null,
+      hotel_id: existing.hotel_id as string | null,
+      billing_party_name: existing.billing_party_name as string | null,
+      orario_barca: existing.orario_barca as string | null,
+      departure_date: existing.departure_date as string | null,
+      departure_time: existing.departure_time as string | null,
+      date: existing.date as string | null,
+    };
+    const agencyFinalPickupState: FormulaPickupEditState = {
+      ...agencyCurrentPickupState,
+      hotel_id: patch.hotel_id !== undefined ? patch.hotel_id : agencyCurrentPickupState.hotel_id,
+      departure_date: patch.departure_date !== undefined ? patch.departure_date : agencyCurrentPickupState.departure_date,
+      departure_time: patch.departure_time !== undefined ? patch.departure_time : agencyCurrentPickupState.departure_time,
+    };
+    const agencyPickupRecalc = await recalculateDirectFormulaPickupForEdit(
+      admin,
+      agencyCurrentPickupState,
+      agencyFinalPickupState
+    );
+    if (agencyPickupRecalc) {
+      update.pickup_hotel = agencyPickupRecalc.pickup_hotel;
+      update.pickup_alert = agencyPickupRecalc.pickup_alert;
     }
 
     // Fetch service details for notification email

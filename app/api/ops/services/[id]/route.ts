@@ -20,6 +20,10 @@ import {
   ferryLegForResponse,
   type FerryConnectionLeg,
 } from "@/lib/server/ferry-connection-lookup";
+import {
+  recalculateDirectFormulaPickupForEdit,
+  type FormulaPickupEditState,
+} from "@/lib/server/recalculate-formula-pickup";
 
 export const runtime = "nodejs";
 
@@ -296,6 +300,44 @@ export async function PATCH(
     if (!current) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
     const currentSnapshot = current as ServiceSnapshot;
 
+    // Step B — ricalcolo write-time pickup Formula direct (formula_snav/
+    // formula_medmar_napoli/formula_medmar_pozzuoli): confronta lo stato
+    // CORRENTE della riga con lo stato FINALE (dopo merge del patch) sui soli
+    // input pickup-relevant (hotel, agenzia, orario_barca, data partenza).
+    // Nessuna query a ferry_pickup_rules se nessuno di questi e' cambiato —
+    // vedi lib/server/recalculate-formula-pickup.ts. Applicabile solo se
+    // QUESTA riga (currentSnapshot, non la eventuale gamba collegata) e' una
+    // Formula direct in direction=departure.
+    const currentPickupState: FormulaPickupEditState = {
+      booking_service_kind: currentSnapshot.booking_service_kind as string | null,
+      direction: currentSnapshot.direction as string | null,
+      hotel_id: currentSnapshot.hotel_id as string | null,
+      billing_party_name: currentSnapshot.billing_party_name as string | null,
+      orario_barca: currentSnapshot.orario_barca as string | null,
+      departure_date: currentSnapshot.departure_date as string | null,
+      departure_time: currentSnapshot.departure_time as string | null,
+      date: currentSnapshot.date as string | null,
+    };
+    const finalHotelId = ordinaryUpdates.hotel_id !== undefined ? ordinaryUpdates.hotel_id : currentPickupState.hotel_id;
+    const finalBillingPartyName = ordinaryUpdates.billing_party_name !== undefined
+      ? ordinaryUpdates.billing_party_name : currentPickupState.billing_party_name;
+    const finalOrarioBarca = ordinaryUpdates.orario_barca !== undefined ? ordinaryUpdates.orario_barca : currentPickupState.orario_barca;
+    const finalDepartureDate = ordinaryUpdates.departure_date !== undefined ? ordinaryUpdates.departure_date : currentPickupState.departure_date;
+    const finalDepartureTime = ordinaryUpdates.departure_time !== undefined ? ordinaryUpdates.departure_time : currentPickupState.departure_time;
+    const finalPickupState: FormulaPickupEditState = {
+      ...currentPickupState,
+      hotel_id: finalHotelId,
+      billing_party_name: finalBillingPartyName,
+      orario_barca: finalOrarioBarca,
+      departure_date: finalDepartureDate,
+      departure_time: finalDepartureTime,
+    };
+    const pickupRecalc = await recalculateDirectFormulaPickupForEdit(
+      auth.admin,
+      currentPickupState,
+      finalPickupState
+    );
+
     // "date" è il campo autorevole usato ovunque (raggruppamento, Biglietti
     // MEDMAR, matching preflight Medmar) per identificare la data operativa
     // di QUESTA riga — arrival_date/departure_date sono invece i campi che
@@ -309,6 +351,7 @@ export async function PATCH(
         ? { date: ordinaryUpdates.arrival_date } : {}),
       ...(ordinaryUpdates.departure_date !== undefined && currentSnapshot.direction === "departure"
         ? { date: ordinaryUpdates.departure_date } : {}),
+      ...(pickupRecalc ? { pickup_hotel: pickupRecalc.pickup_hotel, pickup_alert: pickupRecalc.pickup_alert } : {}),
     });
     if (Object.keys(mainUpdate).length > 0) {
       const { error } = await auth.admin
@@ -345,6 +388,33 @@ export async function PATCH(
         .select("*").eq("id", linkedId).eq("tenant_id", tenantId).maybeSingle();
       if (linkedCurrent) {
         const linkedSnapshot = linkedCurrent as ServiceSnapshot;
+        // Step B: la propagazione sotto tocca SOLO arrival_date/departure_date
+        // sulla gamba collegata (nessun altro campo pickup-relevant viene mai
+        // propagato qui, ne' oggi ne' con questo Step — vedi §12/§28 del task:
+        // non si amplia la propagazione esistente). Se la gamba collegata e'
+        // una Formula direct in direction=departure e la sua departure_date
+        // finale cambia per effetto di questa propagazione, il pickup va
+        // ricalcolato sulla STESSA riga — altrimenti resterebbe quello vecchio.
+        const linkedCurrentPickupState: FormulaPickupEditState = {
+          booking_service_kind: linkedSnapshot.booking_service_kind as string | null,
+          direction: linkedSnapshot.direction as string | null,
+          hotel_id: linkedSnapshot.hotel_id as string | null,
+          billing_party_name: linkedSnapshot.billing_party_name as string | null,
+          orario_barca: linkedSnapshot.orario_barca as string | null,
+          departure_date: linkedSnapshot.departure_date as string | null,
+          departure_time: linkedSnapshot.departure_time as string | null,
+          date: linkedSnapshot.date as string | null,
+        };
+        const linkedFinalPickupState: FormulaPickupEditState = {
+          ...linkedCurrentPickupState,
+          departure_date: ordinaryUpdates.departure_date !== undefined
+            ? ordinaryUpdates.departure_date : linkedCurrentPickupState.departure_date,
+        };
+        const linkedPickupRecalc = await recalculateDirectFormulaPickupForEdit(
+          auth.admin,
+          linkedCurrentPickupState,
+          linkedFinalPickupState
+        );
         const linkedUpdate = compactServiceData({
           ...(ordinaryUpdates.arrival_date !== undefined ? { arrival_date: ordinaryUpdates.arrival_date } : {}),
           ...(ordinaryUpdates.departure_date !== undefined ? { departure_date: ordinaryUpdates.departure_date } : {}),
@@ -352,6 +422,8 @@ export async function PATCH(
             ? { date: ordinaryUpdates.arrival_date } : {}),
           ...(ordinaryUpdates.departure_date !== undefined && linkedSnapshot.direction === "departure"
             ? { date: ordinaryUpdates.departure_date } : {}),
+          ...(linkedPickupRecalc
+            ? { pickup_hotel: linkedPickupRecalc.pickup_hotel, pickup_alert: linkedPickupRecalc.pickup_alert } : {}),
         });
         if (Object.keys(linkedUpdate).length > 0) {
           const { error: linkedError } = await auth.admin.from("services")
@@ -400,9 +472,51 @@ export async function PATCH(
         });
       }
       if (departureId && (return_pickup_time !== undefined || return_ferry_departure_time !== undefined)) {
-        const departureUpdate = compactServiceData({
+        const departureUpdateBase: Record<string, unknown> = {
           ...(return_pickup_time !== undefined ? { pickup_time: return_pickup_time, departure_time: return_pickup_time } : {}),
           ...(return_ferry_departure_time !== undefined ? { orario_barca: return_ferry_departure_time } : {}),
+        };
+        // Step B: questo e' il write path REALE usato dalla UI Formula per
+        // cambiare l'orario nave (return_ferry_departure_time -> orario_barca
+        // sulla riga departureId — vedi app/(app)/services/[id]/edit/page.tsx,
+        // isFerryFormula invia SEMPRE return_ferry_departure_time, mai il
+        // campo orario_barca "ordinario"). Se departureId e' la STESSA riga
+        // gia' aggiornata sopra (mainUpdate, quando si edita direttamente la
+        // gamba departure), lo stato "finale" di hotel/agenzia/data va preso
+        // dalle variabili gia' calcolate sopra (finalHotelId ecc.) e non dallo
+        // snapshot pre-PATCH (departureBefore), altrimenti un edit combinato
+        // (es. hotel + orario nave nella stessa richiesta) userebbe l'hotel
+        // vecchio per il ricalcolo.
+        const departureIsSameRowAsMain = departureId === serviceId;
+        const departureCurrentPickupState: FormulaPickupEditState = {
+          booking_service_kind: departureBefore.booking_service_kind as string | null,
+          direction: departureBefore.direction as string | null,
+          hotel_id: departureBefore.hotel_id as string | null,
+          billing_party_name: departureBefore.billing_party_name as string | null,
+          orario_barca: departureBefore.orario_barca as string | null,
+          departure_date: departureBefore.departure_date as string | null,
+          departure_time: departureBefore.departure_time as string | null,
+          date: departureBefore.date as string | null,
+        };
+        const departureFinalPickupState: FormulaPickupEditState = {
+          ...departureCurrentPickupState,
+          hotel_id: departureIsSameRowAsMain ? finalHotelId : departureCurrentPickupState.hotel_id,
+          billing_party_name: departureIsSameRowAsMain ? finalBillingPartyName : departureCurrentPickupState.billing_party_name,
+          departure_date: departureIsSameRowAsMain ? finalDepartureDate : departureCurrentPickupState.departure_date,
+          orario_barca: departureUpdateBase.orario_barca !== undefined
+            ? (departureUpdateBase.orario_barca as string | null) : departureCurrentPickupState.orario_barca,
+          departure_time: departureUpdateBase.departure_time !== undefined
+            ? (departureUpdateBase.departure_time as string | null) : departureCurrentPickupState.departure_time,
+        };
+        const departurePickupRecalc = await recalculateDirectFormulaPickupForEdit(
+          auth.admin,
+          departureCurrentPickupState,
+          departureFinalPickupState
+        );
+        const departureUpdate = compactServiceData({
+          ...departureUpdateBase,
+          ...(departurePickupRecalc
+            ? { pickup_hotel: departurePickupRecalc.pickup_hotel, pickup_alert: departurePickupRecalc.pickup_alert } : {}),
         });
         const { error: departureError } = await auth.admin.from("services").update(departureUpdate).eq("id", departureId).eq("tenant_id", tenantId);
         if (departureError) return NextResponse.json({ error: departureError.message }, { status: 500 });
