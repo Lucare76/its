@@ -207,6 +207,131 @@ describe("buildBusLinePdfHtml — PARTENZE: fermate senza stop_id valido", () =>
   });
 });
 
+describe("buildBusLinePdfHtml — PARTENZE: nome fermata sempre maiuscolo, dettaglio invariato", () => {
+  const mixedCaseStops: BusPdfStop[] = [
+    { id: REAL_STOP_IDS.romaTiburtina, stop_name: "Roma", pickup_note: "Largo Mazzoni, di fronte negozio ITS Moda", pickup_time: null, stop_order: 1 },
+    { id: REAL_STOP_IDS.narni, stop_name: "Narni", pickup_note: null, pickup_time: null, stop_order: 2 },
+    { id: REAL_STOP_IDS.valmontone, stop_name: "VALMONTONE", pickup_note: "Casello", pickup_time: null, stop_order: 3 },
+  ];
+
+  function buildMixedCaseHtml() {
+    return buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Linea Centro",
+      busLabel: "CENTRO1",
+      dateIso: "2026-09-06",
+      allocations: [
+        alloc({ stop_id: REAL_STOP_IDS.romaTiburtina, stop_name: "Roma", customer_name: "VERDI", pax_assigned: 2 }),
+        alloc({ stop_id: REAL_STOP_IDS.narni, stop_name: "Narni", customer_name: "GIALLI", pax_assigned: 1 }),
+        alloc({ stop_id: REAL_STOP_IDS.valmontone, stop_name: "VALMONTONE", customer_name: "ROSSI", pax_assigned: 3 }),
+      ],
+      stops: mixedCaseStops,
+    });
+  }
+
+  it("stop_name minuscolo/misto (Roma, Narni) viene renderizzato SEMPRE in maiuscolo nella banda fermata", () => {
+    const html = buildMixedCaseHtml();
+    expect(html).toContain("<strong>ROMA</strong>");
+    expect(html).toContain("<strong>NARNI</strong>");
+    expect(html).not.toContain("<strong>Roma</strong>");
+    expect(html).not.toContain("<strong>Narni</strong>");
+    // Un nome già maiuscolo (VALMONTONE) resta invariato (idempotente).
+    expect(html).toContain("<strong>VALMONTONE</strong>");
+  });
+
+  it("il dettaglio/punto di carico (pickup_note) mantiene la capitalizzazione originale", () => {
+    const html = buildMixedCaseHtml();
+    expect(html).toContain("Largo Mazzoni, di fronte negozio ITS Moda");
+    expect(html).not.toContain("LARGO MAZZONI, DI FRONTE NEGOZIO ITS MODA");
+  });
+
+  it("la colonna destinazione (PARTENZE) mostra il nome fermata in maiuscolo con il dettaglio invariato accanto", () => {
+    const html = buildMixedCaseHtml();
+    expect(html).toContain("ROMA - Largo Mazzoni, di fronte negozio ITS Moda");
+    expect(html).not.toContain("Roma - Largo Mazzoni");
+  });
+
+  it("lo SCARICO riporta il nome fermata in maiuscolo", () => {
+    const html = buildMixedCaseHtml();
+    const scaricoSection = html.slice(html.indexOf("SCARICO"));
+    expect(scaricoSection).toContain("ROMA");
+    expect(scaricoSection).not.toContain("Roma -");
+  });
+
+  it("stop_name uppercase non altera il grouping/ordine/conteggi esistenti (VALMONTONE resta 3 pax)", () => {
+    const html = buildMixedCaseHtml();
+    expect(html).toContain("Totale passeggeri: <strong>6</strong>");
+    expect(countOccurrences(html, "<strong>VALMONTONE</strong>")).toBe(1);
+  });
+});
+
+describe("buildBusLinePdfHtml — ARRIVI: nome fermata sempre maiuscolo, dettaglio invariato", () => {
+  function buildMixedCaseArrivalHtml() {
+    return buildBusLinePdfHtml({
+      direction: "arrival",
+      lineName: "Linea Centro",
+      busLabel: "CENTRO1",
+      dateIso: "2026-09-06",
+      allocations: [
+        alloc({
+          stop_id: REAL_STOP_IDS.romaTiburtina,
+          stop_name: "Roma",
+          stop_pickup_note: "Largo Mazzoni, di fronte negozio ITS Moda",
+          stop_pickup_time: "08:00",
+          customer_name: "VERDI",
+          pax_assigned: 2,
+        }),
+        alloc({ stop_id: REAL_STOP_IDS.valmontone, stop_name: "VALMONTONE", stop_pickup_time: "07:30", customer_name: "ROSSI", pax_assigned: 1 }),
+      ],
+      stops: [
+        { id: REAL_STOP_IDS.romaTiburtina, stop_name: "Roma", pickup_note: "Largo Mazzoni, di fronte negozio ITS Moda", pickup_time: null, stop_order: 1 },
+        { id: REAL_STOP_IDS.valmontone, stop_name: "VALMONTONE", pickup_note: "Casello", pickup_time: null, stop_order: 2 },
+      ],
+    });
+  }
+
+  it("stop_name minuscolo/misto (Roma) viene renderizzato SEMPRE in maiuscolo nella banda fermata", () => {
+    const html = buildMixedCaseArrivalHtml();
+    expect(html).toContain("<strong>ROMA</strong>");
+    expect(html).not.toContain("<strong>Roma</strong>");
+  });
+
+  it("il dettaglio/punto di carico mantiene la capitalizzazione originale", () => {
+    const html = buildMixedCaseArrivalHtml();
+    expect(html).toContain("Largo Mazzoni, di fronte negozio ITS Moda");
+    expect(html).not.toContain("LARGO MAZZONI, DI FRONTE NEGOZIO ITS MODA");
+  });
+
+  it("nomi già maiuscoli restano invariati (idempotente)", () => {
+    const html = buildMixedCaseArrivalHtml();
+    expect(html).toContain("<strong>VALMONTONE</strong>");
+  });
+
+  it("grouping/ordinamento/orari/conteggi restano invariati", () => {
+    const html = buildMixedCaseArrivalHtml();
+    expect(html).toContain("Totale passeggeri: <strong>3</strong>");
+    expect(html).toContain("08:00");
+    expect(html).toContain("07:30");
+  });
+});
+
+describe("buildBusLinePdfHtml — PARTENZE: continuano a funzionare come prima (regressione)", () => {
+  it("stop_name minuscolo/misto in PARTENZE resta in maiuscolo dopo l'estensione ad ARRIVI", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Linea Centro",
+      busLabel: "CENTRO1",
+      dateIso: "2026-09-06",
+      allocations: [
+        alloc({ stop_id: REAL_STOP_IDS.romaTiburtina, stop_name: "Roma", customer_name: "VERDI", pax_assigned: 2 }),
+      ],
+      stops: [{ id: REAL_STOP_IDS.romaTiburtina, stop_name: "Roma", pickup_note: "Largo Mazzoni, di fronte negozio ITS Moda", pickup_time: null, stop_order: 1 }],
+    });
+    expect(html).toContain("<strong>ROMA</strong>");
+    expect(html).toContain("Largo Mazzoni, di fronte negozio ITS Moda");
+  });
+});
+
 describe("buildBusLinePdfHtml — PARTENZE: pickup hotel", () => {
   it("PDF mostra il pickup quando hotel_pickup_time esiste nella view/API", () => {
     const html = buildBusLinePdfHtml({

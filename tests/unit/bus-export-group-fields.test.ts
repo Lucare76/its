@@ -109,11 +109,14 @@ describe("buildBusLinePdfHtml — FIX MIRATO \"FORMATO SCARICO ATTESO\": SCARICO
     { id: STOP_ID.marotta, stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:20", stop_order: 4 },
   ].map((s) => ({ ...s, stop_order: direction === "departure" ? 5 - s.stop_order : s.stop_order }));
 
+  // stop_city esplicito per ogni fermata (mai il default "Pesaro" della
+  // fixture condivisa `alloc()`, che farebbe leggere lo stesso nome città
+  // per tutti i gruppi indipendentemente dalla fermata reale).
   const giacomoniAllocations = (): BusPdfAllocation[] => [
-    alloc({ stop_id: STOP_ID.marotta, stop_name: "MAROTTA", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 18, is_booking_group: true }),
-    alloc({ stop_id: STOP_ID.fano, stop_name: "FANO", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 10, is_booking_group: true }),
-    alloc({ stop_id: STOP_ID.pesaro, stop_name: "PESARO", stop_pickup_note: "CASELLO A14", pax_assigned: 6, is_booking_group: true }),
-    alloc({ stop_id: STOP_ID.cattolica, stop_name: "CATTOLICA", stop_pickup_note: "CASELLO A14", pax_assigned: 4, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.marotta, stop_name: "MAROTTA", stop_city: null, stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 18, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.fano, stop_name: "FANO", stop_city: null, stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 10, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.pesaro, stop_name: "PESARO", stop_city: null, stop_pickup_note: "CASELLO A14", pax_assigned: 6, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.cattolica, stop_name: "CATTOLICA", stop_city: null, stop_pickup_note: "CASELLO A14", pax_assigned: 4, is_booking_group: true }),
   ];
 
   it("mostra TUTTE le 4 fermate (mai solo MAROTTA) quando il catalogo passato le contiene tutte", () => {

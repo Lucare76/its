@@ -124,6 +124,13 @@ function displayStopName(alloc: BusPdfAllocation) {
   return (alloc.stop_name ?? "").trim();
 }
 
+// PDF PARTENZE e ARRIVI: il nome della fermata/città va SEMPRE in maiuscolo
+// in fase di rendering (mai il punto di carico/dettaglio fermata, e mai
+// stop_name salvato in DB — solo qui, all'output HTML).
+function uppercaseStopLabel(value: string) {
+  return value.toUpperCase();
+}
+
 function displayStopCity(alloc: BusPdfAllocation) {
   const city = (alloc.stop_city ?? "").trim();
   if (city) return city;
@@ -295,7 +302,7 @@ function buildArrivalRows(input: BusPdfInput) {
     const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
     const stopTime = time5(alloc.stop_pickup_time || alloc.hotel_pickup_time);
     const rawStopNote = alloc.stop_pickup_note ?? input.stops?.find((s) => s.stop_name.toUpperCase() === alloc.stop_name.toUpperCase())?.pickup_note ?? "";
-    const stopCity = displayStopCity(alloc);
+    const stopCity = uppercaseStopLabel(displayStopCity(alloc));
     const stopNote = displayPickupPoint(alloc, rawStopNote);
     const hotel = displayHotel(alloc, hotelFromNotes);
     const agency = alloc.agency_name || agencyFromNotes;
@@ -319,7 +326,7 @@ function buildDepartureRows(input: BusPdfInput) {
       total += alloc.pax_assigned;
       const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
       const stopTime = time5(alloc.hotel_pickup_time || alloc.stop_pickup_time);
-      const stopCity = isVerify ? "⚠ FERMATA DA VERIFICARE" : displayStopCity(alloc);
+      const stopCity = isVerify ? "⚠ FERMATA DA VERIFICARE" : uppercaseStopLabel(displayStopCity(alloc));
       const rawStopNote = isVerify ? "" : (alloc.stop_pickup_note ?? group.stop?.pickup_note ?? "");
       const stopNote = isVerify ? (displayStopName(alloc) || "fermata non riconosciuta") : displayPickupPoint(alloc, rawStopNote);
       const hotel = displayHotel(alloc, hotelFromNotes);
@@ -348,7 +355,7 @@ function buildDepartureUnloadRows(groups: DepartureManifestGroup[]) {
     if (group.stopId === null) {
       label = "⚠ FERMATA DA VERIFICARE";
     } else {
-      const city = displayStopCity(firstAlloc);
+      const city = uppercaseStopLabel(displayStopCity(firstAlloc));
       const rawNote = firstAlloc.stop_pickup_note ?? group.stop?.pickup_note ?? "";
       const note = visiblePickupNote(city, rawNote);
       label = note ? `${city} - ${note}` : city;
@@ -396,7 +403,7 @@ export function buildBusLinePdfHtml(input: BusPdfInput) {
           alloc.pax_assigned,
           alloc.is_booking_group ? "" : alloc.customer_name,
           alloc.is_booking_group ? "" : alloc.customer_phone,
-          stopNote ? `${displayStopName(alloc)} - ${stopNote}` : displayStopName(alloc),
+          stopNote ? `${uppercaseStopLabel(displayStopName(alloc))} - ${stopNote}` : uppercaseStopLabel(displayStopName(alloc)),
           agency,
           cleanNote,
         ];
