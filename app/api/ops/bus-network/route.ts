@@ -20,6 +20,10 @@ import {
   loadServiceFeedbackContexts,
   loadBusLineFamilyCodes,
 } from "@/lib/server/bus-assignment-feedback";
+import {
+  buildBusImportPickupTimesMap,
+  resolveBusImportDeparturePickupTime,
+} from "@/lib/server/bus-import-pickup";
 
 // ── Helper geografico per ordinamento fermate Ischia ────────────────────────
 const PORTO_ISCHIA = { lat: 40.7427, lng: 13.9567 };
@@ -2149,20 +2153,10 @@ export async function POST(request: NextRequest) {
         auth.admin.from("hotel_pickup_times").select("hotel_name, pickup_time_linea_italia, pickup_time_linea_centro, pickup_time_linea_adriatica"),
         auth.admin.from("tenant_bus_lines").select("id, family_code").eq("tenant_id", tenantId),
       ]);
-      const pickupTimesMap = new Map<string, { italia: string; centro: string; adriatica: string }>();
-      for (const row of (pickupTimesRes.data ?? []) as Array<{ hotel_name: string; pickup_time_linea_italia: string; pickup_time_linea_centro: string; pickup_time_linea_adriatica: string }>) {
-        pickupTimesMap.set(row.hotel_name.toUpperCase().trim(), { italia: row.pickup_time_linea_italia, centro: row.pickup_time_linea_centro, adriatica: row.pickup_time_linea_adriatica });
-      }
+      const pickupTimesMap = buildBusImportPickupTimesMap((pickupTimesRes.data ?? []) as Array<{ hotel_name: string; pickup_time_linea_italia: string; pickup_time_linea_centro: string; pickup_time_linea_adriatica: string }>);
       const allLinesById = new Map((linesRes.data ?? []).map((l: { id: string; family_code: string }) => [l.id, l]));
-      function resolvePickupTime(hotelName: string | null | undefined, lineId: string): string {
-        if (!hotelName) return "00:00";
-        const entry = pickupTimesMap.get(hotelName.toUpperCase().trim());
-        if (!entry) return "00:00";
-        const family = (allLinesById.get(lineId)?.family_code ?? "").toLowerCase();
-        if (family === "italia") return entry.italia?.slice(0, 5) ?? "00:00";
-        if (family === "centro") return entry.centro?.slice(0, 5) ?? "00:00";
-        if (family === "adriatica") return entry.adriatica?.slice(0, 5) ?? "00:00";
-        return "00:00";
+      function resolvePickupTime(hotelName: string | null | undefined, lineId: string): string | null {
+        return resolveBusImportDeparturePickupTime(hotelName, lineId, pickupTimesMap, allLinesById);
       }
 
       const existingSvcIds = (existingSvcRes.data ?? []).map((s: { id: string }) => s.id);
@@ -2489,6 +2483,10 @@ export async function POST(request: NextRequest) {
         for (const { row } of group) {
           const pickupTime = isDeparture ? resolvePickupTime(row.hotel, stop.bus_line_id) : "00:00";
           const hotelId = row.hotel ? (resolveHotelMatch(importHotels, row.hotel, null) ?? null) : null;
+          if (isDeparture && row.hotel && !pickupTime) {
+            recordPending(row, `Orario pickup hotel mancante nel catalogo per "${row.hotel}".`);
+            continue;
+          }
           const existing = await findExistingBusCityHotelService(auth, {
             tenantId,
             customerName: row.name,
@@ -2518,7 +2516,7 @@ export async function POST(request: NextRequest) {
               phone: row.phone ?? "",
               direction: parsed.direction,
               date: parsed.travel_date,
-              time: pickupTime,
+              time: pickupTime ?? "00:00",
               pickup_time: isDeparture ? pickupTime : null,
               vessel: "Linea bus",
               pax: row.pax,

@@ -206,3 +206,56 @@ describe("buildBusLinePdfHtml — PARTENZE: fermate senza stop_id valido", () =>
     expect(verifyIndex).toBeGreaterThan(terniIndex);
   });
 });
+
+describe("buildBusLinePdfHtml — PARTENZE: pickup hotel", () => {
+  it("PDF mostra il pickup quando hotel_pickup_time esiste nella view/API", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Linea Centro",
+      busLabel: "CENTRO1",
+      dateIso: "2026-09-06",
+      allocations: [
+        alloc({
+          stop_id: REAL_STOP_IDS.terni,
+          stop_name: "TERNI",
+          stop_pickup_note: "Terminal Bus Atc",
+          customer_name: "FRANCA",
+          hotel_name: "HOTEL TERME FELIX",
+          hotel_pickup_time: "10:10:00",
+          pax_assigned: 2,
+        }),
+      ],
+      stops: [{ id: REAL_STOP_IDS.terni, stop_name: "TERNI", pickup_note: "Terminal Bus Atc", pickup_time: null, stop_order: 7 }],
+    });
+
+    expect(html).toContain("<td class=\"\">10:10</td>");
+    expect(html).toContain("HOTEL TERME FELIX");
+  });
+
+  it("PDF non inventa pickup quando hotel_pickup_time e stop_pickup_time non esistono", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Linea Centro",
+      busLabel: "CENTRO1",
+      dateIso: "2026-09-06",
+      allocations: [
+        alloc({
+          stop_id: REAL_STOP_IDS.terni,
+          stop_name: "TERNI",
+          stop_pickup_note: "Terminal Bus Atc",
+          customer_name: "ANGELUZZI",
+          hotel_name: "SOLEMARE",
+          hotel_pickup_time: null,
+          stop_pickup_time: null,
+          pax_assigned: 2,
+        }),
+      ],
+      stops: [{ id: REAL_STOP_IDS.terni, stop_name: "TERNI", pickup_note: "Terminal Bus Atc", pickup_time: null, stop_order: 7 }],
+    });
+
+    expect(html).toContain("<td class=\"\"></td><td class=\"\">SOLEMARE</td>");
+    expect(html).not.toContain("09:50");
+    expect(html).not.toContain("10:00");
+    expect(html).not.toContain("10:10");
+  });
+});
