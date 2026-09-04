@@ -103,6 +103,20 @@ export type BusLotAggregate = {
   alerts: Array<{ label: string; severity: "high" | "medium" | "low" }>;
 };
 
+// Punto di carico (Fase 3 — /bus-tours "Dettaglio lotto bus"): risolve la
+// fermata canonica (tenant_bus_line_stops) di un lotto a partire dagli
+// stop_id delle allocazioni (tenant_bus_allocations) dei suoi servizi. Mai
+// un match per nome — solo id. Se i servizi del lotto puntano a fermate
+// diverse (o non ne hanno alcuna), il lotto resta "unlinked": niente
+// associazioni inventate, nessuna scrittura sul punto di carico consentita.
+export type BusLotStopLinkResult = { status: "linked"; stopId: string } | { status: "unlinked" };
+
+export function resolveBusLotStopId(allocationStopIds: Array<string | null | undefined>): BusLotStopLinkResult {
+  const distinct = [...new Set(allocationStopIds.filter((id): id is string => Boolean(id)))];
+  if (distinct.length !== 1) return { status: "unlinked" };
+  return { status: "linked", stopId: distinct[0] };
+}
+
 export function buildBusLotAggregates(services: Service[], configs: BusLotConfig[]) {
   const configByKey = new Map(configs.map((item) => [item.lot_key, item]));
   const groups = services.reduce<Map<string, Service[]>>((acc, service) => {

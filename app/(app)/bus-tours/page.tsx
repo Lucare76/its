@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, EmptyState, FilterBar, PageHeader } from "@/components/ui";
-import { buildBusLotAggregates, isBusLineService, isTrueBusTour } from "@/lib/bus-lot-utils";
+import { buildBusLotAggregates, isBusLineService, isTrueBusTour, resolveBusLotStopId } from "@/lib/bus-lot-utils";
 import type { BusLotAggregate } from "@/lib/bus-lot-utils";
 import { BUS_LINES_2026 } from "@/lib/bus-lines-catalog";
 import { supabase } from "@/lib/supabase/client";
+import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { BusLotConfig, ServiceDirection, ServiceStatus } from "@/lib/types";
 import { SERVICE_STATUS_LABELS } from "@/lib/ui-labels";
@@ -58,6 +59,13 @@ export default function BusToursPage() {
   const [lotDrafts, setLotDrafts] = useState<Record<string, { title: string; capacity: string; lowSeatThreshold: string; minimumPassengers: string; waitlistEnabled: boolean; waitlistCount: string; notes: string }>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string>("");
+  // Punto di carico: la source of truth canonica e' tenant_bus_line_stops.pickup_note
+  // (lo stesso campo che alimenta stop_pickup_note nel PDF), collegata al lotto
+  // tramite tenant_bus_allocations.stop_id dei servizi del lotto — mai un
+  // secondo campo/tabella, mai un match per nome quando l'id e' disponibile.
+  const [stopLinkByLotKey, setStopLinkByLotKey] = useState<Record<string, { status: "loading" | "linked" | "unlinked"; stopId: string | null; stopName: string | null; pickupNote: string | null }>>({});
+  const [pickupNoteDrafts, setPickupNoteDrafts] = useState<Record<string, string>>({});
+  const [pickupNoteBusyKey, setPickupNoteBusyKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!message) return;
@@ -185,6 +193,103 @@ export default function BusToursPage() {
   const selectedTour = filteredBusTours.find((service) => service.id === selectedTourServiceId) ?? filteredBusTours[0] ?? null;
   const selectedTourHotel = selectedTour ? hotelsById.get(selectedTour.hotel_id) : null;
   const selectedTourAssignment = selectedTour ? assignmentsByServiceId.get(selectedTour.id) : null;
+
+  // Risolve, per il lotto selezionato, l'UNICA fermata canonica
+  // (tenant_bus_line_stops) collegata tramite tenant_bus_allocations.stop_id
+  // dei servizi del lotto. Nessun match per nome: se i servizi del lotto non
+  // hanno tutti lo stesso stop_id (o non ne hanno nessuno), il lotto resta
+  // "unlinked" e il salvataggio del punto di carico e' bloccato in UI.
+  useEffect(() => {
+    if (!selectedLot || !supabase || !tenantId) return;
+    const lotKey = selectedLot.key;
+    const serviceIds = selectedLot.services.map((service) => service.id);
+    if (serviceIds.length === 0) {
+      setStopLinkByLotKey((prev) => ({ ...prev, [lotKey]: { status: "unlinked", stopId: null, stopName: null, pickupNote: null } }));
+      return;
+    }
+    let cancelled = false;
+    setStopLinkByLotKey((prev) => ({ ...prev, [lotKey]: { status: "loading", stopId: null, stopName: null, pickupNote: null } }));
+    (async () => {
+      const { data: allocations, error: allocationsError } = await supabase!
+        .from("tenant_bus_allocations")
+        .select("stop_id")
+        .eq("tenant_id", tenantId)
+        .eq("direction", selectedLot.direction)
+        .in("service_id", serviceIds);
+      if (cancelled) return;
+      if (allocationsError) {
+        setStopLinkByLotKey((prev) => ({ ...prev, [lotKey]: { status: "unlinked", stopId: null, stopName: null, pickupNote: null } }));
+        return;
+      }
+      const link = resolveBusLotStopId((allocations ?? []).map((row) => row.stop_id));
+      if (link.status !== "linked") {
+        setStopLinkByLotKey((prev) => ({ ...prev, [lotKey]: { status: "unlinked", stopId: null, stopName: null, pickupNote: null } }));
+        return;
+      }
+      const { data: stopRow } = await supabase!
+        .from("tenant_bus_line_stops")
+        .select("id,stop_name,pickup_note")
+        .eq("tenant_id", tenantId)
+        .eq("id", link.stopId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (!stopRow) {
+        setStopLinkByLotKey((prev) => ({ ...prev, [lotKey]: { status: "unlinked", stopId: null, stopName: null, pickupNote: null } }));
+        return;
+      }
+      setStopLinkByLotKey((prev) => ({
+        ...prev,
+        [lotKey]: { status: "linked", stopId: stopRow.id, stopName: stopRow.stop_name, pickupNote: stopRow.pickup_note ?? null }
+      }));
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- si aggancia solo al cambio di lotto/direzione, non a ogni ricalcolo di selectedLot.services
+  }, [selectedLot?.key, selectedLot?.direction, tenantId]);
+
+  const selectedLotStopLink = selectedLot ? stopLinkByLotKey[selectedLot.key] ?? null : null;
+
+  const savePickupNote = async (lot: NonNullable<typeof selectedLot>) => {
+    const link = stopLinkByLotKey[lot.key];
+    if (!link || link.status !== "linked" || !link.stopId) {
+      setMessage("Fermata non collegata: impossibile salvare il punto di carico.");
+      return;
+    }
+    if (!supabase) return;
+    const draftValue = (pickupNoteDrafts[lot.key] ?? link.pickupNote ?? "").trim();
+    setPickupNoteBusyKey(lot.key);
+    const ctx = await getClientSessionContext();
+    if (!ctx.accessToken) {
+      setPickupNoteBusyKey(null);
+      setMessage("Sessione non valida, ricarica la pagina.");
+      return;
+    }
+    let res: Response;
+    try {
+      res = await fetch("/api/ops/bus-network", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.accessToken}` },
+        body: JSON.stringify({ action: "update_stop_pickup_note", stop_id: link.stopId, pickup_note: draftValue || null })
+      });
+    } catch {
+      setPickupNoteBusyKey(null);
+      setMessage("Errore di rete durante il salvataggio del punto di carico.");
+      return;
+    }
+    const resBody = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    setPickupNoteBusyKey(null);
+    if (!res.ok || !resBody?.ok) {
+      setMessage(resBody?.error ?? "Errore salvataggio punto di carico.");
+      return;
+    }
+    // Aggiorna subito il valore mostrato, senza refresh/refetch manuale.
+    setStopLinkByLotKey((prev) => ({ ...prev, [lot.key]: { ...link, pickupNote: draftValue || null } }));
+    setPickupNoteDrafts((prev) => {
+      const next = { ...prev };
+      delete next[lot.key];
+      return next;
+    });
+    setMessage("Punto di carico aggiornato.");
+  };
 
   const lotSummary = useMemo(() => {
     return busLots.reduce(
@@ -514,6 +619,39 @@ export default function BusToursPage() {
               <p className="text-sm"><span className="font-medium">Origine:</span> {selectedLot.bus_city_origin ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Codice bus:</span> {selectedLot.transport_code ?? "N/D"}</p>
               <p className="text-sm"><span className="font-medium">Meeting point:</span> {selectedLot.meeting_point ?? "N/D"}</p>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <p className="text-sm">
+                  <span className="font-medium">Fermata:</span>{" "}
+                  {selectedLotStopLink?.status === "linked"
+                    ? selectedLotStopLink.stopName
+                    : selectedLotStopLink?.status === "loading"
+                      ? "Verifica in corso..."
+                      : "Fermata non collegata"}
+                </p>
+                {selectedLotStopLink?.status === "linked" ? (
+                  <label className="block text-sm">
+                    Punto di carico
+                    <textarea
+                      className="input-saas mt-1 min-h-[64px]"
+                      placeholder="Inserisci punto di carico"
+                      value={pickupNoteDrafts[selectedLot.key] ?? selectedLotStopLink.pickupNote ?? ""}
+                      onChange={(event) => setPickupNoteDrafts((prev) => ({ ...prev, [selectedLot.key]: event.target.value }))}
+                    />
+                  </label>
+                ) : selectedLotStopLink?.status === "unlinked" ? (
+                  <p className="text-xs text-amber-700">
+                    Nessuna fermata unica collegata ai servizi di questo lotto: il punto di carico non è modificabile da qui.
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  disabled={selectedLotStopLink?.status !== "linked" || pickupNoteBusyKey === selectedLot.key}
+                  onClick={() => void savePickupNote(selectedLot)}
+                >
+                  {pickupNoteBusyKey === selectedLot.key ? "Salvataggio..." : "Salva punto di carico"}
+                </button>
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="text-sm">Titolo lotto
                   <input className="input-saas mt-1" value={getLotDraft(selectedLot).title} onChange={(event) => setLotDrafts((prev) => ({ ...prev, [selectedLot.key]: { ...getLotDraft(selectedLot), title: event.target.value } }))} />
