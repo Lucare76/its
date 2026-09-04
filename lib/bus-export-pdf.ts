@@ -1,6 +1,12 @@
 ﻿type Direction = "arrival" | "departure";
 
 export type BusPdfAllocation = {
+  // Fix "PDF PARTENZE — fermata duplicata + SCARICO fuori ordine": stop_id
+  // e' l'unica chiave usata per raggruppare le partenze (mai stop_name,
+  // orario, ordine allocations). Opzionale per compat con vecchie fixture
+  // di test che non lo valorizzano: in quel caso l'allocazione finisce nel
+  // blocco finale "FERMATA DA VERIFICARE" (mai posizionata a caso).
+  stop_id?: string | null;
   stop_name: string;
   stop_city?: string | null;
   stop_pickup_note?: string | null;
@@ -29,6 +35,8 @@ export type BusPdfAllocation = {
 };
 
 export type BusPdfStop = {
+  // id = tenant_bus_line_stops.id: chiave di match con BusPdfAllocation.stop_id.
+  id?: string | null;
   stop_name: string;
   pickup_note?: string | null;
   pickup_time?: string | null;
@@ -175,25 +183,11 @@ function firstBookingGroupFerry(allocations: BusPdfAllocation[], direction: Dire
       };
 }
 
-function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = [], direction: Direction = "arrival") {
+function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] = []) {
+  // Solo ARRIVI: ordina per orario di ritiro, poi per stop_order del
+  // catalogo. La logica PARTENZE (raggruppamento per stop_id) vive in
+  // buildDepartureManifestGroups — mai qui.
   const orders = stopOrderMap(stops);
-  if (direction === "departure") {
-    return [...allocations].sort((a, b) => {
-      const timeA = time5(a.hotel_pickup_time || a.stop_pickup_time);
-      const timeB = time5(b.hotel_pickup_time || b.stop_pickup_time);
-      if (timeA !== timeB) return timeB.localeCompare(timeA);
-      const orderA = orders.get(a.stop_name.toUpperCase()) ?? 9999;
-      const orderB = orders.get(b.stop_name.toUpperCase()) ?? 9999;
-      if (orderA !== orderB) return orderB - orderA;
-      const stopA = displayStopName(a).toUpperCase();
-      const stopB = displayStopName(b).toUpperCase();
-      if (stopA !== stopB) return stopA.localeCompare(stopB, "it");
-      const hotelA = (a.hotel_name ?? "").toUpperCase();
-      const hotelB = (b.hotel_name ?? "").toUpperCase();
-      if (hotelA !== hotelB) return hotelA.localeCompare(hotelB);
-      return a.customer_name.localeCompare(b.customer_name, "it");
-    });
-  }
   return [...allocations].sort((a, b) => {
     const timeA = time5(a.stop_pickup_time || a.hotel_pickup_time);
     const timeB = time5(b.stop_pickup_time || b.hotel_pickup_time);
@@ -205,89 +199,161 @@ function sortedAllocations(allocations: BusPdfAllocation[], stops: BusPdfStop[] 
   });
 }
 
-function groupKey(alloc: BusPdfAllocation, direction: Direction) {
-  if (direction === "departure") return displayStopName(alloc).toUpperCase();
+function arrivalGroupKey(alloc: BusPdfAllocation) {
   return `${time5(alloc.stop_pickup_time || alloc.hotel_pickup_time)}|${displayStopName(alloc).toUpperCase()}`;
 }
 
-function buildRows(input: BusPdfInput) {
-  const sorted = sortedAllocations(input.allocations, input.stops, input.direction);
-  let previousKey = "";
-  let total = 0;
+type ManifestRow = {
+  alloc: BusPdfAllocation;
+  index: number;
+  shouldRenderStop: boolean;
+  stopTime: string;
+  stopNote: string;
+  stopCity: string;
+  hotel: string;
+  agency: string;
+  cleanNote: string;
+  runningTotal: number;
+};
 
-  return {
-    totalPax: sorted.reduce((sum, alloc) => sum + alloc.pax_assigned, 0),
-    rows: sorted.map((alloc, index) => {
-      const key = groupKey(alloc, input.direction);
-      const shouldRenderStop = key !== previousKey;
-      previousKey = key;
-      total += alloc.pax_assigned;
-      const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
-      const stopTime = time5(alloc.stop_pickup_time || alloc.hotel_pickup_time);
-      const stopName = displayStopName(alloc);
-      const rawStopNote = alloc.stop_pickup_note ?? input.stops?.find((s) => s.stop_name.toUpperCase() === alloc.stop_name.toUpperCase())?.pickup_note ?? "";
-      const stopCity = displayStopCity(alloc);
-      const stopNote = displayPickupPoint(alloc, rawStopNote);
-      const hotel = displayHotel(alloc, hotelFromNotes);
-      const agency = alloc.agency_name || agencyFromNotes;
-      // Obiettivo B/C: la nota "pulita" dell'allocazione (comportamento
-      // invariato) resta la base; le note gruppo/fermata/servizio si
-      // aggiungono senza sovrascriverla.
-      const noteCell = [cleanNote, alloc.group_notes_block].filter(Boolean).join(" · ");
-      return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hotel, agency, cleanNote: noteCell, runningTotal: total };
-    }),
-  };
+// Fix "PDF PARTENZE — fermata duplicata + SCARICO fuori ordine": un solo
+// blocco per fermata (chiave = stop_id), ordinato per
+// tenant_bus_line_stops.stop_order della linea/direction selezionata — mai
+// per orario, nome, hotel o ordine di arrivo delle allocations. Questo
+// array è la UNICA fonte di verità: sia il corpo del manifest sia la
+// sezione SCARICO leggono da qui, quindi non possono più divergere.
+type DepartureManifestGroup = {
+  stopId: string | null; // null = blocco finale "FERMATA DA VERIFICARE"
+  stop: BusPdfStop | null;
+  allocations: BusPdfAllocation[]; // ordinate: orario -> hotel -> nominativo
+};
+
+function withinStopSort(a: BusPdfAllocation, b: BusPdfAllocation) {
+  const timeA = time5(a.hotel_pickup_time || a.stop_pickup_time);
+  const timeB = time5(b.hotel_pickup_time || b.stop_pickup_time);
+  if (timeA !== timeB) return timeA.localeCompare(timeB);
+  const hotelA = (a.hotel_name ?? "").toUpperCase();
+  const hotelB = (b.hotel_name ?? "").toUpperCase();
+  if (hotelA !== hotelB) return hotelA.localeCompare(hotelB, "it");
+  return a.customer_name.localeCompare(b.customer_name, "it");
 }
 
-function buildDepartureUnloadRows(input: BusPdfInput) {
-  if (input.direction !== "departure") return "";
-  // FIX MIRATO "FORMATO SCARICO ATTESO": la fonte di verità è SEMPRE
-  // input.allocations (la tabella principale, sempre completa) — mai il
-  // catalogo tenant_bus_line_stops come filtro che può far sparire fermate
-  // (root cause del bug "solo MAROTTA": se una fermata mancava/non
-  // combaciava in input.stops, la riga veniva persa anche se l'allocazione
-  // esisteva). Il catalogo resta usato SOLO per arricchire ordine/pickup
-  // note quando disponibile, mai per decidere quali fermate mostrare.
-  const paxByStop = new Map<string, number>();
-  const noteByStop = new Map<string, string | null>();
-  const firstSeenOrder = new Map<string, number>();
-  let seenIndex = 0;
-  for (const alloc of input.allocations) {
-    const key = alloc.stop_name.toUpperCase();
-    paxByStop.set(key, (paxByStop.get(key) ?? 0) + alloc.pax_assigned);
-    if (!noteByStop.has(key)) noteByStop.set(key, alloc.stop_pickup_note ?? null);
-    if (!firstSeenOrder.has(key)) firstSeenOrder.set(key, seenIndex++);
-  }
-  if (paxByStop.size === 0) return "";
-
-  const stopOrderByName = new Map((input.stops ?? []).map((stop) => [stop.stop_name.toUpperCase(), stop.stop_order]));
-  const catalogNoteByName = new Map((input.stops ?? []).map((stop) => [stop.stop_name.toUpperCase(), stop.pickup_note ?? null]));
-  const originalNameByKey = new Map<string, string>();
-  for (const alloc of input.allocations) {
-    const key = alloc.stop_name.toUpperCase();
-    if (!originalNameByKey.has(key)) originalNameByKey.set(key, alloc.stop_name);
+function buildDepartureManifestGroups(allocations: BusPdfAllocation[], stops: BusPdfStop[] = []): DepartureManifestGroup[] {
+  const stopById = new Map<string, BusPdfStop>();
+  for (const stop of stops) {
+    if (stop.id) stopById.set(stop.id, stop);
   }
 
-  // Regola fondamentale "ORDINE SCARICO RITORNO": booking_group_stops/
-  // tenant_bus_line_stops.sort_order se la fermata è in catalogo; le
-  // fermate SENZA catalogo (mai perse) restano in fondo, nell'ordine in cui
-  // compaiono nella tabella principale — mai alfabetico, mai per orario.
-  const orderedKeys = Array.from(paxByStop.keys()).sort((a, b) => {
-    const orderA = stopOrderByName.get(a);
-    const orderB = stopOrderByName.get(b);
-    if (orderA != null && orderB != null) return orderA - orderB;
-    if (orderA != null) return -1;
-    if (orderB != null) return 1;
-    return (firstSeenOrder.get(a) ?? 0) - (firstSeenOrder.get(b) ?? 0);
+  const byStopId = new Map<string, BusPdfAllocation[]>();
+  const verifyBucket: BusPdfAllocation[] = [];
+  for (const alloc of allocations) {
+    const stop = alloc.stop_id ? stopById.get(alloc.stop_id) : undefined;
+    if (!stop) {
+      // Nessuna posizione forzata: stop_id nullo o non presente nel
+      // catalogo della linea/direction selezionata finisce SEMPRE nel
+      // blocco finale dedicato, mai in mezzo agli altri.
+      verifyBucket.push(alloc);
+      continue;
+    }
+    const list = byStopId.get(alloc.stop_id as string) ?? [];
+    list.push(alloc);
+    byStopId.set(alloc.stop_id as string, list);
+  }
+
+  const groups: DepartureManifestGroup[] = Array.from(byStopId.entries()).map(([stopId, allocs]) => ({
+    stopId,
+    stop: stopById.get(stopId) ?? null,
+    allocations: [...allocs].sort(withinStopSort),
+  }));
+
+  groups.sort((a, b) => {
+    const orderA = a.stop?.stop_order ?? 0;
+    const orderB = b.stop?.stop_order ?? 0;
+    if (orderA !== orderB) return orderA - orderB;
+    // Tie-break meccanico e stabile, usato solo quando il catalogo ha
+    // stop_order duplicati fra fermate diverse (data-quality issue nota):
+    // non è un criterio "significativo" come orario/nome/alfabetico.
+    return (a.stopId ?? "").localeCompare(b.stopId ?? "");
   });
 
-  const rows = orderedKeys.map((key) => {
-    const stopName = originalNameByKey.get(key) ?? key;
-    const pickupNoteRaw = catalogNoteByName.get(key) ?? noteByStop.get(key) ?? null;
-    const pickupNote = visiblePickupNote(stopName, pickupNoteRaw);
-    const label = pickupNote ? `${stopName} - ${pickupNote}` : stopName;
-    const pax = paxByStop.get(key) ?? 0;
-    return `<tr class="unload-row"><td colspan="8"><div class="unload-line"><span>${escapeHtml(label)}</span><strong>${pax} pax</strong></div></td></tr>`;
+  if (verifyBucket.length > 0) {
+    groups.push({ stopId: null, stop: null, allocations: [...verifyBucket].sort(withinStopSort) });
+  }
+
+  return groups;
+}
+
+function buildArrivalRows(input: BusPdfInput) {
+  const sorted = sortedAllocations(input.allocations, input.stops);
+  let previousKey = "";
+  let total = 0;
+  const rows: ManifestRow[] = sorted.map((alloc, index) => {
+    const key = arrivalGroupKey(alloc);
+    const shouldRenderStop = key !== previousKey;
+    previousKey = key;
+    total += alloc.pax_assigned;
+    const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
+    const stopTime = time5(alloc.stop_pickup_time || alloc.hotel_pickup_time);
+    const rawStopNote = alloc.stop_pickup_note ?? input.stops?.find((s) => s.stop_name.toUpperCase() === alloc.stop_name.toUpperCase())?.pickup_note ?? "";
+    const stopCity = displayStopCity(alloc);
+    const stopNote = displayPickupPoint(alloc, rawStopNote);
+    const hotel = displayHotel(alloc, hotelFromNotes);
+    const agency = alloc.agency_name || agencyFromNotes;
+    // Obiettivo B/C: la nota "pulita" dell'allocazione (comportamento
+    // invariato) resta la base; le note gruppo/fermata/servizio si
+    // aggiungono senza sovrascriverla.
+    const noteCell = [cleanNote, alloc.group_notes_block].filter(Boolean).join(" · ");
+    return { alloc, index, shouldRenderStop, stopTime, stopNote, stopCity, hotel, agency, cleanNote: noteCell, runningTotal: total };
+  });
+  return { totalPax: total, rows };
+}
+
+function buildDepartureRows(input: BusPdfInput) {
+  const groups = buildDepartureManifestGroups(input.allocations, input.stops ?? []);
+  let total = 0;
+  let globalIndex = 0;
+  const rows: ManifestRow[] = [];
+  for (const group of groups) {
+    const isVerify = group.stopId === null;
+    group.allocations.forEach((alloc, idxInGroup) => {
+      total += alloc.pax_assigned;
+      const { hotelFromNotes, agencyFromNotes, cleanNote } = extractFromNotes(alloc.notes);
+      const stopTime = time5(alloc.hotel_pickup_time || alloc.stop_pickup_time);
+      const stopCity = isVerify ? "⚠ FERMATA DA VERIFICARE" : displayStopCity(alloc);
+      const rawStopNote = isVerify ? "" : (alloc.stop_pickup_note ?? group.stop?.pickup_note ?? "");
+      const stopNote = isVerify ? (displayStopName(alloc) || "fermata non riconosciuta") : displayPickupPoint(alloc, rawStopNote);
+      const hotel = displayHotel(alloc, hotelFromNotes);
+      const agency = alloc.agency_name || agencyFromNotes;
+      const noteCell = [cleanNote, alloc.group_notes_block].filter(Boolean).join(" · ");
+      rows.push({ alloc, index: globalIndex++, shouldRenderStop: idxInGroup === 0, stopTime, stopNote, stopCity, hotel, agency, cleanNote: noteCell, runningTotal: total });
+    });
+  }
+  return { totalPax: total, rows, groups };
+}
+
+function buildRows(input: BusPdfInput): { totalPax: number; rows: ManifestRow[]; groups: DepartureManifestGroup[] | null } {
+  if (input.direction === "departure") return buildDepartureRows(input);
+  const { totalPax, rows } = buildArrivalRows(input);
+  return { totalPax, rows, groups: null };
+}
+
+function buildDepartureUnloadRows(groups: DepartureManifestGroup[]) {
+  // Stessa fonte di verità del corpo (manifestGroupsOrdered): nessun
+  // secondo sort/aggregazione indipendente, mai divergenza corpo/SCARICO.
+  if (groups.length === 0) return "";
+  const rows = groups.map((group) => {
+    const totalPax = group.allocations.reduce((sum, a) => sum + a.pax_assigned, 0);
+    const firstAlloc = group.allocations[0];
+    let label: string;
+    if (group.stopId === null) {
+      label = "⚠ FERMATA DA VERIFICARE";
+    } else {
+      const city = displayStopCity(firstAlloc);
+      const rawNote = firstAlloc.stop_pickup_note ?? group.stop?.pickup_note ?? "";
+      const note = visiblePickupNote(city, rawNote);
+      label = note ? `${city} - ${note}` : city;
+    }
+    return `<tr class="unload-row"><td colspan="8"><div class="unload-line"><span>${escapeHtml(label)}</span><strong>${totalPax} pax</strong></div></td></tr>`;
   }).join("");
 
   return `<tr class="spacer-row"><td colspan="8"></td></tr><tr class="unload-title"><td colspan="8">SCARICO</td></tr>${rows}`;
@@ -295,8 +361,8 @@ function buildDepartureUnloadRows(input: BusPdfInput) {
 
 export function buildBusLinePdfHtml(input: BusPdfInput) {
   const directionTitle = input.title ?? (input.direction === "arrival" ? "ARRIVI" : "PARTENZE");
-  const { rows, totalPax } = buildRows(input);
-  const departureUnloadRows = buildDepartureUnloadRows(input);
+  const { rows, totalPax, groups } = buildRows(input);
+  const departureUnloadRows = groups ? buildDepartureUnloadRows(groups) : "";
   const groupContact = firstBookingGroupContact(input.allocations);
   const groupFerry = firstBookingGroupFerry(input.allocations, input.direction);
   const driver = `${input.driverName || "N/D"}${input.driverPhone ? ` - ${input.driverPhone}` : ""}`;

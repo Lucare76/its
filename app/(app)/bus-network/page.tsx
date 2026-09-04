@@ -3055,7 +3055,7 @@ export default function BusNetworkPage() {
                       onDragLeave={() => setDragOverUnitId("")}
                       onDrop={(e) => { if (unit.tag === "esclusivo") return; e.preventDefault(); handleDrop(unit.id); }}
                       onClick={() => setSelectedBusUnitId(isSelected ? null : unit.id)}
-                      className={`relative flex w-80 flex-shrink-0 flex-col rounded-2xl border bg-white shadow-sm transition-all cursor-pointer ${
+                      className={`relative flex w-96 flex-shrink-0 flex-col rounded-2xl border bg-white shadow-sm transition-all cursor-pointer ${
                         isSelected ? "border-indigo-500 ring-2 ring-indigo-200" :
                         dragOverUnitId === unit.id ? "border-indigo-400 bg-indigo-50 shadow-indigo-100" :
                         isClosed ? "border-slate-200 opacity-60" :
@@ -3328,12 +3328,15 @@ export default function BusNetworkPage() {
                                 />
                                 <div className="min-w-0 flex-1">
                                   {displayName && (
-                                    <div className="truncate text-sm font-semibold uppercase text-slate-800">
+                                    <div
+                                      className="line-clamp-2 break-words text-sm font-semibold uppercase leading-snug text-slate-800"
+                                      title={displayName}
+                                    >
                                       {displayName}
                                     </div>
                                   )}
                                   {showPassengerDetails && (
-                                  <div className="flex items-center gap-1">
+                                  <div className="mt-0.5">
                                     {editCardHotelId === alloc.allocation_id ? (
                                       <div className="relative w-full" onClick={(e) => e.stopPropagation()}>
                                         <input
@@ -3371,16 +3374,16 @@ export default function BusNetworkPage() {
                                       </div>
                                     ) : (
                                       <span
-                                        className="truncate cursor-pointer text-xs uppercase text-slate-400 hover:text-indigo-600"
-                                        title="Clicca per cambiare hotel"
+                                        className="line-clamp-2 cursor-pointer break-words text-xs uppercase leading-snug text-slate-400 hover:text-indigo-600"
+                                        title={alloc.hotel_name ?? "Clicca per cambiare hotel"}
                                         onClick={(e) => { e.stopPropagation(); setEditCardHotelId(alloc.allocation_id); setEditCardHotelValue(alloc.hotel_id ?? ""); setEditCardHotelSearch(""); }}
                                       >
                                         {alloc.hotel_name ?? "—"}
-                                      </span>
-                                    )}
-                                    {direction === "departure" && alloc.hotel_pickup_time && (
-                                      <span className="shrink-0 rounded bg-amber-50 px-1 text-[9px] font-semibold text-amber-600">
-                                        {alloc.hotel_pickup_time.slice(0, 5)}
+                                        {direction === "departure" && alloc.hotel_pickup_time && (
+                                          <span className="ml-1 whitespace-nowrap rounded bg-amber-50 px-1 text-[9px] font-semibold normal-case text-amber-600">
+                                            {alloc.hotel_pickup_time.slice(0, 5)}
+                                          </span>
+                                        )}
                                       </span>
                                     )}
                                   </div>
@@ -3403,11 +3406,11 @@ export default function BusNetworkPage() {
                                   />
                                   ) : (
                                   <div
-                                    className="cursor-pointer text-xs text-slate-300 hover:text-indigo-500"
+                                    className="mt-0.5 cursor-pointer text-[11px] text-slate-300 hover:text-indigo-500"
                                     title="Clicca per modificare telefono"
                                     onClick={(e) => { e.stopPropagation(); setEditCardPhoneId(alloc.allocation_id); setEditCardPhoneValue(alloc.customer_phone ?? ""); }}
                                   >
-                                    {alloc.customer_phone || <span className="italic">+ telefono</span>}
+                                    {alloc.customer_phone ? `☎ ${alloc.customer_phone}` : <span className="italic">+ telefono</span>}
                                   </div>
                                   ))}
                                 </div>
@@ -3490,7 +3493,12 @@ export default function BusNetworkPage() {
                               />
                               <div className="min-w-0 flex-1">
                                 {displayName && (
-                                  <div className="truncate text-sm font-semibold uppercase text-slate-800">{displayName}</div>
+                                  <div
+                                    className="line-clamp-2 break-words text-sm font-semibold uppercase leading-snug text-slate-800"
+                                    title={displayName}
+                                  >
+                                    {displayName}
+                                  </div>
                                 )}
                                 {editCardHotelId === alloc.allocation_id ? (
                                   <div className="relative w-full" onClick={(e) => e.stopPropagation()}>
@@ -3529,8 +3537,8 @@ export default function BusNetworkPage() {
                                   </div>
                                 ) : (
                                   <div
-                                    className="truncate cursor-pointer text-xs uppercase text-slate-400 hover:text-indigo-600"
-                                    title="Clicca per cambiare hotel"
+                                    className="line-clamp-2 cursor-pointer break-words text-xs uppercase leading-snug text-slate-400 hover:text-indigo-600"
+                                    title={alloc.hotel_name ?? "Clicca per cambiare hotel"}
                                     onClick={(e) => { e.stopPropagation(); setEditCardHotelId(alloc.allocation_id); setEditCardHotelValue(alloc.hotel_id ?? ""); setEditCardHotelSearch(""); }}
                                   >
                                     {alloc.hotel_name ?? "—"}
@@ -3554,11 +3562,11 @@ export default function BusNetworkPage() {
                                   />
                                 ) : (
                                   <div
-                                    className="cursor-pointer text-xs text-slate-300 hover:text-indigo-500"
+                                    className="mt-0.5 cursor-pointer text-[11px] text-slate-300 hover:text-indigo-500"
                                     title="Clicca per modificare telefono"
                                     onClick={(e) => { e.stopPropagation(); setEditCardPhoneId(alloc.allocation_id); setEditCardPhoneValue(alloc.customer_phone ?? ""); }}
                                   >
-                                    {alloc.customer_phone || <span className="italic">+ telefono</span>}
+                                    {alloc.customer_phone ? `☎ ${alloc.customer_phone}` : <span className="italic">+ telefono</span>}
                                   </div>
                                 )}
                               </div>

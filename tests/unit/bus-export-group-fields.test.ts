@@ -96,31 +96,34 @@ describe("buildBusLinePdfHtml — Obiettivo B/C: note gruppo/fermata/servizio co
 });
 
 describe("buildBusLinePdfHtml — FIX MIRATO \"FORMATO SCARICO ATTESO\": SCARICO PDF ritorno", () => {
+  // Fix "PDF PARTENZE — fermata duplicata + SCARICO fuori ordine": la
+  // fixture ora rispecchia i dati reali (AllocationDetail.stop_id /
+  // BusStop.id già esistenti in produzione) — il match per solo stop_name,
+  // usato prima di questo fix, non è più il comportamento atteso.
+  const STOP_ID = { cattolica: "stop-cattolica", pesaro: "stop-pesaro", fano: "stop-fano", marotta: "stop-marotta" };
+
   const giacomoniStops = (direction: "arrival" | "departure") => [
-    { stop_name: "CATTOLICA", pickup_note: "CASELLO A14", pickup_time: "05:20", stop_order: 1 },
-    { stop_name: "PESARO", pickup_note: "CASELLO A14", pickup_time: "05:35", stop_order: 2 },
-    { stop_name: "FANO", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:00", stop_order: 3 },
-    { stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:20", stop_order: 4 },
+    { id: STOP_ID.cattolica, stop_name: "CATTOLICA", pickup_note: "CASELLO A14", pickup_time: "05:20", stop_order: 1 },
+    { id: STOP_ID.pesaro, stop_name: "PESARO", pickup_note: "CASELLO A14", pickup_time: "05:35", stop_order: 2 },
+    { id: STOP_ID.fano, stop_name: "FANO", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:00", stop_order: 3 },
+    { id: STOP_ID.marotta, stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "06:20", stop_order: 4 },
   ].map((s) => ({ ...s, stop_order: direction === "departure" ? 5 - s.stop_order : s.stop_order }));
 
   const giacomoniAllocations = (): BusPdfAllocation[] => [
-    alloc({ stop_name: "MAROTTA", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 18, is_booking_group: true }),
-    alloc({ stop_name: "FANO", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 10, is_booking_group: true }),
-    alloc({ stop_name: "PESARO", stop_pickup_note: "CASELLO A14", pax_assigned: 6, is_booking_group: true }),
-    alloc({ stop_name: "CATTOLICA", stop_pickup_note: "CASELLO A14", pax_assigned: 4, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.marotta, stop_name: "MAROTTA", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 18, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.fano, stop_name: "FANO", stop_pickup_note: "PARCHEGGIO CASELLO A14", pax_assigned: 10, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.pesaro, stop_name: "PESARO", stop_pickup_note: "CASELLO A14", pax_assigned: 6, is_booking_group: true }),
+    alloc({ stop_id: STOP_ID.cattolica, stop_name: "CATTOLICA", stop_pickup_note: "CASELLO A14", pax_assigned: 4, is_booking_group: true }),
   ];
 
-  it("mostra TUTTE le 4 fermate (mai solo MAROTTA) anche se il catalogo passato è incompleto", () => {
+  it("mostra TUTTE le 4 fermate (mai solo MAROTTA) quando il catalogo passato le contiene tutte", () => {
     const html = buildBusLinePdfHtml({
       direction: "departure",
       lineName: "Bus esclusivi gruppi",
       dateIso: "2026-09-13",
       busLabel: "GRUPPO EX 3",
       allocations: giacomoniAllocations(),
-      // Catalogo incompleto (solo MAROTTA) — root cause del bug reale: le
-      // altre 3 fermate NON devono sparire dallo SCARICO solo perché
-      // mancano/non combaciano nel catalogo passato al PDF.
-      stops: [{ stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "09:00", stop_order: 1 }],
+      stops: giacomoniStops("departure"),
     });
     expect(html).toContain("SCARICO");
     expect(html).toContain("MAROTTA - PARCHEGGIO CASELLO A14");
@@ -131,6 +134,28 @@ describe("buildBusLinePdfHtml — FIX MIRATO \"FORMATO SCARICO ATTESO\": SCARICO
     expect(html).toContain("10 pax");
     expect(html).toContain("6 pax");
     expect(html).toContain("4 pax");
+  });
+
+  it("catalogo incompleto (solo MAROTTA): le fermate non risolvibili finiscono in un unico blocco 'FERMATA DA VERIFICARE', mai perse e mai posizionate a caso", () => {
+    const html = buildBusLinePdfHtml({
+      direction: "departure",
+      lineName: "Bus esclusivi gruppi",
+      dateIso: "2026-09-13",
+      busLabel: "GRUPPO EX 3",
+      allocations: giacomoniAllocations(),
+      stops: [{ id: STOP_ID.marotta, stop_name: "MAROTTA", pickup_note: "PARCHEGGIO CASELLO A14", pickup_time: "09:00", stop_order: 1 }],
+    });
+    expect(html).toContain("SCARICO");
+    expect(html).toContain("MAROTTA - PARCHEGGIO CASELLO A14");
+    expect(html).toContain("18 pax");
+    // FANO/PESARO/CATTOLICA non combaciano nel catalogo incompleto: restano
+    // visibili (pax mai persi) ma in un unico blocco finale evidenziato,
+    // non sparsi/inventati in posizioni intermedie.
+    expect(html).toContain("FERMATA DA VERIFICARE");
+    expect(html).toContain("20 pax"); // 10 (FANO) + 6 (PESARO) + 4 (CATTOLICA)
+    const verifyIndex = html.indexOf("FERMATA DA VERIFICARE");
+    const marottaIndex = html.indexOf("MAROTTA - PARCHEGGIO CASELLO A14");
+    expect(verifyIndex).toBeGreaterThan(marottaIndex);
   });
 
   it("ordina lo SCARICO per sort_order (MAROTTA, FANO, PESARO, CATTOLICA), mai alfabetico né per orario", () => {
