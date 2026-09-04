@@ -72,7 +72,8 @@ async function checkAndAlertLowSeats(
   auth: PricingAuthContext,
   tenantId: string,
   busUnitId: string,
-  serviceDate?: string
+  serviceDate?: string,
+  serviceDirection?: "arrival" | "departure"
 ): Promise<{ busLabel: string; lineName: string; remainingSeats: number; threshold: number } | null> {
   const unitResult = await auth.admin
     .from("tenant_bus_units")
@@ -83,7 +84,8 @@ async function checkAndAlertLowSeats(
   if (unitResult.error || !unitResult.data) return null;
 
   let resolvedDate = serviceDate;
-  if (!resolvedDate) {
+  let resolvedDirection = serviceDirection;
+  if (!resolvedDate || !resolvedDirection) {
     const sampleAlloc = await auth.admin
       .from("tenant_bus_allocations")
       .select("service_id")
@@ -94,20 +96,30 @@ async function checkAndAlertLowSeats(
     if (sampleAlloc.data?.service_id) {
       const svc = await auth.admin
         .from("services")
-        .select("date")
+        .select("date,direction")
         .eq("id", (sampleAlloc.data as { service_id: string }).service_id)
         .maybeSingle();
-      resolvedDate = (svc.data as { date?: string } | null)?.date ?? undefined;
+      const svcRow = svc.data as { date?: string; direction?: "arrival" | "departure" } | null;
+      resolvedDate = resolvedDate ?? svcRow?.date ?? undefined;
+      resolvedDirection = resolvedDirection ?? svcRow?.direction ?? undefined;
     }
   }
 
+  // FIX MIRATO cross-direction (audit produzione 2026-09-04): senza il
+  // filtro su services.direction l'alert "pochi posti" per una departure
+  // veniva calcolato sommando anche gli arrival dello stesso bus/data —
+  // stesso bug della RPC allocate_bus_service/move_bus_allocation, corretto
+  // qui lato JS perché questa funzione non passa dalla RPC.
   let allocQuery = auth.admin
     .from("tenant_bus_allocations")
-    .select("pax_assigned, services!inner(date)")
+    .select("pax_assigned, services!inner(date,direction)")
     .eq("tenant_id", tenantId)
     .eq("bus_unit_id", busUnitId);
   if (resolvedDate) {
     allocQuery = allocQuery.eq("services.date", resolvedDate);
+  }
+  if (resolvedDirection) {
+    allocQuery = allocQuery.eq("services.direction", resolvedDirection);
   }
   const allocResult = await allocQuery;
   if (allocResult.error) return null;
@@ -827,7 +839,7 @@ export async function POST(request: NextRequest) {
       // il bus e' libero.
       const [networkPayload, allocateAlert] = await Promise.all([
         loadBusNetwork(auth),
-        checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)
+        checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id, undefined, parsed.direction)
       ]);
       return NextResponse.json({ ok: true, ...networkPayload, low_seat_alert: allocateAlert });
     }
@@ -917,7 +929,7 @@ export async function POST(request: NextRequest) {
       // tenant_bus_units qui — vedi commento gemello in allocate_service.
       const [networkPayload, allocateAlert] = await Promise.all([
         loadBusNetwork(auth),
-        checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id)
+        checkAndAlertLowSeats(auth, tenantId, parsed.bus_unit_id, undefined, parsed.direction)
       ]);
       return NextResponse.json({
         ok: true,
@@ -994,7 +1006,7 @@ export async function POST(request: NextRequest) {
 
       const [networkPayload, moveAlert] = await Promise.all([
         loadBusNetwork(auth),
-        checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
+        checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id, undefined, moveAllocBefore?.direction as "arrival" | "departure" | undefined)
       ]);
       return NextResponse.json({ ok: true, ...networkPayload, low_seat_alert: moveAlert });
     }
@@ -1077,9 +1089,12 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      const bulkMoveDirection = succeededMoves.length > 0
+        ? (bulkMoveAllocBeforeById.get(succeededMoves[0].allocation_id)?.direction as "arrival" | "departure" | undefined)
+        : undefined;
       const [networkPayload, moveAlert] = await Promise.all([
         loadBusNetwork(auth),
-        checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id)
+        checkAndAlertLowSeats(auth, tenantId, parsed.to_bus_unit_id, undefined, bulkMoveDirection)
       ]);
       return NextResponse.json({
         ok: true,
