@@ -61,3 +61,40 @@ describe("bus-stops/page.tsx — wiring lista/filtri/riordino (Fase 22)", () => 
     expect(source).toMatch(/disabled=\{busy \|\| selectedStop\.service_count > 0\}/);
   });
 });
+
+describe("bus-stops/page.tsx — drag&drop reorder (Fase B/1/2/3/8/9)", () => {
+  it("1. canReorder è vero solo con UNA linea e UNA direzione selezionate, ordinamento 'Linea, Ordine' e nessun altro filtro attivo", () => {
+    expect(source).toMatch(/const canReorder =\s*\n\s*lineFilter !== "all" &&\s*\n\s*directionFilter !== "all" &&\s*\n\s*sortBy === "line_order" &&\s*\n\s*statusFilter === "all" &&\s*\n\s*!manualOnly &&\s*\n\s*!search\.trim\(\);/);
+  });
+
+  it("2/3. quando canReorder è attivo, sortedStops mostra SOLO le fermate attive del gruppo lineFilter+directionFilter selezionato (mai un'altra linea o direzione)", () => {
+    expect(source).toMatch(
+      /stop\.bus_line_id === lineFilter && stop\.direction === directionFilter && stop\.active/
+    );
+  });
+
+  it("il drag handle esiste solo quando canReorder è vero, mai sull'intera riga (niente draggable sulla <tr>)", () => {
+    expect(source).toMatch(/draggable\s*\n\s*onDragStart=\{handleDragStart\(stop\.id\)\}/);
+    expect(source).not.toMatch(/<tr[^>]*draggable/);
+  });
+
+  it("2. persistReorder invia SEMPRE l'azione reorder_bus_line_stops con l'elenco fermate del gruppo linea+direzione corrente", () => {
+    expect(source).toMatch(/postBusNetworkAction\("reorder_bus_line_stops", \{/);
+    expect(source).toMatch(/bus_line_id: lineFilter,/);
+    expect(source).toMatch(/direction: directionFilter,/);
+    expect(source).toMatch(/ordered_stop_ids: orderedIds,/);
+  });
+
+  it("9. aggiornamento ottimistico PRIMA della chiamata API, rollback allo snapshot precedente se fallisce, messaggio 'Ordine salvato' se ok — mai un refresh pagina manuale", () => {
+    expect(source).toMatch(/const previousStops = stops;/);
+    expect(source).toMatch(/setStops\(\(prev\) => prev\.map/); // ottimistico
+    expect(source).toMatch(/setStops\(previousStops\);/); // rollback
+    expect(source).toMatch(/setMessage\("Ordine salvato\."\);/);
+    expect(source).not.toMatch(/window\.location\.reload/);
+  });
+
+  it("3. normalizeOrder chiama normalize_bus_line_stop_order scoped a UNA linea+direzione (mai un'azione globale su tutto il catalogo)", () => {
+    expect(source).toMatch(/postBusNetworkAction\("normalize_bus_line_stop_order", \{/);
+    expect(source).not.toMatch(/normalizza tutte le fermate/i);
+  });
+});

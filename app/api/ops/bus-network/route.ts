@@ -28,6 +28,10 @@ import {
   createBusLineStop,
   updateBusLineStop,
   deleteBusLineStop,
+  listBusLineStopsWithUsage,
+  reorderBusLineStops,
+  normalizeBusLineStopOrder,
+  createStopForTransfer,
 } from "@/lib/server/bus-line-stops";
 
 // ── Helper geografico per ordinamento fermate Ischia ────────────────────────
@@ -1368,26 +1372,66 @@ export async function POST(request: NextRequest) {
     // collegati (via tenant_bus_allocations.stop_id), mai loadBusNetwork
     // (troppo pesante e scoped a una data).
     if (action === "list_bus_line_stops") {
-      const [linesRes, stopsRes, allocRes] = await Promise.all([
+      const [linesRes, stops] = await Promise.all([
         auth.admin.from("tenant_bus_lines").select("id,code,name,family_code,active").eq("tenant_id", tenantId).order("code"),
-        auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,pickup_note,pickup_time,stop_order,lat,lng,is_manual,active").eq("tenant_id", tenantId),
-        auth.admin.from("tenant_bus_allocations").select("stop_id").eq("tenant_id", tenantId),
+        listBusLineStopsWithUsage(auth.admin, tenantId),
       ]);
       if (linesRes.error) throw new Error(linesRes.error.message);
-      if (stopsRes.error) throw new Error(stopsRes.error.message);
-      if (allocRes.error) throw new Error(allocRes.error.message);
-
-      const serviceCountByStopId = new Map<string, number>();
-      for (const row of (allocRes.data ?? []) as Array<{ stop_id: string | null }>) {
-        if (!row.stop_id) continue;
-        serviceCountByStopId.set(row.stop_id, (serviceCountByStopId.get(row.stop_id) ?? 0) + 1);
-      }
-      const stops = ((stopsRes.data ?? []) as Array<{ id: string }>).map((stop) => ({
-        ...stop,
-        service_count: serviceCountByStopId.get(stop.id) ?? 0,
-      }));
 
       return NextResponse.json({ ok: true, lines: linesRes.data ?? [], stops });
+    }
+
+    // Fase B/1/2 — /bus-stops: drag&drop reale. Persistenza ATOMICA via RPC
+    // (reorderBusLineStops -> reorder_bus_line_stops), mai una sequenza di
+    // update client-side senza guardie. Il client invia SEMPRE l'elenco
+    // completo delle fermate ATTIVE della linea+direzione selezionata (mai
+    // un subset arbitrario — vedi canReorder in app/(app)/bus-stops/page.tsx,
+    // che mostra un solo gruppo linea+direzione alla volta proprio per
+    // rendere impossibile un drag cross-linea o cross-direzione).
+    if (action === "reorder_bus_line_stops") {
+      const parsed = z.object({
+        bus_line_id: z.string().uuid(),
+        direction: z.enum(["arrival", "departure"]),
+        ordered_stop_ids: z.array(z.string().uuid()).min(1),
+      }).parse(body);
+
+      const result = await reorderBusLineStops(auth.admin, {
+        tenantId,
+        busLineId: parsed.bus_line_id,
+        direction: parsed.direction,
+        orderedStopIds: parsed.ordered_stop_ids,
+      });
+      if (!result.ok) {
+        if (result.reason === "duplicate_ids") {
+          return NextResponse.json({ ok: false, error: "L'elenco fermate contiene id duplicati." }, { status: 400 });
+        }
+        if (result.reason === "empty") {
+          return NextResponse.json({ ok: false, error: "Elenco fermate vuoto." }, { status: 400 });
+        }
+        // rpc_error: include il caso "una o più fermate non appartengono alla
+        // linea/direzione selezionata" sollevato dalla RPC lato SQL.
+        return NextResponse.json({ ok: false, error: result.message }, { status: 400 });
+      }
+      const stops = await listBusLineStopsWithUsage(auth.admin, tenantId);
+      return NextResponse.json({ ok: true, stops });
+    }
+
+    // Fase B/3 — normalizzazione ESPLICITA (bottone "Normalizza ordine" in
+    // /bus-stops), mai automatica: riscrive 1..N solo le fermate attive di
+    // UNA linea+direzione, riusando la stessa RPC atomica del reorder.
+    if (action === "normalize_bus_line_stop_order") {
+      const parsed = z.object({
+        bus_line_id: z.string().uuid(),
+        direction: z.enum(["arrival", "departure"]),
+      }).parse(body);
+
+      const result = await normalizeBusLineStopOrder(auth.admin, tenantId, parsed.bus_line_id, parsed.direction);
+      if (!result.ok) {
+        const message = result.reason === "rpc_error" ? result.message : "Errore normalizzazione ordine fermate.";
+        return NextResponse.json({ ok: false, error: message }, { status: 400 });
+      }
+      const stops = await listBusLineStopsWithUsage(auth.admin, tenantId);
+      return NextResponse.json({ ok: true, stops });
     }
 
     // Fase 8/9 — /bus-stops "+ Nuova fermata": creazione singola (una sola
@@ -2825,6 +2869,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
     }
 
+    // Fase B/4 — riusa il core condiviso createStopForTransfer (a sua volta
+    // basato su createBusLineStop, la stessa logica anti-duplicato usata da
+    // /bus-stops): la logica GEOGRAFICA specifica di questo caller (shift dei
+    // stop_order in base a lat/lng) resta qui dentro l'helper dedicato, non è
+    // stata persa — vedi lib/server/bus-line-stops.ts.
     if (action === "create_stop_for_transfer") {
       if (!["admin", "supervisor", "operator"].includes(auth.membership.role)) {
         return NextResponse.json({ ok: false, error: "Non autorizzato." }, { status: 403 });
@@ -2835,83 +2884,16 @@ export async function POST(request: NextRequest) {
         direction: z.enum(["arrival", "departure"]),
       }).parse(body);
 
-      const cityName = parsed.stop_name.toUpperCase();
-
-      const existing = await auth.admin.from("tenant_bus_line_stops")
-        .select("id")
-        .eq("tenant_id", tenantId)
-        .eq("bus_line_id", parsed.bus_line_id)
-        .eq("direction", parsed.direction)
-        .ilike("stop_name", cityName)
-        .maybeSingle();
-      if (existing.data) {
-        return NextResponse.json({ ok: true, stop_id: existing.data.id, ...(await loadBusNetwork(auth)) });
+      const result = await createStopForTransfer(
+        auth.admin,
+        { tenantId, busLineId: parsed.bus_line_id, direction: parsed.direction, stopName: parsed.stop_name },
+        geocodeCity
+      );
+      if (!result.ok) {
+        return NextResponse.json({ ok: false, error: result.message }, { status: 400 });
       }
 
-      const { data: lineStops } = await auth.admin.from("tenant_bus_line_stops")
-        .select("id,stop_name,city,lat,lng,stop_order")
-        .eq("tenant_id", tenantId)
-        .eq("bus_line_id", parsed.bus_line_id)
-        .eq("direction", parsed.direction)
-        .eq("active", true)
-        .order("stop_order");
-      type GeoStop = { id: string; stop_name: string; city: string; lat: number | null; lng: number | null; stop_order: number };
-      const stops = (lineStops ?? []) as GeoStop[];
-
-      const geo = await geocodeCity(cityName);
-      let insertOrder = (stops.length > 0 ? Math.max(...stops.map(s => s.stop_order)) : 0) + 1;
-
-      if (geo) {
-        const withCoords = stops.filter(s => s.lat != null) as Array<GeoStop & { lat: number; lng: number }>;
-        if (withCoords.length > 0) {
-          const sorted = [...withCoords].sort((a, b) =>
-            parsed.direction === "arrival" ? b.lat - a.lat : a.lat - b.lat
-          );
-          let insertAfterIdx = sorted.length;
-          for (let i = 0; i < sorted.length; i++) {
-            const cmp = parsed.direction === "arrival"
-              ? geo.lat > sorted[i].lat
-              : geo.lat < sorted[i].lat;
-            if (cmp) { insertAfterIdx = i; break; }
-          }
-          if (insertAfterIdx === 0) {
-            insertOrder = Math.max(1, sorted[0].stop_order - 1);
-          } else if (insertAfterIdx >= sorted.length) {
-            insertOrder = sorted[sorted.length - 1].stop_order + 1;
-          } else {
-            insertOrder = sorted[insertAfterIdx - 1].stop_order + 1;
-            for (const s of stops) {
-              if (s.stop_order >= insertOrder) {
-                await auth.admin.from("tenant_bus_line_stops")
-                  .update({ stop_order: s.stop_order + 1, order_index: s.stop_order + 1 })
-                  .eq("tenant_id", tenantId).eq("id", s.id);
-              }
-            }
-          }
-        }
-      }
-
-      const { data: newStop, error: stopErr } = await auth.admin.from("tenant_bus_line_stops")
-        .insert({
-          tenant_id: tenantId,
-          bus_line_id: parsed.bus_line_id,
-          direction: parsed.direction,
-          stop_name: cityName,
-          city: cityName,
-          stop_order: insertOrder,
-          order_index: insertOrder,
-          lat: geo?.lat ?? null,
-          lng: geo?.lng ?? null,
-          is_manual: true,
-          active: true,
-        })
-        .select("id")
-        .single();
-      if (stopErr || !newStop) {
-        return NextResponse.json({ ok: false, error: stopErr?.message ?? "Errore creazione fermata." }, { status: 400 });
-      }
-
-      return NextResponse.json({ ok: true, stop_id: (newStop as { id: string }).id, ...(await loadBusNetwork(auth)) });
+      return NextResponse.json({ ok: true, stop_id: result.stopId, ...(await loadBusNetwork(auth)) });
     }
 
     if (action === "transfer_allocation_line") {

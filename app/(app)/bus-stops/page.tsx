@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import {
@@ -139,6 +139,12 @@ export default function BusStopsPage() {
   const [stopOrderTouched, setStopOrderTouched] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // Fase B/1 — drag&drop reorder: stato locale del trascinamento in corso.
+  const [dragStopId, setDragStopId] = useState<string | null>(null);
+  const [dragOverStopId, setDragOverStopId] = useState<string | null>(null);
+  const [reordering, setReordering] = useState(false);
+  const [normalizing, setNormalizing] = useState(false);
+
   useEffect(() => {
     if (!message) return;
     const timeout = window.setTimeout(() => setMessage(""), 3000);
@@ -221,7 +227,29 @@ export default function BusStopsPage() {
     });
   }, [stopsWithStatus, lineFilter, directionFilter, statusFilter, manualOnly, search]);
 
+  // Fase B/1 — il reorder via drag&drop è consentito SOLO quando la tabella
+  // mostra esattamente UN gruppo linea+direzione senza altri filtri attivi:
+  // così non esiste alcuna possibilità strutturale di trascinare una fermata
+  // fuori dalla propria linea/direzione (nessun controllo runtime aggiuntivo
+  // necessario — il gruppo visibile è sempre e solo quello). Se l'operatore
+  // vuole riordinare deve prima filtrare su una linea e una direzione precise
+  // con "Stato: Tutte" (altrimenti l'elenco visibile sarebbe un subset e
+  // rinumerarlo 1..N potrebbe collidere con lo stop_order delle righe
+  // nascoste dal filtro).
+  const canReorder =
+    lineFilter !== "all" &&
+    directionFilter !== "all" &&
+    sortBy === "line_order" &&
+    statusFilter === "all" &&
+    !manualOnly &&
+    !search.trim();
+
   const sortedStops = useMemo(() => {
+    if (canReorder) {
+      return stopsWithStatus
+        .filter(({ stop }) => stop.bus_line_id === lineFilter && stop.direction === directionFilter && stop.active)
+        .sort((a, b) => a.stop.stop_order - b.stop.stop_order);
+    }
     const list = [...filteredStops];
     if (sortBy === "name") {
       list.sort((a, b) => a.stop.stop_name.localeCompare(b.stop.stop_name, "it"));
@@ -235,11 +263,13 @@ export default function BusStopsPage() {
       });
     }
     return list;
-  }, [filteredStops, sortBy, lineById]);
+  }, [filteredStops, sortBy, lineById, canReorder, stopsWithStatus, lineFilter, directionFilter]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedStops.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pageStops = sortedStops.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // In modalità riordino niente paginazione: il gruppo linea+direzione è per
+  // natura piccolo e l'intero elenco deve essere visibile per trascinare.
+  const totalPages = canReorder ? 1 : Math.max(1, Math.ceil(sortedStops.length / pageSize));
+  const currentPage = canReorder ? 1 : Math.min(page, totalPages);
+  const pageStops = canReorder ? sortedStops : sortedStops.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   useEffect(() => {
     setPage(1);
@@ -347,6 +377,86 @@ export default function BusStopsPage() {
     closePanel();
     await loadData();
     setMessage("Fermata eliminata.");
+  };
+
+  // Fase B/1/2/9 — persiste il nuovo ordine via la RPC atomica
+  // reorder_bus_line_stops (action "reorder_bus_line_stops"), sempre con
+  // l'elenco COMPLETO delle fermate attive del gruppo linea+direzione
+  // corrente. Aggiornamento ottimistico prima della chiamata, rollback
+  // automatico allo snapshot precedente se l'API fallisce — mai un refresh
+  // pagina manuale.
+  const persistReorder = async (orderedIds: string[]) => {
+    const previousStops = stops;
+    const orderIndexById = new Map(orderedIds.map((id, idx) => [id, idx + 1]));
+    setStops((prev) => prev.map((s) => (orderIndexById.has(s.id) ? { ...s, stop_order: orderIndexById.get(s.id)! } : s)));
+    setReordering(true);
+    const result = await postBusNetworkAction("reorder_bus_line_stops", {
+      bus_line_id: lineFilter,
+      direction: directionFilter,
+      ordered_stop_ids: orderedIds,
+    });
+    setReordering(false);
+    if (!result.ok) {
+      setStops(previousStops);
+      setMessage(result.error ?? "Errore riordino fermate.");
+      return;
+    }
+    if (Array.isArray(result.stops)) {
+      setStops(result.stops as BusStopRow[]);
+    }
+    setMessage("Ordine salvato.");
+  };
+
+  const handleDragStart = (stopId: string) => (e: DragEvent) => {
+    setDragStopId(stopId);
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const handleDragOver = (stopId: string) => (e: DragEvent) => {
+    e.preventDefault();
+    if (dragOverStopId !== stopId) setDragOverStopId(stopId);
+  };
+  const handleDragLeave = (stopId: string) => () => {
+    setDragOverStopId((prev) => (prev === stopId ? null : prev));
+  };
+  const handleDragEnd = () => {
+    setDragStopId(null);
+    setDragOverStopId(null);
+  };
+  const handleDrop = (targetStopId: string) => (e: DragEvent) => {
+    e.preventDefault();
+    setDragOverStopId(null);
+    const sourceId = dragStopId;
+    setDragStopId(null);
+    if (!sourceId || sourceId === targetStopId || !canReorder) return;
+    const currentOrder = sortedStops.map(({ stop }) => stop.id);
+    const fromIdx = currentOrder.indexOf(sourceId);
+    const toIdx = currentOrder.indexOf(targetStopId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const next = [...currentOrder];
+    next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, sourceId);
+    void persistReorder(next);
+  };
+
+  // Fase B/3 — normalizzazione ESPLICITA 1..N del gruppo linea+direzione
+  // corrente (mai automatica su tutto il catalogo): utile quando l'audit
+  // rileva stop_order duplicati storici in un singolo catalogo.
+  const normalizeOrder = async () => {
+    if (!canReorder) return;
+    setNormalizing(true);
+    const result = await postBusNetworkAction("normalize_bus_line_stop_order", {
+      bus_line_id: lineFilter,
+      direction: directionFilter,
+    });
+    setNormalizing(false);
+    if (!result.ok) {
+      setMessage(result.error ?? "Errore normalizzazione ordine.");
+      return;
+    }
+    if (Array.isArray(result.stops)) {
+      setStops(result.stops as BusStopRow[]);
+    }
+    setMessage("Ordine normalizzato.");
   };
 
   const exportCsv = () => {
@@ -538,11 +648,33 @@ export default function BusStopsPage() {
                   <option value="name">Nome fermata (A-Z)</option>
                 </select>
               </label>
+              {canReorder ? (
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50"
+                  onClick={() => void normalizeOrder()}
+                  disabled={normalizing || reordering}
+                  title="Riscrive l'ordine di questa linea/direzione come 1, 2, 3... senza duplicati"
+                >
+                  {normalizing ? "Normalizzo..." : "Normalizza ordine"}
+                </button>
+              ) : null}
               <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={exportCsv} disabled={sortedStops.length === 0}>
                 Esporta
               </button>
             </div>
           </div>
+
+          {canReorder ? (
+            <p className="mb-3 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              Trascina <span aria-hidden>⋮⋮</span> per riordinare le fermate di questa linea/direzione.
+              {reordering ? " Salvataggio ordine..." : ""}
+            </p>
+          ) : lineFilter !== "all" && directionFilter !== "all" ? (
+            <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-muted">
+              Per riordinare trascinando: imposta Stato su &quot;Tutte&quot;, svuota la ricerca e disattiva &quot;Solo fermate create manualmente&quot;.
+            </p>
+          ) : null}
 
           {sortedStops.length === 0 ? (
             <EmptyState title="Nessuna fermata trovata con questi filtri." compact />
@@ -567,17 +699,39 @@ export default function BusStopsPage() {
                     {pageStops.map(({ stop, status }) => {
                       const line = lineById.get(stop.bus_line_id);
                       const isSelected = selectedStopId === stop.id;
+                      const isDragging = canReorder && dragStopId === stop.id;
+                      const isDropTarget = canReorder && dragOverStopId === stop.id && dragStopId !== stop.id;
                       return (
                         <tr
                           key={stop.id}
                           onClick={() => selectStop(stop)}
-                          className={`cursor-pointer border-t border-slate-100 transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50"}`}
+                          onDragOver={canReorder ? handleDragOver(stop.id) : undefined}
+                          onDragLeave={canReorder ? handleDragLeave(stop.id) : undefined}
+                          onDrop={canReorder ? handleDrop(stop.id) : undefined}
+                          className={`cursor-pointer border-t transition ${isSelected ? "bg-blue-50/70" : "hover:bg-slate-50"} ${
+                            isDropTarget ? "border-t-2 border-t-blue-500" : "border-slate-100"
+                          } ${isDragging ? "opacity-40" : ""}`}
                         >
                           <td className="px-3 py-2">
                             {line ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold uppercase ${lineBadgeClassName(line.family_code)}`}>{lineShortLabel(line)}</span> : "N/D"}
                           </td>
                           <td className="px-3 py-2 text-slate-700">{DIRECTION_LABEL[stop.direction]}</td>
-                          <td className="px-3 py-2 text-slate-500">{stop.stop_order}</td>
+                          <td className="px-3 py-2 text-slate-500">
+                            {canReorder ? (
+                              <span
+                                draggable
+                                onDragStart={handleDragStart(stop.id)}
+                                onDragEnd={handleDragEnd}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mr-1.5 inline-flex cursor-grab select-none items-center text-slate-400 hover:text-slate-600 active:cursor-grabbing"
+                                title="Trascina per riordinare"
+                                aria-label="Trascina per riordinare"
+                              >
+                                ⋮⋮
+                              </span>
+                            ) : null}
+                            {stop.stop_order}
+                          </td>
                           <td className="px-3 py-2 font-semibold text-slate-800">{stop.stop_name.toUpperCase()}</td>
                           <td className="px-3 py-2 text-slate-600">{stop.city}</td>
                           <td className="max-w-[240px] truncate px-3 py-2 text-slate-600" title={stop.pickup_note ?? ""}>
@@ -624,19 +778,21 @@ export default function BusStopsPage() {
                 })}
               </div>
 
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                <span>Risultati: {sortedStops.length} fermate</span>
-                <div className="flex items-center gap-2">
-                  <button type="button" className="btn-secondary px-2 py-1 text-xs" disabled={currentPage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>‹</button>
-                  <span>Pagina {currentPage} / {totalPages}</span>
-                  <button type="button" className="btn-secondary px-2 py-1 text-xs" disabled={currentPage >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>›</button>
-                  <select className="input-saas py-1 text-xs" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-                    <option value={10}>10 per pagina</option>
-                    <option value={25}>25 per pagina</option>
-                    <option value={50}>50 per pagina</option>
-                  </select>
+              {!canReorder ? (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                  <span>Risultati: {sortedStops.length} fermate</span>
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="btn-secondary px-2 py-1 text-xs" disabled={currentPage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>‹</button>
+                    <span>Pagina {currentPage} / {totalPages}</span>
+                    <button type="button" className="btn-secondary px-2 py-1 text-xs" disabled={currentPage >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>›</button>
+                    <select className="input-saas py-1 text-xs" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                      <option value={10}>10 per pagina</option>
+                      <option value={25}>25 per pagina</option>
+                      <option value={50}>50 per pagina</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </>
           )}
         </div>

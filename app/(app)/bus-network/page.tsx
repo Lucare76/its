@@ -2311,6 +2311,15 @@ export default function BusNetworkPage() {
     setEditDriverUnitId("");
   }, [post, editDriverName, editDriverPhone, direction, date]);
 
+  // Fase B/5 — "Crea nuova fermata" dalla approvazione pending usa LO STESSO
+  // helper server di /bus-stops (action "create_bus_line_stop" ->
+  // createBusLineStop), non più "add_stop" (che inseriva senza alcun
+  // controllo anti-duplicato e creava sempre anche la fermata gemella
+  // sull'altra direzione). Una sola direzione — quella del pending — con lo
+  // stesso blocco su duplicato esatto e stesso warning near-duplicate di
+  // /bus-stops. Se la fermata esiste già (stesso nome, es. creata da un
+  // import Excel nel frattempo), riusa quella invece di bloccare
+  // l'approvazione — mai una seconda fermata per la stessa città.
   const confirmApprovePendingWithNewStop = useCallback(async () => {
     if (!approvePending || !pendingNewStop || !selectedLine) return;
     const existing = payload.stops.filter((s) => s.bus_line_id === selectedLine.id && s.direction === direction);
@@ -2318,27 +2327,49 @@ export default function BusNetworkPage() {
     const insertOrder = afterStop
       ? afterStop.stop_order + 1
       : existing.reduce((max, s) => Math.max(max, s.stop_order), 0) + 1;
-    const addResult = await post("add_stop", {
-      bus_line_id: selectedLine.id,
-      direction,
-      stop_name: pendingNewStop.name.trim().toUpperCase(),
-      city: pendingNewStop.city.trim(),
-      pickup_note: pendingNewStop.note || null,
-      stop_order: insertOrder,
-      lat: null, lng: null
-    }) as (Partial<ApiPayload> & { ok?: boolean }) | null;
-    if (!addResult) return;
-    const updatedStops = addResult.stops ?? [];
-    const newStop = updatedStops.find(
-      (s) => s.bus_line_id === selectedLine.id &&
-        s.direction === direction &&
-        s.stop_name.toUpperCase() === pendingNewStop.name.trim().toUpperCase()
-    );
-    if (!newStop) { setMessage("Fermata creata ma non trovata — riprova."); return; }
+
+    const token = await getToken();
+    if (!token) return;
+    setSaving(true);
+    let stopId: string | null = null;
+    try {
+      const res = await fetch("/api/ops/bus-network", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          action: "create_bus_line_stop",
+          bus_line_id: selectedLine.id,
+          direction,
+          stop_name: pendingNewStop.name.trim().toUpperCase(),
+          city: pendingNewStop.city.trim(),
+          pickup_note: pendingNewStop.note || null,
+          stop_order: insertOrder,
+        }),
+      });
+      const createBody = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; stop?: { id: string }; existing_stop_id?: string }
+        | null;
+      if (createBody?.ok && createBody.stop) {
+        stopId = createBody.stop.id;
+      } else if (res.status === 409 && createBody?.existing_stop_id) {
+        stopId = createBody.existing_stop_id;
+      } else {
+        setSaving(false);
+        setMessage(createBody?.error ?? "Errore creazione fermata.");
+        return;
+      }
+    } catch {
+      setSaving(false);
+      setMessage("Errore di rete durante la creazione della fermata.");
+      return;
+    }
+    setSaving(false);
+    if (!stopId) { setMessage("Fermata creata ma non trovata — riprova."); return; }
+
     await post("approve_pending", {
       pending_id: approvePending.id,
       bus_unit_id: approveUnitId,
-      stop_id: newStop.id,
+      stop_id: stopId,
       travel_date: approvePending.travel_date,
     });
     setApprovePending(null);
