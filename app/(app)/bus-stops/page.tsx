@@ -121,6 +121,17 @@ function toCsvValue(value: string | number | null | undefined) {
   return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
+function formatPickupPoint(value: string | null | undefined) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const letters = text.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
+  const isMostlyUppercase = letters.length > 3 && letters === letters.toUpperCase();
+  if (!isMostlyUppercase) return text;
+  return text
+    .toLocaleLowerCase("it-IT")
+    .replace(/(^|[\s'/-])([a-zà-öø-ÿ])/g, (match, prefix: string, letter: string) => `${prefix}${letter.toLocaleUpperCase("it-IT")}`);
+}
+
 export default function BusStopsPage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -490,68 +501,68 @@ export default function BusStopsPage() {
   if (errorMessage) return <div className="card p-4 text-sm text-muted">{errorMessage}</div>;
 
   return (
-    <section className="page-section">
+    <section className="page-section gap-3">
       {/* Fase C/A — il titolo "Fermate bus" è già mostrato dall'header
           condiviso (eyebrow "Vista operativa" + h2, in app/(app)/layout.tsx):
           qui niente h1 duplicato, solo sottotitolo + CTA integrata. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
-        <p className="max-w-2xl text-sm text-muted">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <p className="max-w-3xl text-xs text-muted">
           Gestisci tutte le fermate delle linee bus: aggiungi, modifica o disattiva le fermate e definisci il punto di carico.
         </p>
-        <button type="button" className="btn-primary shrink-0 px-4 py-2 text-sm" onClick={startCreate}>
+        <button type="button" className="btn-primary shrink-0 px-3 py-1.5 text-xs" onClick={startCreate}>
           + Nuova fermata
         </button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
-        <article className="card flex items-center gap-3 p-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
+      <div className="grid gap-2 md:grid-cols-4">
+        <article className="card flex items-center gap-2 p-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
           </span>
           <div className="min-w-0 leading-tight">
-            <p className="text-xl font-bold text-text">{kpi.totalStops}</p>
-            <p className="truncate text-[11px] text-muted">Fermate totali</p>
+            <p className="text-base font-bold text-text">{kpi.totalStops}</p>
+            <p className="truncate text-[10px] text-muted">Fermate totali</p>
           </div>
         </article>
-        <article className="card flex items-center gap-3 p-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 12l4 4 10-10" /></svg>
+        <article className="card flex items-center gap-2 p-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 12l4 4 10-10" /></svg>
           </span>
           <div className="min-w-0 flex-1 leading-tight">
             <div className="flex items-baseline justify-between gap-1">
-              <p className="text-xl font-bold text-text">{kpi.withNote}</p>
+              <p className="text-base font-bold text-text">{kpi.withNote}</p>
               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">{kpi.withNotePct}%</span>
             </div>
-            <p className="truncate text-[11px] text-muted">Con punto di carico</p>
+            <p className="truncate text-[10px] text-muted">Con punto di carico</p>
           </div>
         </article>
-        <article className="card flex items-center gap-3 p-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
+        <article className="card flex items-center gap-2 p-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
           </span>
           <div className="min-w-0 leading-tight">
-            <p className="text-xl font-bold text-text">{kpi.activeLinesCount}</p>
-            <p className="truncate text-[11px] text-muted" title={kpi.activeLinesLabel}>{kpi.activeLinesLabel || "Linee attive"}</p>
+            <p className="text-base font-bold text-text">{kpi.activeLinesCount}</p>
+            <p className="truncate text-[10px] text-muted" title={kpi.activeLinesLabel}>{kpi.activeLinesLabel || "Linee attive"}</p>
           </div>
         </article>
-        <article className="card flex items-center gap-3 p-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="8" r="3" /><path d="M2 20a7 7 0 0 1 14 0M16 8a3 3 0 1 1 0 6M22 20a6.5 6.5 0 0 0-5-6.3" /></svg>
+        <article className="card flex items-center gap-2 p-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="8" r="3" /><path d="M2 20a7 7 0 0 1 14 0M16 8a3 3 0 1 1 0 6M22 20a6.5 6.5 0 0 0-5-6.3" /></svg>
           </span>
           <div className="min-w-0 flex-1 leading-tight">
             <div className="flex items-baseline justify-between gap-1">
-              <p className="text-xl font-bold text-text">{kpi.linkedServicesTotal}</p>
+              <p className="text-base font-bold text-text">{kpi.linkedServicesTotal}</p>
               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">{kpi.coveragePct}%</span>
             </div>
-            <p className="truncate text-[11px] text-muted">Servizi collegati</p>
+            <p className="truncate text-[10px] text-muted">Servizi collegati</p>
           </div>
         </article>
       </div>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+      <div className="grid items-start gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
         {/* Colonna sinistra: filtri */}
-        <div className="space-y-3">
-          <div className="card space-y-4 p-4">
+        <div className="space-y-2">
+          <div className="card space-y-3 p-3">
             <div className="flex items-center justify-between">
               <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Filtri</h2>
               <button
@@ -570,7 +581,7 @@ export default function BusStopsPage() {
             </div>
             <label className="block text-xs font-medium text-muted">
               Linea
-              <select className="input-saas mt-1.5 w-full" value={lineFilter} onChange={(e) => setLineFilter(e.target.value)}>
+              <select className="input-saas mt-1 h-9 w-full text-xs" value={lineFilter} onChange={(e) => setLineFilter(e.target.value)}>
                 <option value="all">Tutte le linee</option>
                 {lines.map((line) => (
                   <option key={line.id} value={line.id}>{line.name}</option>
@@ -579,7 +590,7 @@ export default function BusStopsPage() {
             </label>
             <label className="block text-xs font-medium text-muted">
               Direzione
-              <select className="input-saas mt-1.5 w-full" value={directionFilter} onChange={(e) => setDirectionFilter(e.target.value as "all" | Direction)}>
+              <select className="input-saas mt-1 h-9 w-full text-xs" value={directionFilter} onChange={(e) => setDirectionFilter(e.target.value as "all" | Direction)}>
                 <option value="all">Tutte</option>
                 <option value="arrival">Andata</option>
                 <option value="departure">Ritorno</option>
@@ -587,7 +598,7 @@ export default function BusStopsPage() {
             </label>
             <label className="block text-xs font-medium text-muted">
               Stato
-              <select className="input-saas mt-1.5 w-full" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | BusStopStatus)}>
+              <select className="input-saas mt-1 h-9 w-full text-xs" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | BusStopStatus)}>
                 <option value="all">Tutte</option>
                 <option value="active">Solo attive</option>
                 <option value="incomplete">Da completare</option>
@@ -602,7 +613,7 @@ export default function BusStopsPage() {
             <div className="border-t border-slate-100 pt-3">
               <button
                 type="button"
-                className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
                 onClick={() => setShowMoreFilters((v) => !v)}
               >
                 <span>Altri filtri</span>
@@ -617,12 +628,12 @@ export default function BusStopsPage() {
             </div>
           </div>
 
-          <div className="card space-y-1 p-4">
+          <div className="card space-y-1 p-3">
             <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Linee</h2>
             <button
               type="button"
               onClick={() => setLineFilter("all")}
-              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition ${lineFilter === "all" ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
+              className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition ${lineFilter === "all" ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
             >
               <span>Tutte le linee</span>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{stops.length}</span>
@@ -632,7 +643,7 @@ export default function BusStopsPage() {
                 key={line.id}
                 type="button"
                 onClick={() => setLineFilter(line.id)}
-                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition ${lineFilter === line.id ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition ${lineFilter === line.id ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
               >
                 <span className="truncate">{line.name}</span>
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{lineCounts.get(line.id) ?? 0}</span>
@@ -642,13 +653,13 @@ export default function BusStopsPage() {
         </div>
 
         {/* Colonna centrale: tabella */}
-        <div className="card p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-semibold">Fermate ({sortedStops.length})</h2>
+        <div className="card min-w-0 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-base font-semibold">Fermate ({sortedStops.length})</h2>
             <div className="flex items-center gap-2">
               <label className="flex items-center gap-1.5 text-xs text-muted">
                 Ordina per
-                <select className="input-saas py-1 text-xs" value={sortBy} onChange={(e) => setSortBy(e.target.value as "line_order" | "name")}>
+                <select className="input-saas h-8 py-1 text-xs" value={sortBy} onChange={(e) => setSortBy(e.target.value as "line_order" | "name")}>
                   <option value="line_order">Linea, Ordine</option>
                   <option value="name">Nome fermata (A-Z)</option>
                 </select>
@@ -656,7 +667,7 @@ export default function BusStopsPage() {
               {canReorder ? (
                 <button
                   type="button"
-                  className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50"
+                  className="btn-secondary px-2.5 py-1 text-xs disabled:opacity-50"
                   onClick={() => void normalizeOrder()}
                   disabled={normalizing || reordering}
                   title="Riscrive l'ordine di questa linea/direzione come 1, 2, 3... senza duplicati"
@@ -664,7 +675,7 @@ export default function BusStopsPage() {
                   {normalizing ? "Normalizzo..." : "Normalizza ordine"}
                 </button>
               ) : null}
-              <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={exportCsv} disabled={sortedStops.length === 0}>
+              <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={exportCsv} disabled={sortedStops.length === 0}>
                 Esporta
               </button>
             </div>
@@ -686,19 +697,26 @@ export default function BusStopsPage() {
           ) : (
             <>
               {/* Desktop/tablet: tabella */}
-              <div className="hidden max-h-[560px] overflow-auto rounded-xl border border-slate-200 md:block">
-                <table className="min-w-[980px] table-auto whitespace-nowrap text-sm">
-                  <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+              <div className="hidden max-h-[610px] overflow-y-auto overflow-x-hidden rounded-lg border border-slate-200 md:block">
+                <table className="w-full table-fixed text-xs">
+                  <colgroup>
+                    <col className="w-[9%]" />
+                    <col className="w-[6%]" />
+                    <col className="w-[24%]" />
+                    <col className="w-[38%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[7%]" />
+                    <col className="w-[6%]" />
+                  </colgroup>
+                  <thead className="sticky top-0 z-10 whitespace-nowrap border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
                     <tr>
-                      <th className="px-3 py-2.5">Linea</th>
-                      <th className="px-3 py-2">Direzione</th>
-                      <th className="px-3 py-2 text-right">Ord.</th>
-                      <th className="px-3 py-2">Nome fermata</th>
-                      <th className="px-3 py-2">Città</th>
-                      <th className="px-3 py-2">Punto di carico</th>
-                      <th className="px-3 py-2">Stato</th>
-                      <th className="px-3 py-2 text-right">Servizi</th>
-                      <th className="px-3 py-2 text-right">Azioni</th>
+                      <th className="px-4 py-3">Linea</th>
+                      <th className="px-3 py-3 text-right">Ord.</th>
+                      <th className="px-3 py-3">Fermata</th>
+                      <th className="px-3 py-3">Punto di carico</th>
+                      <th className="px-3 py-3">Stato</th>
+                      <th className="px-3 py-3 text-right">Servizi</th>
+                      <th className="px-3 py-3 text-right">Azioni</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -718,11 +736,10 @@ export default function BusStopsPage() {
                             isSelected ? "border-l-2 border-l-blue-500 bg-blue-50/70" : "border-l-2 border-l-transparent hover:bg-slate-50"
                           } ${isDropTarget ? "border-t-2 border-t-blue-500" : "border-slate-100"} ${isDragging ? "opacity-40" : ""}`}
                         >
-                          <td className="px-3 py-1.5">
+                          <td className="px-3 py-2">
                             {line ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold uppercase ${lineBadgeClassName(line.family_code)}`}>{lineShortLabel(line)}</span> : "N/D"}
                           </td>
-                          <td className="px-3 py-1.5 text-slate-700">{DIRECTION_LABEL[stop.direction]}</td>
-                          <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">
+                          <td className="px-2.5 py-2 text-right text-slate-500 tabular-nums">
                             {canReorder ? (
                               <span
                                 draggable
@@ -738,20 +755,24 @@ export default function BusStopsPage() {
                             ) : null}
                             {stop.stop_order}
                           </td>
-                          <td className="px-3 py-1.5 font-semibold text-slate-800">{stop.stop_name.toUpperCase()}</td>
-                          <td className="px-3 py-1.5 text-slate-600">{stop.city}</td>
-                          <td className="max-w-[220px] truncate px-3 py-1.5 text-slate-600" title={stop.pickup_note ?? ""}>
+                          <td className="px-2.5 py-2">
+                            <span className="line-clamp-2 font-semibold text-slate-800">{stop.stop_name.toUpperCase()}</span>
+                            {stop.city.trim().toUpperCase() !== stop.stop_name.trim().toUpperCase() ? (
+                              <span className="mt-0.5 block truncate text-[11px] font-medium uppercase text-slate-400">{stop.city}</span>
+                            ) : null}
+                          </td>
+                          <td className="px-2.5 py-2 text-slate-600" title={stop.pickup_note ?? ""}>
                             {stop.pickup_note && stop.pickup_note.trim() ? (
-                              stop.pickup_note
+                              <span className="line-clamp-2">{formatPickupPoint(stop.pickup_note)}</span>
                             ) : (
                               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">Punto di carico mancante</span>
                             )}
                           </td>
-                          <td className="px-3 py-1.5">
+                          <td className="px-2.5 py-2">
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${BUS_STOP_STATUS_BADGE_CLASSNAME[status]}`}>{BUS_STOP_STATUS_LABELS[status]}</span>
                           </td>
-                          <td className="px-3 py-1.5 text-right text-slate-600 tabular-nums">{stop.service_count}</td>
-                          <td className="px-3 py-1.5 text-right">
+                          <td className="px-2.5 py-2 text-right text-slate-600 tabular-nums">{stop.service_count}</td>
+                          <td className="px-2.5 py-2 text-right">
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); selectStop(stop); }}
@@ -818,23 +839,15 @@ export default function BusStopsPage() {
             nessuna fermata è selezionata, niente header/area vuota: un
             empty state compatto e intenzionale (icona + titolo + CTA), mai
             un grande riquadro bianco senza contenuto. */}
-        <div className="card p-4">
-          {!draft ? (
-            <div className="flex flex-col items-center gap-3 py-8 text-center">
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-500">
-                <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
-              </span>
-              <div className="space-y-1">
-                <p className="text-sm font-semibold text-text">Seleziona una fermata</p>
-                <p className="max-w-[240px] text-xs text-muted">
-                  Seleziona una fermata dalla tabella per modificarla, oppure crea una nuova fermata.
-                </p>
-              </div>
-              <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={startCreate}>
-                + Nuova fermata
-              </button>
-            </div>
-          ) : (
+        {draft ? (
+          <>
+          <button
+            type="button"
+            className="fixed inset-0 z-30 hidden cursor-default bg-slate-900/10 xl:block"
+            onClick={closePanel}
+            aria-label="Chiudi pannello modifica"
+          />
+          <div className="fixed bottom-5 right-5 top-24 z-40 w-[380px] max-w-[calc(100vw-32px)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-900/20">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">{mode === "create" ? "Nuova fermata" : "Modifica fermata"}</h2>
@@ -941,8 +954,9 @@ export default function BusStopsPage() {
                 </button>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+          </>
+        ) : null}
       </div>
 
       {message ? <div className="fixed bottom-4 right-4 rounded-lg bg-slate-900 px-4 py-2 text-sm text-white">{message}</div> : null}
