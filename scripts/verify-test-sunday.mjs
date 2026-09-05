@@ -7,13 +7,12 @@
  * riferite a quei servizi, e produce PASS/FAIL su invarianti dure.
  *
  * Uso:
- *   node scripts/verify-test-sunday.mjs
- *   node scripts/verify-test-sunday.mjs --date=2025-10-12
- *   node scripts/verify-test-sunday.mjs --min-services=400
+ *   pnpm exec tsx scripts/verify-test-sunday.mjs
+ *   pnpm exec tsx scripts/verify-test-sunday.mjs --date=2025-10-12
+ *   pnpm exec tsx scripts/verify-test-sunday.mjs --min-services=400
  */
 
 import { readFileSync } from "fs";
-import { pathToFileURL } from "url";
 
 const DEFAULT_DATE = "2025-10-12";
 const DEFAULT_TENANT = "d200b89a-64c7-4f8d-a430-95a33b83047a";
@@ -95,10 +94,7 @@ async function main() {
     `/tenant_bus_units?select=id,tenant_id,label,capacity&tenant_id=eq.${TENANT_ID}&limit=500`,
   );
 
-  // Il verificatore puro è TypeScript; lo carichiamo con tsx quando invocato
-  // dallo script package.json. L'import dinamico resta read-only.
-  const moduleUrl = pathToFileURL(new URL("../lib/server/its-sunday-torture.ts", import.meta.url).pathname).href;
-  const { evaluateItsSundayTorture } = await import(moduleUrl);
+  const { evaluateItsSundayTorture } = await import("../lib/server/its-sunday-torture.ts");
   const report = evaluateItsSundayTorture({
     tenantId: TENANT_ID,
     date: DATE,
@@ -110,13 +106,13 @@ async function main() {
   });
 
   console.log("RISULTATO");
-  console.log(`  Servizi:        ${report.stats.services}`);
-  console.log(`  PAX:            ${report.stats.pax}`);
-  console.log(`  Arrivi:         ${report.stats.arrivalServices}`);
-  console.log(`  Partenze:       ${report.stats.departureServices}`);
-  console.log(`  Assignments:    ${report.stats.assignments}`);
-  console.log(`  Allocazioni bus:${report.stats.busAllocations}`);
-  console.log(`  Bus censiti:    ${report.stats.busUnits}\n`);
+  console.log(`  Servizi:         ${report.stats.services}`);
+  console.log(`  PAX:             ${report.stats.pax}`);
+  console.log(`  Arrivi:          ${report.stats.arrivalServices}`);
+  console.log(`  Partenze:        ${report.stats.departureServices}`);
+  console.log(`  Assignments:     ${report.stats.assignments}`);
+  console.log(`  Allocazioni bus: ${report.stats.busAllocations}`);
+  console.log(`  Bus censiti:     ${report.stats.busUnits}\n`);
 
   if (report.hardFailures.length) {
     console.log(`❌ HARD FAILURES (${report.hardFailures.length})`);
