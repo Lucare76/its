@@ -17,7 +17,7 @@ test.describe("Operational pages — auth gates", () => {
     test(`${path} → redirect a /login se non autenticato`, async ({ page }) => {
       await page.goto(path);
       await expect(page).toHaveURL(/\/login/);
-      await expect(page.getByRole("heading", { name: "Login Supabase" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Accesso riservato" })).toBeVisible();
     });
   }
 });
