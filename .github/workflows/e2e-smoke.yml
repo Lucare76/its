@@ -35,6 +35,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: ITS Sunday torture — synthetic 500
+        run: pnpm exec tsx scripts/verify-test-sunday-synthetic.mjs
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
