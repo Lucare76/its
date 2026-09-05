@@ -5,7 +5,7 @@ test.describe("Smoke e2e", () => {
     await page.goto("/dashboard");
     await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
 
-    await expect(page.getByRole("heading", { name: "Login Supabase" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Accesso riservato" })).toBeVisible();
     await expect(page.getByTestId("login-email")).toBeVisible();
     await expect(page.getByTestId("login-password")).toBeVisible();
     await expect(page.getByRole("button", { name: "Accedi all'area riservata" })).toBeVisible();
