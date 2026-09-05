@@ -28,6 +28,18 @@ const TABLES = [
   "tenants",
   "trip_groups",
   "driver_profiles",
+  "tenant_bus_lines",
+  "tenant_bus_line_stops",
+  "tenant_bus_units",
+  "tenant_bus_allocations",
+  "booking_groups",
+  "booking_group_stops",
+  "agency_bookings",
+  "bus_lot_configs",
+  "bus_import_pending",
+  "ferry_pickup_rules",
+  "hotel_vehicle_limits",
+  "driver_availability",
 ] as const;
 
 const BUCKET = "backups";
