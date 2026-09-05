@@ -35,6 +35,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: ITS Sunday torture — unit tests
+        run: pnpm exec vitest run tests/unit/its-sunday-torture.test.ts
+
       - name: ITS Sunday torture — synthetic 500
         run: pnpm exec tsx scripts/verify-test-sunday-synthetic.mjs
 
