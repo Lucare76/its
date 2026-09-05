@@ -2,8 +2,15 @@
  * GET|POST /api/cron/backup
  *
  * Esporta le tabelle principali in JSON e salva su Supabase Storage
- * nel bucket "backups" con nome backup_YYYY-MM-DD.json
- * Schedulato ogni notte alle 02:00.
+ * nel bucket "backups" con nome backup_YYYY-MM-DD.json (backup primario,
+ * retention 15 giorni). Schedulato ogni notte alle 02:00.
+ *
+ * Disaster Recovery V2: dopo il successo del backup primario, copia lo
+ * stesso JSON su Cloudflare R2 (off-provider, bucket privato, retention
+ * applicativa 90 giorni — vedi lib/server/r2-backup.ts). Il backup primario
+ * e la copia offsite hanno stati indipendenti: un fallimento R2 non tocca
+ * mai il backup Supabase gia' caricato, non causa retry/rollback del
+ * primario e non esegue mai un restore.
  *
  * Usa paginazione per tabelle con più di 1000 righe (cap REST API Supabase).
  */
@@ -11,6 +18,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { withJobHealth } from "@/lib/server/job-health";
+import { uploadOffsiteBackup, purgeOldOffsiteBackups, type R2UploadResult } from "@/lib/server/r2-backup";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -148,6 +156,13 @@ async function runBackup(admin: ReturnType<typeof createAdminClient>) {
 
   const purge = await purgeOldBackups(admin);
 
+  // Disaster Recovery V2 — copia off-provider su Cloudflare R2. Gira SOLO
+  // dopo il successo dell'upload Supabase sopra, e un suo fallimento non
+  // tocca in alcun modo il backup primario gia' caricato (nessun rollback,
+  // nessuna cancellazione, nessun retry sul primario).
+  const offsiteUpload = await uploadOffsiteBackup(filename, bytes);
+  const offsitePurge = offsiteUpload.status === "success" ? await purgeOldOffsiteBackups() : { deleted: [], errors: [] };
+
   return {
     ok: true,
     filename,
@@ -157,6 +172,43 @@ async function runBackup(admin: ReturnType<typeof createAdminClient>) {
     table_errors: errors.length > 0 ? errors : undefined,
     purged: purge.deleted.length > 0 ? purge.deleted : undefined,
     purge_errors: purge.errors.length > 0 ? purge.errors : undefined,
+    offsite_backup: toOffsiteBackupSummary(offsiteUpload),
+    offsite_purge_errors: offsitePurge.errors.length > 0 ? offsitePurge.errors : undefined,
+  };
+}
+
+/**
+ * Proietta l'esito interno di uploadOffsiteBackup nella forma pubblica del
+ * risultato del job (provider esplicito, mai credenziali/endpoint con
+ * token). "verified" e' sempre presente cosi' i consumer possono distinguere
+ * un semplice PutObject riuscito senza verifica da un HeadObject confermato.
+ */
+function toOffsiteBackupSummary(result: R2UploadResult) {
+  if (result.status === "success") {
+    return {
+      provider: "cloudflare-r2" as const,
+      bucket: result.bucket,
+      key: result.key,
+      status: result.status,
+      size_bytes: result.size_bytes,
+      verified: result.verified,
+    };
+  }
+  if (result.status === "failed") {
+    return {
+      provider: "cloudflare-r2" as const,
+      bucket: result.bucket,
+      key: result.key,
+      status: result.status,
+      verified: result.verified,
+      error: result.error,
+    };
+  }
+  return {
+    provider: "cloudflare-r2" as const,
+    status: result.status,
+    verified: result.verified,
+    error: result.error,
   };
 }
 
@@ -177,7 +229,13 @@ async function handler(request: NextRequest) {
       const backup = await runBackup(admin);
       const tableErrors = Array.isArray(backup.table_errors) ? backup.table_errors.length : 0;
       const purgeErrors = Array.isArray(backup.purge_errors) ? backup.purge_errors.length : 0;
-      const warningCount = tableErrors + purgeErrors;
+      // Offsite (R2) fallito o non configurato non fa MAI fallire il job (il
+      // backup primario e' gia' salvo su Supabase), ma non deve nemmeno
+      // risultare "tutto verde": conta come warning, coerente con la regola
+      // "primary success + offsite failed -> stato complessivo non healthy".
+      const offsiteProblem = backup.offsite_backup?.status === "failed" || backup.offsite_backup?.status === "skipped" ? 1 : 0;
+      const offsitePurgeErrors = Array.isArray(backup.offsite_purge_errors) ? backup.offsite_purge_errors.length : 0;
+      const warningCount = tableErrors + purgeErrors + offsiteProblem + offsitePurgeErrors;
       return {
         result: backup,
         status: backup.ok ? (warningCount > 0 ? "warning" : "success") : "failed",
@@ -195,7 +253,9 @@ async function handler(request: NextRequest) {
           row_counts: backup.row_counts,
           table_errors: backup.table_errors,
           purged_count: Array.isArray(backup.purged) ? backup.purged.length : 0,
-          purge_errors: backup.purge_errors
+          purge_errors: backup.purge_errors,
+          offsite_backup: backup.offsite_backup,
+          offsite_purge_errors: backup.offsite_purge_errors
         }
       };
     });

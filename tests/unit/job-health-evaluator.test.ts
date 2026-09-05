@@ -209,6 +209,68 @@ describe("evaluateJobHealth — 10. backup con errori parziali diventa warning",
   });
 });
 
+describe("evaluateJobHealth — 10b. Disaster Recovery V2, copia offsite R2 (primario non deve mai risultare invalidato da un problema R2)", () => {
+  it("primary success + offsite success + HeadObject verificato -> healthy, con nota offsite", () => {
+    const run = makeRun({
+      status: "success",
+      metadata: {
+        tables_exported: 24,
+        offsite_backup: { provider: "cloudflare-r2", bucket: "its-backups-offsite", key: "production/backup_2026-08-22.json", status: "success", size_bytes: 123, verified: true },
+      },
+    });
+    const evaluation = evaluateJobHealth({ config: makeConfig(), runs: [run], now: NOW });
+    expect(evaluation.healthStatus).toBe("healthy");
+    expect(evaluation.notes).toContain("copia offsite (R2) verificata");
+  });
+
+  it("primary success ma offsite failed -> warning (mai critical/failed), backup primario resta implicitamente riuscito", () => {
+    const run = makeRun({
+      status: "warning",
+      metadata: {
+        tables_exported: 24,
+        offsite_backup: { provider: "cloudflare-r2", status: "failed", error: "PutObject error" },
+      },
+    });
+    const evaluation = evaluateJobHealth({ config: makeConfig(), runs: [run], now: NOW });
+    expect(evaluation.healthStatus).toBe("warning");
+    expect(evaluation.reason).toContain("copia offsite (R2) non riuscita");
+  });
+
+  it("env R2 mancanti (offsite skipped) -> warning con motivo esplicito 'non configurata'", () => {
+    const run = makeRun({
+      status: "warning",
+      metadata: {
+        tables_exported: 24,
+        offsite_backup: { provider: "cloudflare-r2", status: "skipped", error: "Variabili R2 mancanti: R2_ENDPOINT" },
+      },
+    });
+    const evaluation = evaluateJobHealth({ config: makeConfig(), runs: [run], now: NOW });
+    expect(evaluation.healthStatus).toBe("warning");
+    expect(evaluation.reason).toContain("copia offsite (R2) non configurata");
+  });
+
+  it("purge R2 fallito ma offsite_backup success -> warning per la pulizia, non per l'upload", () => {
+    const run = makeRun({
+      status: "warning",
+      metadata: {
+        tables_exported: 24,
+        offsite_backup: { provider: "cloudflare-r2", status: "success", verified: true },
+        offsite_purge_errors: ["Cancellazione oggetti R2 fallita: boom"],
+      },
+    });
+    const evaluation = evaluateJobHealth({ config: makeConfig(), runs: [run], now: NOW });
+    expect(evaluation.healthStatus).toBe("warning");
+    expect(evaluation.reason).toContain("pulizia offsite (R2) non riuscita");
+  });
+
+  it("run pre-Disaster-Recovery-V2 (nessun campo offsite_backup in metadata) -> comportamento identico a prima, nessuna nota offsite", () => {
+    const run = makeRun({ status: "success", metadata: { tables_exported: 12 } });
+    const evaluation = evaluateJobHealth({ config: makeConfig(), runs: [run], now: NOW });
+    expect(evaluation.healthStatus).toBe("healthy");
+    expect(evaluation.notes).not.toContain("copia offsite (R2) verificata");
+  });
+});
+
 describe("evaluateJobHealth — 11. ultimo failed seguito da success torna sano", () => {
   it("1 fallimento isolato PRIMA di un success piu' recente -> healthy (il piu' recente vince)", () => {
     const runs = [

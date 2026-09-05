@@ -70,20 +70,36 @@ function metaArrayLength(metadata: Record<string, unknown> | null | undefined, k
   return Array.isArray(value) ? value.length : 0;
 }
 
+function metaObject(metadata: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> | null {
+  const value = metadata?.[key];
+  return value != null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
 /**
- * Regole Backup (vedi spec sprint): warning se success ma con tabelle in
- * errore o purge fallito; altrimenti healthy con note informative (tabelle
- * esportate, righe totali, backup vecchi eliminati). Il numero assoluto di
- * righe NON e' mai valutato come anomalia in questo sprint.
+ * Regole Backup (vedi spec sprint, esteso in Disaster Recovery V2 per la
+ * copia offsite Cloudflare R2 — lib/server/r2-backup.ts): warning se success
+ * ma con tabelle in errore, purge Supabase fallito, copia offsite fallita/non
+ * configurata, o purge offsite fallito; altrimenti healthy con note
+ * informative (tabelle esportate, righe totali, backup vecchi eliminati,
+ * esito offsite). Assente `offsite_backup` in metadata (run precedenti alla
+ * V2) -> nessun impatto, comportamento identico a prima. Il numero assoluto
+ * di righe NON e' mai valutato come anomalia in questo sprint.
  */
 function classifyBackupRun(run: SystemJobRunRow): { status: "healthy" | "warning"; reason: string; notes: string[] } {
   const tableErrors = metaArrayLength(run.metadata, "table_errors");
   const purgeErrors = metaArrayLength(run.metadata, "purge_errors");
+  const offsiteBackup = metaObject(run.metadata, "offsite_backup");
+  const offsiteStatus = typeof offsiteBackup?.status === "string" ? offsiteBackup.status : null;
+  const offsiteProblem = offsiteStatus === "failed" || offsiteStatus === "skipped";
+  const offsitePurgeErrors = metaArrayLength(run.metadata, "offsite_purge_errors");
 
-  if (run.status === "warning" || tableErrors > 0 || purgeErrors > 0) {
+  if (run.status === "warning" || tableErrors > 0 || purgeErrors > 0 || offsiteProblem || offsitePurgeErrors > 0) {
     const parts: string[] = [];
     if (tableErrors > 0) parts.push(`${tableErrors} tabelle con errori`);
     if (purgeErrors > 0) parts.push("pulizia backup vecchi non riuscita");
+    if (offsiteStatus === "failed") parts.push("copia offsite (R2) non riuscita");
+    if (offsiteStatus === "skipped") parts.push("copia offsite (R2) non configurata");
+    if (offsitePurgeErrors > 0) parts.push("pulizia offsite (R2) non riuscita");
     return { status: "warning", reason: parts.length > 0 ? parts.join(", ") : "Backup completato con avvisi.", notes: [] };
   }
 
@@ -94,6 +110,7 @@ function classifyBackupRun(run: SystemJobRunRow): { status: "healthy" | "warning
   if (tablesExported != null) notes.push(`${tablesExported} tabelle esportate`);
   if (rowsTotal != null) notes.push(`${rowsTotal.toLocaleString("it-IT")} righe`);
   if (purgedCount != null && purgedCount > 0) notes.push(`${purgedCount} vecchio backup eliminato`);
+  if (offsiteStatus === "success") notes.push("copia offsite (R2) verificata");
   return { status: "healthy", reason: "Backup completato correttamente.", notes };
 }
 
