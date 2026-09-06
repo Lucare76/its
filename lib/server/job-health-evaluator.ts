@@ -137,6 +137,39 @@ function classifyPollEmailsRun(run: SystemJobRunRow): { status: "healthy" | "war
   return { status: "healthy", reason: "Polling email completato correttamente.", notes };
 }
 
+/**
+ * Regole Backup PostgreSQL completo (Disaster Recovery V3, Layer 4/5 —
+ * scripts/postgres-backup.mjs via GitHub Actions, esito riportato a
+ * /api/cron/postgres-backup-report). Job DISTINTO da "backup" (JSON):
+ *  - execution 'warning' (dump creato ma verifica strutturale non 'passed')
+ *    -> health 'warning', mai silenzioso;
+ *  - execution 'success' -> healthy con note informative (artefatti, size,
+ *    versione PostgreSQL). Il fallimento vero e proprio (pg_dump/R2 KO) arriva
+ *    qui come run 'failed' ed e' gestito dai rami generici dell'evaluator
+ *    (warning al primo KO, critical da 2 KO consecutivi — vedi
+ *    job-health-config criticalConsecutiveFailures: 2 e staleSeverity: 'critical').
+ */
+function classifyPostgresBackupRun(run: SystemJobRunRow): { status: "healthy" | "warning"; reason: string; notes: string[] } {
+  const verification = typeof run.metadata?.verification === "string" ? run.metadata.verification : null;
+  if (run.status === "warning" || (verification != null && verification !== "passed")) {
+    return {
+      status: "warning",
+      reason: verification != null && verification !== "passed"
+        ? "Dump PostgreSQL creato ma verifica strutturale non superata."
+        : "Backup PostgreSQL completato con avvisi.",
+      notes: [],
+    };
+  }
+  const notes: string[] = [];
+  const artifactCount = metaNumber(run.metadata, "artifact_count");
+  const sizeBytes = metaNumber(run.metadata, "total_size_bytes");
+  const pgVersion = typeof run.metadata?.postgres_server_version === "string" ? run.metadata.postgres_server_version : null;
+  if (artifactCount != null) notes.push(`${artifactCount} artefatti`);
+  if (sizeBytes != null) notes.push(`${(sizeBytes / 1024 / 1024).toFixed(1)} MiB`);
+  if (pgVersion) notes.push(`PostgreSQL ${pgVersion}`);
+  return { status: "healthy", reason: "Backup PostgreSQL completo verificato e copiato su R2.", notes };
+}
+
 /** Fallback generico per job senza regole dedicate: un execution status 'warning' diventa health 'info' (non concerning, ma non del tutto silenzioso) finche' non viene definita una regola specifica. */
 function classifyGenericRun(run: SystemJobRunRow): { status: "healthy" | "info"; reason: string; notes: string[] } {
   if (run.status === "warning") {
@@ -147,6 +180,7 @@ function classifyGenericRun(run: SystemJobRunRow): { status: "healthy" | "info";
 
 function classifyJobSpecificRun(jobKey: string, run: SystemJobRunRow): { status: "healthy" | "info" | "warning"; reason: string; notes: string[] } {
   if (jobKey === "backup") return classifyBackupRun(run);
+  if (jobKey === "postgres-backup") return classifyPostgresBackupRun(run);
   if (jobKey === "poll-emails") return classifyPollEmailsRun(run);
   return classifyGenericRun(run);
 }

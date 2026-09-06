@@ -48,7 +48,7 @@ describe("GET /api/admin/system-status — job health", () => {
         recent_failed_count: 0
       }
     ]);
-    vi.mocked(readRecentJobRuns).mockResolvedValue({ backup: [], "poll-emails": [], "whatsapp-reminders": [] });
+    vi.mocked(readRecentJobRuns).mockResolvedValue({ backup: [], "poll-emails": [], "postgres-backup": [], "whatsapp-reminders": [] });
 
     const response = await GET(new Request("http://localhost/api/admin/system-status", {
       headers: { authorization: "Bearer test" }
@@ -56,8 +56,8 @@ describe("GET /api/admin/system-status — job health", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(readSystemJobHealthSummary).toHaveBeenCalledWith(admin, "tenant-1", ["backup", "poll-emails", "whatsapp-reminders"], expect.any(String));
-    expect(readRecentJobRuns).toHaveBeenCalledWith(admin, "tenant-1", ["backup", "poll-emails", "whatsapp-reminders"]);
+    expect(readSystemJobHealthSummary).toHaveBeenCalledWith(admin, "tenant-1", ["backup", "poll-emails", "postgres-backup", "whatsapp-reminders"], expect.any(String));
+    expect(readRecentJobRuns).toHaveBeenCalledWith(admin, "tenant-1", ["backup", "poll-emails", "postgres-backup", "whatsapp-reminders"]);
     expect(body.job_health).toHaveLength(1);
     expect(body.env[0]).toHaveProperty("present");
     expect(body.env[0]).not.toHaveProperty("value");

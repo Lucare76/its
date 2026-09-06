@@ -1,0 +1,104 @@
+name: PostgreSQL Full Backup (DR V3)
+
+# Disaster Recovery V3 — backup PostgreSQL logico completo (pg_dump -Fc) del
+# database di produzione, copiato offsite su Cloudflare R2 sotto il prefix
+# "production/postgres/". Coesiste con lo snapshot JSON (Layer 2/3), non lo
+# sostituisce.
+#
+# Perche' GitHub Actions e non Vercel: pg_dump non e' disponibile nel runtime
+# serverless, la durata e' limitata e la connection string diretta non deve
+# stare nell'ambiente dell'app. Qui il backup e' fisicamente separato dalla
+# produzione (stesso pattern gia' usato da supabase-migrations.yml).
+#
+# ─── SECRETS RICHIESTI (Settings -> Secrets and variables -> Actions) ───
+#   SUPABASE_DB_URL         Session Pooler URI di produzione, porta 5432.
+#                           Forma: postgresql://postgres.<project-ref>:<DB_PASSWORD>@aws-0-<region>.pooler.supabase.com:5432/postgres
+#                           Dashboard Supabase -> Project Settings -> Database ->
+#                             Connection string -> Session pooler.
+#                             * Session Pooler (5432)     = CONSENTITO per pg_dump.
+#                             * Transaction Pooler (6543)  = NON usare (non supporta pg_dump).
+#                             * Direct (db.<ref>.supabase.co:5432) = NON usare dai runner
+#                               GitHub-hosted (IPv6-only; servirebbe l'add-on IPv4 o connettivita' IPv6).
+#   R2_ACCOUNT_ID           account Cloudflare
+#   R2_ACCESS_KEY_ID        credenziale S3-compatible R2
+#   R2_SECRET_ACCESS_KEY    credenziale S3-compatible R2
+#   R2_BUCKET_NAME          bucket privato (es. its-backups-offsite — lo stesso del JSON)
+#   R2_ENDPOINT             endpoint S3-compatible del bucket R2
+# ─── SECRETS OPZIONALI (integrazione Centro Salute ITS, Layer 8) ───
+#   DR_HEALTH_REPORT_URL     es. https://<app>/api/cron/postgres-backup-report
+#   DR_HEALTH_REPORT_SECRET  bearer per quell'endpoint
+#
+# Nessun valore di secret compare in questo file o nei log (redazione lato script).
+
+on:
+  schedule:
+    # 02:30 UTC — sfasato di 30' dal backup JSON Vercel (0 2 * * *) per non
+    # concentrare il carico di lettura sul DB nello stesso minuto.
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run: valida tool/env/R2 senza eseguire pg_dump ne' upload"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client 17 (>= any current Supabase server)
+        # Client 17 puo' dumpare qualsiasi server Postgres attuale di Supabase
+        # (15/16/17). Lo script verifica comunque a runtime che
+        # pg_dump_major >= server_major (SHOW server_version_num) e fallisce
+        # prima del backup se la condizione non e' soddisfatta.
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          pg_dump --version
+          pg_restore --version
+          psql --version
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run PostgreSQL backup
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          DR_HEALTH_REPORT_URL: ${{ secrets.DR_HEALTH_REPORT_URL }}
+          DR_HEALTH_REPORT_SECRET: ${{ secrets.DR_HEALTH_REPORT_SECRET }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            pnpm exec tsx scripts/postgres-backup.mjs --dry-run
+          else
+            pnpm exec tsx scripts/postgres-backup.mjs
+          fi

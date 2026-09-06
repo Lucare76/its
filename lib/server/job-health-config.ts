@@ -96,6 +96,28 @@ export const JOB_HEALTH_CONFIG: Record<string, JobHealthRuleConfig> = {
     criticalConsecutiveFailures: 3,
     missingRunSeverity: "warning",
   },
+  "postgres-backup": {
+    jobKey: "postgres-backup",
+    jobName: "Backup PostgreSQL completo (DR V3)",
+    // Layer 4/5 del Disaster Recovery: pg_dump -Fc completo + copia su
+    // Cloudflare R2 (production/postgres/). Gira su GitHub Actions
+    // (.github/workflows/postgres-backup.yml), NON su Vercel. L'esito viene
+    // riportato a POST /api/cron/postgres-backup-report che scrive qui.
+    // Job DISTINTO da "backup" (snapshot JSON): un JSON verde non deve mai
+    // mascherare un pg_dump fallito.
+    enabled: true,
+    schedulingMode: "scheduled",
+    expectedCadence: "daily",
+    cadenceLabel: "Ogni giorno alle 02:30 UTC (GitHub Actions)",
+    // 24h di cadenza + margine ampio per code dei runner GitHub / manutenzione.
+    staleAfterMinutes: 30 * 60,
+    // timeout workflow 30' + margine per il reporting.
+    maxRunningMinutes: 45,
+    // Il DR completo e' critico: 2 esecuzioni KO consecutive -> critical.
+    criticalConsecutiveFailures: 2,
+    missingRunSeverity: "warning",
+    staleSeverity: "critical",
+  },
   "whatsapp-reminders": {
     jobKey: "whatsapp-reminders",
     jobName: "Promemoria WhatsApp",

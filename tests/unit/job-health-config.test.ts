@@ -2,8 +2,18 @@ import { describe, expect, it } from "vitest";
 import { JOB_HEALTH_CONFIG, JOB_HEALTH_KEYS, getJobHealthConfig } from "@/lib/server/job-health-config";
 
 describe("job-health-config", () => {
-  it("espone esattamente i 3 job monitorati dallo Sprint 1, nello stesso ordine atteso dalla route", () => {
-    expect(JOB_HEALTH_KEYS).toEqual(["backup", "poll-emails", "whatsapp-reminders"]);
+  it("espone i job monitorati nello stesso ordine atteso dalla route (Sprint 1 + postgres-backup DR V3)", () => {
+    expect(JOB_HEALTH_KEYS).toEqual(["backup", "poll-emails", "postgres-backup", "whatsapp-reminders"]);
+  });
+
+  it("postgres-backup (DR V3) e' abilitato, 'scheduled', DISTINTO da 'backup', critical a 2 KO", () => {
+    const config = JOB_HEALTH_CONFIG["postgres-backup"]!;
+    expect(config.enabled).toBe(true);
+    expect(config.schedulingMode).toBe("scheduled");
+    expect(config.staleAfterMinutes).toBeGreaterThan(0);
+    expect(config.staleSeverity).toBe("critical");
+    expect(config.criticalConsecutiveFailures).toBe(2);
+    expect(config.jobKey).not.toBe("backup");
   });
 
   it("whatsapp-reminders e' configurato come non in uso (enabled=false)", () => {
