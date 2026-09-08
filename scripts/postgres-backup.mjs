@@ -73,6 +73,8 @@ const {
   versionCompatMessage,
   pgClientToolsConsistent,
   pgClientToolsMessage,
+  splitPgConnString,
+  buildPgChildEnv,
 } = await import("../lib/server/postgres-backup.ts");
 
 const FULL_SCOPE = [...PG_BACKUP_FULL_SCOPE_ARGS];
@@ -83,11 +85,15 @@ const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
 const KEEP_LOCAL = args.includes("--keep-local");
 
+// Segreti extra rilevati a runtime (es. la password estratta dalla URI, che poi
+// vive solo in PGPASSWORD dell'env figlio): sempre redatti dai log/errori.
+const EXTRA_SECRETS = [];
 const SECRETS = () => [
   process.env.SUPABASE_DB_URL,
   process.env.R2_ACCESS_KEY_ID,
   process.env.R2_SECRET_ACCESS_KEY,
   process.env.DR_HEALTH_REPORT_SECRET,
+  ...EXTRA_SECRETS,
 ];
 
 function log(msg) {
@@ -100,9 +106,11 @@ function fail(msg) {
   throw new Error("__handled__");
 }
 
-function run(cmd, argv, { captureStdout = false } = {}) {
+function run(cmd, argv, { captureStdout = false, env } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, argv, { stdio: ["ignore", captureStdout ? "pipe" : "inherit", "pipe"] });
+    // env === undefined -> spawn eredita process.env (invariato per i comandi
+    // che non si connettono: --version, pg_restore --list).
+    const child = spawn(cmd, argv, { stdio: ["ignore", captureStdout ? "pipe" : "inherit", "pipe"], env });
     let out = "";
     let err = "";
     if (captureStdout) child.stdout.on("data", (d) => (out += d.toString()));
@@ -159,11 +167,14 @@ async function uploadAndVerify(client, bucket, key, body, contentType) {
 
 /**
  * Legge `SHOW server_version_num` dal database via psql (SOLA LETTURA, nessuna
- * scrittura). La connection string e' passata come ARGV (spawn senza shell):
- * non compare mai in un comando espanso ne' nei log (redazione su stderr).
+ * scrittura). `dsn` e' la connection URI SENZA password (passata come ARGV,
+ * spawn senza shell); la password arriva a psql via `PGPASSWORD` in `env` —
+ * cosi' caratteri speciali nella password non possono rompere il parsing URI di
+ * libpq (che invierebbe una password troncata → "password authentication failed
+ * for user \"postgres\"").
  */
-async function readServerVersionNum(connStr) {
-  const { stdout } = await run("psql", [connStr, "-tAX", "-c", "SHOW server_version_num"], { captureStdout: true });
+async function readServerVersionNum(dsn, env) {
+  const { stdout } = await run("psql", [dsn, "-tAX", "-c", "SHOW server_version_num"], { captureStdout: true, env });
   const trimmed = stdout.trim();
   if (!/^\d+$/.test(trimmed)) throw new Error(`SHOW server_version_num ha restituito un valore inatteso: "${trimmed.slice(0, 40)}"`);
   return trimmed;
@@ -203,6 +214,17 @@ async function main() {
   if (missing.length) fail(`env mancanti: ${missing.join(", ")}`);
   const connStr = process.env.SUPABASE_DB_URL;
   log(`   DB:        ${maskConnectionString(connStr)} (atteso: Session Pooler URI, porta 5432)`);
+  // La password NON resta nell'argomento URI passato a psql/pg_dump: viene
+  // separata e passata via PGPASSWORD nell'env del processo figlio. Host, porta,
+  // username (col punto del pooler `postgres.<ref>`), dbname e query restano
+  // quelli della URI originale — nessuna ricostruzione manuale. L'env figlio
+  // parte da process.env MA senza le PG* di connessione ereditate dal runner.
+  const { dsn: pgDsn, password: pgPassword } = splitPgConnString(connStr);
+  if (pgPassword) EXTRA_SECRETS.push(pgPassword);
+  const pgChildEnv = buildPgChildEnv(process.env, pgPassword, { PGCONNECT_TIMEOUT: "15" });
+  if (!pgPassword) {
+    log("   ⚠️  SUPABASE_DB_URL senza password nello userinfo: verificare il secret (forma attesa postgresql://postgres.<ref>:<password>@...:5432/postgres).");
+  }
   const bucket = process.env.R2_BUCKET_NAME.trim();
 
   // 1. pg_dump / pg_restore / psql disponibili + versione
@@ -247,7 +269,7 @@ async function main() {
   if (DRY_RUN) {
     // 2. verifica compatibilita' versione (anche in dry-run: e' sola lettura)
     try {
-      const serverNum = await readServerVersionNum(connStr);
+      const serverNum = await readServerVersionNum(pgDsn, pgChildEnv);
       const serverMajor = serverMajorFromVersionNum(serverNum);
       log(`   server:     PostgreSQL major ${serverMajor} (server_version_num ${serverNum})`);
       log(`   compat:     ${versionCompatMessage(pgDumpMajor, serverMajor)}`);
@@ -277,7 +299,7 @@ async function main() {
   try {
     // 2. verifica OBBLIGATORIA compatibilita' versione client/server PRIMA del dump
     log("→ verifica versione client/server ...");
-    const serverNum = await readServerVersionNum(connStr);
+    const serverNum = await readServerVersionNum(pgDsn, pgChildEnv);
     const serverMajor = serverMajorFromVersionNum(serverNum);
     const serverVersionHuman = `PostgreSQL ${serverMajor} (server_version_num ${serverNum})`;
     log(`   ${serverVersionHuman} · ${versionCompatMessage(pgDumpMajor, serverMajor)}`);
@@ -285,12 +307,12 @@ async function main() {
       fail(versionCompatMessage(pgDumpMajor, serverMajor));
     }
 
-    // 3. pg_dump (public)
+    // 3. pg_dump (public) — DSN senza password come argomento, PGPASSWORD in env
     log(`→ pg_dump ${FULL_SCOPE.join(" ")} ...`);
-    await run("pg_dump", [...COMMON_DUMP_ARGS, ...FULL_SCOPE, "--file", fullPath, connStr]);
+    await run("pg_dump", [...COMMON_DUMP_ARGS, ...FULL_SCOPE, "--file", fullPath, pgDsn], { env: pgChildEnv });
     // 3b. pg_dump (auth, selettivo, data-only)
     log(`→ pg_dump ${AUTH_SCOPE.join(" ")} ...`);
-    await run("pg_dump", [...COMMON_DUMP_ARGS, ...AUTH_SCOPE, "--file", authPath, connStr]);
+    await run("pg_dump", [...COMMON_DUMP_ARGS, ...AUTH_SCOPE, "--file", authPath, pgDsn], { env: pgChildEnv });
 
     // 4-6. exit code (gia' verificato da run()), file esiste, dimensione > 0
     const artifactsToCheck = [

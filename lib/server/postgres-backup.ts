@@ -578,3 +578,83 @@ export function maskConnectionString(url: string | undefined | null): string {
 export function missingBackupEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   return PG_BACKUP_REQUIRED_ENV.filter((k) => !((env[k] ?? "").trim().length > 0));
 }
+
+// ─── Connection string: separazione password ↔ argomento psql/pg_dump ──────
+
+/**
+ * Variabili d'ambiente PostgreSQL che, se ereditate dal runner / dalla shell,
+ * possono forzare utente / host / database diversi da quelli della connection
+ * URI (o interferire col SCRAM). Vanno rimosse dall'ambiente del processo figlio
+ * prima di lanciare psql / pg_dump, cosi' l'unica fonte di verita' e' la URI.
+ */
+export const PG_CONN_ENV_VARS = [
+  "PGHOST",
+  "PGHOSTADDR",
+  "PGPORT",
+  "PGDATABASE",
+  "PGUSER",
+  "PGPASSWORD",
+  "PGPASSFILE",
+  "PGSERVICE",
+  "PGSERVICEFILE",
+] as const;
+
+/** decodeURIComponent che non lancia: se `v` non e' percent-encoding valido lo
+ *  restituisce invariato (una password puo' contenere un `%` letterale). */
+export function safeDecodeURIComponent(v: string): string {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+}
+
+/**
+ * Separa una connection URI Postgres in:
+ *  - `dsn`: la STESSA URI, con il solo campo password rimosso dallo userinfo.
+ *    Schema, host, porta, **username (inclusi i punti del pooler Supabase
+ *    `postgres.<project-ref>`)**, dbname e query-string restano quelli
+ *    dell'originale — nessuna ricostruzione manuale di quei campi.
+ *  - `password`: la password, decodificata da eventuale percent-encoding, da
+ *    passare al processo figlio via `PGPASSWORD`. Le variabili d'ambiente non
+ *    hanno delimitatori: qualunque carattere speciale (`@ : / ? # %` …) e'
+ *    innocuo, mentre lasciato nella URL-argomento puo' far estrarre a libpq una
+ *    password TRONCATA → `psql`/`pg_dump` inviano la password sbagliata e il
+ *    pooler risponde `FATAL: password authentication failed for user "postgres"`
+ *    (Supavisor toglie il suffisso `.<ref>` e nomina il ruolo DB sottostante,
+ *    `postgres`: NON e' un troncamento dell'username lato client).
+ *
+ * Se la stringa non e' una URI (`key=value` conninfo) o non e' parsabile, viene
+ * restituita invariata come `dsn` con `password: null` — comportamento neutro.
+ */
+export function splitPgConnString(raw: string | undefined | null): { dsn: string | null; password: string | null } {
+  const s = (raw ?? "").trim();
+  if (!s) return { dsn: null, password: null };
+  if (!/^postgres(?:ql)?:\/\//i.test(s)) return { dsn: s, password: null };
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    return { dsn: s, password: null };
+  }
+  const password = u.password ? safeDecodeURIComponent(u.password) : null;
+  u.password = "";
+  return { dsn: u.toString(), password };
+}
+
+/**
+ * Ambiente per il processo figlio (psql / pg_dump): parte da `base`, RIMUOVE
+ * ogni `PG*` di connessione ereditata (vedi PG_CONN_ENV_VARS) e reimposta solo
+ * `PGPASSWORD` (se disponibile) piu' eventuali `extra`. Host / porta / utente /
+ * dbname arrivano dal `dsn` passato come argomento a psql/pg_dump.
+ */
+export function buildPgChildEnv(
+  base: NodeJS.ProcessEnv,
+  password: string | null,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const k of PG_CONN_ENV_VARS) delete env[k];
+  if (password != null && password !== "") env.PGPASSWORD = password;
+  return { ...env, ...extra };
+}

@@ -32,6 +32,10 @@ import {
   versionCompatMessage,
   pgClientToolsConsistent,
   pgClientToolsMessage,
+  splitPgConnString,
+  buildPgChildEnv,
+  safeDecodeURIComponent,
+  PG_CONN_ENV_VARS,
 } from "@/lib/server/postgres-backup";
 
 describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
@@ -195,6 +199,110 @@ describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
       expect(m).toMatch(/psql 17/);
       expect(m).toMatch(/\/usr\/lib\/postgresql\/17\/bin/);
       expect(pgClientToolsMessage({ pg_dump: null, pg_restore: 17, psql: 17 })).toMatch(/pg_dump \?/);
+    });
+  });
+
+  // ─── Pooler URI: username col punto + password fuori dall'argomento ────
+  describe("splitPgConnString — Session Pooler (postgres.<project-ref>)", () => {
+    it("REPRO: postgresql://postgres.projectref:password@host:5432/postgres — username resta postgres.projectref", () => {
+      const { dsn, password } = splitPgConnString(
+        "postgresql://postgres.projectref:password@aws-1-eu-west-1.pooler.supabase.com:5432/postgres",
+      );
+      expect(password).toBe("password");
+      // username NON troncato al punto
+      expect(new URL(dsn!).username).toBe("postgres.projectref");
+      expect(dsn).toBe("postgresql://postgres.projectref@aws-1-eu-west-1.pooler.supabase.com:5432/postgres");
+      // la password NON e' piu' nell'argomento passato a psql/pg_dump
+      expect(dsn).not.toContain("password");
+      expect(dsn).not.toContain(":password@");
+    });
+
+    it("host, porta, dbname e query-string della URI originale sono preservati", () => {
+      const { dsn } = splitPgConnString(
+        "postgresql://postgres.abcdefghijklmnop:secret@aws-1-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require",
+      );
+      const u = new URL(dsn!);
+      expect(u.username).toBe("postgres.abcdefghijklmnop");
+      expect(u.hostname).toBe("aws-1-eu-west-1.pooler.supabase.com");
+      expect(u.port).toBe("5432");
+      expect(u.pathname).toBe("/postgres");
+      expect(u.search).toBe("?sslmode=require");
+      expect(u.password).toBe("");
+    });
+
+    it("password con caratteri riservati nell'URI ( @ : ) viene estratta intera, username intatto", () => {
+      const at = splitPgConnString("postgresql://postgres.ref:pa@ss@aws-1-eu-west-1.pooler.supabase.com:5432/postgres");
+      expect(at.password).toBe("pa@ss");
+      expect(new URL(at.dsn!).username).toBe("postgres.ref");
+
+      const colon = splitPgConnString("postgresql://postgres.ref:pa:ss@aws-1-eu-west-1.pooler.supabase.com:5432/postgres");
+      expect(colon.password).toBe("pa:ss");
+      expect(new URL(colon.dsn!).username).toBe("postgres.ref");
+    });
+
+    it("password percent-encoded viene decodificata una volta (per PGPASSWORD)", () => {
+      const { password } = splitPgConnString(
+        "postgresql://postgres.ref:p%2Fw%3F%40x@aws-1-eu-west-1.pooler.supabase.com:5432/postgres",
+      );
+      expect(password).toBe("p/w?@x");
+    });
+
+    it("stringa non-URI (conninfo key=value) e input vuoto: passata invariata, nessuna password", () => {
+      expect(splitPgConnString("host=foo user=postgres.ref dbname=postgres")).toEqual({
+        dsn: "host=foo user=postgres.ref dbname=postgres",
+        password: null,
+      });
+      expect(splitPgConnString("")).toEqual({ dsn: null, password: null });
+      expect(splitPgConnString(undefined)).toEqual({ dsn: null, password: null });
+    });
+
+    it("safeDecodeURIComponent non lancia su percent-encoding non valido (es. '%' letterale)", () => {
+      expect(safeDecodeURIComponent("ab%zz")).toBe("ab%zz");
+      expect(safeDecodeURIComponent("a%20b")).toBe("a b");
+    });
+  });
+
+  describe("buildPgChildEnv — env figlio per psql/pg_dump", () => {
+    it("rimuove ogni PG* di connessione ereditata e imposta solo PGPASSWORD", () => {
+      const base = {
+        PATH: "/usr/lib/postgresql/17/bin:/usr/bin",
+        PGUSER: "postgres",
+        PGPASSWORD: "leftover",
+        PGHOST: "localhost",
+        PGPORT: "5432",
+        PGDATABASE: "postgres",
+        PGSERVICE: "x",
+        PGSERVICEFILE: "/tmp/x",
+        PGPASSFILE: "/root/.pgpass",
+      };
+      const env = buildPgChildEnv(base, "real-secret");
+      for (const k of PG_CONN_ENV_VARS) {
+        if (k === "PGPASSWORD") continue;
+        expect(env[k]).toBeUndefined();
+      }
+      expect(env.PGPASSWORD).toBe("real-secret");
+      expect(env.PATH).toBe("/usr/lib/postgresql/17/bin:/usr/bin"); // env non-PG* preservate
+    });
+
+    it("password null -> nessun PGPASSWORD (e comunque PG* ereditate rimosse)", () => {
+      const env = buildPgChildEnv({ PGUSER: "postgres", PGPASSWORD: "leftover", FOO: "bar" }, null);
+      expect(env.PGPASSWORD).toBeUndefined();
+      expect(env.PGUSER).toBeUndefined();
+      expect(env.FOO).toBe("bar");
+    });
+
+    it("extra viene applicato (es. PGCONNECT_TIMEOUT) senza rimettere le PG* rimosse", () => {
+      const env = buildPgChildEnv({ PGUSER: "postgres" }, "s", { PGCONNECT_TIMEOUT: "15" });
+      expect(env.PGCONNECT_TIMEOUT).toBe("15");
+      expect(env.PGUSER).toBeUndefined();
+      expect(env.PGPASSWORD).toBe("s");
+    });
+
+    it("PGPASSWORD non finisce mai nei log: il valore e' un carattere-per-carattere della password, redatto a monte", () => {
+      // buildPgChildEnv non logga nulla: e' una funzione pura. Verifica che il
+      // valore passato sia esattamente quello ricevuto (nessuna trasformazione).
+      const weird = "p@ss:w/o?rd#1%2";
+      expect(buildPgChildEnv({}, weird).PGPASSWORD).toBe(weird);
     });
   });
 
@@ -634,6 +742,25 @@ describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
       expect(script).toMatch(/maskConnectionString\(connStr\)/);
       expect(script).not.toMatch(/console\.log\([^)]*connStr[^)]*\)/);
       expect(script).not.toMatch(/log\(\s*connStr\s*\)/);
+    });
+
+    it("lo script separa la password dall'argomento URI e la passa a psql/pg_dump via PGPASSWORD (env figlio)", () => {
+      expect(script).toMatch(/splitPgConnString\(connStr\)/);
+      expect(script).toMatch(/buildPgChildEnv\(process\.env, pgPassword/);
+      // psql e pg_dump ricevono il DSN SENZA password (pgDsn), non piu' connStr
+      expect(script).toMatch(/readServerVersionNum\(pgDsn, pgChildEnv\)/);
+      expect(script).toMatch(/run\("pg_dump", \[[^\]]*pgDsn\], \{ env: pgChildEnv \}\)/);
+      expect(script).not.toMatch(/run\("pg_dump", \[[^\]]*connStr\]/);
+      expect(script).not.toMatch(/readServerVersionNum\(connStr\)/);
+    });
+
+    it("lo script NON chiama psql/pg_dump con -U / --username (nessun override dell'utente del pooler)", () => {
+      expect(script).not.toMatch(/["']-U["']/);
+      expect(script).not.toMatch(/--username/);
+    });
+
+    it("la password estratta dalla URI viene aggiunta ai SECRETS redatti", () => {
+      expect(script).toMatch(/EXTRA_SECRETS\.push\(pgPassword\)/);
     });
   });
 });
