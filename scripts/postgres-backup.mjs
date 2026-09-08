@@ -71,6 +71,8 @@ const {
   serverMajorFromVersionNum,
   isClientVersionSufficient,
   versionCompatMessage,
+  pgClientToolsConsistent,
+  pgClientToolsMessage,
 } = await import("../lib/server/postgres-backup.ts");
 
 const FULL_SCOPE = [...PG_BACKUP_FULL_SCOPE_ARGS];
@@ -212,7 +214,19 @@ async function main() {
   if (!psqlVersion) fail("psql non trovato nel PATH (serve per la verifica versione server).");
   log(`   pg_dump:    ${pgDumpVersion}`);
   log(`   pg_restore: ${pgRestoreVersion}`);
+  log(`   psql:       ${psqlVersion}`);
   const pgDumpMajor = parsePgMajorFromVersionLine(pgDumpVersion);
+  const pgRestoreMajor = parsePgMajorFromVersionLine(pgRestoreVersion);
+  const psqlMajor = parsePgMajorFromVersionLine(psqlVersion);
+
+  // I tre tool client vengono da postgresql-client-17: se i major divergono il
+  // PATH risolve binari di versioni diverse (su runner Ubuntu: pg_wrapper manda
+  // pg_dump/pg_restore al cluster 16 locale, psql alla 17). Hard fail PRIMA di
+  // tutto — vale anche in --dry-run (nessun accesso a DB / R2 qui).
+  if (!pgClientToolsConsistent(pgDumpMajor, pgRestoreMajor, psqlMajor)) {
+    fail(pgClientToolsMessage({ pg_dump: pgDumpMajor, pg_restore: pgRestoreMajor, psql: psqlMajor }));
+  }
+  log(`   tool major: pg_dump/pg_restore/psql tutti a ${pgDumpMajor} ✓`);
 
   const fullName = fullDumpFileName(base);
   const authName = authDumpFileName(base);

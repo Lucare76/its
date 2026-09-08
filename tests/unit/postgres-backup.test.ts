@@ -30,6 +30,8 @@ import {
   serverMajorFromVersionNum,
   isClientVersionSufficient,
   versionCompatMessage,
+  pgClientToolsConsistent,
+  pgClientToolsMessage,
 } from "@/lib/server/postgres-backup";
 
 describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
@@ -164,6 +166,35 @@ describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
       expect(versionCompatMessage(15, 17)).toMatch(/non affidabile.*postgresql-client >= 17/);
       expect(versionCompatMessage(null, 15)).toMatch(/non rilevabile/);
       expect(versionCompatMessage(17, null)).toMatch(/non rilevabile/);
+    });
+
+    it("pgClientToolsConsistent: true SOLO se pg_dump == pg_restore == psql (stesso major)", () => {
+      expect(pgClientToolsConsistent(17, 17, 17)).toBe(true);
+      // il bug reale osservato: pg_dump/pg_restore 16, psql 17
+      expect(pgClientToolsConsistent(16, 16, 17)).toBe(false);
+      expect(pgClientToolsConsistent(17, 16, 17)).toBe(false);
+      expect(pgClientToolsConsistent(16, 17, 17)).toBe(false);
+      expect(pgClientToolsConsistent(null, 17, 17)).toBe(false);
+      expect(pgClientToolsConsistent(17, null, 17)).toBe(false);
+      expect(pgClientToolsConsistent(17, 17, null)).toBe(false);
+    });
+
+    it("pgClientToolsConsistent e' indipendente da isClientVersionSufficient (pg_dump >= server)", () => {
+      // tool allineati a 17 ma server 18 -> consistent true, ma isClientVersionSufficient false
+      expect(pgClientToolsConsistent(17, 17, 17)).toBe(true);
+      expect(isClientVersionSufficient(17, 18)).toBe(false);
+      // tool disallineati ma pg_dump comunque >= server -> consistency deve fallire lo stesso
+      expect(isClientVersionSufficient(16, 15)).toBe(true);
+      expect(pgClientToolsConsistent(16, 16, 17)).toBe(false);
+    });
+
+    it("pgClientToolsMessage: elenca i tre major e rimanda al fix del PATH 17", () => {
+      const m = pgClientToolsMessage({ pg_dump: 16, pg_restore: 16, psql: 17 });
+      expect(m).toMatch(/pg_dump 16/);
+      expect(m).toMatch(/pg_restore 16/);
+      expect(m).toMatch(/psql 17/);
+      expect(m).toMatch(/\/usr\/lib\/postgresql\/17\/bin/);
+      expect(pgClientToolsMessage({ pg_dump: null, pg_restore: 17, psql: 17 })).toMatch(/pg_dump \?/);
     });
   });
 
@@ -548,6 +579,34 @@ describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
       expect(wf).toMatch(/pg_dump --version/);
       expect(wf).toMatch(/pg_restore --version/);
       expect(wf).toMatch(/psql --version/);
+    });
+
+    it("il workflow antepone i binari PostgreSQL 17 al PATH (GITHUB_PATH) prima dei check", () => {
+      expect(wf).toMatch(/\/usr\/lib\/postgresql\/17\/bin/);
+      expect(wf).toMatch(/>>\s*"\$GITHUB_PATH"/);
+      // export inline nello stesso step, cosi' anche i `--version` di quello step usano la 17
+      expect(wf).toMatch(/export PATH="\/usr\/lib\/postgresql\/17\/bin:\$PATH"/);
+    });
+
+    it("il workflow fallisce lo step se pg_dump/pg_restore/psql non sono major 17", () => {
+      expect(wf).toMatch(/for bin in pg_dump pg_restore psql/);
+      expect(wf).toMatch(/!= "17"/);
+      expect(wf).toMatch(/::error::/);
+    });
+
+    it("workflow_dispatch dry_run=true chiama davvero scripts/postgres-backup.mjs --dry-run", () => {
+      expect(wf).toMatch(/workflow_dispatch:/);
+      expect(wf).toMatch(/dry_run:/);
+      expect(wf).toMatch(/github\.event\.inputs\.dry_run.*=.*"true"|"true".*github\.event\.inputs\.dry_run/s);
+      expect(wf).toMatch(/postgres-backup\.mjs --dry-run/);
+      expect(wf).toMatch(/postgres-backup\.mjs\s*$/m); // ramo non-dry-run presente
+    });
+
+    it("lo script esegue il check di coerenza tool client (pg_dump/pg_restore/psql) e MANTIENE pg_dump_major >= server_major + SHOW server_version_num", () => {
+      expect(script).toMatch(/pgClientToolsConsistent\(/);
+      // regola preesistente non rimossa
+      expect(script).toMatch(/isClientVersionSufficient\(pgDumpMajor, serverMajor\)/);
+      expect(script).toMatch(/SHOW server_version_num/);
     });
 
     it("workflow e runbook documentano il Session Pooler, porta 5432, e sconsigliano Transaction Pooler 6543 e Direct", () => {

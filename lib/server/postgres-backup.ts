@@ -172,6 +172,40 @@ export function versionCompatMessage(pgDumpMajor: number | null, serverMajor: nu
     : `pg_dump ${pgDumpMajor} < server ${serverMajor}: dump non affidabile. Installare postgresql-client >= ${serverMajor}.`;
 }
 
+/**
+ * `pg_dump`, `pg_restore` e `psql` provengono tutti dallo stesso pacchetto
+ * `postgresql-client-<major>`: i loro major DEVONO coincidere. Se divergono, il
+ * PATH sta risolvendo binari di versioni diverse — tipicamente perche' su un
+ * runner Ubuntu il wrapper `pg_wrapper` (pacchetto `postgresql-common`) instrada
+ * `pg_dump`/`pg_restore` verso un cluster PostgreSQL locale preesistente (16),
+ * mentre `psql` va alla piu' recente installata (17). Fix: anteporre
+ * `/usr/lib/postgresql/17/bin` al PATH prima di ogni check/esecuzione.
+ * Nota: e' un controllo indipendente da `isClientVersionSufficient`
+ * (`pg_dump_major >= server_major`), che resta comunque obbligatorio.
+ */
+export function pgClientToolsConsistent(
+  pgDumpMajor: number | null,
+  pgRestoreMajor: number | null,
+  psqlMajor: number | null,
+): boolean {
+  if (pgDumpMajor == null || pgRestoreMajor == null || psqlMajor == null) return false;
+  return pgDumpMajor === pgRestoreMajor && pgDumpMajor === psqlMajor;
+}
+
+export function pgClientToolsMessage(majors: {
+  pg_dump: number | null;
+  pg_restore: number | null;
+  psql: number | null;
+}): string {
+  const fmt = (n: number | null) => (n == null ? "?" : String(n));
+  return (
+    `Tool client PostgreSQL con major disallineati: pg_dump ${fmt(majors.pg_dump)}, ` +
+    `pg_restore ${fmt(majors.pg_restore)}, psql ${fmt(majors.psql)}. ` +
+    "Devono coincidere (stesso pacchetto postgresql-client-17). " +
+    "Anteporre '/usr/lib/postgresql/17/bin' al PATH prima di ogni check/esecuzione."
+  );
+}
+
 // ─── Retention ─────────────────────────────────────────────────────────────
 
 export type BackupSet = {

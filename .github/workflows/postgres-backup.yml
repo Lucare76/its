@@ -63,14 +63,34 @@ jobs:
         # (15/16/17). Lo script verifica comunque a runtime che
         # pg_dump_major >= server_major (SHOW server_version_num) e fallisce
         # prima del backup se la condizione non e' soddisfatta.
+        #
+        # ATTENZIONE PATH: i runner ubuntu-latest hanno un cluster PostgreSQL 16
+        # preinstallato. I comandi /usr/bin/pg_dump, /usr/bin/pg_restore,
+        # /usr/bin/psql sono in realta' il wrapper `pg_wrapper` (pacchetto
+        # postgresql-common), che instrada pg_dump/pg_restore verso quel cluster
+        # 16, mentre psql va alla piu' recente installata (17) -> mismatch
+        # (pg_dump 16 / psql 17). Fix: anteporre i binari 17 REALI al PATH, per
+        # questo step e per tutti gli step successivi del job (GITHUB_PATH).
         run: |
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client-17
+          test -x /usr/lib/postgresql/17/bin/pg_dump || { echo "::error::/usr/lib/postgresql/17/bin/pg_dump mancante dopo l'install"; exit 1; }
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
           pg_dump --version
           pg_restore --version
           psql --version
+          # guardia: tutti e tre devono essere major 17, altrimenti il PATH non
+          # sta usando i binari 17 e il job va fermato subito.
+          for bin in pg_dump pg_restore psql; do
+            major="$("$bin" --version | grep -oE '[0-9]+' | head -n1)"
+            if [ "$major" != "17" ]; then
+              echo "::error::$bin risolve major $major, atteso 17 (PATH: $(command -v "$bin"))"
+              exit 1
+            fi
+          done
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
