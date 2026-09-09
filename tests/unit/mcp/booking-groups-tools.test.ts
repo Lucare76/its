@@ -47,8 +47,12 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
   function table(name: string) {
     if (!db[name]) db[name] = [];
     const filters: Array<[string, unknown]> = [];
+    const inFilters: Array<[string, unknown[]]> = [];
     let pending: { kind: "insert" | "update" | "upsert" | "delete"; payload?: Row; opts?: { onConflict?: string } } | null = null;
-    const rows = () => db[name].filter((r) => filters.every(([c, v]) => r[c] === v));
+    const rows = () =>
+      db[name].filter(
+        (r) => filters.every(([c, v]) => r[c] === v) && inFilters.every(([c, vals]) => vals.includes(r[c])),
+      );
 
     function run(): { data: Row | Row[] | null; error: null } {
       if (pending?.kind === "insert") {
@@ -87,6 +91,7 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     const b: Record<string, unknown> = {};
     b.select = () => b;
     b.eq = (c: string, v: unknown) => { filters.push([c, v]); return b; };
+    b.in = (c: string, vals: unknown[]) => { inFilters.push([c, vals]); return b; };
     b.order = () => b;
     b.limit = () => b;
     b.insert = (payload: Row) => { pending = { kind: "insert", payload }; return b; };

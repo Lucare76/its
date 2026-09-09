@@ -10,6 +10,37 @@ function isoDate(offsetDays: number) {
   return new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+// Come isoDate(), ma per i due test "cambio mese"/"cambio anno": servono una
+// coppia di giorni CONSECUTIVI e futuri che attraversino un confine di
+// mese/anno. Un range hardcoded (es. "2026-08-31" -> "2026-09-01") e' un
+// timestamp che, passato quel mese, diventa passato rispetto a "oggi" reale —
+// enumerateShuttleDates/buildRows clippano l'intervallo a partire da "oggi"
+// (comportamento corretto: mai rigenerare corse nel passato), quindi
+// l'intervallo risulterebbe vuoto e insert=0 anziche' 1. Si cerca quindi
+// dinamicamente, a partire da un margine di sicurezza, la prossima coppia di
+// giorni consecutivi che attraversa il confine cercato.
+function nextBoundaryPair(crosses: (a: Date, b: Date) => boolean, startOffsetDays: number, maxDays: number) {
+  let day = new Date(Date.now() + startOffsetDays * 24 * 60 * 60 * 1000);
+  for (let i = 0; i < maxDays; i++) {
+    const next = new Date(day.getTime() + 24 * 60 * 60 * 1000);
+    if (crosses(day, next)) {
+      return { from: day.toISOString().slice(0, 10), to: next.toISOString().slice(0, 10) };
+    }
+    day = next;
+  }
+  throw new Error(`nextBoundaryPair: nessun confine trovato entro ${maxDays} giorni`);
+}
+
+function nextMonthBoundaryPair(startOffsetDays = 1) {
+  // Ogni mese ha al massimo 31 giorni: 40 giorni di margine bastano sempre.
+  return nextBoundaryPair((a, b) => a.getUTCMonth() !== b.getUTCMonth(), startOffsetDays, 40);
+}
+
+function nextYearBoundaryPair(startOffsetDays = 1) {
+  // Un anno ha al massimo 366 giorni: 400 giorni di margine bastano sempre.
+  return nextBoundaryPair((a, b) => a.getUTCFullYear() !== b.getUTCFullYear(), startOffsetDays, 400);
+}
+
 // Fake Supabase admin client that only tracks whether delete()/insert() on
 // "services" were invoked — enough to prove no write happens on invalid input.
 function createFakeSupabase() {
@@ -212,13 +243,16 @@ describe("PATCH /api/shuttle-schedules/[id] — intervallo valid_from/valid_to (
     expect(fake.calls.insert).toBe(0);
   });
 
-  it("valid_from < valid_to su cambio mese (2026-08-31 → 2026-09-01) → 200, delete=1, insert=1", async () => {
-    // 2026-08-31 è lunedì (1) e 2026-09-01 è martedì (2): entrambi compresi
-    // nel days_of_week di default [1,2,3,4,5] del VALID_PAYLOAD.
+  it("valid_from < valid_to su cambio mese → 200, delete=1, insert=1", async () => {
+    // Coppia dinamica futura che attraversa un cambio mese (mai hardcoded:
+    // vedi commento su nextBoundaryPair). days_of_week è null per non
+    // dipendere dal giorno della settimana specifico.
+    const { from, to } = nextMonthBoundaryPair();
     const res = await callPatch(VALID_SCHEDULE_ID, {
       ...VALID_PAYLOAD,
-      valid_from: "2026-08-31",
-      valid_to: "2026-09-01"
+      valid_from: from,
+      valid_to: to,
+      days_of_week: null
     });
     const body = await res.json();
 
@@ -228,13 +262,16 @@ describe("PATCH /api/shuttle-schedules/[id] — intervallo valid_from/valid_to (
     expect(fake.calls.insert).toBe(1);
   });
 
-  it("valid_from < valid_to su cambio anno (2026-12-31 → 2027-01-01) → 200, delete=1, insert=1", async () => {
-    // 2026-12-31 è giovedì (4) e 2027-01-01 è venerdì (5): entrambi compresi
-    // nel days_of_week di default [1,2,3,4,5] del VALID_PAYLOAD.
+  it("valid_from < valid_to su cambio anno → 200, delete=1, insert=1", async () => {
+    // Coppia dinamica futura che attraversa un cambio anno (mai hardcoded:
+    // vedi commento su nextBoundaryPair). days_of_week è null per non
+    // dipendere dal giorno della settimana specifico.
+    const { from, to } = nextYearBoundaryPair();
     const res = await callPatch(VALID_SCHEDULE_ID, {
       ...VALID_PAYLOAD,
-      valid_from: "2026-12-31",
-      valid_to: "2027-01-01"
+      valid_from: from,
+      valid_to: to,
+      days_of_week: null
     });
     const body = await res.json();
 

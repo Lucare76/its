@@ -83,9 +83,12 @@ describe("FASE A.5.2 §7/§8 — Mario guida la prenotazione bus esclusivo (più
   it("2 bus compatibili su entrambe le date -> Mario chiede, 'usa Bus 54' -> reservation andata+ritorno confermate separatamente -> operationalize", async () => {
     const admin = makeBusAdmin({
       tenant_bus_units: [
-        { id: "BUS-54", tenant_id: TENANT, label: "Bus 54", capacity: 54, status: "open", manual_close: false, active: true, tag: null },
-        { id: "BUS-60", tenant_id: TENANT, label: "Bus 60", capacity: 60, status: "open", manual_close: false, active: true, tag: null },
+        { id: "BUS-54", tenant_id: TENANT, bus_line_id: "line-esclusivi", label: "Bus 54", capacity: 54, status: "open", manual_close: false, active: true, tag: null },
+        { id: "BUS-60", tenant_id: TENANT, bus_line_id: "line-esclusivi", label: "Bus 60", capacity: 60, status: "open", manual_close: false, active: true, tag: null },
       ],
+      // Dalla migration 0268 findAvailableBusesForGroup propone solo bus
+      // della linea dedicata "GRUPPI_ESCLUSIVI" per i gruppi bus_exclusive.
+      tenant_bus_lines: [{ id: "line-esclusivi", tenant_id: TENANT, code: "GRUPPI_ESCLUSIVI", family_code: "GRUPPI_ESCLUSIVI", active: true }],
       booking_group_bus_reservations: [],
     });
     const ctx: McpContext = { requestId: "req-1", userId: "user-1", userEmail: "op@example.com", tenantId: TENANT, role: "operator", admin };
@@ -199,7 +202,10 @@ describe("FASE A.5.2 §9 — allocazione sul bus riservato visibile in Linea Bus
         { id: "r2", tenant_id: TENANT, booking_group_id: GROUP_ID, bus_unit_id: BUS_UNIT_ID, service_date: "2026-09-20", reserved_pax: 50, exclusive: true },
       ],
       tenant_bus_units: [{ id: BUS_UNIT_ID, tenant_id: TENANT, bus_line_id: "line-adriatica", label: "Bus Esclusivo", capacity: 54, low_seat_threshold: 5, status: "open", manual_close: false, sort_order: 0, active: true }],
-      tenant_bus_lines: [{ id: "line-adriatica", tenant_id: TENANT, family_code: "ADRIATICA", name: "Adriatica" }],
+      // Dalla migration 0268 le allocazioni di un gruppo bus_exclusive sono
+      // visibili in Linea Bus solo se la linea del bus e' "GRUPPI_ESCLUSIVI"
+      // (vedi lib/server/bus-network-loader.ts, shouldExposeAllocation).
+      tenant_bus_lines: [{ id: "line-adriatica", tenant_id: TENANT, code: "GRUPPI_ESCLUSIVI", family_code: "GRUPPI_ESCLUSIVI", name: "Adriatica" }],
       tenant_bus_line_stops: [
         { id: CANONICAL_ARR, tenant_id: TENANT, bus_line_id: "line-adriatica", city: "Rimini", stop_name: "RIMINI", direction: "arrival", active: true, pickup_time: "05:10", stop_order: 0 },
         { id: CANONICAL_DEP, tenant_id: TENANT, bus_line_id: "line-adriatica", city: "Rimini", stop_name: "RIMINI", direction: "departure", active: true, pickup_time: "18:00", stop_order: 0 },
@@ -322,7 +328,10 @@ describe("FASE A.5.2 §10 — resume dopo Redis scaduto con nextStep reserve_bus
         { id: "SVC-RET", tenant_id: TENANT, booking_group_id: "BG1", booking_group_stop_id: "s-ret", pax: 50, direction: "departure" },
       ],
       booking_group_bus_reservations: [], // nessuna reservation ancora -> nextStep "reserve_bus"
-      tenant_bus_units: [{ id: "BUS-54", tenant_id: TENANT, label: "Bus 54", capacity: 54, status: "open", manual_close: false, active: true, tag: null }],
+      // Dalla migration 0268 findAvailableBusesForGroup propone solo bus
+      // della linea dedicata "GRUPPI_ESCLUSIVI" per i gruppi bus_exclusive.
+      tenant_bus_lines: [{ id: "line-esclusivi", tenant_id: TENANT, code: "GRUPPI_ESCLUSIVI", family_code: "GRUPPI_ESCLUSIVI", active: true }],
+      tenant_bus_units: [{ id: "BUS-54", tenant_id: TENANT, bus_line_id: "line-esclusivi", label: "Bus 54", capacity: 54, status: "open", manual_close: false, active: true, tag: null }],
     });
     const ctx: McpContext = { requestId: "req-1", userId: "user-1", userEmail: "op@example.com", tenantId: TENANT, role: "operator", admin };
     // Sessione (Redis) vuota per costruzione: nessun draft/pendingConfirmation seminato.

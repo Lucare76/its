@@ -27,7 +27,11 @@ vi.mock("@/lib/server/mario-assistant/llm-router", () => ({ routeMarioWithLlm: (
 // FASE A.5.2 §7 — fake admin minimale per `findAvailableBusesForGroup`
 // (letta direttamente dalla catena, non via tool MCP): un solo bus con
 // capienza sufficiente e nessuna reservation preesistente, così il flusso di
-// prenotazione bus esclusivo lo trova/propone senza ambiguità.
+// prenotazione bus esclusivo lo trova/propone senza ambiguità. Dalla migration
+// 0268 i bus utilizzabili per un gruppo bus_exclusive devono appartenere alla
+// linea dedicata "GRUPPI_ESCLUSIVI" (vedi lib/server/booking-groups-service.ts,
+// findAvailableBusesForGroup) — bus_line_id + tenant_bus_lines qui sotto
+// replicano quel vincolo.
 type Row = Record<string, unknown>;
 function makeBusAdmin(seed: Record<string, Row[]>): McpContext["admin"] {
   function builder(table: string) {
@@ -52,7 +56,8 @@ const CTX: McpContext = {
   tenantId: "tenant-a",
   role: "operator",
   admin: makeBusAdmin({
-    tenant_bus_units: [{ id: "BUS-54", tenant_id: "tenant-a", label: "Bus 54", capacity: 54, status: "open", manual_close: false, active: true, tag: null }],
+    tenant_bus_units: [{ id: "BUS-54", tenant_id: "tenant-a", bus_line_id: "line-esclusivi", label: "Bus 54", capacity: 54, status: "open", manual_close: false, active: true, tag: null }],
+    tenant_bus_lines: [{ id: "line-esclusivi", tenant_id: "tenant-a", code: "GRUPPI_ESCLUSIVI", family_code: "GRUPPI_ESCLUSIVI", active: true }],
     booking_group_bus_reservations: [],
   }),
 };
