@@ -33,9 +33,9 @@ Il backup primario (Layer 2) e la copia offsite (Layer 3) hanno **stati indipend
 Limiti attuali rilevanti per Disaster Recovery:
 
 1. il backup JSON (Layer 2/3) copre un insieme limitato di tabelle (24, non l'intero schema);
-2. il dump PostgreSQL (Layer 4/5) e' implementato ma **non ancora eseguito** contro produzione (attende autorizzazione — vedi "Primo backup e drill");
-3. non esiste ancora un restore drill eseguito su ambiente isolato;
-4. non esiste ancora una prova documentata di RPO/RTO reali.
+2. il dump PostgreSQL (Layer 4/5) e' implementato e **gia' eseguito con successo** contro produzione (primo backup reale: 2026-09-09, set `its_full_2026-09-09_13-39.*`);
+3. lo script di restore drill (`scripts/postgres-restore-drill.mjs`) e' **implementato con guardie anti-produzione** ma **non ancora eseguito end-to-end** su un ambiente isolato reale — vedi "Restore Drill (V3.1)";
+4. non esiste ancora una prova documentata di RPO/RTO reali (dipende dal punto 3).
 
 ## Obiettivi operativi V1
 
@@ -335,6 +335,48 @@ Requisiti gia' noti che la procedura di restore dovra' coprire:
 
 Dettagli tecnici gia' identificati per lo script dedicato: ordine di `--use-list`, gestione del ciclo FK `tenant_bus_line_stops ↔ tenant_bus_allocations`, import dei dati `auth` prima dei dati `public`.
 
+## Restore Drill (V3.1) — script implementato, NON ancora verificato end-to-end
+
+> **Stato: implementato ma non eseguito contro un ambiente reale.** Vale ancora integralmente la "Regola di verifica" in cima a questo documento: finche' un drill reale non e' stato eseguito con successo, il DR ITS resta "backup presenti, restore non provato". Questa sezione descrive lo strumento pronto per farlo, non una prova gia' fatta.
+
+### Strategia scelta
+
+Tra le tre opzioni elencate in "Restore PostgreSQL" (progetto vuoto + `pg_restore` singolo; `--clean --if-exists`; restore selettivo via `--use-list`), e' stata scelta e implementata: **progetto Supabase di test completamente vuoto (nessuna migration eseguita) + `pg_restore --use-list` selettivo**. Mai `--clean` ne' `--create`.
+
+- **PUBLIC**: ogni progetto Supabase nuovo ha gia' lo schema `public` (vuoto, creato al provisioning). Il TOC del dump full contiene comunque una voce `SCHEMA - public`, che se ripristinata fallisce con "already exists". Soluzione chirurgica: la riga viene filtrata dalla `--use-list` (`filterOutPublicSchemaCreation`), tutto il resto dell'ordine del TOC resta invariato — pg_dump organizza gia' l'archivio per sezione (pre-data/data/post-data), quindi rimuovere una sola riga non altera la sicurezza delle dipendenze delle altre.
+- **AUTH**: `pg_restore --list` elenca le tabelle `TABLE DATA` nell'ordine di scoperta nel catalogo (tipicamente alfabetico), NON per dipendenza FK — "identities" precede "users" alfabeticamente, ma `auth.identities.user_id` referenzia `auth.users.id`. Soluzione: riordino esplicito della `--use-list` (`reorderAuthRestoreList`) cosi' che `auth.users` sia sempre restorata prima di `auth.identities` / `auth.mfa_factors` / `auth.mfa_amr_claims`.
+
+### Script
+
+`scripts/postgres-restore-drill.mjs` (helper puri e testabili in `lib/server/postgres-restore-drill.ts`, stesso pattern architetturale di `scripts/postgres-backup.mjs` / `lib/server/postgres-backup.ts`). Flusso:
+
+1. **Guardia anti-produzione**, PRIMA di ogni altra operazione (`assertRestoreTargetIsSafe`): abort immediato se il target contiene il project-ref di produzione noto (`lnjgwxqblapmxabwiyrg`), se coincide letteralmente con `SUPABASE_DB_URL`, se lo username Session Pooler (`postgres.<project-ref>`) del target coincide con quello di produzione, o se manca `RESTORE_TARGET_CONFIRM=I_UNDERSTAND_THIS_IS_TEST_ONLY` (richiesta per qualunque esecuzione che non sia `--dry-run`). Lo script non apre MAI una connessione verso `SUPABASE_DB_URL`: quella env serve solo per il confronto.
+2. Verifica tool: `pg_restore`/`psql`/`pg_dump` devono essere tutti major 17 e coerenti (stessa regola del backup).
+3. Download **read-only** da R2 (`GetObjectCommand`/`ListObjectsV2Command` — mai `PutObject`/`DeleteObject`) dell'ultimo set (o di uno specifico via `--base`).
+4. Verifica SHA-256 e dimensione di ogni artefatto contro il manifest — STOP immediato su qualunque mismatch.
+5. `pg_restore --list` strutturale su entrambi i dump (riusa `verifyRestoreList` / `verifyAuthRestoreList` gia' usate dal backup) — STOP se lo stato e' `failed`.
+6. In `--dry-run` (default assoluto: serve `--confirm-restore` esplicito per scrivere) si ferma qui e stampa il piano.
+7. Altrimenti: `pg_restore --no-owner --no-privileges --exit-on-error` PUBLIC poi AUTH (fail-fast, nessun `|| true`, nessun errore soppresso).
+8. Verifiche post-restore via `psql` (sola lettura sul target): conteggi tabelle chiave (`PG_BACKUP_CHECK_TABLES` + agency_bookings/driver_profiles/vehicles/tenant_bus_lines), `auth.users`/`auth.identities`, controllo FK orfane su 5 relazioni chiave, controllo sequence, smoke query su services/booking_groups/tenant_bus_allocations/hotels/agencies/driver_profiles/vehicles.
+9. RPO (eta' del backup usato) / RTO (durata totale del drill) misurati e stampati.
+10. Report finale PASS/FAIL per ogni fase; verdict `DR RESTORE VERIFIED` solo se tutte le verifiche passano.
+
+Test unitari: `tests/unit/postgres-restore-drill.test.ts` — copre la guardia anti-produzione (incluso l'abort esplicito sul project-ref `lnjgwxqblapmxabwiyrg`), il riordino AUTH e il filtro dello schema `public`.
+
+### Rischio residuo noto
+
+Extension o oggetti Supabase gia' presenti sul progetto di test (oltre al solo schema `public`) potrebbero generare conflitti non coperti dal solo filtro implementato: lo script non li sopprime, fa fallire il `pg_restore` e mostra lo stderr esatto per la diagnosi.
+
+### Checklist — creare il target di test (prerequisito mai ancora soddisfatto)
+
+1. Creare un nuovo progetto Supabase dedicato, isolato — il project-ref **non deve mai** essere `lnjgwxqblapmxabwiyrg`.
+2. **Non eseguire migrazioni** su di esso (`supabase db push`): deve restare vuoto, e' un requisito della strategia scelta.
+3. Copiare la Session Pooler URI (porta 5432) del nuovo progetto.
+4. Impostare `RESTORE_TARGET_DB_URL` (target di test), `SUPABASE_DB_URL` (produzione, solo per il confronto di sicurezza), i 5 `R2_*` esistenti (in lettura), e solo per l'esecuzione reale `RESTORE_TARGET_CONFIRM=I_UNDERSTAND_THIS_IS_TEST_ONLY`.
+5. Eseguire prima `node scripts/postgres-restore-drill.mjs --dry-run` e rivedere il piano stampato.
+6. Solo dopo revisione: `node scripts/postgres-restore-drill.mjs --confirm-restore`.
+7. Documentare qui RPO/RTO reali misurati dallo script e il verdict, una volta eseguito il primo drill reale.
+
 ## Regola 3-2-1
 
 Per un Disaster Recovery completo ITS deve arrivare gradualmente a:
@@ -374,8 +416,7 @@ Finche' non esiste una copia offsite di `vehicle-documents`, un incidente che co
 ## Roadmap DR
 
 - **DR V4 candidate: offsite backup del bucket `vehicle-documents`.** (Sync periodico verso R2 o download/upload dal job GitHub Actions; da progettare — **non** implementato in V3.)
-- Restore drill PostgreSQL ripetibile su progetto isolato + misura RPO/RTO reali (vedi "Regola di verifica").
-- Definizione e validazione della procedura di restore PostgreSQL (vedi "Restore PostgreSQL").
+- Eseguire il primo restore drill reale con `scripts/postgres-restore-drill.mjs` su un progetto Supabase isolato + misurare RPO/RTO reali (script pronto — vedi "Restore Drill (V3.1)" e "Regola di verifica").
 
 ## Frequenza drill consigliata
 
@@ -393,16 +434,16 @@ Il codice della V3 e' pronto ma **non e' mai stato eseguito contro produzione**.
 3. **Primo backup reale**: stesso workflow con `dry_run = false`. Produce il primo set `its_full_<ts>.*` in `production/postgres/`.
 4. **Verificare il primo dump**: scaricare `its_full_<ts>.dump` da R2 e controllare in locale:
    `pg_restore --list its_full_<ts>.dump | head` (TOC popolato, schema `public`, tabelle attese) e confrontare lo `sha256` con quello del manifest.
-5. **Restore drill** (fase successiva, non V3): ripristinare in un progetto Supabase isolato, misurare RPO/RTO reali, documentarli qui.
+5. **Restore drill** (V3.1, script pronto — vedi "Restore Drill (V3.1)"): `node scripts/postgres-restore-drill.mjs --dry-run` per validare hash/struttura senza scrivere, poi `--confirm-restore` su un progetto Supabase isolato per il drill reale, misurando RPO/RTO. **Non ancora eseguito.**
 
 ## Criterio di completamento P0
 
 Il P0 Disaster Recovery puo' considerarsi realmente chiuso solo quando ITS dispone di:
 
-1. backup con copertura delle tabelle operative critiche — 🟡 parziale (JSON: 24 tabelle, V1; PostgreSQL: schema `public` completo + `auth` data-only, V3 — **da eseguire**);
+1. backup con copertura delle tabelle operative critiche — ✅ (JSON: 24 tabelle, V1; PostgreSQL: schema `public` completo + `auth` data-only, V3 — eseguito con successo il 2026-09-09);
 2. validazione automatica del file — ✅ (`scripts/verify-backup-snapshot.mjs` per il JSON; `pg_restore --list` + SHA-256 + HeadObject per il dump, V3);
 3. copia off-provider — ✅ (Cloudflare R2: JSON in V2, dump PostgreSQL in V3);
-4. restore drill ripetibile su ambiente isolato — ❌ ancora da fare;
-5. report documentato con RPO/RTO misurati — ❌ ancora da fare.
+4. restore drill ripetibile su ambiente isolato — 🟡 script implementato e testato (`scripts/postgres-restore-drill.mjs`), **mai eseguito end-to-end** (manca il progetto Supabase di test — vedi "Restore Drill (V3.1)");
+5. report documentato con RPO/RTO misurati — ❌ ancora da fare (dipende dal punto 4).
 
 Finche' 4 e 5 non sono chiusi, vale la **Regola di verifica** in cima a questo documento: il DR ITS non e' verificato.
