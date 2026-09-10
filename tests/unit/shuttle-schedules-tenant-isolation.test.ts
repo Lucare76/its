@@ -31,15 +31,18 @@ const SHARED_KEY = {
  * Real in-memory, mutating, tenant-aware fake for public.services /
  * public.hotels / public.assignments. Filters (.eq/.is/.in/.gte/.lte) are
  * applied for real against seeded rows shared by BOTH tenants, and
- * delete()/insert() actually mutate the shared arrays — so assertions can
- * inspect the resulting store state, not just which mock args were passed.
+ * insert() actually mutates the shared arrays — so assertions can inspect
+ * the resulting store state, not just which mock args were passed.
  *
- * Every select/delete on "services" or "assignments" is checked for an
- * .eq("tenant_id", ...) filter; if one is never applied before the query
- * resolves, the operation is recorded in calls.unscopedQueries. Tests assert
- * this stays empty — if a future change drops a tenant_id filter from a
- * critical query, the corresponding test fails for real (not tautologically),
- * because the shared store contains both tenants' data by design.
+ * GET/POST sono invariati (select/insert diretti). PATCH/DELETE ora
+ * chiamano UNA sola RPC transazionale (public.patch_shuttle_schedule /
+ * delete_shuttle_schedule, migration 0276): la simulazione qui sotto applica
+ * SEMPRE `tenant_id === p_tenant_id` come primo filtro (e' un parametro
+ * esplicito della RPC, non un .eq() opzionale che si possa dimenticare) —
+ * l'isolamento tenant per queste due operazioni e' quindi strutturale, non
+ * piu' qualcosa da tracciare con unscopedQueries. Ogni select/insert diretto
+ * su "services" (GET/POST) resta comunque tracciato in
+ * calls.unscopedQueries se manca .eq("tenant_id", ...).
  */
 function createTenantAwareSupabase(seed: { services?: Row[]; hotels?: Row[]; assignments?: Row[] } = {}) {
   const services: Row[] = [...(seed.services ?? [])];
@@ -48,18 +51,18 @@ function createTenantAwareSupabase(seed: { services?: Row[]; hotels?: Row[]; ass
   const calls = {
     servicesSelect: 0,
     hotelsSelect: 0,
-    assignmentsSelect: 0,
     delete: 0,
     insert: 0,
     unscopedQueries: [] as string[],
     insertedRows: [] as Row[],
+    rpcCalls: [] as Array<{ fn: string; params: Row }>,
   };
 
-  function store(table: "services" | "hotels" | "assignments") {
-    return table === "services" ? services : table === "hotels" ? hotels : assignments;
+  function store(table: "services" | "hotels") {
+    return table === "services" ? services : hotels;
   }
 
-  function makeBuilder(table: "services" | "hotels" | "assignments", op: "select" | "delete") {
+  function makeBuilder(table: "services" | "hotels", op: "select") {
     let filtered = store(table);
     let sawTenantFilter = false;
     const builder = {
@@ -94,22 +97,25 @@ function createTenantAwareSupabase(seed: { services?: Row[]; hotels?: Row[]; ass
         return builder;
       },
       then(resolve: (v: { data: Row[] | null; error: null }) => unknown, reject?: (e: unknown) => unknown) {
-        if ((table === "services" || table === "assignments") && !sawTenantFilter) {
+        if (table === "services" && !sawTenantFilter) {
           calls.unscopedQueries.push(`${table}.${op}`);
-        }
-        if (op === "delete") {
-          calls.delete++;
-          const idsToRemove = new Set(filtered.map((row) => row.id));
-          const arr = store(table);
-          for (let i = arr.length - 1; i >= 0; i--) {
-            if (idsToRemove.has(arr[i].id)) arr.splice(i, 1);
-          }
-          return Promise.resolve({ data: null, error: null }).then(resolve as never, reject);
         }
         return Promise.resolve({ data: filtered, error: null }).then(resolve, reject);
       },
     };
     return builder;
+  }
+
+  function matchesOldIdentity(row: Row, p: Row) {
+    return (
+      row.direction === p.p_old_direction &&
+      row.time === p.p_old_departure_time &&
+      row.customer_name === p.p_old_customer_name &&
+      row.vessel === p.p_old_vessel &&
+      (row.hotel_id ?? null) === (p.p_old_hotel_id ?? null) &&
+      (row.meeting_point ?? null) === (p.p_old_meeting_point ?? null) &&
+      (!p.p_old_booking_service_kind || row.booking_service_kind === p.p_old_booking_service_kind)
+    );
   }
 
   const admin = {
@@ -119,9 +125,6 @@ function createTenantAwareSupabase(seed: { services?: Row[]; hotels?: Row[]; ass
           select() {
             calls.servicesSelect++;
             return makeBuilder("services", "select");
-          },
-          delete() {
-            return makeBuilder("services", "delete");
           },
           insert(rows: Row[]) {
             calls.insert++;
@@ -139,15 +142,45 @@ function createTenantAwareSupabase(seed: { services?: Row[]; hotels?: Row[]; ass
           },
         };
       }
-      if (table === "assignments") {
-        return {
-          select() {
-            calls.assignmentsSelect++;
-            return makeBuilder("assignments", "select");
-          },
-        };
-      }
       throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Row) {
+      calls.rpcCalls.push({ fn, params });
+      if (fn !== "patch_shuttle_schedule" && fn !== "delete_shuttle_schedule") {
+        throw new Error(`Unexpected rpc in test fake: ${fn}`);
+      }
+      // Isolamento tenant strutturale: p_tenant_id e' un parametro esplicito
+      // della RPC (non un .eq() che si possa dimenticare di chiamare).
+      const matched = services.filter(
+        (row) => row.tenant_id === params.p_tenant_id && (row.date as string) >= (params.p_today as string) && matchesOldIdentity(row, params),
+      );
+      const blockedStatus = matched.some((row) => row.status !== "new");
+      const matchedIds = new Set(matched.map((row) => row.id));
+      const blockedAssignment = assignments.some((a) => a.tenant_id === params.p_tenant_id && matchedIds.has(a.service_id));
+      if (blockedStatus || blockedAssignment) {
+        return Promise.resolve({ data: null, error: { message: "SHUTTLE_HAS_OPERATIONAL_SERVICES" } });
+      }
+
+      calls.delete++;
+      for (const row of matched) {
+        const idx = services.indexOf(row);
+        if (idx !== -1) services.splice(idx, 1);
+      }
+      let insertedCount = 0;
+      if (fn === "patch_shuttle_schedule") {
+        calls.insert++;
+        const newRows = (params.p_new_rows as Row[]) ?? [];
+        for (const row of newRows) {
+          const inserted = { id: `svc-${Math.random().toString(36).slice(2)}`, ...row, tenant_id: params.p_tenant_id };
+          services.push(inserted);
+          calls.insertedRows.push(inserted);
+        }
+        insertedCount = newRows.length;
+      }
+      return Promise.resolve({
+        data: [{ deleted_count: matched.length, deleted_date_from: null, deleted_date_to: null, deleted_weekdays: [], inserted_count: insertedCount }],
+        error: null,
+      });
     },
   };
 

@@ -58,108 +58,74 @@ function buildRows(tenantId: string, schedule: ShuttleSchedule) {
   }));
 }
 
-async function insertRows(admin: SupabaseClient, rows: Array<Record<string, unknown>>) {
-  const chunkSize = 500;
-  for (let index = 0; index < rows.length; index += chunkSize) {
-    const { error } = await admin.from("services").insert(rows.slice(index, index + chunkSize));
-    if (error) throw new Error(error.message);
-  }
-}
+// ─── RPC atomiche (P1: PATCH/DELETE transazionali, migration 0276) ───────
+//
+// Guardia operativa + individuazione righe future + DELETE (+ INSERT per la
+// PATCH) girano ORA dentro un'unica transazione Postgres lato RPC
+// (public.patch_shuttle_schedule / public.delete_shuttle_schedule): non più
+// una sequenza di chiamate Supabase separate che potevano lasciare il DB in
+// uno stato parziale (DELETE riuscita, INSERT fallita) o soggetto a una race
+// check-then-act tra la guardia e la scrittura. Il calcolo del range di
+// date/orario/timezone resta qui in TypeScript (invariato, vedi
+// enumerateShuttleDates/todayIsoDate) — la RPC riceve le righe già calcolate
+// e si occupa solo della parte che deve essere atomica sul database.
 
-async function deleteMatchingFutureServices(
-  admin: SupabaseClient,
-  tenantId: string,
-  scheduleId: string
-) {
-  const decoded = decodeShuttleScheduleId(scheduleId);
-  let query = admin
-    .from("services")
-    .delete()
-    .eq("tenant_id", tenantId)
-    .gte("date", todayIsoDate())
-    .eq("direction", decoded.direction)
-    .eq("time", decoded.departure_time)
-    .eq("customer_name", decoded.customer_name)
-    .eq("vessel", decoded.vessel);
-
-  if (decoded.hotel_id) query = query.eq("hotel_id", decoded.hotel_id);
-  else query = query.is("hotel_id", null);
-
-  if (decoded.meeting_point) query = query.eq("meeting_point", decoded.meeting_point);
-  else query = query.is("meeting_point", null);
-
-  if (decoded.booking_service_kind) query = query.eq("booking_service_kind", decoded.booking_service_kind);
-
-  const { error } = await query;
-  if (error) throw new Error(error.message);
-}
-
-type OperationalGuardResult = {
-  blocked: boolean;
-  matchedCount: number;
-  dateFrom: string | null;
-  dateTo: string | null;
-  weekdays: number[];
+type ShuttleRpcOldIdentity = {
+  direction: string;
+  departure_time: string;
+  customer_name: string;
+  vessel: string;
+  hotel_id: string | null;
+  meeting_point: string | null;
+  booking_service_kind: string | null;
 };
 
-// Extends the F-01 guard query result (unchanged filters, unchanged blocking
-// logic) with the data already fetched, so PATCH/DELETE can build an audit
-// snapshot (M1-08) without a second, redundant select on the same rows.
-async function hasOperationalFutureServices(
+type ShuttleRpcResult = {
+  deleted_count: number;
+  deleted_date_from: string | null;
+  deleted_date_to: string | null;
+  deleted_weekdays: number[] | null;
+  inserted_count?: number;
+};
+
+const OPERATIONAL_GUARD_RPC_MESSAGE = "SHUTTLE_HAS_OPERATIONAL_SERVICES";
+
+function isOperationalGuardRpcError(error: { message?: string | null } | null | undefined): boolean {
+  return error?.message === OPERATIONAL_GUARD_RPC_MESSAGE;
+}
+
+async function callPatchShuttleScheduleRpc(
   admin: SupabaseClient,
   tenantId: string,
-  scheduleId: string
-): Promise<OperationalGuardResult> {
-  const decoded = decodeShuttleScheduleId(scheduleId);
-  let query = admin
-    .from("services")
-    .select("id, status, date")
-    .eq("tenant_id", tenantId)
-    .gte("date", todayIsoDate())
-    .eq("direction", decoded.direction)
-    .eq("time", decoded.departure_time)
-    .eq("customer_name", decoded.customer_name)
-    .eq("vessel", decoded.vessel);
+  old: ShuttleRpcOldIdentity,
+  newRows: Array<Record<string, unknown>>
+) {
+  return admin.rpc("patch_shuttle_schedule", {
+    p_tenant_id: tenantId,
+    p_today: todayIsoDate(),
+    p_old_direction: old.direction,
+    p_old_departure_time: old.departure_time,
+    p_old_customer_name: old.customer_name,
+    p_old_vessel: old.vessel,
+    p_old_hotel_id: old.hotel_id,
+    p_old_meeting_point: old.meeting_point,
+    p_old_booking_service_kind: old.booking_service_kind,
+    p_new_rows: newRows,
+  });
+}
 
-  if (decoded.hotel_id) query = query.eq("hotel_id", decoded.hotel_id);
-  else query = query.is("hotel_id", null);
-
-  if (decoded.meeting_point) query = query.eq("meeting_point", decoded.meeting_point);
-  else query = query.is("meeting_point", null);
-
-  if (decoded.booking_service_kind) query = query.eq("booking_service_kind", decoded.booking_service_kind);
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  const services = (data ?? []) as Array<{ id: string; status: string | null; date: string }>;
-  const matchedCount = services.length;
-  const sortedDates = services.map((service) => service.date).sort();
-  const dateFrom = sortedDates[0] ?? null;
-  const dateTo = sortedDates[sortedDates.length - 1] ?? null;
-  const weekdays = Array.from(
-    new Set(services.map((service) => new Date(`${service.date}T12:00:00`).getDay()))
-  ).sort((left, right) => left - right);
-
-  if (services.some((service) => service.status !== "new")) {
-    return { blocked: true, matchedCount, dateFrom, dateTo, weekdays };
-  }
-
-  const serviceIds = services.map((service) => service.id);
-  if (serviceIds.length === 0) {
-    return { blocked: false, matchedCount: 0, dateFrom: null, dateTo: null, weekdays: [] };
-  }
-
-  const { data: assignmentRows, error: assignmentsError } = await admin
-    .from("assignments")
-    .select("id")
-    .eq("tenant_id", tenantId)
-    .in("service_id", serviceIds)
-    .limit(1);
-  if (assignmentsError) throw new Error(assignmentsError.message);
-
-  const blocked = ((assignmentRows ?? []) as Array<{ id: string }>).length > 0;
-  return { blocked, matchedCount, dateFrom, dateTo, weekdays };
+async function callDeleteShuttleScheduleRpc(admin: SupabaseClient, tenantId: string, old: ShuttleRpcOldIdentity) {
+  return admin.rpc("delete_shuttle_schedule", {
+    p_tenant_id: tenantId,
+    p_today: todayIsoDate(),
+    p_old_direction: old.direction,
+    p_old_departure_time: old.departure_time,
+    p_old_customer_name: old.customer_name,
+    p_old_vessel: old.vessel,
+    p_old_hotel_id: old.hotel_id,
+    p_old_meeting_point: old.meeting_point,
+    p_old_booking_service_kind: old.booking_service_kind,
+  });
 }
 
 function operationalGuardResponse() {
@@ -303,7 +269,6 @@ export async function PATCH(
     notes: parsed.data.notes === undefined ? null : normalizeNullableText(parsed.data.notes),
   };
 
-  let deletePhaseCompleted = false;
   let expectedInsertCount = 0;
   let deletedCount = 0;
   let deletedDateFrom: string | null = null;
@@ -311,23 +276,25 @@ export async function PATCH(
   let previousWeekdays: number[] = [];
 
   try {
-    const guardResult = await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id);
-    if (guardResult.blocked) {
-      return operationalGuardResponse();
-    }
-    deletedCount = guardResult.matchedCount;
-    deletedDateFrom = guardResult.dateFrom;
-    deletedDateTo = guardResult.dateTo;
-    previousWeekdays = guardResult.weekdays;
-
-    await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
-    deletePhaseCompleted = true;
-
     const rows = buildRows(auth.membership.tenant_id, schedule);
-    expectedInsertCount = rows.length;
-    if (rows.length) {
-      await insertRows(auth.admin, rows);
+    const { data, error } = await callPatchShuttleScheduleRpc(
+      auth.admin,
+      auth.membership.tenant_id,
+      existing,
+      rows
+    );
+    if (error) {
+      if (isOperationalGuardRpcError(error)) {
+        return operationalGuardResponse();
+      }
+      throw new Error(error.message);
     }
+    const result = (Array.isArray(data) ? data[0] : data) as ShuttleRpcResult | undefined;
+    deletedCount = result?.deleted_count ?? 0;
+    deletedDateFrom = result?.deleted_date_from ?? null;
+    deletedDateTo = result?.deleted_date_to ?? null;
+    previousWeekdays = result?.deleted_weekdays ?? [];
+    expectedInsertCount = result?.inserted_count ?? 0;
 
     auditLog({
       event: "shuttle_schedule_updated",
@@ -368,6 +335,10 @@ export async function PATCH(
       },
     });
   } catch (error) {
+    // RPC transazionale: se qui arriva un errore, la transazione Postgres ha
+    // fatto rollback completo (guardia/delete/insert sono un unico blocco
+    // atomico) — non esiste più uno stato "delete riuscita, insert fallita"
+    // da registrare separatamente.
     auditLog({
       event: "shuttle_schedules_update_failed",
       level: "error",
@@ -376,9 +347,6 @@ export async function PATCH(
       details: {
         scheduleId: id,
         message: error instanceof Error ? error.message : String(error),
-        deletePhaseCompleted,
-        deletedCount,
-        expectedInsertCount,
       },
     });
     return NextResponse.json(
@@ -404,11 +372,14 @@ export async function DELETE(
 
   try {
     const existing = decodeShuttleScheduleId(id);
-    const guardResult = await hasOperationalFutureServices(auth.admin, auth.membership.tenant_id, id);
-    if (guardResult.blocked) {
-      return operationalGuardResponse();
+    const { data, error } = await callDeleteShuttleScheduleRpc(auth.admin, auth.membership.tenant_id, existing);
+    if (error) {
+      if (isOperationalGuardRpcError(error)) {
+        return operationalGuardResponse();
+      }
+      throw new Error(error.message);
     }
-    await deleteMatchingFutureServices(auth.admin, auth.membership.tenant_id, id);
+    const result = (Array.isArray(data) ? data[0] : data) as ShuttleRpcResult | undefined;
 
     auditLog({
       event: "shuttle_schedule_deleted",
@@ -426,15 +397,15 @@ export async function DELETE(
           departureTime: existing.departure_time,
           meetingPoint: existing.meeting_point,
           vessel: existing.vessel,
-          validFrom: guardResult.dateFrom,
-          validTo: guardResult.dateTo,
-          weekdays: guardResult.weekdays,
+          validFrom: result?.deleted_date_from ?? null,
+          validTo: result?.deleted_date_to ?? null,
+          weekdays: result?.deleted_weekdays ?? [],
         },
         next: null,
-        deletedCount: guardResult.matchedCount,
+        deletedCount: result?.deleted_count ?? 0,
         insertedCount: 0,
-        deletedDateFrom: guardResult.dateFrom,
-        deletedDateTo: guardResult.dateTo,
+        deletedDateFrom: result?.deleted_date_from ?? null,
+        deletedDateTo: result?.deleted_date_to ?? null,
       },
     });
   } catch (error) {

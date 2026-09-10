@@ -14,110 +14,83 @@ const TOMORROW = isoDate(1);
 
 type Row = Record<string, unknown>;
 
-// In-memory fake Supabase admin client. Unlike a client that always returns a
-// fixed payload, this one actually applies .eq()/.is()/.in()/.gte() as row
-// filters against seeded data, so tests prove the guard's query filters (in
-// particular tenant_id) are what determines the result — not just that some
-// mock resolved truthy.
+// In-memory fake Supabase admin client. PATCH/DELETE ora chiamano UNA sola
+// RPC transazionale (public.patch_shuttle_schedule / delete_shuttle_schedule,
+// migration 0276) invece della vecchia sequenza select(services)+select
+// (assignments)+delete+insert: questo fake simula quella RPC applicando GLI
+// STESSI filtri (in particolare tenant_id + date >= oggi) contro i dati
+// seminati, cosi' i test continuano a provare che il filtro sia quello che
+// determina il risultato — non solo che un mock qualunque abbia risposto
+// "ok". Su errore forzato (setRpcError) lo store NON viene mutato per
+// niente: e' esattamente la garanzia di atomicita' che la RPC reale fornisce
+// via transazione Postgres (nessuno stato parziale).
 function createFakeSupabase(seed: { services?: Row[]; assignments?: Row[] } = {}) {
   const services = [...(seed.services ?? [])];
   const assignments = [...(seed.assignments ?? [])];
   const calls = {
     delete: 0,
     insert: 0,
-    servicesSelect: 0,
-    assignmentsSelect: 0,
+    rpcCalls: [] as Array<{ fn: string; params: Row }>,
   };
-  let servicesSelectError: { message: string } | null = null;
-  let assignmentsSelectError: { message: string } | null = null;
+  let rpcError: { message: string } | null = null;
 
-  function makeSelectBuilder(table: "services" | "assignments", rows: Row[]) {
-    let filtered = rows;
-    const builder = {
-      eq(field: string, value: unknown) {
-        filtered = filtered.filter((row) => row[field] === value);
-        return builder;
-      },
-      is(field: string, value: null) {
-        filtered = filtered.filter((row) => row[field] === value);
-        return builder;
-      },
-      in(field: string, values: unknown[]) {
-        filtered = filtered.filter((row) => values.includes(row[field]));
-        return builder;
-      },
-      gte(field: string, value: unknown) {
-        filtered = filtered.filter((row) => (row[field] as string) >= (value as string));
-        return builder;
-      },
-      limit(_count: number) {
-        return builder;
-      },
-      then(resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
-        const error = table === "services" ? servicesSelectError : assignmentsSelectError;
-        const result = error ? { data: null, error } : { data: filtered, error: null };
-        return Promise.resolve(result).then(resolve, reject);
-      },
-    };
-    return builder;
-  }
-
-  function makeDeleteBuilder() {
-    const builder = {
-      eq() {
-        return builder;
-      },
-      gte() {
-        return builder;
-      },
-      is() {
-        return builder;
-      },
-      then(resolve: (v: { error: null }) => unknown, reject?: (e: unknown) => unknown) {
-        return Promise.resolve({ error: null }).then(resolve, reject);
-      },
-    };
-    return builder;
+  function matchesOldIdentity(row: Row, p: Row) {
+    return (
+      row.direction === p.p_old_direction &&
+      row.time === p.p_old_departure_time &&
+      row.customer_name === p.p_old_customer_name &&
+      row.vessel === p.p_old_vessel &&
+      (row.hotel_id ?? null) === (p.p_old_hotel_id ?? null) &&
+      (row.meeting_point ?? null) === (p.p_old_meeting_point ?? null) &&
+      (!p.p_old_booking_service_kind || row.booking_service_kind === p.p_old_booking_service_kind)
+    );
   }
 
   const admin = {
     from(table: string) {
-      if (table === "services") {
-        return {
-          select(_cols: string) {
-            calls.servicesSelect++;
-            return makeSelectBuilder("services", services);
-          },
-          delete() {
-            calls.delete++;
-            return makeDeleteBuilder();
-          },
-          insert(_rows: unknown) {
-            calls.insert++;
-            return Promise.resolve({ error: null });
-          },
-        };
-      }
-      if (table === "assignments") {
-        return {
-          select(_cols: string) {
-            calls.assignmentsSelect++;
-            return makeSelectBuilder("assignments", assignments);
-          },
-        };
-      }
       throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Row) {
+      calls.rpcCalls.push({ fn, params });
+      if (fn !== "patch_shuttle_schedule" && fn !== "delete_shuttle_schedule") {
+        throw new Error(`Unexpected rpc in test fake: ${fn}`);
+      }
+      if (rpcError) return Promise.resolve({ data: null, error: rpcError });
+
+      const matched = services.filter(
+        (row) => row.tenant_id === params.p_tenant_id && (row.date as string) >= (params.p_today as string) && matchesOldIdentity(row, params),
+      );
+      const blockedStatus = matched.some((row) => row.status !== "new");
+      const matchedIds = new Set(matched.map((row) => row.id));
+      const blockedAssignment = assignments.some((a) => a.tenant_id === params.p_tenant_id && matchedIds.has(a.service_id));
+      if (blockedStatus || blockedAssignment) {
+        return Promise.resolve({ data: null, error: { message: "SHUTTLE_HAS_OPERATIONAL_SERVICES" } });
+      }
+
+      calls.delete++;
+      for (const row of matched) {
+        const idx = services.indexOf(row);
+        if (idx !== -1) services.splice(idx, 1);
+      }
+      let insertedCount = 0;
+      if (fn === "patch_shuttle_schedule") {
+        calls.insert++;
+        const newRows = (params.p_new_rows as Row[]) ?? [];
+        for (const row of newRows) services.push({ id: `svc-${Math.random().toString(36).slice(2)}`, ...row, tenant_id: params.p_tenant_id });
+        insertedCount = newRows.length;
+      }
+      return Promise.resolve({
+        data: [{ deleted_count: matched.length, deleted_date_from: null, deleted_date_to: null, deleted_weekdays: [], inserted_count: insertedCount }],
+        error: null,
+      });
     },
   };
 
   return {
     admin,
     calls,
-    setServicesSelectError(message: string) {
-      servicesSelectError = { message };
-    },
-    setAssignmentsSelectError(message: string) {
-      assignmentsSelectError = { message };
+    setRpcError(message: string) {
+      rpcError = { message };
     },
   };
 }
@@ -379,9 +352,15 @@ describe("PATCH/DELETE /api/shuttle-schedules/[id] — operational guard (F-01 m
     expect(fake.calls.delete).toBe(1);
   });
 
-  it("10a. Errore Supabase sulla query services → fail closed (nessun delete/insert), operazione non consentita", async () => {
+  it("10a. Errore RPC in DELETE → fail closed (nessun delete/insert), operazione non consentita", async () => {
+    // Guardia + individuazione righe + delete sono ora UNA sola RPC
+    // transazionale (migration 0276): un errore Postgres qualunque durante
+    // quella transazione (query interna, vincolo, timeout) fa rollback
+    // dell'intera operazione — non e' piu' distinguibile "e' fallita la
+    // select su services" da "e' fallita la select su assignments", perche'
+    // dal punto di vista del chiamante e' un'unica chiamata RPC che fallisce.
     const fake = createFakeSupabase({ services: [baseService()], assignments: [] });
-    fake.setServicesSelectError("connection reset");
+    fake.setRpcError("connection reset");
     mocks.authorizeServiceRoleRequest.mockResolvedValue({
       admin: fake.admin,
       user: { id: "user-1", email: "op@test.dev" },
@@ -394,24 +373,9 @@ describe("PATCH/DELETE /api/shuttle-schedules/[id] — operational guard (F-01 m
     expect(fake.calls.delete).toBe(0);
   });
 
-  it("10b. Errore Supabase sulla query assignments → fail closed (nessun delete/insert), operazione non consentita", async () => {
+  it("10b. Errore RPC in PATCH → fail closed, nessun delete/insert", async () => {
     const fake = createFakeSupabase({ services: [baseService()], assignments: [] });
-    fake.setAssignmentsSelectError("connection reset");
-    mocks.authorizeServiceRoleRequest.mockResolvedValue({
-      admin: fake.admin,
-      user: { id: "user-1", email: "op@test.dev" },
-      membership: { tenant_id: TENANT_A, role: "operator", suspended: false },
-    });
-
-    const res = await callDelete(SCHEDULE_ID);
-
-    expect(res.status).toBe(500);
-    expect(fake.calls.delete).toBe(0);
-  });
-
-  it("10c. Errore Supabase sulla query services in PATCH → fail closed, nessun delete/insert", async () => {
-    const fake = createFakeSupabase({ services: [baseService()], assignments: [] });
-    fake.setServicesSelectError("timeout");
+    fake.setRpcError("timeout");
     mocks.authorizeServiceRoleRequest.mockResolvedValue({
       admin: fake.admin,
       user: { id: "user-1", email: "op@test.dev" },
@@ -425,7 +389,7 @@ describe("PATCH/DELETE /api/shuttle-schedules/[id] — operational guard (F-01 m
     expect(fake.calls.insert).toBe(0);
   });
 
-  it("il guard interroga davvero services e assignments (nessun falso positivo da mock inerte)", async () => {
+  it("la guardia operativa e' valutata dentro la stessa chiamata RPC di delete/insert (una sola invocazione, mai due round-trip separati)", async () => {
     const service = baseService();
     const fake = createFakeSupabase({
       services: [service],
@@ -439,7 +403,7 @@ describe("PATCH/DELETE /api/shuttle-schedules/[id] — operational guard (F-01 m
 
     await callDelete(SCHEDULE_ID);
 
-    expect(fake.calls.servicesSelect).toBeGreaterThan(0);
-    expect(fake.calls.assignmentsSelect).toBeGreaterThan(0);
+    expect(fake.calls.rpcCalls).toHaveLength(1);
+    expect(fake.calls.rpcCalls[0].fn).toBe("delete_shuttle_schedule");
   });
 });

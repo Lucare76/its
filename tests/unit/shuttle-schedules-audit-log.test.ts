@@ -43,9 +43,17 @@ const SHARED_KEY = {
 
 /**
  * Tenant-aware, mutating in-memory fake for "hotels" / "services" /
- * "assignments". Supports controlled insert failures (flat or "fail on the
- * Nth insert() call", to simulate a mid-chunk failure without seeding
- * hundreds of real rows one by one).
+ * "assignments". Supports controlled insert failures for POST (flat or
+ * "fail on the Nth insert() call", per chunk) — POST e' invariato, scrive
+ * ancora direttamente su "services" in chunk.
+ *
+ * PATCH/DELETE ora chiamano UNA sola RPC transazionale
+ * (public.patch_shuttle_schedule / delete_shuttle_schedule, migration 0276):
+ * la simulazione qui sotto applica la STESSA identita'/guardia della RPC
+ * reale contro lo store condiviso, e su errore forzato (setRpcError) NON
+ * muta lo store per niente — e' esattamente la garanzia di atomicita' che la
+ * transazione Postgres fornisce (nessuno stato "delete riuscita, insert
+ * fallita").
  */
 function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignments?: Row[] } = {}) {
   const hotels: Row[] = [...(seed.hotels ?? [])];
@@ -54,14 +62,14 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
   const calls = {
     hotelsSelect: 0,
     servicesSelect: 0,
-    assignmentsSelect: 0,
     delete: 0,
     insertCalls: [] as number[],
     insertedRows: [] as Row[],
+    rpcCalls: [] as Array<{ fn: string; params: Row }>,
   };
   let insertErrorOnCall: number | null = null;
   let flatInsertError: string | null = null;
-  let flatDeleteError: string | null = null;
+  let rpcError: string | null = null;
 
   function makeSelectBuilder(rows: Row[]) {
     let filtered = rows;
@@ -98,34 +106,16 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
     return builder;
   }
 
-  function makeDeleteBuilder() {
-    let filtered = services;
-    const builder = {
-      eq(field: string, value: unknown) {
-        filtered = filtered.filter((row) => row[field] === value);
-        return builder;
-      },
-      is(field: string, value: null) {
-        filtered = filtered.filter((row) => row[field] === value);
-        return builder;
-      },
-      gte(field: string, value: unknown) {
-        filtered = filtered.filter((row) => (row[field] as string) >= (value as string));
-        return builder;
-      },
-      then(resolve: (v: { error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
-        calls.delete++;
-        if (flatDeleteError) {
-          return Promise.resolve({ error: { message: flatDeleteError } }).then(resolve, reject);
-        }
-        const idsToRemove = new Set(filtered.map((row) => row.id));
-        for (let i = services.length - 1; i >= 0; i--) {
-          if (idsToRemove.has(services[i].id)) services.splice(i, 1);
-        }
-        return Promise.resolve({ error: null }).then(resolve, reject);
-      },
-    };
-    return builder;
+  function matchesOldIdentity(row: Row, p: Row) {
+    return (
+      row.direction === p.p_old_direction &&
+      row.time === p.p_old_departure_time &&
+      row.customer_name === p.p_old_customer_name &&
+      row.vessel === p.p_old_vessel &&
+      (row.hotel_id ?? null) === (p.p_old_hotel_id ?? null) &&
+      (row.meeting_point ?? null) === (p.p_old_meeting_point ?? null) &&
+      (!p.p_old_booking_service_kind || row.booking_service_kind === p.p_old_booking_service_kind)
+    );
   }
 
   const admin = {
@@ -144,9 +134,6 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
             calls.servicesSelect++;
             return makeSelectBuilder(services);
           },
-          delete() {
-            return makeDeleteBuilder();
-          },
           insert(rows: Row[]) {
             const callIndex = calls.insertCalls.length + 1;
             calls.insertCalls.push(rows.length);
@@ -159,15 +146,48 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
           },
         };
       }
-      if (table === "assignments") {
-        return {
-          select() {
-            calls.assignmentsSelect++;
-            return makeSelectBuilder(assignments);
-          },
-        };
-      }
       throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Row) {
+      calls.rpcCalls.push({ fn, params });
+      if (fn !== "patch_shuttle_schedule" && fn !== "delete_shuttle_schedule") {
+        throw new Error(`Unexpected rpc in test fake: ${fn}`);
+      }
+      if (rpcError) return Promise.resolve({ data: null, error: { message: rpcError } });
+
+      const matched = services.filter(
+        (row) => row.tenant_id === params.p_tenant_id && (row.date as string) >= (params.p_today as string) && matchesOldIdentity(row, params),
+      );
+      const blockedStatus = matched.some((row) => row.status !== "new");
+      const matchedIds = new Set(matched.map((row) => row.id));
+      const blockedAssignment = assignments.some((a) => a.tenant_id === params.p_tenant_id && matchedIds.has(a.service_id));
+      if (blockedStatus || blockedAssignment) {
+        return Promise.resolve({ data: null, error: { message: "SHUTTLE_HAS_OPERATIONAL_SERVICES" } });
+      }
+
+      calls.delete++;
+      const dates = matched.map((r) => r.date as string).sort();
+      const deletedDateFrom = dates[0] ?? null;
+      const deletedDateTo = dates[dates.length - 1] ?? null;
+      const deletedWeekdays = [...new Set(matched.map((r) => new Date(`${r.date as string}T12:00:00`).getDay()))].sort((a, b) => a - b);
+      for (const row of matched) {
+        const idx = services.indexOf(row);
+        if (idx !== -1) services.splice(idx, 1);
+      }
+      let insertedCount = 0;
+      if (fn === "patch_shuttle_schedule") {
+        const newRows = (params.p_new_rows as Row[]) ?? [];
+        for (const row of newRows) {
+          const inserted = { id: `svc-${Math.random().toString(36).slice(2)}`, ...row, tenant_id: params.p_tenant_id };
+          services.push(inserted);
+          calls.insertedRows.push(inserted);
+        }
+        insertedCount = newRows.length;
+      }
+      return Promise.resolve({
+        data: [{ deleted_count: matched.length, deleted_date_from: deletedDateFrom, deleted_date_to: deletedDateTo, deleted_weekdays: deletedWeekdays, inserted_count: insertedCount }],
+        error: null,
+      });
     },
   };
 
@@ -183,8 +203,8 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
     setFlatInsertError(message: string) {
       flatInsertError = message;
     },
-    setFlatDeleteError(message: string) {
-      flatDeleteError = message;
+    setRpcError(message: string) {
+      rpcError = message;
     },
   };
 }
@@ -553,9 +573,9 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
       expect(eventsNamed("shuttle_schedule_updated")).toHaveLength(0);
     });
 
-    it("23. errore DELETE non produce evento di successo", async () => {
+    it("23. errore RPC non produce evento di successo", async () => {
       const fake = createFakeSupabase({ services: [], assignments: [] });
-      fake.setFlatDeleteError("delete failed");
+      fake.setRpcError("delete failed");
       authorizeAs(TENANT_A, fake);
 
       const res = await callPatch(SHARED_SCHEDULE_ID, basePayload());
@@ -564,10 +584,18 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
       expect(eventsNamed("shuttle_schedule_updated")).toHaveLength(0);
     });
 
-    it("24. DELETE riuscita seguita da INSERT fallito: nessun evento di successo, evento di errore con deletePhaseCompleted:true e deletedCount", async () => {
+    // P1 atomicita' (migration 0276): guardia + individuazione righe + delete
+    // + insert sono ora UN'UNICA transazione Postgres lato RPC
+    // (public.patch_shuttle_schedule). Un errore in un punto qualunque della
+    // transazione (che prima sarebbe stato "delete riuscita, insert fallita",
+    // uno stato parziale reale) ora fa ROLLBACK TOTALE: la riga futura
+    // esistente resta intatta, non esiste piu' un "deletePhaseCompleted" da
+    // registrare separatamente perche' non c'e' piu' nessuno stato
+    // intermedio da distinguere.
+    it("24. errore RPC a metà operazione → rollback totale: la riga futura esistente NON viene toccata", async () => {
       const rowA = serviceRow(TENANT_A, { date: isoDate(2) });
       const fake = createFakeSupabase({ services: [rowA], assignments: [] });
-      fake.setFlatInsertError("insert failed after delete");
+      fake.setRpcError("insert failed mid-transaction");
       authorizeAs(TENANT_A, fake);
 
       const res = await callPatch(SHARED_SCHEDULE_ID, basePayload({ valid_from: TODAY, valid_to: TOMORROW }));
@@ -575,54 +603,10 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
 
       expect(eventsNamed("shuttle_schedule_updated")).toHaveLength(0);
       const [errorEvent] = eventsNamed("shuttle_schedules_update_failed");
-      expect(errorEvent.details.deletePhaseCompleted).toBe(true);
-      expect(errorEvent.details.deletedCount).toBe(1);
-      // The row was already deleted from the shared store — real partial state.
-      expect(fake.services.some((row) => row.id === rowA.id)).toBe(false);
-    });
-
-    it("25. errore prima della DELETE: evento di errore con deletePhaseCompleted:false", async () => {
-      const fake = createFakeSupabase({ services: [], assignments: [] });
-      // Force the guard's own select to error before any delete happens.
-      const brokenAdmin = {
-        from(table: string) {
-          if (table === "services") {
-            return {
-              select() {
-                return {
-                  eq() {
-                    return this;
-                  },
-                  gte() {
-                    return this;
-                  },
-                  is() {
-                    return this;
-                  },
-                  then(resolve: (v: { data: null; error: { message: string } }) => unknown) {
-                    return Promise.resolve({ data: null, error: { message: "guard query failed" } }).then(resolve);
-                  },
-                };
-              },
-              delete() {
-                throw new Error("delete must not be called before the guard succeeds");
-              },
-            };
-          }
-          return fake.admin.from(table);
-        },
-      };
-      mocks.authorizeServiceRoleRequest.mockResolvedValue({
-        admin: brokenAdmin,
-        user: { id: "user-1", email: "op@test.dev" },
-        membership: { tenant_id: TENANT_A, role: "operator", suspended: false },
-      });
-
-      const res = await callPatch(SHARED_SCHEDULE_ID, basePayload());
-      expect(res.status).toBe(500);
-
-      const [errorEvent] = eventsNamed("shuttle_schedules_update_failed");
-      expect(errorEvent.details.deletePhaseCompleted).toBe(false);
+      expect(errorEvent.details).not.toHaveProperty("deletePhaseCompleted");
+      // Rollback totale: la riga NON è stata cancellata (a differenza del
+      // comportamento pre-P1, dove sarebbe già sparita dallo store).
+      expect(fake.services.some((row) => row.id === rowA.id)).toBe(true);
     });
   });
 
@@ -699,7 +683,7 @@ describe("shuttle-schedules API — aggregated audit log (M1-08 / F-04)", () => 
 
     it("33. errore database non produce evento di successo", async () => {
       const fake = createFakeSupabase({ services: [serviceRow(TENANT_A)], assignments: [] });
-      fake.setFlatDeleteError("delete failed");
+      fake.setRpcError("delete failed");
       authorizeAs(TENANT_A, fake);
 
       const res = await callDelete(SHARED_SCHEDULE_ID);

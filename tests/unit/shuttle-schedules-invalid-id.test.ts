@@ -16,19 +16,20 @@ function b64url(obj: unknown) {
   return Buffer.from(JSON.stringify(obj)).toString("base64url");
 }
 
-// In-memory fake Supabase admin client covering "hotels", "services" and
-// "assignments", tracking every select/delete/insert call so tests can prove
-// zero downstream queries/writes happen when the id fails validation.
+// In-memory fake Supabase admin client covering "hotels" (still queried
+// directly by the route for the F-10 guard) and the PATCH RPC
+// (public.patch_shuttle_schedule, migration 0276), tracking every
+// select/rpc call so tests can prove zero downstream queries/writes happen
+// when the id fails validation.
 function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignments?: Row[] } = {}) {
   const hotels = [...(seed.hotels ?? [])];
   const services = [...(seed.services ?? [])];
   const assignments = [...(seed.assignments ?? [])];
   const calls = {
     hotelsSelect: 0,
-    servicesSelect: 0,
-    assignmentsSelect: 0,
     delete: 0,
     insert: 0,
+    rpcCalls: [] as Array<{ fn: string; params: Row }>,
   };
 
   function makeSelectBuilder(rows: Row[]) {
@@ -60,22 +61,16 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
     return builder;
   }
 
-  function makeDeleteBuilder() {
-    const builder = {
-      eq() {
-        return builder;
-      },
-      gte() {
-        return builder;
-      },
-      is() {
-        return builder;
-      },
-      then(resolve: (v: { error: null }) => unknown, reject?: (e: unknown) => unknown) {
-        return Promise.resolve({ error: null }).then(resolve, reject);
-      },
-    };
-    return builder;
+  function matchesOldIdentity(row: Row, p: Row) {
+    return (
+      row.direction === p.p_old_direction &&
+      row.time === p.p_old_departure_time &&
+      row.customer_name === p.p_old_customer_name &&
+      row.vessel === p.p_old_vessel &&
+      (row.hotel_id ?? null) === (p.p_old_hotel_id ?? null) &&
+      (row.meeting_point ?? null) === (p.p_old_meeting_point ?? null) &&
+      (!p.p_old_booking_service_kind || row.booking_service_kind === p.p_old_booking_service_kind)
+    );
   }
 
   const admin = {
@@ -88,31 +83,35 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
           },
         };
       }
-      if (table === "services") {
-        return {
-          select() {
-            calls.servicesSelect++;
-            return makeSelectBuilder(services);
-          },
-          delete() {
-            calls.delete++;
-            return makeDeleteBuilder();
-          },
-          insert(_rows: unknown) {
-            calls.insert++;
-            return Promise.resolve({ error: null });
-          },
-        };
-      }
-      if (table === "assignments") {
-        return {
-          select() {
-            calls.assignmentsSelect++;
-            return makeSelectBuilder(assignments);
-          },
-        };
-      }
       throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Row) {
+      calls.rpcCalls.push({ fn, params });
+      if (fn !== "patch_shuttle_schedule") throw new Error(`Unexpected rpc in test fake: ${fn}`);
+
+      const matched = services.filter(
+        (row) => row.tenant_id === params.p_tenant_id && (row.date as string) >= (params.p_today as string) && matchesOldIdentity(row, params),
+      );
+      const blockedStatus = matched.some((row) => row.status !== "new");
+      const matchedIds = new Set(matched.map((row) => row.id));
+      const blockedAssignment = assignments.some((a) => a.tenant_id === params.p_tenant_id && matchedIds.has(a.service_id));
+      if (blockedStatus || blockedAssignment) {
+        return Promise.resolve({ data: null, error: { message: "SHUTTLE_HAS_OPERATIONAL_SERVICES" } });
+      }
+
+      calls.delete++;
+      for (const row of matched) {
+        const idx = services.indexOf(row);
+        if (idx !== -1) services.splice(idx, 1);
+      }
+      calls.insert++;
+      const newRows = (params.p_new_rows as Row[]) ?? [];
+      for (const row of newRows) services.push({ id: `svc-${Math.random().toString(36).slice(2)}`, ...row, tenant_id: params.p_tenant_id });
+
+      return Promise.resolve({
+        data: [{ deleted_count: matched.length, deleted_date_from: null, deleted_date_to: null, deleted_weekdays: [], inserted_count: newRows.length }],
+        error: null,
+      });
     },
   };
 
@@ -173,8 +172,7 @@ function authorizeAs(tenantId: string, fake: ReturnType<typeof createFakeSupabas
 
 function assertNoDownstreamCalls(fake: ReturnType<typeof createFakeSupabase>) {
   expect(fake.calls.hotelsSelect).toBe(0);
-  expect(fake.calls.servicesSelect).toBe(0);
-  expect(fake.calls.assignmentsSelect).toBe(0);
+  expect(fake.calls.rpcCalls).toHaveLength(0);
   expect(fake.calls.delete).toBe(0);
   expect(fake.calls.insert).toBe(0);
 }

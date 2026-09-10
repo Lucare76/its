@@ -20,6 +20,11 @@ type Row = Record<string, unknown>;
 // and "assignments" (F-01 guard). Filters (.eq/.is/.in/.gte) are applied for
 // real against seeded rows, so a passing test proves the actual query
 // arguments — not just that some mock resolved truthy.
+// POST continua a scrivere direttamente su "services" (.insert), invariato.
+// PATCH ora chiama UNA sola RPC transazionale (public.patch_shuttle_schedule,
+// migration 0276) invece di select(services)+select(assignments)+delete+
+// insert separati: questo fake la simula applicando gli stessi filtri contro
+// i dati seminati.
 function createFakeSupabase(
   seed: { hotels?: Row[]; services?: Row[]; assignments?: Row[] } = {}
 ) {
@@ -28,15 +33,13 @@ function createFakeSupabase(
   const assignments = [...(seed.assignments ?? [])];
   const calls = {
     hotelsSelect: 0,
-    servicesSelect: 0,
-    assignmentsSelect: 0,
     delete: 0,
     insert: 0,
+    rpcCalls: [] as Array<{ fn: string; params: Row }>,
   };
   let hotelsSelectError: { message: string } | null = null;
-  let servicesSelectError: { message: string } | null = null;
 
-  function makeSelectBuilder(kind: "hotels" | "services" | "assignments", rows: Row[]) {
+  function makeSelectBuilder(kind: "hotels" | "services", rows: Row[]) {
     let filtered = rows;
     const builder = {
       eq(field: string, value: unknown) {
@@ -68,7 +71,7 @@ function createFakeSupabase(
         resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown,
         reject?: (e: unknown) => unknown
       ) {
-        const error = kind === "hotels" ? hotelsSelectError : kind === "services" ? servicesSelectError : null;
+        const error = kind === "hotels" ? hotelsSelectError : null;
         const result = error ? { data: null, error } : { data: filtered, error: null };
         return Promise.resolve(result).then(resolve, reject);
       },
@@ -76,22 +79,16 @@ function createFakeSupabase(
     return builder;
   }
 
-  function makeDeleteBuilder() {
-    const builder = {
-      eq() {
-        return builder;
-      },
-      gte() {
-        return builder;
-      },
-      is() {
-        return builder;
-      },
-      then(resolve: (v: { error: null }) => unknown, reject?: (e: unknown) => unknown) {
-        return Promise.resolve({ error: null }).then(resolve, reject);
-      },
-    };
-    return builder;
+  function matchesOldIdentity(row: Row, p: Row) {
+    return (
+      row.direction === p.p_old_direction &&
+      row.time === p.p_old_departure_time &&
+      row.customer_name === p.p_old_customer_name &&
+      row.vessel === p.p_old_vessel &&
+      (row.hotel_id ?? null) === (p.p_old_hotel_id ?? null) &&
+      (row.meeting_point ?? null) === (p.p_old_meeting_point ?? null) &&
+      (!p.p_old_booking_service_kind || row.booking_service_kind === p.p_old_booking_service_kind)
+    );
   }
 
   const admin = {
@@ -106,13 +103,10 @@ function createFakeSupabase(
       }
       if (table === "services") {
         return {
+          // GET (usato anche dal fallback "return GET(request)" di POST) legge
+          // via fetchAllServices: .select().eq().order().
           select(_cols: string) {
-            calls.servicesSelect++;
             return makeSelectBuilder("services", services);
-          },
-          delete() {
-            calls.delete++;
-            return makeDeleteBuilder();
           },
           insert(_rows: unknown) {
             calls.insert++;
@@ -120,15 +114,35 @@ function createFakeSupabase(
           },
         };
       }
-      if (table === "assignments") {
-        return {
-          select(_cols: string) {
-            calls.assignmentsSelect++;
-            return makeSelectBuilder("assignments", assignments);
-          },
-        };
-      }
       throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Row) {
+      calls.rpcCalls.push({ fn, params });
+      if (fn !== "patch_shuttle_schedule") throw new Error(`Unexpected rpc in test fake: ${fn}`);
+
+      const matched = services.filter(
+        (row) => row.tenant_id === params.p_tenant_id && (row.date as string) >= (params.p_today as string) && matchesOldIdentity(row, params),
+      );
+      const blockedStatus = matched.some((row) => row.status !== "new");
+      const matchedIds = new Set(matched.map((row) => row.id));
+      const blockedAssignment = assignments.some((a) => a.tenant_id === params.p_tenant_id && matchedIds.has(a.service_id));
+      if (blockedStatus || blockedAssignment) {
+        return Promise.resolve({ data: null, error: { message: "SHUTTLE_HAS_OPERATIONAL_SERVICES" } });
+      }
+
+      calls.delete++;
+      for (const row of matched) {
+        const idx = services.indexOf(row);
+        if (idx !== -1) services.splice(idx, 1);
+      }
+      calls.insert++;
+      const newRows = (params.p_new_rows as Row[]) ?? [];
+      for (const row of newRows) services.push({ id: `svc-${Math.random().toString(36).slice(2)}`, ...row, tenant_id: params.p_tenant_id });
+
+      return Promise.resolve({
+        data: [{ deleted_count: matched.length, deleted_date_from: null, deleted_date_to: null, deleted_weekdays: [], inserted_count: newRows.length }],
+        error: null,
+      });
     },
   };
 
@@ -137,9 +151,6 @@ function createFakeSupabase(
     calls,
     setHotelsSelectError(message: string) {
       hotelsSelectError = { message };
-    },
-    setServicesSelectError(message: string) {
-      servicesSelectError = { message };
     },
   };
 }
@@ -324,10 +335,9 @@ describe("POST/PATCH /api/shuttle-schedules — hotel tenant guard (F-10 mitigat
     expect(body.error).toBe("INVALID_HOTEL_FOR_TENANT");
     expect(fake.calls.delete).toBe(0);
     expect(fake.calls.insert).toBe(0);
-    // Proves ordering: the F-01 guard's own reads never ran because the hotel
-    // check short-circuited the handler first.
-    expect(fake.calls.servicesSelect).toBe(0);
-    expect(fake.calls.assignmentsSelect).toBe(0);
+    // Proves ordering: the RPC (guard+delete+insert) never ran because the
+    // hotel check short-circuited the handler first.
+    expect(fake.calls.rpcCalls).toHaveLength(0);
   });
 
   it("7. PATCH con hotel_id null → nessuna query hotels, comportamento invariato (delete+insert normali)", async () => {
@@ -372,8 +382,7 @@ describe("POST/PATCH /api/shuttle-schedules — hotel tenant guard (F-10 mitigat
     expect(res.status).toBe(500);
     expect(fake.calls.delete).toBe(0);
     expect(fake.calls.insert).toBe(0);
-    expect(fake.calls.servicesSelect).toBe(0);
-    expect(fake.calls.assignmentsSelect).toBe(0);
+    expect(fake.calls.rpcCalls).toHaveLength(0);
   });
 
   it("10a. Tenant isolation reale nel fake: tenant A non può usare un hotel esistente solo per tenant B", async () => {

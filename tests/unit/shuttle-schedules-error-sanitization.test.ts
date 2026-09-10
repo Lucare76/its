@@ -23,6 +23,12 @@ type Row = Record<string, unknown>;
 // write/select operation can be independently forced to fail with a
 // distinctive Postgres-like error message, so tests prove the route actually
 // swallows that specific message rather than merely returning some 500.
+// PATCH/DELETE ora chiamano UNA sola RPC transazionale
+// (public.patch_shuttle_schedule / delete_shuttle_schedule, migration 0276):
+// un errore durante la transazione (guardia, delete o insert: dal punto di
+// vista del chiamante e' indistinguibile, ed e' proprio questo il punto —
+// tutto o niente) e' simulato con un unico setRpcError. GET/POST restano
+// invariati (select/insert dirette su "services"/"hotels").
 function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignments?: Row[] } = {}) {
   const hotels = [...(seed.hotels ?? [])];
   const services = [...(seed.services ?? [])];
@@ -30,16 +36,16 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
   const calls = {
     hotelsSelect: 0,
     servicesSelect: 0,
-    assignmentsSelect: 0,
     delete: 0,
     insert: 0,
+    rpcCalls: [] as Array<{ fn: string; params: Row }>,
   };
   let hotelsSelectError: { message: string } | null = null;
   let servicesSelectError: { message: string } | null = null;
-  let servicesDeleteError: { message: string } | null = null;
   let servicesInsertError: { message: string } | null = null;
+  let rpcError: { message: string } | null = null;
 
-  function makeSelectBuilder(kind: "hotels" | "services" | "assignments", rows: Row[]) {
+  function makeSelectBuilder(kind: "hotels" | "services", rows: Row[]) {
     let filtered = rows;
     const builder = {
       eq(field: string, value: unknown) {
@@ -71,7 +77,7 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
         resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown,
         reject?: (e: unknown) => unknown
       ) {
-        const error = kind === "hotels" ? hotelsSelectError : kind === "services" ? servicesSelectError : null;
+        const error = kind === "hotels" ? hotelsSelectError : servicesSelectError;
         const result = error ? { data: null, error } : { data: filtered, error: null };
         return Promise.resolve(result).then(resolve, reject);
       },
@@ -79,22 +85,16 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
     return builder;
   }
 
-  function makeDeleteBuilder() {
-    const builder = {
-      eq() {
-        return builder;
-      },
-      gte() {
-        return builder;
-      },
-      is() {
-        return builder;
-      },
-      then(resolve: (v: { error: { message: string } | null }) => unknown, reject?: (e: unknown) => unknown) {
-        return Promise.resolve({ error: servicesDeleteError }).then(resolve, reject);
-      },
-    };
-    return builder;
+  function matchesOldIdentity(row: Row, p: Row) {
+    return (
+      row.direction === p.p_old_direction &&
+      row.time === p.p_old_departure_time &&
+      row.customer_name === p.p_old_customer_name &&
+      row.vessel === p.p_old_vessel &&
+      (row.hotel_id ?? null) === (p.p_old_hotel_id ?? null) &&
+      (row.meeting_point ?? null) === (p.p_old_meeting_point ?? null) &&
+      (!p.p_old_booking_service_kind || row.booking_service_kind === p.p_old_booking_service_kind)
+    );
   }
 
   const admin = {
@@ -113,25 +113,47 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
             calls.servicesSelect++;
             return makeSelectBuilder("services", services);
           },
-          delete() {
-            calls.delete++;
-            return makeDeleteBuilder();
-          },
           insert(_rows: unknown) {
             calls.insert++;
             return Promise.resolve({ error: servicesInsertError });
           },
         };
       }
-      if (table === "assignments") {
-        return {
-          select(_cols: string) {
-            calls.assignmentsSelect++;
-            return makeSelectBuilder("assignments", assignments);
-          },
-        };
-      }
       throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Row) {
+      calls.rpcCalls.push({ fn, params });
+      if (fn !== "patch_shuttle_schedule" && fn !== "delete_shuttle_schedule") {
+        throw new Error(`Unexpected rpc in test fake: ${fn}`);
+      }
+      if (rpcError) return Promise.resolve({ data: null, error: rpcError });
+
+      const matched = services.filter(
+        (row) => row.tenant_id === params.p_tenant_id && (row.date as string) >= (params.p_today as string) && matchesOldIdentity(row, params),
+      );
+      const blockedStatus = matched.some((row) => row.status !== "new");
+      const matchedIds = new Set(matched.map((row) => row.id));
+      const blockedAssignment = assignments.some((a) => a.tenant_id === params.p_tenant_id && matchedIds.has(a.service_id));
+      if (blockedStatus || blockedAssignment) {
+        return Promise.resolve({ data: null, error: { message: "SHUTTLE_HAS_OPERATIONAL_SERVICES" } });
+      }
+
+      calls.delete++;
+      for (const row of matched) {
+        const idx = services.indexOf(row);
+        if (idx !== -1) services.splice(idx, 1);
+      }
+      let insertedCount = 0;
+      if (fn === "patch_shuttle_schedule") {
+        calls.insert++;
+        const newRows = (params.p_new_rows as Row[]) ?? [];
+        for (const row of newRows) services.push({ id: `svc-${Math.random().toString(36).slice(2)}`, ...row, tenant_id: params.p_tenant_id });
+        insertedCount = newRows.length;
+      }
+      return Promise.resolve({
+        data: [{ deleted_count: matched.length, deleted_date_from: null, deleted_date_to: null, deleted_weekdays: [], inserted_count: insertedCount }],
+        error: null,
+      });
     },
   };
 
@@ -144,11 +166,11 @@ function createFakeSupabase(seed: { hotels?: Row[]; services?: Row[]; assignment
     setServicesSelectError(message: string) {
       servicesSelectError = { message };
     },
-    setServicesDeleteError(message: string) {
-      servicesDeleteError = { message };
-    },
     setServicesInsertError(message: string) {
       servicesInsertError = { message };
+    },
+    setRpcError(message: string) {
+      rpcError = { message };
     },
   };
 }
@@ -313,7 +335,7 @@ describe("shuttle-schedules API — error sanitization (F-11 mitigation)", () =>
 
   it("3. PATCH: errore nel flusso di aggiornamento → 500, nessun dettaglio tecnico, log invocato, nessuna operazione dopo l'errore", async () => {
     const fake = createFakeSupabase({ services: [], assignments: [] });
-    fake.setServicesDeleteError(DISTINCTIVE_ERROR);
+    fake.setRpcError(DISTINCTIVE_ERROR);
     authorizeAs(TENANT_A, fake);
 
     const res = await callPatch(SCHEDULE_ID, basePayload());
@@ -336,7 +358,7 @@ describe("shuttle-schedules API — error sanitization (F-11 mitigation)", () =>
 
   it("4. DELETE: errore nella cancellazione → 500, nessun dettaglio tecnico, log invocato", async () => {
     const fake = createFakeSupabase({ services: [], assignments: [] });
-    fake.setServicesDeleteError(DISTINCTIVE_ERROR);
+    fake.setRpcError(DISTINCTIVE_ERROR);
     authorizeAs(TENANT_A, fake);
 
     const res = await callDelete(SCHEDULE_ID);
@@ -367,12 +389,12 @@ describe("shuttle-schedules API — error sanitization (F-11 mitigation)", () =>
     assertNoForbiddenFields(await (await callPost(basePayload())).json());
 
     const fakePatch = createFakeSupabase({ services: [], assignments: [] });
-    fakePatch.setServicesDeleteError(DISTINCTIVE_ERROR);
+    fakePatch.setRpcError(DISTINCTIVE_ERROR);
     authorizeAs(TENANT_A, fakePatch);
     assertNoForbiddenFields(await (await callPatch(SCHEDULE_ID, basePayload())).json());
 
     const fakeDelete = createFakeSupabase({ services: [], assignments: [] });
-    fakeDelete.setServicesDeleteError(DISTINCTIVE_ERROR);
+    fakeDelete.setRpcError(DISTINCTIVE_ERROR);
     authorizeAs(TENANT_A, fakeDelete);
     assertNoForbiddenFields(await (await callDelete(SCHEDULE_ID)).json());
   });

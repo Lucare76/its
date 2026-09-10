@@ -10,73 +10,29 @@ function isoDate(offsetDays: number) {
   return new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-// Fake Supabase admin client that only tracks whether delete()/insert() on
-// "services" were invoked — enough to prove no write happens on invalid input.
+// Fake Supabase admin client: PATCH ora chiama UNA sola RPC transazionale
+// (public.patch_shuttle_schedule, migration 0276) invece di select/delete/
+// insert separati. Nessun dato preesistente e' seminato -> la guardia
+// operativa non trova mai righe da bloccare, cosi' i test originali su
+// validazione restano invariati: contano solo se la RPC e' stata invocata
+// (delete=1) e se ha ricevuto righe da inserire (insert=1).
 function createFakeSupabase() {
   const calls = { delete: 0, insert: 0 };
 
-  function makeDeleteBuilder() {
-    const builder = {
-      eq() {
-        return builder;
-      },
-      gte() {
-        return builder;
-      },
-      is() {
-        return builder;
-      },
-      then(resolve: (v: { error: null }) => unknown, reject?: (e: unknown) => unknown) {
-        return Promise.resolve({ error: null }).then(resolve, reject);
-      }
-    };
-    return builder;
-  }
-
-  // Select builder used by the F-01 operational guard (hasOperationalFutureServices)
-  // added to the PATCH/DELETE route. Always resolves to an empty result set, i.e.
-  // "no operational future services found", so the guard never blocks these
-  // pre-existing tests and their original assertions stay unchanged.
-  function makeEmptySelectBuilder() {
-    const builder = {
-      eq() {
-        return builder;
-      },
-      gte() {
-        return builder;
-      },
-      is() {
-        return builder;
-      },
-      in() {
-        return builder;
-      },
-      limit() {
-        return builder;
-      },
-      then(resolve: (v: { data: unknown[]; error: null }) => unknown, reject?: (e: unknown) => unknown) {
-        return Promise.resolve({ data: [], error: null }).then(resolve, reject);
-      }
-    };
-    return builder;
-  }
-
   const admin = {
-    from(_table: string) {
-      return {
-        select(_cols: string) {
-          return makeEmptySelectBuilder();
-        },
-        delete() {
-          calls.delete++;
-          return makeDeleteBuilder();
-        },
-        insert(_rows: unknown) {
-          calls.insert++;
-          return Promise.resolve({ error: null });
-        }
-      };
-    }
+    from(table: string) {
+      throw new Error(`Unexpected table in test fake: ${table}`);
+    },
+    rpc(fn: string, params: Record<string, unknown>) {
+      if (fn !== "patch_shuttle_schedule") throw new Error(`Unexpected rpc in test fake: ${fn}`);
+      calls.delete++;
+      const newRows = (params.p_new_rows as unknown[]) ?? [];
+      if (newRows.length > 0) calls.insert++;
+      return Promise.resolve({
+        data: [{ deleted_count: 0, deleted_date_from: null, deleted_date_to: null, deleted_weekdays: [], inserted_count: newRows.length }],
+        error: null,
+      });
+    },
   };
 
   return { admin, calls };
