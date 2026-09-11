@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   computeAssignableUnassigned,
+  computeNeedsReview,
   computeWhatsAppFailedForServices,
+  evaluateIncompleteBookingGroups,
   evaluatePendingAgencyApprovals,
   evaluatePendingCancellationRequests,
   WHATSAPP_CONTROL_CENTER_KIND,
@@ -128,6 +130,91 @@ describe("control-center-extras — funzioni pure", () => {
 
     it("WHATSAPP_CONTROL_CENTER_KIND è 'info_3d' (unico kind attivo/joinabile verificato in audit)", () => {
       expect(WHATSAPP_CONTROL_CENTER_KIND).toBe("info_3d");
+    });
+  });
+
+  describe("computeNeedsReview", () => {
+    it("mappa le righe needs_review preservando service_id/customer_name/review_reasons", () => {
+      const rows = [
+        { service_id: "s1", customer_name: "Rossi", operational_time: "09:00", review_reasons: ["Pickup mancante"] },
+        { service_id: "s2", customer_name: null, operational_time: null, review_reasons: ["Orario operativo non determinato", "Pax mancante/non valido"] },
+      ] as unknown as Parameters<typeof computeNeedsReview>[0];
+      const result = computeNeedsReview(rows);
+      expect(result.count).toBe(2);
+      expect(result.items).toEqual([
+        { service_id: "s1", customer_name: "Rossi", operational_time: "09:00", review_reasons: ["Pickup mancante"] },
+        { service_id: "s2", customer_name: null, operational_time: null, review_reasons: ["Orario operativo non determinato", "Pax mancante/non valido"] },
+      ]);
+    });
+
+    it("lista vuota -> count 0", () => {
+      expect(computeNeedsReview([] as unknown as Parameters<typeof computeNeedsReview>[0])).toEqual({ count: 0, items: [] });
+    });
+  });
+
+  describe("assignable_unassigned vs needs_review — DISTINTI, mai lo stesso servizio in entrambi", () => {
+    it("un servizio needs_review non compare mai nel set assignable_unassigned (mutuamente esclusivi per costruzione)", () => {
+      // Le stesse due liste che la route produce dallo STESSO buildUnassignedServicesDiagnostics():
+      // stops (assignable && !needs_review) e needs_review (l'insieme complementare).
+      const stops = [{ services: [{ service_id: "structurally-ok", customer_name: "Bianchi", operational_time: "10:00", pax: 2 }] }];
+      const needsReviewRows = [
+        { service_id: "missing-data", customer_name: "Verdi", operational_time: null, review_reasons: ["Pickup mancante"] },
+      ] as unknown as Parameters<typeof computeNeedsReview>[0];
+
+      const assignableUnassigned = computeAssignableUnassigned(stops, new Set());
+      const needsReview = computeNeedsReview(needsReviewRows);
+
+      const unassignedIds = new Set(assignableUnassigned.assignable_unassigned.map((s) => s.service_id));
+      const needsReviewIds = new Set(needsReview.items.map((s) => s.service_id));
+
+      // Nessuna intersezione: nessun service_id classificato in entrambe le liste.
+      for (const id of unassignedIds) expect(needsReviewIds.has(id)).toBe(false);
+      for (const id of needsReviewIds) expect(unassignedIds.has(id)).toBe(false);
+
+      expect(assignableUnassigned.assignable_unassigned_count).toBe(1);
+      expect(needsReview.count).toBe(1);
+    });
+  });
+
+  describe("evaluateIncompleteBookingGroups", () => {
+    it("un gruppo con status diverso da 'operational'/'cancelled' è incompleto", () => {
+      const groups = [
+        { id: "g1", name: "Gruppo A", status: "draft", kind: "other" },
+        { id: "g2", name: "Gruppo B", status: "operational", kind: "other" },
+      ];
+      const result = evaluateIncompleteBookingGroups(groups, new Set());
+      expect(result.count).toBe(1);
+      expect(result.items).toEqual([{ id: "g1", name: "Gruppo A", status: "draft", kind: "other", missing_bus: false }]);
+    });
+
+    it("un gruppo bus_exclusive incompleto senza prenotazione bus ha missing_bus=true", () => {
+      const groups = [{ id: "g1", name: "Gruppo Esclusivo", status: "passengers_defined", kind: "bus_exclusive" }];
+      const result = evaluateIncompleteBookingGroups(groups, new Set());
+      expect(result.items[0]).toMatchObject({ missing_bus: true });
+    });
+
+    it("un gruppo bus_exclusive incompleto CON prenotazione bus ha missing_bus=false", () => {
+      const groups = [{ id: "g1", name: "Gruppo Esclusivo", status: "passengers_defined", kind: "bus_exclusive" }];
+      const result = evaluateIncompleteBookingGroups(groups, new Set(["g1"]));
+      expect(result.items[0]).toMatchObject({ missing_bus: false });
+    });
+
+    it("un gruppo non bus_exclusive non è mai segnalato come missing_bus, anche senza prenotazioni", () => {
+      const groups = [{ id: "g1", name: "Gruppo Altro", status: "draft", kind: "other" }];
+      const result = evaluateIncompleteBookingGroups(groups, new Set());
+      expect(result.items[0]).toMatchObject({ missing_bus: false });
+    });
+
+    it("tutti i gruppi operational/cancelled -> nessun incompleto", () => {
+      const groups = [
+        { id: "g1", name: "A", status: "operational", kind: "other" },
+        { id: "g2", name: "B", status: "cancelled", kind: "other" },
+      ];
+      expect(evaluateIncompleteBookingGroups(groups, new Set())).toEqual({ count: 0, items: [] });
+    });
+
+    it("lista vuota -> count 0", () => {
+      expect(evaluateIncompleteBookingGroups([], new Set())).toEqual({ count: 0, items: [] });
     });
   });
 });

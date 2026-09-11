@@ -131,6 +131,34 @@ export function severityFromWhatsAppFailed(count: number): CardStatus {
   return { level: count > 0 ? "critical" : "ok", count };
 }
 
+// ─── Servizi da verificare (needs_review, control-center-extras) ──────────
+
+/**
+ * `needs_review` (lib/piano-assignable-service.ts) identifica servizi che
+ * NON possono essere assegnati automaticamente per dati mancanti/incoerenti
+ * (hotel non risolto, meeting point mancante, orario non determinato, ecc.)
+ * — categoria DISTINTA da "assignable_unassigned" (servizi strutturalmente
+ * a posto ma ancora senza autista). V1 la calcolava ma non la esponeva.
+ * Sempre WARNING: richiede una verifica umana ma non è di per sé un servizio
+ * bloccato/critico (potrebbe già avere un autista assegnato manualmente).
+ */
+export function severityFromNeedsReview(count: number): CardStatus {
+  return { level: count > 0 ? "warning" : "ok", count };
+}
+
+// ─── Gruppi prenotazione incompleti (control-center-extras) ───────────────
+
+/**
+ * Un booking_group è "da completare" quando il suo status (dominio già
+ * esistente, migration 0263: draft/to_complete/stops_defined/
+ * passengers_defined/operational/cancelled) non è ancora 'operational'.
+ * Nessuna nuova regola inventata. Sempre WARNING: un gruppo a metà non
+ * blocca la giornata odierna finché non arriva a operativizzazione.
+ */
+export function severityFromIncompleteBookingGroups(count: number): CardStatus {
+  return { level: count > 0 ? "warning" : "ok", count };
+}
+
 // ─── Totali di riepilogo ("X problemi critici · Y attenzioni") ────────────
 
 export function summarizeTotals(cards: CardStatus[]): { critical: number; warning: number } {
@@ -141,4 +169,97 @@ export function summarizeTotals(cards: CardStatus[]): { critical: number; warnin
     else if (card.level === "warning") warning += card.count;
   }
   return { critical, warning };
+}
+
+// ─── Alert model V2 (FASE 3) ────────────────────────────────────────────────
+//
+// Un unico tipo coerente per ogni card mostrata a Mario. Le funzioni
+// severityFromXxx sopra restano il "motore" delle soglie (invariate); questo
+// livello si occupa SOLO di: normalizzare il livello in una severità a 3
+// valori, ordinare (critical -> warning -> info) e nascondere/mostrare le
+// card senza problemi. Nessuna soglia viene ricalcolata qui.
+
+export type ControlCenterAlertSeverity = "critical" | "warning" | "info";
+
+export type ControlCenterAlert = {
+  code: string;
+  severity: ControlCenterAlertSeverity;
+  count: number;
+  title: string;
+  description: string;
+  action_label: string;
+  action_href: string;
+  metadata?: Record<string, unknown>;
+};
+
+/** "ok" (nessun problema) diventa "info": è comunque un'informazione utile
+ *  da mostrare in "Vedi tutto", non un'anomalia. */
+export function cardLevelToAlertSeverity(level: CardLevel): ControlCenterAlertSeverity {
+  return level === "ok" ? "info" : level;
+}
+
+const ALERT_SEVERITY_RANK: Record<ControlCenterAlertSeverity, number> = { critical: 0, warning: 1, info: 2 };
+
+/**
+ * Ordina critical -> warning -> info. A parità di severità mantiene l'ordine
+ * originale (indice dell'array in input) come tiebreak esplicito, cosi'
+ * l'ordinamento resta deterministico indipendentemente dall'implementazione
+ * di Array.prototype.sort del runtime.
+ */
+export function sortAlertsBySeverity<T extends { severity: ControlCenterAlertSeverity }>(alerts: readonly T[]): T[] {
+  return alerts
+    .map((alert, index) => ({ alert, index }))
+    .sort((a, b) => ALERT_SEVERITY_RANK[a.alert.severity] - ALERT_SEVERITY_RANK[b.alert.severity] || a.index - b.index)
+    .map(({ alert }) => alert);
+}
+
+/** Default: solo le card con un problema reale (critical/warning). `showAll`
+ *  (toggle "Vedi tutto" in UI) fa comparire anche quelle "info" (count=0). */
+export function filterVisibleAlerts<T extends { severity: ControlCenterAlertSeverity }>(
+  alerts: readonly T[],
+  showAll: boolean
+): T[] {
+  return showAll ? [...alerts] : alerts.filter((alert) => alert.severity !== "info");
+}
+
+export type ControlCenterDayStatus = {
+  level: CardLevel;
+  headline: string;
+  subline?: string;
+};
+
+function pluralIt(count: number, singular: string, plural: string): string {
+  return count === 1 ? singular : plural;
+}
+
+/**
+ * Fascia "Stato Giornata": una frase umana, mai un termine tecnico. Se ci
+ * sono sia critical che warning, il critical vince come frase principale e
+ * i warning residui compaiono come sottotesto breve (mai il contrario:
+ * un problema urgente non deve mai essere oscurato da "N cose da verificare").
+ */
+export function buildControlCenterDayStatus(
+  alerts: readonly Pick<ControlCenterAlert, "severity" | "count">[]
+): ControlCenterDayStatus {
+  const critical = alerts.filter((a) => a.severity === "critical").reduce((sum, a) => sum + a.count, 0);
+  const warning = alerts.filter((a) => a.severity === "warning").reduce((sum, a) => sum + a.count, 0);
+
+  if (critical > 0) {
+    return {
+      level: "critical",
+      headline: `${critical} ${pluralIt(critical, "problema urgente", "problemi urgenti")}`,
+      subline: warning > 0 ? `+ ${warning} da verificare` : undefined,
+    };
+  }
+  if (warning > 0) {
+    return {
+      level: "warning",
+      headline: `${warning} ${pluralIt(warning, "cosa da verificare", "cose da verificare")}`,
+    };
+  }
+  return {
+    level: "ok",
+    headline: "Giornata sotto controllo",
+    subline: "Nessun problema operativo rilevante",
+  };
 }

@@ -6,7 +6,15 @@ const TENANT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const TEST_DATE = "2026-09-05";
 
 type Row = Record<string, unknown>;
-type TableName = "services" | "hotels" | "assignments" | "booking_approval_tokens" | "cancellation_requests" | "whatsapp_events";
+type TableName =
+  | "services"
+  | "hotels"
+  | "assignments"
+  | "booking_approval_tokens"
+  | "cancellation_requests"
+  | "whatsapp_events"
+  | "booking_groups"
+  | "booking_group_bus_reservations";
 
 /**
  * Fake Supabase in-memory, tenant-aware, per le 6 tabelle lette da
@@ -23,6 +31,8 @@ function createTenantAwareSupabase(seed: Partial<Record<TableName, Row[]>> = {})
     booking_approval_tokens: [...(seed.booking_approval_tokens ?? [])],
     cancellation_requests: [...(seed.cancellation_requests ?? [])],
     whatsapp_events: [...(seed.whatsapp_events ?? [])],
+    booking_groups: [...(seed.booking_groups ?? [])],
+    booking_group_bus_reservations: [...(seed.booking_group_bus_reservations ?? [])],
   };
   const calls = { unscopedQueries: [] as string[] };
 
@@ -41,6 +51,13 @@ function createTenantAwareSupabase(seed: Partial<Record<TableName, Row[]>> = {})
       },
       in(field: string, values: unknown[]) {
         filtered = filtered.filter((row) => values.includes(row[field]));
+        return builder;
+      },
+      // .or("service_date.eq.X,return_date.eq.X") — usato solo dalla query
+      // booking_groups. Nessun test di questo file seeda booking_groups, quindi
+      // un passthrough (nessun filtro aggiuntivo) è sufficiente e sicuro: il
+      // set resta comunque vuoto per costruzione.
+      or() {
         return builder;
       },
       order() {
@@ -246,5 +263,24 @@ describe("Tenant isolation e RBAC — /api/ops/control-center-extras", () => {
 
     const res = await callGet("not-a-date");
     expect(res.status).toBe(400);
+  });
+
+  it("booking_groups del tenant B non compaiono mai in incomplete_booking_groups del tenant A, e header.groups_count conta solo il tenant A", async () => {
+    const fake = createTenantAwareSupabase({
+      booking_groups: [
+        { id: "bg-a1", tenant_id: TENANT_A, name: "Gruppo A", status: "draft", kind: "other", service_date: TEST_DATE, return_date: null },
+        { id: "bg-b1", tenant_id: TENANT_B, name: "Gruppo B", status: "draft", kind: "other", service_date: TEST_DATE, return_date: null },
+      ],
+    });
+    authorizeAs(TENANT_A, fake);
+
+    const res = await callGet();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.header.groups_count).toBe(1);
+    expect(body.incomplete_booking_groups.count).toBe(1);
+    expect(body.incomplete_booking_groups.items[0].id).toBe("bg-a1");
+    expect(JSON.stringify(body.incomplete_booking_groups)).not.toContain("bg-b1");
   });
 });

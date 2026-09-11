@@ -60,7 +60,13 @@ export async function GET(request: NextRequest) {
       )
     );
 
-    return NextResponse.json({ ok: true, rows });
+    // Filtro opzionale lato server (es. ?status=failed dal Controllo Giornata):
+    // evita di spedire al client righe che verrebbero comunque scartate.
+    // Retrocompatibile: senza il parametro il comportamento è invariato.
+    const statusFilter = new URL(request.url).searchParams.get("status");
+    const filteredRows = statusFilter ? rows.filter((row) => row.status === statusFilter) : rows;
+
+    return NextResponse.json({ ok: true, rows: filteredRows });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

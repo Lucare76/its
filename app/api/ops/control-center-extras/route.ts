@@ -27,7 +27,9 @@ import type { AutoAssignPreviewHotel, AutoAssignPreviewService } from "@/lib/pia
 import { romeDateKey } from "@/lib/server/operational-health/operations-health";
 import {
   computeAssignableUnassigned,
+  computeNeedsReview,
   computeWhatsAppFailedForServices,
+  evaluateIncompleteBookingGroups,
   evaluatePendingAgencyApprovals,
   evaluatePendingCancellationRequests,
   WHATSAPP_CONTROL_CENTER_KIND,
@@ -184,6 +186,10 @@ async function handleControlCenterExtras(request: NextRequest) {
     );
 
     const assignableUnassigned = computeAssignableUnassigned(classification.stops, assignedServiceIdsWithDriver);
+    // DISTINTO da assignableUnassigned: servizi non assegnabili per dati
+    // mancanti/incoerenti (vedi commento su computeNeedsReview). Nessuna
+    // query aggiuntiva: classification.needs_review è già calcolato sopra.
+    const needsReview = computeNeedsReview(classification.needs_review);
 
     // 3. Prenotazioni agenzia in attesa (backlog tenant, non filtrato per data).
     const pendingApprovalServicesResult = await auth.admin
@@ -288,6 +294,44 @@ async function handleControlCenterExtras(request: NextRequest) {
 
     const whatsappFailed = computeWhatsAppFailedForServices(whatsappEventsResult.data ?? []);
 
+    // 6. booking_groups della giornata (service_date O return_date), esclusi
+    // i cancellati a monte. Serve sia per il totale di riepilogo (tutti i
+    // gruppi della giornata) sia per la card "Gruppi da completare"
+    // (sottoinsieme non ancora 'operational' — vedi evaluateIncompleteBookingGroups).
+    const bookingGroupsResult = await auth.admin
+      .from("booking_groups")
+      .select("id, name, status, kind")
+      .eq("tenant_id", tenantId)
+      .neq("status", "cancelled")
+      .or(`service_date.eq.${date},return_date.eq.${date}`);
+
+    if (bookingGroupsResult.error) {
+      return NextResponse.json({ ok: false, error: `booking_groups: ${bookingGroupsResult.error.message}` }, { status: 500 });
+    }
+
+    const bookingGroupsForDay = (bookingGroupsResult.data ?? []) as Array<{ id: string; name: string; status: string; kind: string }>;
+    const exclusiveGroupIds = bookingGroupsForDay.filter((group) => group.kind === "bus_exclusive").map((group) => group.id);
+
+    // Query batch UNICA su tutti i gruppi bus_exclusive trovati (mai una
+    // query per gruppo — vedi nota in evaluateIncompleteBookingGroups).
+    const reservationsResult = exclusiveGroupIds.length
+      ? await auth.admin
+          .from("booking_group_bus_reservations")
+          .select("booking_group_id")
+          .eq("tenant_id", tenantId)
+          .in("booking_group_id", exclusiveGroupIds)
+      : { data: [] as Array<{ booking_group_id: string }>, error: null };
+
+    if (reservationsResult.error) {
+      return NextResponse.json(
+        { ok: false, error: `booking_group_bus_reservations: ${reservationsResult.error.message}` },
+        { status: 500 }
+      );
+    }
+
+    const groupIdsWithReservation = new Set((reservationsResult.data ?? []).map((row) => row.booking_group_id));
+    const incompleteBookingGroups = evaluateIncompleteBookingGroups(bookingGroupsForDay, groupIdsWithReservation);
+
     return NextResponse.json({
       ok: true,
       date,
@@ -296,8 +340,11 @@ async function handleControlCenterExtras(request: NextRequest) {
         pax_total: paxTotal,
         drivers_in_use_count: driversInUse.size,
         buses_in_use_count: busesInUse.size,
+        groups_count: bookingGroupsForDay.length,
       },
       assignable_unassigned: assignableUnassigned,
+      needs_review: needsReview,
+      incomplete_booking_groups: incompleteBookingGroups,
       agency_approvals_pending: agencyApprovalsPending,
       cancellation_requests_pending: cancellationRequestsPending,
       whatsapp_failed: { ...whatsappFailed, kind: WHATSAPP_CONTROL_CENTER_KIND },

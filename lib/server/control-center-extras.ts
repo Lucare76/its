@@ -23,6 +23,82 @@
 import type { UnassignedDiagnosticsResult } from "@/lib/piano-unassigned-services-diagnostics";
 import { isNewerStatus, normalizeStatusGroup } from "@/lib/server/whatsapp-log-shared";
 
+// ─── Servizi da verificare (needs_review) — DISTINTO da assignable_unassigned ─
+//
+// assignable_unassigned (sopra) = servizi strutturalmente a posto (macro
+// categoria nota, orario/pickup/destinazione/pax presenti) ma ancora senza
+// autista assegnato. needs_review = servizi che buildUnassignedServicesDiagnostics
+// classifica come NON assegnabili automaticamente per dati mancanti/incoerenti
+// (vedi lib/piano-assignable-service.ts, review_reasons). Un servizio non
+// compare MAI in entrambe le liste: resolveAssignableService imposta
+// `assignable = !needs_review` (mutuamente esclusivi per costruzione).
+
+export type NeedsReviewItem = {
+  service_id: string;
+  customer_name: string | null;
+  operational_time: string | null;
+  review_reasons: string[];
+};
+
+export type NeedsReviewResult = {
+  count: number;
+  items: NeedsReviewItem[];
+};
+
+export function computeNeedsReview(rows: UnassignedDiagnosticsResult["needs_review"]): NeedsReviewResult {
+  return {
+    count: rows.length,
+    items: rows.map((row) => ({
+      service_id: row.service_id,
+      customer_name: row.customer_name ?? null,
+      operational_time: row.operational_time ?? null,
+      review_reasons: row.review_reasons,
+    })),
+  };
+}
+
+// ─── Gruppi prenotazione (booking_groups) incompleti per la giornata ──────
+//
+// "Incompleto" = status del dominio GIÀ esistente (migration 0263) diverso
+// da 'operational' (e da 'cancelled', escluso a monte dalla query). Nessuna
+// nuova euristica. `groupIdsWithReservation` viene passato dal chiamante
+// (UNA query batch su booking_group_bus_reservations per tutti i gruppi
+// bus_exclusive trovati, mai una query per gruppo — a differenza di
+// inspectOperationalBusGroupState in lib/server/booking-groups-service.ts,
+// pensata per un singolo gruppo e quindi non adatta a un conteggio giornaliero).
+
+export type IncompleteBookingGroupItem = {
+  id: string;
+  name: string;
+  status: string;
+  kind: string;
+  missing_bus: boolean;
+};
+
+export type IncompleteBookingGroupsResult = {
+  count: number;
+  items: IncompleteBookingGroupItem[];
+};
+
+const BOOKING_GROUP_COMPLETE_STATUSES = new Set(["operational", "cancelled"]);
+
+export function evaluateIncompleteBookingGroups(
+  groups: Array<{ id: string; name: string; status: string; kind: string }>,
+  groupIdsWithReservation: ReadonlySet<string>
+): IncompleteBookingGroupsResult {
+  const incomplete = groups.filter((group) => !BOOKING_GROUP_COMPLETE_STATUSES.has(group.status));
+  return {
+    count: incomplete.length,
+    items: incomplete.map((group) => ({
+      id: group.id,
+      name: group.name,
+      status: group.status,
+      kind: group.kind,
+      missing_bus: group.kind === "bus_exclusive" && !groupIdsWithReservation.has(group.id),
+    })),
+  };
+}
+
 // ─── Servizi strutturalmente assegnabili ancora senza autista ────────────
 
 export type AssignableUnassignedService = {
