@@ -236,7 +236,15 @@ function pluralIt(count: number, singular: string, plural: string): string {
  * Fascia "Stato Giornata": una frase umana, mai un termine tecnico. Se ci
  * sono sia critical che warning, il critical vince come frase principale e
  * i warning residui compaiono come sottotesto breve (mai il contrario:
- * un problema urgente non deve mai essere oscurato da "N cose da verificare").
+ * un problema urgente non deve mai essere oscurato da "N segnalazioni da
+ * verificare").
+ *
+ * Il totale warning e' una somma di CARD, non di servizi unici: alcune card
+ * (conflitti autista/mezzo, gruppi prenotazione incompleti) non sono
+ * riconducibili a un service_id, quindi lo stesso servizio puo' in teoria
+ * comparire in piu' di una categoria. Per non far credere a Mario che
+ * "N cose" siano N servizi distinti, il testo usa deliberatamente
+ * "segnalazioni" (= card-item, non entita' uniche).
  */
 export function buildControlCenterDayStatus(
   alerts: readonly Pick<ControlCenterAlert, "severity" | "count">[]
@@ -248,13 +256,13 @@ export function buildControlCenterDayStatus(
     return {
       level: "critical",
       headline: `${critical} ${pluralIt(critical, "problema urgente", "problemi urgenti")}`,
-      subline: warning > 0 ? `+ ${warning} da verificare` : undefined,
+      subline: warning > 0 ? `+ ${warning} ${pluralIt(warning, "segnalazione da verificare", "segnalazioni da verificare")}` : undefined,
     };
   }
   if (warning > 0) {
     return {
       level: "warning",
-      headline: `${warning} ${pluralIt(warning, "cosa da verificare", "cose da verificare")}`,
+      headline: `${warning} ${pluralIt(warning, "segnalazione da verificare", "segnalazioni da verificare")}`,
     };
   }
   return {
@@ -262,4 +270,34 @@ export function buildControlCenterDayStatus(
     headline: "Giornata sotto controllo",
     subline: "Nessun problema operativo rilevante",
   };
+}
+
+// ─── Stato sistema (job_health, /api/admin/system-status) ─────────────────
+
+export type SystemJobHealthLike = { job_key: string; job_name?: string; health: string; reason: string };
+
+/**
+ * Solo "warning" e "critical" sono anomalie reali da segnalare a Mario.
+ * "unknown" (job mai eseguito ma senza finestra attesa superata — es. il
+ * reporting salute non e' ancora configurato lato GitHub Actions/Vercel) e
+ * "disabled" (job intenzionalmente non in uso, es. whatsapp-reminders) NON
+ * sono problemi: mostrarli come pill ambra farebbe vedere un falso allarme
+ * anche quando il job reale (es. il backup PostgreSQL offsite via GitHub
+ * Actions) e' effettivamente OK ma solo il reporting verso questa app non e'
+ * ancora arrivato/configurato.
+ */
+export function filterSystemJobIssues<T extends { health: string }>(jobs: readonly T[]): T[] {
+  return jobs.filter((job) => job.health === "warning" || job.health === "critical");
+}
+
+/**
+ * Livello complessivo del pannello "Stato sistema": si affida innanzitutto a
+ * `overall_health` (gia' calcolato server-side da computeOverallHealth, che
+ * ignora i job disabled), con `issueCount` come rete di sicurezza (mai 0
+ * anomalie reali mostrate ma livello "ok").
+ */
+export function computeSystemLevel(overallHealth: string | undefined, issueCount: number): CardLevel {
+  if (overallHealth === "critical") return "critical";
+  if (overallHealth === "warning" || issueCount > 0) return "warning";
+  return "ok";
 }

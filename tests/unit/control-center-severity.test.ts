@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildControlCenterDayStatus,
   cardLevelToAlertSeverity,
+  computeSystemLevel,
+  filterSystemJobIssues,
   filterVisibleAlerts,
   hasAgencyApprovalNearOrPastExpiry,
   severityFromAgencyApprovals,
@@ -217,26 +219,113 @@ describe("control-center-severity — mapping INFO/WARNING/CRITICAL", () => {
       expect(status.headline).toBe("3 problemi urgenti");
     });
 
-    it("solo warning (nessun critical) -> 'N cose da verificare'", () => {
+    it("solo warning (nessun critical) -> 'N segnalazioni da verificare' (somma di card, non di servizi unici)", () => {
       const status = buildControlCenterDayStatus([alert("warning", 3)]);
-      expect(status).toEqual({ level: "warning", headline: "3 cose da verificare" });
+      expect(status).toEqual({ level: "warning", headline: "3 segnalazioni da verificare" });
     });
 
-    it("un solo warning -> singolare 'cosa da verificare'", () => {
+    it("una sola segnalazione -> singolare 'segnalazione da verificare'", () => {
       const status = buildControlCenterDayStatus([alert("warning", 1)]);
-      expect(status.headline).toBe("1 cosa da verificare");
+      expect(status.headline).toBe("1 segnalazione da verificare");
     });
 
-    it("critical + warning insieme -> il critical vince come frase principale, i warning residui in subline", () => {
+    it("critical invariata: la frase principale resta 'N problemi urgenti', mai orientata alle segnalazioni", () => {
+      const status = buildControlCenterDayStatus([alert("critical", 1)]);
+      expect(status.headline).toBe("1 problema urgente");
+    });
+
+    it("critical + warning insieme -> il critical vince come frase principale, le segnalazioni residue in subline", () => {
       const status = buildControlCenterDayStatus([alert("critical", 2, "a"), alert("warning", 5, "b")]);
       expect(status.level).toBe("critical");
       expect(status.headline).toBe("2 problemi urgenti");
-      expect(status.subline).toBe("+ 5 da verificare");
+      expect(status.subline).toBe("+ 5 segnalazioni da verificare");
+    });
+
+    it("critical + una sola segnalazione warning -> subline al singolare", () => {
+      const status = buildControlCenterDayStatus([alert("critical", 1, "a"), alert("warning", 1, "b")]);
+      expect(status.subline).toBe("+ 1 segnalazione da verificare");
     });
 
     it("somma i count di più alert della stessa severità", () => {
       const status = buildControlCenterDayStatus([alert("critical", 1, "a"), alert("critical", 2, "b")]);
       expect(status.headline).toBe("3 problemi urgenti");
+    });
+
+    it("stato verde invariato: nessuna card in warning/critical -> 'Giornata sotto controllo'", () => {
+      const status = buildControlCenterDayStatus([alert("info", 0, "a"), alert("info", 0, "b")]);
+      expect(status).toEqual({ level: "ok", headline: "Giornata sotto controllo", subline: "Nessun problema operativo rilevante" });
+    });
+  });
+
+  describe("filterSystemJobIssues — solo warning/critical sono anomalie reali", () => {
+    function job(health: string, jobKey = health) {
+      return { job_key: jobKey, job_name: `Nome ${jobKey}`, health, reason: `motivo ${jobKey}` };
+    }
+
+    it("un job 'unknown' (mai eseguito, es. reporting non ancora configurato) NON è un'anomalia", () => {
+      expect(filterSystemJobIssues([job("unknown")])).toEqual([]);
+    });
+
+    it("un job 'disabled' (es. whatsapp-reminders non in uso) NON è un'anomalia", () => {
+      expect(filterSystemJobIssues([job("disabled")])).toEqual([]);
+    });
+
+    it("un job 'healthy' NON è un'anomalia", () => {
+      expect(filterSystemJobIssues([job("healthy")])).toEqual([]);
+    });
+
+    it("un job 'info' (es. esecuzione in corso) NON è un'anomalia", () => {
+      expect(filterSystemJobIssues([job("info")])).toEqual([]);
+    });
+
+    it("un job 'warning' è un'anomalia reale ed è mantenuto", () => {
+      const w = job("warning", "backup");
+      expect(filterSystemJobIssues([w])).toEqual([w]);
+    });
+
+    it("un job 'critical' è un'anomalia reale ed è mantenuto", () => {
+      const c = job("critical", "postgres-backup");
+      expect(filterSystemJobIssues([c])).toEqual([c]);
+    });
+
+    it("postgres-backup 'unknown' insieme a backup 'warning' -> solo backup resta (nessun falso allarme DR V3)", () => {
+      const result = filterSystemJobIssues([job("unknown", "postgres-backup"), job("warning", "backup")]);
+      expect(result.map((j) => j.job_key)).toEqual(["backup"]);
+    });
+
+    it("postgres-backup recente e sano ('healthy') -> nessuna anomalia mostrata", () => {
+      expect(filterSystemJobIssues([job("healthy", "postgres-backup")])).toEqual([]);
+    });
+
+    it("postgres-backup stale ('critical', successo troppo vecchio) -> resta come anomalia reale", () => {
+      const stale = job("critical", "postgres-backup");
+      expect(filterSystemJobIssues([stale])).toEqual([stale]);
+    });
+
+    it("lista vuota -> nessuna anomalia", () => {
+      expect(filterSystemJobIssues([])).toEqual([]);
+    });
+  });
+
+  describe("computeSystemLevel", () => {
+    it("overall_health 'critical' -> critical, indipendentemente da issueCount", () => {
+      expect(computeSystemLevel("critical", 0)).toBe("critical");
+    });
+
+    it("overall_health 'warning' -> warning", () => {
+      expect(computeSystemLevel("warning", 0)).toBe("warning");
+    });
+
+    it("overall_health 'healthy' ma issueCount > 0 (rete di sicurezza) -> warning", () => {
+      expect(computeSystemLevel("healthy", 2)).toBe("warning");
+    });
+
+    it("overall_health 'healthy' e issueCount 0 -> ok", () => {
+      expect(computeSystemLevel("healthy", 0)).toBe("ok");
+    });
+
+    it("overall_health undefined (system status non caricato) e issueCount 0 -> ok", () => {
+      expect(computeSystemLevel(undefined, 0)).toBe("ok");
     });
   });
 });

@@ -27,6 +27,8 @@ import { DateInput, PageHeader, StatCard } from "@/components/ui";
 import {
   buildControlCenterDayStatus,
   cardLevelToAlertSeverity,
+  computeSystemLevel,
+  filterSystemJobIssues,
   filterVisibleAlerts,
   hasAgencyApprovalNearOrPastExpiry,
   severityFromAgencyApprovals,
@@ -93,7 +95,7 @@ type ControlCenterExtras = {
 type SystemStatusResponse = {
   ok: boolean;
   overall_health?: string;
-  job_health?: Array<{ job_key: string; health: string; reason: string }>;
+  job_health?: Array<{ job_key: string; job_name?: string; health: string; reason: string }>;
   error?: string;
 };
 
@@ -447,12 +449,8 @@ export default function ControlloGiornataPage() {
 
   const header = extras?.header;
 
-  const systemJobIssues = (systemStatus?.job_health ?? []).filter((j) => j.health !== "healthy");
-  const systemLevel: CardLevel = systemStatus?.overall_health === "critical"
-    ? "critical"
-    : systemStatus?.overall_health === "warning" || systemJobIssues.length > 0
-      ? "warning"
-      : "ok";
+  const systemJobIssues = filterSystemJobIssues(systemStatus?.job_health ?? []);
+  const systemLevel: CardLevel = computeSystemLevel(systemStatus?.overall_health, systemJobIssues.length);
 
   const toggleExpanded = useCallback((id: string) => {
     setExpandedCardId((current) => (current === id ? null : id));
@@ -616,7 +614,7 @@ export default function ControlloGiornataPage() {
             </span>
             {systemJobIssues.map((job) => (
               <span key={job.job_key} className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-                {job.job_key}: {job.reason}
+                {job.job_name ?? job.job_key}: {job.reason}
               </span>
             ))}
             <a href="/settings/system" className="text-xs font-semibold text-blue-600 hover:underline">Apri stato sistema →</a>
