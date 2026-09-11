@@ -241,4 +241,127 @@ describe("RPC public.patch_shuttle_schedule / public.delete_shuttle_schedule —
     expect(error).toBeNull();
     expect(JSON.stringify(data)).not.toContain(otherCtx.tenantId);
   });
+
+  // ─── Regressione bug 0276/0277: cast enum mancanti (trovato da uno smoke
+  // test contro produzione, MAI da un mock JS — un fake `.rpc()` confronta
+  // stringhe con `===` e non può mai riprodurre "operator does not exist:
+  // service_direction = text"). Questi test girano SOLO contro Postgres
+  // reale, dove il type-checking degli enum esiste davvero. ───
+
+  it("7. Enum validi (direction/service_type/status non-default) → PATCH consentito, righe scritte con i tipi corretti", async () => {
+    const seedIdent = { ...SCHEDULE_KEY, customer_name: `${SCHEDULE_KEY.customer_name}-enum` };
+    const seedArgsFor = (rows: Array<Record<string, unknown>>) => ({
+      p_tenant_id: ctx.tenantId,
+      p_today: isoDate(0),
+      p_old_direction: seedIdent.direction,
+      p_old_departure_time: seedIdent.departure_time,
+      p_old_customer_name: seedIdent.customer_name,
+      p_old_vessel: seedIdent.vessel,
+      p_old_hotel_id: seedIdent.hotel_id,
+      p_old_meeting_point: seedIdent.meeting_point,
+      p_old_booking_service_kind: seedIdent.booking_service_kind,
+      p_new_rows: rows,
+    });
+
+    const seedRow = newRow(ctx.tenantId, isoDate(2), { customer_name: seedIdent.customer_name });
+    const { error: seedErr } = await ctx.admin.rpc("patch_shuttle_schedule", seedArgsFor([seedRow]));
+    expect(seedErr).toBeNull();
+
+    // service_type non-default ("bus_tour" invece del default "transfer") e
+    // direction "arrival" invece di "departure": entrambi enum, entrambi
+    // devono passare sia il confronto WHERE (sul vecchio "departure") sia il
+    // cast nell'INSERT (sul nuovo "arrival"/"bus_tour").
+    const newValidRow = newRow(ctx.tenantId, isoDate(3), {
+      customer_name: seedIdent.customer_name,
+      direction: "arrival",
+      service_type: "bus_tour",
+      status: "new",
+    });
+    const { data, error } = await ctx.admin.rpc("patch_shuttle_schedule", seedArgsFor([newValidRow]));
+    expect(error).toBeNull();
+    expect(data?.[0]?.inserted_count).toBe(1);
+
+    const { data: rows } = await ctx.admin
+      .from("services")
+      .select("id, direction, service_type, status, date")
+      .eq("customer_name", seedIdent.customer_name);
+    expect(rows).toHaveLength(1);
+    expect(rows?.[0]).toMatchObject({ direction: "arrival", service_type: "bus_tour", status: "new", date: isoDate(3) });
+
+    await ctx.admin.from("services").delete().eq("customer_name", seedIdent.customer_name);
+  });
+
+  it("8. direction non valida (fuori dai valori dell'enum) nel WHERE → errore Postgres, nessuna modifica (rollback)", async () => {
+    const seedIdent = { ...SCHEDULE_KEY, customer_name: `${SCHEDULE_KEY.customer_name}-bad-direction` };
+    const seedRow = newRow(ctx.tenantId, isoDate(2), { customer_name: seedIdent.customer_name });
+    const { error: seedErr } = await ctx.admin.rpc("patch_shuttle_schedule", {
+      p_tenant_id: ctx.tenantId,
+      p_today: isoDate(0),
+      p_old_direction: seedIdent.direction,
+      p_old_departure_time: seedIdent.departure_time,
+      p_old_customer_name: seedIdent.customer_name,
+      p_old_vessel: seedIdent.vessel,
+      p_old_hotel_id: seedIdent.hotel_id,
+      p_old_meeting_point: seedIdent.meeting_point,
+      p_old_booking_service_kind: seedIdent.booking_service_kind,
+      p_new_rows: [seedRow],
+    });
+    expect(seedErr).toBeNull();
+
+    const { data: before } = await ctx.admin.from("services").select("id, date").eq("customer_name", seedIdent.customer_name);
+
+    const { error } = await ctx.admin.rpc("patch_shuttle_schedule", {
+      p_tenant_id: ctx.tenantId,
+      p_today: isoDate(0),
+      p_old_direction: "not-a-real-direction",
+      p_old_departure_time: seedIdent.departure_time,
+      p_old_customer_name: seedIdent.customer_name,
+      p_old_vessel: seedIdent.vessel,
+      p_old_hotel_id: seedIdent.hotel_id,
+      p_old_meeting_point: seedIdent.meeting_point,
+      p_old_booking_service_kind: seedIdent.booking_service_kind,
+      p_new_rows: [newRow(ctx.tenantId, isoDate(3), { customer_name: seedIdent.customer_name })],
+    });
+    expect(error).not.toBeNull();
+    expect(error?.message).toMatch(/invalid input value for enum/i);
+
+    const { data: after } = await ctx.admin.from("services").select("id, date").eq("customer_name", seedIdent.customer_name);
+    expect(after).toEqual(before);
+
+    await ctx.admin.from("services").delete().eq("customer_name", seedIdent.customer_name);
+  });
+
+  it("9. service_type non valido in p_new_rows → errore Postgres, rollback totale (nessun insert, riga precedente intatta)", async () => {
+    const seedIdent = { ...SCHEDULE_KEY, customer_name: `${SCHEDULE_KEY.customer_name}-bad-service-type` };
+    const seedArgsFor = (rows: Array<Record<string, unknown>>) => ({
+      p_tenant_id: ctx.tenantId,
+      p_today: isoDate(0),
+      p_old_direction: seedIdent.direction,
+      p_old_departure_time: seedIdent.departure_time,
+      p_old_customer_name: seedIdent.customer_name,
+      p_old_vessel: seedIdent.vessel,
+      p_old_hotel_id: seedIdent.hotel_id,
+      p_old_meeting_point: seedIdent.meeting_point,
+      p_old_booking_service_kind: seedIdent.booking_service_kind,
+      p_new_rows: rows,
+    });
+
+    const seedRow = newRow(ctx.tenantId, isoDate(2), { customer_name: seedIdent.customer_name });
+    const { error: seedErr } = await ctx.admin.rpc("patch_shuttle_schedule", seedArgsFor([seedRow]));
+    expect(seedErr).toBeNull();
+    const { data: before } = await ctx.admin.from("services").select("id, date").eq("customer_name", seedIdent.customer_name);
+
+    const invalidRow = newRow(ctx.tenantId, isoDate(3), {
+      customer_name: seedIdent.customer_name,
+      service_type: "not-a-real-service-type",
+    });
+    const { error } = await ctx.admin.rpc("patch_shuttle_schedule", seedArgsFor([invalidRow]));
+    expect(error).not.toBeNull();
+    expect(error?.message).toMatch(/invalid input value for enum/i);
+
+    const { data: after } = await ctx.admin.from("services").select("id, date").eq("customer_name", seedIdent.customer_name);
+    expect(after).toEqual(before);
+
+    await ctx.admin.from("services").delete().eq("customer_name", seedIdent.customer_name);
+  });
 });
