@@ -482,6 +482,15 @@ const bulkMoveSchema = z.object({
   reason: z.string().max(500).optional().nullable()
 });
 
+// Disalloca selezionati (barra multi-select): rimuove SOLO le allocazioni
+// indicate, stesso identico percorso row-per-row di "delete_allocation" (mai
+// una seconda implementazione SQL) — la prenotazione/service, il booking
+// group e le fermate non vengono mai toccati, il servizio torna semplicemente
+// "non allocato" e ri-eleggibile per auto-assegna/auto-allocazione.
+const bulkDeleteSchema = z.object({
+  allocation_ids: z.array(z.string().uuid()).min(1).max(200),
+});
+
 // Fix C — assegnazione a blocco (fermata/gruppo) per bus esclusivi gruppo:
 // stessa fermata/bus/linea per tutti i services della selezione, ognuno con
 // il proprio pax_assigned (di solito il pax del singolo passeggero/service).
@@ -1160,6 +1169,58 @@ export async function POST(request: NextRequest) {
       });
 
       return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)) });
+    }
+
+    if (action === "delete_allocations_bulk") {
+      const parsed = bulkDeleteSchema.parse(body);
+      // Verifica ownership/tenant come nel path singolo, batch (mai una query
+      // per allocazione).
+      const { data: allocsBefore, error: fetchErr } = await auth.admin
+        .from("tenant_bus_allocations")
+        .select("id,service_id,bus_unit_id,bus_line_id,stop_id,direction")
+        .eq("tenant_id", tenantId)
+        .in("id", parsed.allocation_ids);
+      if (fetchErr) throw new Error(fetchErr.message);
+      type BulkDeleteAlloc = { id: string; service_id: string; bus_unit_id: string; bus_line_id: string; stop_id: string | null; direction: string };
+      const rows = (allocsBefore ?? []) as BulkDeleteAlloc[];
+      if (rows.length === 0) {
+        return NextResponse.json({ ok: false, error: "Allocazioni non trovate." }, { status: 404 });
+      }
+
+      const { error: delErr } = await auth.admin
+        .from("tenant_bus_allocations")
+        .delete()
+        .eq("tenant_id", tenantId)
+        .in("id", rows.map((r) => r.id));
+      if (delErr) throw new Error(delErr.message);
+
+      // ML STEP 1 — stesso feedback strutturato del path singolo, una riga
+      // per allocazione rimossa (batch sui lookup, mai N+1 sulle query).
+      const [deleteContexts, deleteLineFamilyCodes] = await Promise.all([
+        loadServiceFeedbackContexts(auth, tenantId, rows.map((r) => r.service_id)),
+        loadBusLineFamilyCodes(auth, tenantId, rows.map((r) => r.bus_line_id)),
+      ]);
+      for (const alloc of rows) {
+        const context = deleteContexts.get(alloc.service_id) ?? null;
+        await recordBusAssignmentFeedback(auth, {
+          tenantId,
+          serviceId: alloc.service_id,
+          actionType: "delete_allocation",
+          source: "manual",
+          oldBusUnitId: alloc.bus_unit_id,
+          oldBusLineId: alloc.bus_line_id,
+          oldStopId: alloc.stop_id,
+          oldDirection: alloc.direction,
+          pax: context?.pax ?? null,
+          customerName: context?.customerName ?? null,
+          hotelName: context?.hotelName ?? null,
+          derivedFamilyCode: context?.derivedFamilyCode ?? null,
+          finalFamilyCode: deleteLineFamilyCodes.get(alloc.bus_line_id) ?? null,
+          createdByUserId: auth.user.id,
+        });
+      }
+
+      return NextResponse.json({ ok: true, ...(await loadBusNetwork(auth)), deleted_count: rows.length });
     }
 
     if (action === "update_line_name") {

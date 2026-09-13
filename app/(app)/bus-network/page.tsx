@@ -1254,6 +1254,27 @@ export default function BusNetworkPage() {
     setSelectedAllocIds(new Set());
   }, [selectedAllocs, bulkMoveTargetUnitId, bulkMoveReason, post]);
 
+  // Disalloca selezionati: rimuove solo l'assegnazione al bus dei service
+  // selezionati (mai la prenotazione, mai il booking group) — usa lo stesso
+  // action "delete_allocations_bulk" server-side (permessi e RLS invariati
+  // rispetto a move/allocate). Dopo il successo il service torna "non
+  // allocato" e ri-eleggibile per Auto-assegna.
+  const confirmBulkDeallocate = useCallback(async () => {
+    if (selectedAllocs.length === 0) return;
+    const count = selectedAllocs.length;
+    const confirmed = window.confirm(
+      `Vuoi rimuovere l'assegnazione al bus per ${count} passegger${count === 1 ? "o" : "i"} selezionat${count === 1 ? "o" : "i"}? Le prenotazioni non verranno cancellate.`
+    );
+    if (!confirmed) return;
+    const res = await post("delete_allocations_bulk", {
+      allocation_ids: selectedAllocs.map((a) => a.allocation_id),
+    });
+    if (res) {
+      setSelectedAllocIds(new Set());
+      setMessage(`Assegnazione al bus rimossa per ${count} passegger${count === 1 ? "o" : "i"}: torna${count === 1 ? "" : "no"} disponibile${count === 1 ? "" : "i"} per Auto-assegna.`);
+    }
+  }, [selectedAllocs, post]);
+
   const confirmAssign = useCallback(async () => {
     if (!assignService || !assignUnitId || !assignStopId || !assignLineId) return;
     const allStops = payload.stops;
@@ -4588,6 +4609,9 @@ export default function BusNetworkPage() {
           <span className="text-sm font-semibold">{selectedAllocIds.size} selezionat{selectedAllocIds.size === 1 ? "o" : "i"} ({selectedTotalPax} pax)</span>
           <button onClick={openBulkMoveModal} className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
             Sposta insieme
+          </button>
+          <button onClick={() => void confirmBulkDeallocate()} disabled={saving} className="rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-40">
+            Disalloca selezionati
           </button>
           <button onClick={() => setSelectedAllocIds(new Set())} className="rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium text-indigo-100 hover:bg-indigo-400">
             Deseleziona
