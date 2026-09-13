@@ -420,6 +420,32 @@ function GroupDetail({ detail, busLines, hotels, agencies, onChange, onMessage, 
     return null;
   };
 
+  const [autoAssignBusy, setAutoAssignBusy] = useState(false);
+  // "Auto-assegna gruppo": espone in UI l'action server già esistente
+  // auto_assign_group -> autoAssignBookingGroup(). Nessuna nuova API, nessuna
+  // logica di allocazione duplicata qui — solo la chiamata + conferma + stato
+  // UI. auto_assign_group tratta ARRIVO/PARTENZA come date indipendenti (una
+  // reservation per service_date, vedi autoAssignBookingGroup).
+  const runAutoAssignGroup = async () => {
+    const confirmed = window.confirm(
+      `Vuoi eseguire l'auto-assegnazione del gruppo ${group.name}?\n` +
+      `Il sistema cercherà il primo bus disponibile per le date del gruppo secondo le regole correnti.`
+    );
+    if (!confirmed) return;
+    setAutoAssignBusy(true);
+    const result = await post({ action: "auto_assign_group", booking_group_id: group.id });
+    setAutoAssignBusy(false);
+    if (result) {
+      const reservationsCreated = Array.isArray(result.reservations_created) ? result.reservations_created.length : 0;
+      const allocationsCreated = Array.isArray(result.allocations_created) ? result.allocations_created.length : 0;
+      const blockedCount = Array.isArray(result.blocked) ? result.blocked.length : 0;
+      onMessage(
+        `Auto-assegnazione gruppo: ${reservationsCreated} bus riservati, ${allocationsCreated} passeggeri allocati` +
+        (blockedCount > 0 ? ` · ${blockedCount} bloccati` : "") + "."
+      );
+    }
+  };
+
   const cancelGroup = async () => {
     const confirmed = window.confirm("Annullare questo gruppo? I servizi gia creati verranno annullati e rimossi dalla Linea Bus.");
     if (!confirmed) return;
@@ -505,10 +531,22 @@ function GroupDetail({ detail, busLines, hotels, agencies, onChange, onMessage, 
 
         {/* Bus riservato */}
         {(group.kind === "bus_exclusive" || group.kind === "bus_group") ? (
-          <BusReservationSection key={`bus-${group.id}-${group.updated_at}`} group={group} reservations={bus_reservations}
-            onUpsert={(r) => post({ action: "upsert_bus_reservation", booking_group_id: group.id, ...r })}
-            onRelease={(id) => post({ action: "delete_bus_reservation", id })}
-          />
+          <>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">Auto-assegnazione bus</div>
+                <p className="mt-0.5 text-[11px] text-slate-400">Cerca il primo bus disponibile per andata e ritorno (date indipendenti), riserva ed operativizza.</p>
+              </div>
+              <button type="button" disabled={autoAssignBusy} onClick={() => void runAutoAssignGroup()}
+                className="btn-secondary shrink-0 px-3 py-1.5 text-xs disabled:opacity-50">
+                {autoAssignBusy ? "Auto-assegno…" : "Auto-assegna gruppo"}
+              </button>
+            </div>
+            <BusReservationSection key={`bus-${group.id}-${group.updated_at}`} group={group} reservations={bus_reservations}
+              onUpsert={(r) => post({ action: "upsert_bus_reservation", booking_group_id: group.id, ...r })}
+              onRelease={(id) => post({ action: "delete_bus_reservation", id })}
+            />
+          </>
         ) : null}
 
         {/* Operativizzazione */}
