@@ -430,15 +430,14 @@ describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
       expect(v.checked_tables_missing).toContain("services");
     });
 
-    it("UNVERIFIED (non failed): estensione unaccent assente dal TOC — nessun oggetto ITS ne dipende", () => {
+    it("PASSED anche senza l'estensione unaccent nel TOC (FASE 2, 2026-09-13): false positive noto di --schema=public, nessun oggetto ITS vivo dipende da unaccent — la sua assenza resta solo informativa, non degrada piu' lo status", () => {
       const toc = goodToc.split("\n").filter((l) => !/unaccent/i.test(l)).join("\n");
       const v = verifyRestoreList(toc);
-      expect(v.status).toBe("unverified");
+      expect(v.status).toBe("passed");
       expect(v.unaccent_extension_present).toBe(false);
       expect(v.has_public_schema).toBe(true);
       expect(v.checked_tables_missing).toEqual([]);
       expect(v.notes.join(" ")).toMatch(/unaccent.*0189/i);
-      expect(v.notes.join(" ")).toMatch(/CREATE EXTENSION unaccent/i);
     });
 
     it("FAIL (non unverified): struttura rotta (manca una tabella di controllo) resta failed anche con unaccent presente", () => {

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
+import { formatJobRunDuration } from "@/lib/job-run-duration";
 
 type EnvVar = { key: string; label: string; group: string; present: boolean };
 type CronJob = { name: string; path: string; schedule: string; description: string };
@@ -145,16 +146,6 @@ const OVERALL_HEALTH_BANNER: Record<OverallHealthStatus, { label: string; classN
   attention: { label: "🟠 Richiede attenzione", className: "border-amber-200 bg-amber-50 text-amber-800" },
   critical: { label: "🔴 Problemi critici", className: "border-rose-200 bg-rose-50 text-rose-800" },
 };
-
-function formatDuration(startedAt: string, finishedAt: string | null): string {
-  if (!finishedAt) return "in corso";
-  const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
 
 type MedmarCreditSettings = {
   initial_credit_cents: number;
@@ -488,7 +479,7 @@ export default function SystemStatusPage() {
                         <>
                           <p className="mt-1 text-xs text-slate-500">
                             Ultimo run: {formatRunDate(run?.started_at)}
-                            {run ? ` · durata ${formatDuration(run.started_at, run.finished_at)}` : ""}
+                            {run ? ` · durata ${formatJobRunDuration(run.started_at, run.finished_at, run.metadata)}` : ""}
                           </p>
                           {(job.health === "warning" || job.health === "critical") && job.reason ? (
                             <p className={`mt-1 text-xs font-semibold ${job.health === "critical" ? "text-rose-600" : "text-amber-700"}`}>{job.reason}</p>

@@ -293,16 +293,33 @@ export const PG_BACKUP_CHECK_TABLES = [
  *  - "failed":     problema strutturale reale (TOC vuoto, nessuno schema public,
  *                  tabelle di controllo assenti) -> il dump NON e' utilizzabile,
  *                  il backup e' FAILED.
- *  - "unverified": struttura ok ma manca dal TOC il `CREATE EXTENSION unaccent`.
- *                  NON e' un blocco provato: nessun indice / funzione / vista /
- *                  colonna generata di ITS dipende da `unaccent`. Unica ricorrenza
- *                  nel repo: migrazione 0189 — `CREATE EXTENSION` + un backfill
- *                  dati una-tantum (`INSERT ... SELECT public.unaccent(...)`), che
- *                  NON e' schema e non viene rieseguito al restore. Se la riga
- *                  manca dal TOC basta `CREATE EXTENSION unaccent` a mano sul
- *                  progetto fresco (contrib disponibile su Supabase). Il backup
- *                  resta valido e conservato, ma il job va in `warning`.
- *  - "passed":     tutto presente, unaccent incluso.
+ *  - "unverified": riservato a un futuro gap di restore REALE e documentato.
+ *                  NON viene piu' attivato dalla sola assenza del `CREATE
+ *                  EXTENSION unaccent` dal TOC — verdetto FASE 2 (audit DR V3,
+ *                  2026-09-13): FALSE POSITIVE, corretto qui. Motivazione:
+ *                    1. `pg_dump --schema=public` non include MAI una
+ *                       `CREATE EXTENSION`, qualunque sia l'estensione e la sua
+ *                       schema di installazione: le extension non sono oggetti
+ *                       "di schema" ai fini del filtro `-n`/`--schema` di
+ *                       pg_dump, che le omette sempre da un dump con scope
+ *                       ristretto (serve un dump dell'intero DB, oppure
+ *                       `--extension=<nome>` esplicito su PG16+). La sua
+ *                       assenza dal TOC e' quindi garantita ad ogni run,
+ *                       indipendentemente dalla salute reale di `unaccent` —
+ *                       non e' un segnale utile.
+ *                    2. Nessun oggetto vivo dello schema `public` dipende da
+ *                       `unaccent` oggi: l'unica occorrenza nel repo
+ *                       (migrazione 0189) e' un backfill one-shot dentro una
+ *                       `INSERT ... SELECT public.unaccent(...)`, non un
+ *                       generated column / espressione di indice / vista /
+ *                       funzione persistita. I valori sono gia' calcolati e
+ *                       salvati in `public.places`: il restore non richiama
+ *                       mai `unaccent()`, quindi non serve l'estensione.
+ *                  Il campo `unaccent_extension_present` resta calcolato e
+ *                  riportato — solo come nota informativa, mai come gate.
+ *  - "passed":     struttura ok (TOC non vuoto, schema public presente, tabelle
+ *                  di controllo presenti). L'estensione `unaccent` non e' (e
+ *                  non e' mai stata davvero) un prerequisito per "passed".
  */
 export type PgBackupPublicVerification = {
   status: "passed" | "unverified" | "failed";
@@ -310,7 +327,7 @@ export type PgBackupPublicVerification = {
   has_public_schema: boolean;
   checked_tables_present: string[];
   checked_tables_missing: string[];
-  /** true se il TOC contiene `CREATE EXTENSION unaccent` (o un COMMENT su di essa). */
+  /** true se il TOC contiene `CREATE EXTENSION unaccent` (o un COMMENT su di essa). Solo informativo: vedi doc dello status sopra — pg_dump --schema=public non la include mai, quindi NON influisce su `status`. */
   unaccent_extension_present: boolean;
   notes: string[];
 };
@@ -330,11 +347,13 @@ function tocMentionsUnaccentExtension(lines: string[]): boolean {
 
 /**
  * Interpreta l'output di `pg_restore --list <full.dump>` (custom format).
- *  - "failed":     TOC vuoto, nessuno schema public, o tabelle di controllo
- *                  assenti (dump troncato/vuoto -> inutilizzabile).
- *  - "unverified": struttura ok ma `CREATE EXTENSION unaccent` assente dal TOC
- *                  (non e' un blocco provato — vedi PgBackupPublicVerification).
- *  - "passed":     struttura ok E unaccent presente.
+ *  - "failed":  TOC vuoto, nessuno schema public, o tabelle di controllo
+ *               assenti (dump troncato/vuoto -> inutilizzabile).
+ *  - "passed":  struttura ok (TOC, schema public, tabelle di controllo).
+ *               L'assenza di `CREATE EXTENSION unaccent` dal TOC NON degrada
+ *               piu' lo status — vedi PgBackupPublicVerification per il
+ *               verdetto FASE 2 (false positive strutturale di `--schema=public`,
+ *               nessuna dipendenza viva su unaccent).
  */
 export function verifyRestoreList(listOutput: string): PgBackupPublicVerification {
   const lines = String(listOutput ?? "")
@@ -365,18 +384,17 @@ export function verifyRestoreList(listOutput: string): PgBackupPublicVerificatio
   if (missing.length > 0) notes.push(`tabelle di controllo assenti dal TOC: ${missing.join(", ")}`);
   if (!unaccentPresent) {
     notes.push(
-      "estensione 'unaccent' assente dal TOC: nessun indice/funzione/vista ITS ne dipende " +
-        "(unica ricorrenza: backfill una-tantum nella migrazione 0189), quindi il backup NON e' bloccato " +
-        "ma resta 'unverified' — al restore eseguire 'CREATE EXTENSION unaccent' a mano se serve",
+      "estensione 'unaccent' assente dal TOC: atteso con --schema=public (pg_dump non include mai le " +
+        "CREATE EXTENSION in un dump con scope di schema, qualunque sia l'estensione); nessun oggetto ITS " +
+        "vivo dipende da unaccent (unica occorrenza: backfill una-tantum nella migrazione 0189) — solo " +
+        "informativo, non influisce sullo stato della verifica",
     );
   }
 
+  // L'estensione unaccent NON e' piu' un prerequisito per "passed" — vedi
+  // doc di PgBackupPublicVerification per il verdetto FASE 2 (false positive).
   const structurallyBroken = entryCount === 0 || !hasPublicSchema || missing.length > 0;
-  const status: "passed" | "unverified" | "failed" = structurallyBroken
-    ? "failed"
-    : unaccentPresent
-      ? "passed"
-      : "unverified";
+  const status: "passed" | "unverified" | "failed" = structurallyBroken ? "failed" : "passed";
 
   return {
     status,
