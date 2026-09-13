@@ -47,7 +47,7 @@ const TABLES = [
   "bus_import_pending",
   "ferry_pickup_rules",
   "hotel_vehicle_limits",
-  "driver_availability",
+  "driver_daily_availability",
 ] as const;
 
 const BUCKET = "backups";

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
+const clientConstructorMock = vi.fn();
 
 vi.mock("@aws-sdk/client-s3", () => {
   class FakeCommand {
@@ -10,6 +11,9 @@ vi.mock("@aws-sdk/client-s3", () => {
     }
   }
   class FakeS3Client {
+    constructor(config: unknown) {
+      clientConstructorMock(config);
+    }
     send(...args: unknown[]) {
       return sendMock(...args);
     }
@@ -46,6 +50,7 @@ function clearEnv() {
 describe("r2-backup — Disaster Recovery V2 offsite Cloudflare R2", () => {
   beforeEach(() => {
     sendMock.mockReset();
+    clientConstructorMock.mockReset();
     clearEnv();
     setEnv();
     vi.resetModules();
@@ -214,6 +219,59 @@ describe("r2-backup — Disaster Recovery V2 offsite Cloudflare R2", () => {
 
     expect(result.deleted).toEqual([]);
     expect(sendMock).toHaveBeenCalledTimes(1); // solo list, nessuna DeleteObjectsCommand
+  });
+
+  it("11. client S3 costruito con region 'auto' e SENZA forcePathStyle — coerente con DR V3 (scripts/postgres-backup.mjs), nessuna divergenza di config", async () => {
+    const { uploadOffsiteBackup } = await import("@/lib/server/r2-backup");
+    sendMock.mockResolvedValueOnce({}).mockResolvedValueOnce({ ContentLength: 2 });
+
+    await uploadOffsiteBackup("backup_2026-09-06.json", Buffer.from("{}"));
+
+    expect(clientConstructorMock).toHaveBeenCalledTimes(1);
+    const config = clientConstructorMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(config.region).toBe("auto");
+    expect(config.forcePathStyle).toBeUndefined();
+  });
+
+  it("12. endpoint del client = R2_ENDPOINT trimmato — stesso env name e stesso trattamento di DR V3", async () => {
+    setEnv({ R2_ENDPOINT: "  https://test-account-id.r2.cloudflarestorage.com  " });
+    const { uploadOffsiteBackup } = await import("@/lib/server/r2-backup");
+    sendMock.mockResolvedValueOnce({}).mockResolvedValueOnce({ ContentLength: 2 });
+
+    await uploadOffsiteBackup("backup_2026-09-06.json", Buffer.from("{}"));
+
+    const config = clientConstructorMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(config.endpoint).toBe("https://test-account-id.r2.cloudflarestorage.com");
+  });
+
+  it("13. credentials mapping: accessKeyId <- R2_ACCESS_KEY_ID, secretAccessKey <- R2_SECRET_ACCESS_KEY, solo trim (nessuno strip di virgolette diverso da DR V3 dopo il fix FASE 3)", async () => {
+    setEnv({ R2_ACCESS_KEY_ID: "  ak-value  ", R2_SECRET_ACCESS_KEY: "  sk-value  " });
+    const { uploadOffsiteBackup } = await import("@/lib/server/r2-backup");
+    sendMock.mockResolvedValueOnce({}).mockResolvedValueOnce({ ContentLength: 2 });
+
+    await uploadOffsiteBackup("backup_2026-09-06.json", Buffer.from("{}"));
+
+    const config = clientConstructorMock.mock.calls[0]![0] as { credentials: { accessKeyId: string; secretAccessKey: string } };
+    expect(config.credentials.accessKeyId).toBe("ak-value");
+    expect(config.credentials.secretAccessKey).toBe("sk-value");
+  });
+
+  it("14. errore di firma R2 reale (SignatureDoesNotMatch) -> status failed, messaggio originale preservato (nessuna mis-classificazione)", async () => {
+    const { uploadOffsiteBackup } = await import("@/lib/server/r2-backup");
+    sendMock.mockRejectedValueOnce(
+      new Error(
+        "The request signature we calculated does not match the signature you provided. Check your secret access key and signing method."
+      )
+    );
+
+    const result = await uploadOffsiteBackup("backup_2026-09-13.json", Buffer.from("{}"));
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error).toContain("signature");
+      expect(result.verified).toBe(false);
+      expect(result.key).toBe("production/backup_2026-09-13.json");
+    }
   });
 
   it("10. retention cancella solo backup >90 giorni, ignora oggetti fuori dal pattern nome file", async () => {

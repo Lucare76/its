@@ -37,8 +37,15 @@ export const R2_RETENTION_DAYS = 90;
 
 const FILENAME_RE = /^backup_(\d{4}-\d{2}-\d{2})\.json$/;
 
+/**
+ * Allineato a scripts/postgres-backup.mjs (DR V3, funzionante): SOLO trim,
+ * nessuno strip di virgolette. La versione precedente rimuoveva anche un
+ * eventuale carattere '"'/"'" iniziale/finale — divergenza rispetto al client
+ * R2 gia' verificato del DR V3, individuata nell'audit FASE 2 (2026-09-13)
+ * durante la diagnosi del SignatureDoesNotMatch sul backup JSON legacy.
+ */
 function trimEnv(value: string | undefined): string {
-  return (value ?? "").trim().replace(/^["']|["']$/g, "");
+  return (value ?? "").trim();
 }
 
 export type R2ConfigStatus =

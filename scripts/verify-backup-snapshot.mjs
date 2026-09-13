@@ -19,14 +19,14 @@ const REQUIRED_TABLES = [
   "pricing_rules", "price_lists", "agency_invoices", "tenants", "trip_groups", "driver_profiles",
   "tenant_bus_lines", "tenant_bus_line_stops", "tenant_bus_units", "tenant_bus_allocations",
   "booking_groups", "booking_group_stops", "agency_bookings", "bus_lot_configs",
-  "bus_import_pending", "ferry_pickup_rules", "hotel_vehicle_limits", "driver_availability",
+  "bus_import_pending", "ferry_pickup_rules", "hotel_vehicle_limits", "driver_daily_availability",
 ];
 
 const TENANT_SCOPED_TABLES = [
   "services", "hotels", "memberships", "agencies", "assignments", "vehicles", "trip_groups", "driver_profiles",
   "tenant_bus_lines", "tenant_bus_line_stops", "tenant_bus_units", "tenant_bus_allocations",
   "booking_groups", "booking_group_stops", "agency_bookings", "bus_lot_configs", "bus_import_pending",
-  "ferry_pickup_rules", "hotel_vehicle_limits", "driver_availability",
+  "ferry_pickup_rules", "hotel_vehicle_limits", "driver_daily_availability",
 ];
 
 function fail(message, failures) { failures.push(message); }
