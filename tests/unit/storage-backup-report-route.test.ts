@@ -229,4 +229,44 @@ describe("POST /api/cron/storage-backup-report", () => {
     await POST(makeRequest({ ...VALID_PAYLOAD, dry_run: true }, AUTH));
     expect(rows[0]!.metadata.dry_run).toBe(true);
   });
+
+  it("5. reporting failure NON trasforma un backup riuscito in fallito: se la scrittura in system_job_runs fallisce, la route risponde comunque ok:true", async () => {
+    // Simula un DB che rifiuta insert/update (es. colonna mancante, permessi,
+    // rete) — stesso comportamento reale di startJobRun/completeJobRun
+    // (lib/server/job-health.ts): l'errore viene inghiottito e loggato, mai
+    // propagato. Il ping del workflow deve restare "non bloccante".
+    const brokenAdmin = {
+      from(table: string) {
+        if (table !== "system_job_runs") throw new Error(`tabella inattesa: ${table}`);
+        return {
+          insert() {
+            return { select: () => ({ single: async () => ({ data: null, error: { message: "insert rifiutato (simulato)" } }) }) };
+          },
+          update() {
+            return { eq: async () => ({ error: { message: "update rifiutato (simulato)" } }) };
+          },
+        };
+      },
+    };
+    mocks.createClient.mockReturnValueOnce(brokenAdmin);
+
+    const res = await POST(makeRequest(VALID_PAYLOAD, AUTH));
+    const body = await res.json();
+
+    // Il BACKUP era riuscito (status="success" nel payload): la route non
+    // deve mai riportare un errore HTTP solo perché l'audit-log fallisce.
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.recorded).toBe("success");
+    // run_id è null perché startJobRun non è riuscito a creare la riga — ma
+    // questo non fa fallire la risposta (completeJobRun con runId=null è un
+    // no-op sicuro, vedi lib/server/job-health.ts).
+    expect(body.run_id).toBeNull();
+  });
+
+  it("6. tenant/system scope corretto: la riga è system-wide (tenant_id null), non legata a un tenant applicativo", async () => {
+    await POST(makeRequest(VALID_PAYLOAD, AUTH));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.tenant_id).toBeNull();
+  });
 });

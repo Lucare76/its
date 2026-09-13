@@ -421,8 +421,11 @@ production/storage/manifests/latest.json                            (puntatore, 
 NEXT_PUBLIC_SUPABASE_URL    (nuovo per Actions — stesso valore gia' in uso su Vercel, store separato)
 SUPABASE_SERVICE_ROLE_KEY   (nuovo per Actions — stesso valore gia' in uso su Vercel, store separato)
 R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET_NAME R2_ENDPOINT   (gia' presenti per postgres-backup.yml — stessi valori, stesso bucket)
-DR_HEALTH_REPORT_URL DR_HEALTH_REPORT_SECRET   (opzionali — gia' presenti per postgres-backup-report, stesso secret riusabile)
+STORAGE_HEALTH_REPORT_URL   (opzionale, NUOVO — es. https://<app>/api/cron/storage-backup-report)
+DR_HEALTH_REPORT_SECRET     (opzionale — gia' presente per postgres-backup-report, stesso bearer riusabile)
 ```
+
+> **Perche' `STORAGE_HEALTH_REPORT_URL` e non `DR_HEALTH_REPORT_URL`** (FIX MIRATO, gap chiuso 2026-09-13): un secret GitHub Actions ha un solo valore per nome, condiviso da tutti i workflow che lo referenziano. `DR_HEALTH_REPORT_URL` era gia' occupato dall'URL di `postgres-backup-report` (impostato l'12/09, un giorno prima che `storage-backup.yml` esistesse). Riusare lo stesso nome per `storage-backup.yml` avrebbe instradato (e di fatto ha instradato, nella prima versione del workflow) il ping di storage silenziosamente sull'endpoint postgres: quest'ultimo lo accettava comunque (schema con quasi tutti i campi opzionali) registrandolo come `job_key="postgres-backup"` con conteggi a zero, mentre `system_job_runs` restava senza nessuna riga `job_key="storage-backup"`. Il bearer (`DR_HEALTH_REPORT_SECRET`) resta invece correttamente condiviso: e' lo stesso segreto di autenticazione, non una destinazione.
 
 ### Osservabilita' (Layer 8) — job `storage-backup`, DISTINTO da `backup`/`postgres-backup`
 
@@ -431,10 +434,11 @@ Report a `POST /api/cron/storage-backup-report`, registrato in `system_job_runs`
 ### Attivazione (mai eseguito contro produzione — checklist)
 
 1. Aggiungere i 2 secret GitHub nuovi (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) — vedi sezione secret sopra.
-2. Primo run manuale in dry-run: Actions -> *Storage Files Backup (DR V4)* -> *Run workflow* -> `dry_run = true`. Elenca bucket/file target e calcola cosa verrebbe caricato, senza toccare R2 ne' Supabase.
-3. Primo backup reale: stesso workflow con `dry_run = false`.
-4. Verificare il manifest (`production/storage/manifests/<run_id>.json` su R2): `uploaded_count`/`failed_count` coerenti con l'atteso, `errors` vuoto per i bucket Tier A.
-5. Verificare in `/settings/system` (Centro Salute) che il job `storage-backup` risulti `healthy`.
+2. Aggiungere il secret `STORAGE_HEALTH_REPORT_URL` (es. `https://<app>/api/cron/storage-backup-report`) — **dedicato**, non riusare `DR_HEALTH_REPORT_URL` (vedi nota sopra). Senza questo secret il job funziona comunque (health ping opzionale, mai bloccante) ma resta invisibile al Centro Salute.
+3. Primo run manuale in dry-run: Actions -> *Storage Files Backup (DR V4)* -> *Run workflow* -> `dry_run = true`. Elenca bucket/file target e calcola cosa verrebbe caricato, senza toccare R2 ne' Supabase.
+4. Primo backup reale: stesso workflow con `dry_run = false`.
+5. Verificare il manifest (`production/storage/manifests/<run_id>.json` su R2): `uploaded_count`/`failed_count` coerenti con l'atteso, `errors` vuoto per i bucket Tier A.
+6. Verificare in `/settings/system` (Centro Salute) che il job `storage-backup` risulti `healthy`, e con una query su `system_job_runs` (`job_key = 'storage-backup'`) che compaia una riga per il run appena eseguito.
 
 ### Restore (procedura manuale — NESSUN restore automatico)
 

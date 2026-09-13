@@ -19,8 +19,19 @@ name: Storage Files Backup (DR V4)
 #     -> GIA' presenti per postgres-backup.yml: stessi valori, stesso bucket
 #        its-backups-offsite, prefix diverso (production/storage/ vs production/postgres/).
 # ─── SECRETS OPZIONALI (integrazione Centro Salute ITS, Layer 8) ───
-#   DR_HEALTH_REPORT_URL     es. https://<app>/api/cron/storage-backup-report
-#   DR_HEALTH_REPORT_SECRET  stesso bearer secret gia' usato da postgres-backup-report
+#   STORAGE_HEALTH_REPORT_URL  es. https://<app>/api/cron/storage-backup-report
+#                              NOME DEDICATO, NON DR_HEALTH_REPORT_URL: quel secret e'
+#                              gia' occupato dall'URL di postgres-backup-report
+#                              (postgres-backup.yml). Un secret GitHub Actions ha un
+#                              solo valore per nome, condiviso da tutti i workflow che
+#                              lo referenziano — riusare lo stesso nome per un URL
+#                              diverso instraderebbe silenziosamente il ping di questo
+#                              job sull'endpoint sbagliato (bug reale osservato:
+#                              storage-backup finiva registrato come "postgres-backup"
+#                              con conteggi a zero, "storage-backup" assente da
+#                              system_job_runs). Il bearer resta condiviso
+#                              (DR_HEALTH_REPORT_SECRET), solo l'URL e' dedicato.
+#   DR_HEALTH_REPORT_SECRET    stesso bearer secret gia' usato da postgres-backup-report
 #
 # Nessun valore di secret compare in questo file o nei log (redazione lato script).
 
@@ -75,7 +86,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          DR_HEALTH_REPORT_URL: ${{ secrets.DR_HEALTH_REPORT_URL }}
+          # FIX MIRATO — secret dedicato (mai secrets.DR_HEALTH_REPORT_URL, gia'
+          # occupato dall'URL di postgres-backup-report): vedi commento in testa
+          # al file. scripts/storage-backup.mjs continua a leggere la stessa
+          # variabile d'ambiente DR_HEALTH_REPORT_URL, invariata — cambia solo
+          # quale secret GitHub la valorizza per QUESTO job.
+          DR_HEALTH_REPORT_URL: ${{ secrets.STORAGE_HEALTH_REPORT_URL }}
           DR_HEALTH_REPORT_SECRET: ${{ secrets.DR_HEALTH_REPORT_SECRET }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
