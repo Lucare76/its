@@ -1145,7 +1145,10 @@ function BusReservationSection({ group, reservations, onUpsert, onRelease }: {
     );
     if (!confirmed) return;
     setReleasingId(r.id);
-    await onRelease(r.id);
+    // DIAGNOSTICA TEMPORANEA — DA RIMUOVERE dopo aver isolato la causa.
+    console.info("[Libera bus][DIAG] invio delete_bus_reservation", { reservationId: r.id, busUnitId: r.bus_unit_id, serviceDate: r.service_date });
+    const result = await onRelease(r.id);
+    console.info("[Libera bus][DIAG] risposta ricevuta", result);
     setReleasingId(null);
   };
 

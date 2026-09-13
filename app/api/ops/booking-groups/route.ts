@@ -636,21 +636,34 @@ export async function POST(request: NextRequest) {
   // (tenant_id, booking_group_id, bus_unit_id, service_date) — mai tocca
   // services/booking_groups/tenant_bus_allocations, mai altre date/gruppi.
   if (body.action === "delete_bus_reservation") {
+    // DIAGNOSTICA TEMPORANEA — DA RIMUOVERE dopo aver isolato la causa.
+    console.info("[delete_bus_reservation][DIAG] payload ricevuto", { action: body.action, id: body.id, tenantId, role: actor.role });
+
     const { data: reservation, error: fetchError } = await admin
       .from("booking_group_bus_reservations")
       .select("id, booking_group_id, bus_unit_id, service_date, reserved_pax, exclusive")
       .eq("tenant_id", tenantId)
       .eq("id", body.id)
       .maybeSingle();
+    console.info("[delete_bus_reservation][DIAG] SELECT esito", { found: Boolean(reservation), reservation, fetchError: fetchError?.message ?? null });
     if (fetchError) return NextResponse.json({ ok: false, error: fetchError.message }, { status: 500 });
     if (!reservation) return NextResponse.json({ ok: false, error: "Riserva bus non trovata." }, { status: 404 });
 
-    const { error } = await admin
+    // .select() dopo .delete() per vedere DAVVERO le righe rimosse: un plain
+    // .delete() risponde error:null anche quando il filtro non matcha nessuna
+    // riga (PostgREST non lo tratta come errore) — senza .select() questo
+    // caso sarebbe indistinguibile da un successo reale.
+    const { data: deletedRows, error } = await admin
       .from("booking_group_bus_reservations")
       .delete()
       .eq("tenant_id", tenantId)
-      .eq("id", body.id);
+      .eq("id", body.id)
+      .select("id");
+    console.info("[delete_bus_reservation][DIAG] DELETE esito", { deletedRows, deletedCount: deletedRows?.length ?? null, error: error?.message ?? null });
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    if (!deletedRows || deletedRows.length === 0) {
+      console.error("[delete_bus_reservation][DIAG] ATTENZIONE: la SELECT aveva trovato la riga ma la DELETE non ha rimosso nulla", { id: body.id, tenantId });
+    }
 
     auditLog({
       event: "booking_group_bus_reservation_changed",
