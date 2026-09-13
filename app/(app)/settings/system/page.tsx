@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { formatJobRunDuration } from "@/lib/job-run-duration";
+import { computeAutomationHealthLevel } from "@/lib/automation-health-level";
 
 type EnvVar = { key: string; label: string; group: string; present: boolean };
 type CronJob = { name: string; path: string; schedule: string; description: string };
@@ -430,7 +431,10 @@ export default function SystemStatusPage() {
       {/* Centro Salute ITS (Sprint 2) — riepilogo generale + job che richiedono attenzione + dettaglio per job. Health decisa server-side, questa pagina la renderizza soltanto. */}
       {(() => {
         const jobs = status.job_health ?? [];
-        const overall = status.overall_health ?? "healthy";
+        // Severita' SOLO delle automazioni — mai combinata con l'Operational
+        // Health (quella vive nella sezione "Salute operativa" piu' sotto,
+        // invariata). Vedi lib/automation-health-level.ts.
+        const overall = computeAutomationHealthLevel(jobs);
         const banner = OVERALL_HEALTH_BANNER[overall];
         const needsAttention = jobs.filter((j) => j.health === "warning" || j.health === "critical");
 
