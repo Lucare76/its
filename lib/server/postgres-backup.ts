@@ -389,6 +389,21 @@ export function verifyRestoreList(listOutput: string): PgBackupPublicVerificatio
   };
 }
 
+/**
+ * Estrae la versione server breve (es. "17.4") dal commento header del TOC di
+ * `pg_restore --list` su un dump custom-format, per il campo
+ * `postgres_server_version` del manifest / health ping (Layer 8).
+ *
+ * pg_dump scrive questa riga con i due punti dopo "version"
+ * (`;     Dumped from database version: 17.4`, vedi pg_backup_archiver.c) —
+ * il ":" e' opzionale qui solo per tollerare variazioni di formattazione, MAI
+ * per ipotizzare un formato diverso da quello reale di pg_dump.
+ */
+export function extractServerVersionFromToc(tocText: string): string | null {
+  const m = String(tocText ?? "").match(/Dumped from database version:?\s*([0-9.]+)/i);
+  return m ? m[1] : null;
+}
+
 // ─── Verifica strutturale — AUTH dump ────────────────────────────────────
 
 export type PgBackupAuthVerification = {

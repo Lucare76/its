@@ -23,6 +23,7 @@ import {
   buildPgBackupManifest,
   verifyRestoreList,
   verifyAuthRestoreList,
+  extractServerVersionFromToc,
   redactSecrets,
   maskConnectionString,
   missingBackupEnv,
@@ -454,6 +455,29 @@ describe("postgres-backup — Disaster Recovery V3 (pure helpers)", () => {
       expect(verifyRestoreList(`${base}\n3320; 0 0 COMMENT - EXTENSION unaccent postgres`).unaccent_extension_present).toBe(true);
       // falso positivo da evitare: una funzione con "unaccent" nel nome ma nessun EXTENSION
       expect(verifyRestoreList(`${base}\n99; 1255 1 FUNCTION public my_unaccent_wrapper() postgres`).unaccent_extension_present).toBe(false);
+    });
+  });
+
+  // ─── Estrazione versione server dal TOC (health report, Layer 8) ────────
+  describe("extractServerVersionFromToc", () => {
+    it("formato REALE pg_dump (con i due punti dopo 'version') -> estrae la versione breve", () => {
+      const toc = [
+        ";",
+        "; Archive created at 2026-09-06 02:30:00 UTC",
+        ";     dbname: postgres",
+        ";     Dumped from database version: 17.4",
+        ";     Dumped by pg_dump version: 17.4",
+      ].join("\n");
+      expect(extractServerVersionFromToc(toc)).toBe("17.4");
+    });
+
+    it("formato senza i due punti (tollerato per robustezza) -> estrae comunque la versione", () => {
+      expect(extractServerVersionFromToc(";     Dumped from database version 15.8")).toBe("15.8");
+    });
+
+    it("riga assente dal TOC -> null (mai un crash, mai un valore inventato)", () => {
+      expect(extractServerVersionFromToc("; Archive created at 2026-09-06 02:30:00 UTC")).toBeNull();
+      expect(extractServerVersionFromToc("")).toBeNull();
     });
   });
 

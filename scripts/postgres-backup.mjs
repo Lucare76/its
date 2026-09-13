@@ -63,6 +63,7 @@ const {
   buildPgBackupManifest,
   verifyRestoreList,
   verifyAuthRestoreList,
+  extractServerVersionFromToc,
   selectExpiredBackupSets,
   redactSecrets,
   maskConnectionString,
@@ -379,10 +380,7 @@ async function main() {
     }
 
     // 6/11. manifest
-    const serverVersionFromToc = (() => {
-      const m = fullListOut.match(/Dumped from database version ([0-9.]+)/i);
-      return m ? m[1] : null;
-    })();
+    const serverVersionFromToc = extractServerVersionFromToc(fullListOut);
     const manifest = buildPgBackupManifest({
       now,
       baseName: base,
@@ -440,7 +438,12 @@ async function main() {
       public_verification: publicVerification.status,
       auth_verification: authVerification.status,
       duration_ms: manifest.duration_ms,
-      postgres_server_version: manifest.postgres_server_version,
+      // Troncato difensivamente a 40 char (contratto dell'endpoint health
+      // report): normalmente e' la versione breve estratta dal TOC (es.
+      // "17.4"), ma se anche quella fallisse manifest.postgres_server_version
+      // ricadrebbe sulla stringa human-readable piu' lunga — non deve MAI far
+      // fallire lo schema lato receiver.
+      postgres_server_version: manifest.postgres_server_version ? manifest.postgres_server_version.slice(0, 40) : null,
       pg_dump_version: pgDumpVersion,
       retention_days: PG_BACKUP_RETENTION_DAYS,
     });
