@@ -630,14 +630,41 @@ export async function POST(request: NextRequest) {
     }));
   }
 
-  // ── delete_bus_reservation ────────────────────────────────────────────
+  // ── delete_bus_reservation ("Libera bus del gruppo") ──────────────────
+  // Rimuove SOLO la reservation esclusiva (booking_group_bus_reservations),
+  // una riga = un (gruppo, bus, data) per via del vincolo unique su
+  // (tenant_id, booking_group_id, bus_unit_id, service_date) — mai tocca
+  // services/booking_groups/tenant_bus_allocations, mai altre date/gruppi.
   if (body.action === "delete_bus_reservation") {
+    const { data: reservation, error: fetchError } = await admin
+      .from("booking_group_bus_reservations")
+      .select("id, booking_group_id, bus_unit_id, service_date, reserved_pax, exclusive")
+      .eq("tenant_id", tenantId)
+      .eq("id", body.id)
+      .maybeSingle();
+    if (fetchError) return NextResponse.json({ ok: false, error: fetchError.message }, { status: 500 });
+    if (!reservation) return NextResponse.json({ ok: false, error: "Riserva bus non trovata." }, { status: 404 });
+
     const { error } = await admin
       .from("booking_group_bus_reservations")
       .delete()
       .eq("tenant_id", tenantId)
       .eq("id", body.id);
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+
+    auditLog({
+      event: "booking_group_bus_reservation_changed",
+      tenantId, userId, role: actor.role,
+      outcome: "deleted",
+      details: {
+        booking_group_id: reservation.booking_group_id,
+        bus_unit_id: reservation.bus_unit_id,
+        service_date: reservation.service_date,
+        reserved_pax: reservation.reserved_pax,
+        exclusive: reservation.exclusive,
+      },
+    });
+
     return NextResponse.json({ ok: true, deleted: body.id });
   }
 

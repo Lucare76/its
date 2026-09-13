@@ -507,6 +507,7 @@ function GroupDetail({ detail, busLines, hotels, agencies, onChange, onMessage, 
         {(group.kind === "bus_exclusive" || group.kind === "bus_group") ? (
           <BusReservationSection key={`bus-${group.id}-${group.updated_at}`} group={group} reservations={bus_reservations}
             onUpsert={(r) => post({ action: "upsert_bus_reservation", booking_group_id: group.id, ...r })}
+            onRelease={(id) => post({ action: "delete_bus_reservation", id })}
           />
         ) : null}
 
@@ -1108,10 +1109,11 @@ function StopPassengerBatch({ stop, serviceDate, suggestedPax, onCreate }: {
   );
 }
 
-function BusReservationSection({ group, reservations, onUpsert }: {
+function BusReservationSection({ group, reservations, onUpsert, onRelease }: {
   group: BookingGroup;
   reservations: BookingGroupBusReservation[];
   onUpsert: (r: { bus_unit_id: string; service_date: string; reserved_pax: number; exclusive: boolean }) => Promise<unknown>;
+  onRelease: (reservationId: string) => Promise<unknown>;
 }) {
   const [unitId, setUnitId] = useState("");
   const [date, setDate] = useState(group.service_date ?? group.return_date ?? "");
@@ -1120,6 +1122,7 @@ function BusReservationSection({ group, reservations, onUpsert }: {
   const [buses, setBuses] = useState<AvailableBus[]>([]);
   const [loadingBuses, setLoadingBuses] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [releasingId, setReleasingId] = useState<string | null>(null);
 
   const loadBuses = async () => {
     if (!date || !(Number(rp) > 0)) return;
@@ -1130,12 +1133,36 @@ function BusReservationSection({ group, reservations, onUpsert }: {
     else setBuses([]);
   };
 
+  // "Libera bus del gruppo": rimuove SOLO booking_group_bus_reservations
+  // (id specifico). Concetto separato da "Disalloca selezionati" (che
+  // rimuove tenant_bus_allocations, su /bus-network) — non tocca mai
+  // passeggeri/servizi/gruppo, mai altre date.
+  const releaseReservation = async (r: BookingGroupBusReservation) => {
+    const confirmed = window.confirm(
+      `Vuoi liberare il bus ${r.bus_unit_id.slice(0, 8)} riservato per ${group.name} il ${r.service_date}?\n` +
+      `La reservation del bus verrà rimossa.\n` +
+      `I passeggeri e le prenotazioni non verranno cancellati né spostati.`
+    );
+    if (!confirmed) return;
+    setReleasingId(r.id);
+    await onRelease(r.id);
+    setReleasingId(null);
+  };
+
   return (
     <div className="rounded-lg border border-slate-200 p-3">
       <div className="text-sm font-semibold text-slate-800">Bus riservato (date-scoped)</div>
       {reservations.length > 0 ? (
-        <ul className="mt-1 list-disc pl-4 text-xs text-slate-600">
-          {reservations.map((r) => <li key={r.id}>{r.service_date} · unit {r.bus_unit_id.slice(0, 8)} · {r.reserved_pax} pax · {r.exclusive ? "esclusivo" : "non esclusivo"}</li>)}
+        <ul className="mt-1 space-y-1 text-xs text-slate-600">
+          {reservations.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-2">
+              <span>{r.service_date} · unit {r.bus_unit_id.slice(0, 8)} · {r.reserved_pax} pax · {r.exclusive ? "esclusivo" : "non esclusivo"}</span>
+              <button type="button" disabled={releasingId === r.id} onClick={() => void releaseReservation(r)}
+                className="shrink-0 rounded border border-rose-200 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">
+                {releasingId === r.id ? "Libero…" : "Libera bus"}
+              </button>
+            </li>
+          ))}
         </ul>
       ) : <p className="mt-1 text-xs text-slate-400">Nessuna riserva. La riserva vale SOLO per la data indicata.</p>}
       <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-[1fr_1fr_1fr_auto]">
