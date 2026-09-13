@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 import { JOB_HEALTH_CONFIG, JOB_HEALTH_KEYS, getJobHealthConfig } from "@/lib/server/job-health-config";
 
 describe("job-health-config", () => {
-  it("espone i job monitorati nello stesso ordine atteso dalla route (Sprint 1 + postgres-backup DR V3)", () => {
-    expect(JOB_HEALTH_KEYS).toEqual(["backup", "poll-emails", "postgres-backup", "whatsapp-reminders"]);
+  it("espone i job monitorati nello stesso ordine atteso dalla route (Sprint 1 + postgres-backup DR V3 + storage-backup DR V4)", () => {
+    expect(JOB_HEALTH_KEYS).toEqual(["backup", "poll-emails", "postgres-backup", "storage-backup", "whatsapp-reminders"]);
+  });
+
+  it("storage-backup (DR V4) e' abilitato, 'scheduled', DISTINTO da 'backup'/'postgres-backup', critical al PRIMO KO (dati Tier A non rigenerabili)", () => {
+    const config = JOB_HEALTH_CONFIG["storage-backup"]!;
+    expect(config.enabled).toBe(true);
+    expect(config.schedulingMode).toBe("scheduled");
+    expect(config.staleAfterMinutes).toBeGreaterThan(0);
+    expect(config.staleSeverity).toBe("critical");
+    expect(config.criticalConsecutiveFailures).toBe(1);
+    expect(config.jobKey).not.toBe("backup");
+    expect(config.jobKey).not.toBe("postgres-backup");
   });
 
   it("postgres-backup (DR V3) e' abilitato, 'scheduled', DISTINTO da 'backup', critical a 2 KO", () => {

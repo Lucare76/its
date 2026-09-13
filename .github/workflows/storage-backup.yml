@@ -1,0 +1,85 @@
+name: Storage Files Backup (DR V4)
+
+# Disaster Recovery V4 — copia off-provider su Cloudflare R2 dei bucket
+# Supabase Storage importanti (vehicle-documents, vehicle-damage-photos,
+# service-photos). Coesiste con DR V2 (JSON) e DR V3 (PostgreSQL), non li
+# sostituisce ne' li tocca.
+#
+# Perche' GitHub Actions e non Vercel Cron: file fino a 10MB ciascuno,
+# conteggio/durata non limitati a priori (crescono nel tempo). Stesso
+# ragionamento e stesso pattern di postgres-backup.yml, anche se qui non
+# servono binari nativi (solo @supabase/supabase-js + @aws-sdk/client-s3,
+# entrambi puro JS) — la scelta e' per coerenza operativa e per non
+# consumare uno dei 2 cron slot Vercel gia' scarsi.
+#
+# ─── SECRETS RICHIESTI (Settings -> Secrets and variables -> Actions) ───
+#   NEXT_PUBLIC_SUPABASE_URL    URL progetto Supabase (stesso valore di Vercel)
+#   SUPABASE_SERVICE_ROLE_KEY   service role key (stesso valore di Vercel — store separato, va aggiunto qui a parte)
+#   R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET_NAME R2_ENDPOINT
+#     -> GIA' presenti per postgres-backup.yml: stessi valori, stesso bucket
+#        its-backups-offsite, prefix diverso (production/storage/ vs production/postgres/).
+# ─── SECRETS OPZIONALI (integrazione Centro Salute ITS, Layer 8) ───
+#   DR_HEALTH_REPORT_URL     es. https://<app>/api/cron/storage-backup-report
+#   DR_HEALTH_REPORT_SECRET  stesso bearer secret gia' usato da postgres-backup-report
+#
+# Nessun valore di secret compare in questo file o nei log (redazione lato script).
+
+on:
+  schedule:
+    # 03:00 UTC — sfasato di 30' da postgres-backup (02:30) e 1h dal backup
+    # JSON Vercel (02:00), per non concentrare il carico di lettura.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run: elenca bucket/file target senza scaricare/caricare nulla"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storage-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.6.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Storage backup
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          DR_HEALTH_REPORT_URL: ${{ secrets.DR_HEALTH_REPORT_URL }}
+          DR_HEALTH_REPORT_SECRET: ${{ secrets.DR_HEALTH_REPORT_SECRET }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            pnpm exec tsx scripts/storage-backup.mjs --dry-run
+          else
+            pnpm exec tsx scripts/storage-backup.mjs
+          fi

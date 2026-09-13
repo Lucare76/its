@@ -170,6 +170,50 @@ function classifyPostgresBackupRun(run: SystemJobRunRow): { status: "healthy" | 
   return { status: "healthy", reason: "Backup PostgreSQL completo verificato e copiato su R2.", notes };
 }
 
+/**
+ * Regole Backup file Storage (Disaster Recovery V4, Layer 6/7 —
+ * scripts/storage-backup.mjs via GitHub Actions, esito riportato a
+ * /api/cron/storage-backup-report). Job DISTINTO da "backup" (JSON) e
+ * "postgres-backup" (DR V3): un loro verde non maschera mai un bucket
+ * Storage non backuppato.
+ *
+ * Il fallimento vero e proprio di un bucket Tier A ("non backuppato": list()
+ * Supabase fallita, credenziali R2 assenti/errate) arriva qui come run
+ * "failed", gestito dal ramo generico dell'evaluator con
+ * criticalConsecutiveFailures=1 (vedi job-health-config.ts) — quindi va in
+ * critical al PRIMO KO, non al secondo come postgres-backup: per dati Tier A
+ * non rigenerabili non c'e' margine.
+ *  - execution 'warning' (alcuni file falliti, o un bucket Tier B "opzionale"
+ *    non backuppato del tutto) -> health 'warning', mai silenzioso;
+ *  - execution 'success' -> healthy con note informative (file caricati/
+ *    invariati, byte totali).
+ */
+function classifyStorageBackupRun(run: SystemJobRunRow): { status: "healthy" | "warning"; reason: string; notes: string[] } {
+  const buckets = Array.isArray(run.metadata?.buckets) ? (run.metadata.buckets as Array<Record<string, unknown>>) : [];
+  const problemBuckets = buckets.filter((b) => b.status === "warning" || b.status === "failed");
+
+  if (run.status === "warning" || problemBuckets.length > 0) {
+    const parts = problemBuckets.map((b) => {
+      const name = typeof b.bucket === "string" ? b.bucket : "bucket sconosciuto";
+      return b.status === "failed" ? `${name}: bucket opzionale non backuppato` : `${name}: alcuni file non verificati`;
+    });
+    return {
+      status: "warning",
+      reason: parts.length > 0 ? parts.join(", ") : "Backup file Storage completato con avvisi.",
+      notes: [],
+    };
+  }
+
+  const notes: string[] = [];
+  const totalUploaded = metaNumber(run.metadata, "total_uploaded");
+  const totalSkipped = metaNumber(run.metadata, "total_skipped");
+  const totalBytes = metaNumber(run.metadata, "total_bytes");
+  if (totalUploaded != null) notes.push(`${totalUploaded} file caricati`);
+  if (totalSkipped != null) notes.push(`${totalSkipped} invariati`);
+  if (totalBytes != null) notes.push(`${(totalBytes / 1024 / 1024).toFixed(1)} MiB`);
+  return { status: "healthy", reason: "Backup file Storage completo e verificato.", notes };
+}
+
 /** Fallback generico per job senza regole dedicate: un execution status 'warning' diventa health 'info' (non concerning, ma non del tutto silenzioso) finche' non viene definita una regola specifica. */
 function classifyGenericRun(run: SystemJobRunRow): { status: "healthy" | "info"; reason: string; notes: string[] } {
   if (run.status === "warning") {
@@ -182,6 +226,7 @@ function classifyJobSpecificRun(jobKey: string, run: SystemJobRunRow): { status:
   if (jobKey === "backup") return classifyBackupRun(run);
   if (jobKey === "postgres-backup") return classifyPostgresBackupRun(run);
   if (jobKey === "poll-emails") return classifyPollEmailsRun(run);
+  if (jobKey === "storage-backup") return classifyStorageBackupRun(run);
   return classifyGenericRun(run);
 }
 

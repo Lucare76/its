@@ -1,4 +1,4 @@
-# ITS Disaster Recovery — Runbook V1 + V2 + V3
+# ITS Disaster Recovery — Runbook V1 + V2 + V3 + V4
 
 ## Obiettivo
 
@@ -377,6 +377,80 @@ Extension o oggetti Supabase gia' presenti sul progetto di test (oltre al solo s
 6. Solo dopo revisione: `node scripts/postgres-restore-drill.mjs --confirm-restore`.
 7. Documentare qui RPO/RTO reali misurati dallo script e il verdict, una volta eseguito il primo drill reale.
 
+## Disaster Recovery V4 — copia off-provider file Supabase Storage (Layer 6/7)
+
+Copre i bucket Supabase Storage non rigenerabili elencati sopra. Additivo: non tocca V1/V2/V3, non modifica/cancella mai nulla lato Supabase (solo `list` + `download`, sola lettura sui bucket sorgente).
+
+### Flusso
+
+1. Per ciascun bucket target (`vehicle-documents`, `vehicle-damage-photos`, `service-photos`): enumerazione ricorsiva (Supabase Storage `list()` e' a un livello per volta, si cammina l'albero cartella per cartella).
+2. Confronto con lo stato dell'ultimo run riuscito (`production/storage/manifests/latest.json` su R2, sola lettura) usando eTag -> `updated_at` -> `size` in ordine di affidabilita'; se nessun segnale e' disponibile, fallback sicuro = ricarica comunque (mai uno skip per incertezza).
+3. Solo i file nuovi/modificati vengono scaricati da Supabase e ricaricati su R2, poi verificati con `HeadObject` (upload "verified" solo se l'oggetto esiste e la size coincide).
+4. Manifest completo del run scritto su R2 (copia storica per-run + puntatore `latest.json`).
+5. Retention (solo sul bucket versionato) e report di salute verso `system_job_runs`.
+
+### Namespace R2 (bucket condiviso `its-backups-offsite`, stesso di V2/V3 — MAI mischiato con `production/postgres/` o `production/backup_*.json`)
+
+```
+production/storage/vehicle-documents/<path originale>              (mirror — sovrascritto quando cambia)
+production/storage/vehicle-damage-photos/<path originale>           (mirror — sovrascritto quando cambia)
+production/storage/service-photos/history/<run_id>/<path originale> (VERSIONATO — mai sovrascritto)
+production/storage/manifests/<run_id>.json                          (storico, immutabile)
+production/storage/manifests/latest.json                            (puntatore, sovrascritto ad ogni run — solo indice per il diff incrementale, non e' un backup)
+```
+
+`service-photos` e' versionato perche' l'app carica alcuni oggetti con `upsert:true` (foto interno/esterno mezzo per servizio): un mirror 1:1 perderebbe la versione precedente nello stesso istante in cui Supabase la sovrascrive. Ogni upload nuovo/modificato per questo bucket finisce in una cartella storica per-run, mai in una chiave sovrascritta.
+
+### Retention
+
+- `vehicle-documents`: 365 giorni
+- `vehicle-damage-photos`: 180 giorni
+- `service-photos` (versioni storiche): 180 giorni
+- Regola fissa per tutti: **mai** eliminata l'ultima versione nota di un `source_path`, anche se piu' vecchia della retention (stesso principio di V2/V3). Per i due bucket mirror non c'e' una vera e propria potatura da fare (una sola chiave stabile per path, sovrascritta quando cambia) — la retention si applica solo alle versioni storiche di `service-photos`.
+- Un file cancellato lato Supabase **non** viene mai propagato come delete su R2: resta li' secondo la sua retention.
+
+### Classificazione Tier e severita' run
+
+- **Tier A** (`vehicle-documents`): un bucket Tier A non enumerabile (list() fallita: credenziali R2 assenti/errate, errore lettura Supabase) rende l'intero run `failed` -> health **critical al primo KO** (non al secondo come V3: dati Tier A non rigenerabili, zero margine).
+- **Tier B** (`vehicle-damage-photos`, `service-photos`): un bucket Tier B interamente fallito, o alcuni file falliti su un bucket qualsiasi, rendono il run `warning` -> health **warning**, mai silenzioso, mai critical automatico.
+- Tutti i bucket `success` -> run `success` -> health **healthy**.
+
+### GitHub Secrets richiesti (oltre a quelli gia' presenti per V3)
+
+```
+NEXT_PUBLIC_SUPABASE_URL    (nuovo per Actions — stesso valore gia' in uso su Vercel, store separato)
+SUPABASE_SERVICE_ROLE_KEY   (nuovo per Actions — stesso valore gia' in uso su Vercel, store separato)
+R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET_NAME R2_ENDPOINT   (gia' presenti per postgres-backup.yml — stessi valori, stesso bucket)
+DR_HEALTH_REPORT_URL DR_HEALTH_REPORT_SECRET   (opzionali — gia' presenti per postgres-backup-report, stesso secret riusabile)
+```
+
+### Osservabilita' (Layer 8) — job `storage-backup`, DISTINTO da `backup`/`postgres-backup`
+
+Report a `POST /api/cron/storage-backup-report`, registrato in `system_job_runs` con `job_key = "storage-backup"`. Un `backup`/`postgres-backup` verde non maschera mai un bucket Storage non backuppato — sono job indipendenti nel Centro Salute ITS.
+
+### Attivazione (mai eseguito contro produzione — checklist)
+
+1. Aggiungere i 2 secret GitHub nuovi (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) — vedi sezione secret sopra.
+2. Primo run manuale in dry-run: Actions -> *Storage Files Backup (DR V4)* -> *Run workflow* -> `dry_run = true`. Elenca bucket/file target e calcola cosa verrebbe caricato, senza toccare R2 ne' Supabase.
+3. Primo backup reale: stesso workflow con `dry_run = false`.
+4. Verificare il manifest (`production/storage/manifests/<run_id>.json` su R2): `uploaded_count`/`failed_count` coerenti con l'atteso, `errors` vuoto per i bucket Tier A.
+5. Verificare in `/settings/system` (Centro Salute) che il job `storage-backup` risulti `healthy`.
+
+### Restore (procedura manuale — NESSUN restore automatico)
+
+Non implementato in automatico deliberatamente (stesso principio di "Restore automatico" sopra: un restore automatico puo' trasformare un incidente recuperabile in perdita dati maggiore).
+
+1. **Scaricare i file da R2**: con l'AWS CLI (o qualunque client S3-compatibile) configurato sull'endpoint/bucket R2 (stessi `R2_*` usati dal job):
+   `aws s3 sync s3://<R2_BUCKET_NAME>/production/storage/vehicle-documents/ ./restore/vehicle-documents/ --endpoint-url <R2_ENDPOINT>`
+   (ripetere per `vehicle-damage-photos/`; per `service-photos/history/<run_id>/` scegliere il `run_id` desiderato leggendo `production/storage/manifests/<run_id>.json`, o l'ultimo noto da `manifests/latest.json`).
+2. **Ricreare il bucket** (se necessario, su un progetto Supabase nuovo/isolato — MAI su produzione senza un piano di incidente approvato): stessa migration che lo crea in origine (`0160_vehicle_compliance.sql` per `vehicle-documents`, `0102_vehicle_damage_photos_bucket.sql` per `vehicle-damage-photos`; `service-photos` non ha migration — va creato manualmente con le stesse policy attese, vedi gap di governance sotto).
+3. **Ripristinare i path**: ogni file scaricato mantiene il path originale relativo (es. `vehicle-1/libretto.pdf`) — basta ri-caricarlo con `supabase.storage.from(bucket).upload(path, file, { upsert: true })` sullo stesso path, cosi' i riferimenti gia' presenti nelle tabelle applicative (es. `vehicle_documents.file_path`) restano validi senza bisogno di aggiornare il DB.
+4. **Verificare l'integrita'**: confrontare `size`/`checksum` (eTag Supabase originale) di ogni file ripristinato contro il manifest del run da cui e' stato preso — un mismatch indica un file scaricato/ricaricato in modo incompleto, da ripetere.
+
+### Gap noto
+
+`service-photos` non ha una migration in `supabase/migrations/` — e' stato creato manualmente (dashboard), quindi RLS/visibilita' non sono verificabili da codice. Non blocca V4 (il job legge comunque con service role, che bypassa RLS), ma andrebbe formalizzato separatamente.
+
 ## Regola 3-2-1
 
 Per un Disaster Recovery completo ITS deve arrivare gradualmente a:
@@ -400,22 +474,23 @@ Un restore automatico puo' trasformare un incidente recuperabile in perdita dati
 
 senza toccare produzione.
 
-## Storage — gap noto (non coperto da V3)
+## Storage — gap chiuso da V4 (era il gap noto di V3)
 
-V3 copre database (`public`) e dati `auth`. **Non** copre i file in Supabase Storage. Stato dei bucket:
+V3 copre database (`public`) e dati `auth`. **Non** copriva i file in Supabase Storage — colmato da **DR V4** (vedi sezione dedicata sotto). Audit bucket (FASE 1, 2026-09-13) — `service-photos` emerso durante l'audit, non nella lista iniziale:
 
-| Bucket | Contenuto | Rigenerabile? | Priorita' DR |
-|---|---|---|---|
-| `vehicle-documents` | PDF di conformita' veicolo (revisioni, assicurazioni, bollo, …) caricati dagli operatori | **No** — originali forniti da terzi, non ricostruibili | **Alta** (non rigenerabile / importante) |
-| `vehicle-damage-photos` | Foto danni veicolo | **No** — evento puntuale, non ripetibile | Media (non rigenerabile / priorita' inferiore) |
-| `bus-qr-codes` | QR code prenotazioni bus | **Si'** — rigenerati dall'app dai dati del DB | Bassa (rigenerabile) |
-| `backups` | Snapshot JSON applicativi (Layer 2) | — gia' un artefatto di backup, gia' copiato su R2 (Layer 3) | Nessuna (non ha senso duplicare un backup) |
+| Bucket | Contenuto | Rigenerabile? | Priorita' DR | Coperto da V4? |
+|---|---|---|---|---|
+| `vehicle-documents` | PDF di conformita' veicolo (revisioni, assicurazioni, bollo, …) caricati dagli operatori | **No** — originali forniti da terzi, non ricostruibili | **Tier A — Alta** | **Si'**, mirror |
+| `vehicle-damage-photos` | Foto danni veicolo (upload pubblico via QR) | **No** — evento puntuale, non ripetibile | Tier B — Media | **Si'**, mirror |
+| `service-photos` | Foto biglietto Medmar (OCR) + foto interno/esterno mezzo per servizio, **sovrascritte con `upsert:true`** | **No** — alcuni oggetti persi anche lato Supabase ad ogni sovrascrittura | Tier B — Media | **Si'**, versionato (storico per-run, mai sovrascritto) |
+| `bus-qr-codes` | QR code prenotazioni bus | **Si'** — rigenerati dall'app dai dati del DB | Tier C — Bassa | No, escluso (rigenerabile) |
+| `backups` | Snapshot JSON applicativi (Layer 2) | — gia' un artefatto di backup, gia' copiato su R2 (Layer 3) | Nessuna | No, escluso (gia' protetto da V2) |
 
-Finche' non esiste una copia offsite di `vehicle-documents`, un incidente che colpisce anche lo Storage del progetto comporta la **perdita definitiva** di quei PDF. Il DB verrebbe ripristinato dal dump V3, ma i riferimenti ai file punterebbero a oggetti inesistenti.
+Con V4 attivo (dopo il primo run reale riuscito), un incidente che colpisce lo Storage del progetto non comporta piu' perdita definitiva per i tre bucket Tier A/B.
 
 ## Roadmap DR
 
-- **DR V4 candidate: offsite backup del bucket `vehicle-documents`.** (Sync periodico verso R2 o download/upload dal job GitHub Actions; da progettare — **non** implementato in V3.)
+- ~~DR V4 candidate: offsite backup del bucket `vehicle-documents`.~~ **Implementato** (2026-09-13) — vedi "Disaster Recovery V4" sotto. Copre `vehicle-documents`/`vehicle-damage-photos`/`service-photos`. **Mai ancora eseguito contro produzione** — vedi checklist di attivazione nella sezione V4.
 - Eseguire il primo restore drill reale con `scripts/postgres-restore-drill.mjs` su un progetto Supabase isolato + misurare RPO/RTO reali (script pronto — vedi "Restore Drill (V3.1)" e "Regola di verifica").
 
 ## Frequenza drill consigliata

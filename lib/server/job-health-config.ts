@@ -118,6 +118,33 @@ export const JOB_HEALTH_CONFIG: Record<string, JobHealthRuleConfig> = {
     missingRunSeverity: "warning",
     staleSeverity: "critical",
   },
+  "storage-backup": {
+    jobKey: "storage-backup",
+    jobName: "Backup file Storage (DR V4)",
+    // Copia off-provider (R2) dei bucket Supabase Storage importanti
+    // (vehicle-documents, vehicle-damage-photos, service-photos). Gira su
+    // GitHub Actions (.github/workflows/storage-backup.yml), NON su Vercel.
+    // Job DISTINTO da "backup" (JSON) e "postgres-backup" (DR V3): un loro
+    // verde non maschera mai un file Storage non backuppato.
+    enabled: true,
+    schedulingMode: "scheduled",
+    expectedCadence: "daily",
+    cadenceLabel: "Ogni giorno alle 03:00 UTC (GitHub Actions)",
+    // 24h di cadenza + margine ampio per code dei runner GitHub / manutenzione.
+    staleAfterMinutes: 30 * 60,
+    // timeout workflow atteso + margine per il reporting.
+    maxRunningMinutes: 45,
+    // A differenza di postgres-backup (2 KO consecutivi -> critical), qui UN
+    // solo run "failed" e' gia' critical: lo script riporta status="failed"
+    // SOLO quando un bucket Tier A non e' stato enumerabile affatto (list()
+    // fallita: errore credenziali R2 o lettura Supabase) — "non backuppato",
+    // zero tolleranza per i dati non rigenerabili di Tier A. Un problema piu'
+    // lieve (alcuni file falliti, bucket Tier B fallito) e' gia' "warning"
+    // lato sender, non "failed" — vedi classifyStorageBackupRunStatus.
+    criticalConsecutiveFailures: 1,
+    missingRunSeverity: "warning",
+    staleSeverity: "critical",
+  },
   "whatsapp-reminders": {
     jobKey: "whatsapp-reminders",
     jobName: "Promemoria WhatsApp",
