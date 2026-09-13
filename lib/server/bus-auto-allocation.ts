@@ -77,6 +77,17 @@ function normCity(value?: string | null) {
  * (0 pax in tenant_bus_allocations) veniva sempre riproposto e rifiutato
  * dalla RPC, senza mai avanzare al successivo (FIX MIRATO — AUTO ASSEGNAZIONE
  * BUS: PREFILTRO EXCLUSIVE + RETRY).
+ *
+ * FIX MIRATO — BOOKING GROUPS: PRIMO BUS UTILIZZABILE IN ORDINE (bug reale
+ * 6-13 settembre, PARTENZA che partiva dal BUS 3 con BUS 1/2 liberi). La
+ * preferenza "stessa fermata" sceglieva il bus già usato per quella fermata
+ * anche quando un bus precedente in sort_order aveva ancora posto libero e
+ * non era mai stato usato per quella fermata — violando la regola "prova
+ * sempre il primo bus utilizzabile". Stessa correzione già in produzione in
+ * `pickBusCandidatesOrdered` (app/api/ops/bus-network/route.ts, percorso
+ * auto_assign_date), mai riportata qui: se il bus "stessa fermata" non è il
+ * primo con posto, si preferisce il bus precedente libero e "stessa fermata"
+ * resta solo un fallback quando nessun bus precedente ha posto.
  */
 function pickBusCandidates(
   units: BusUnitRow[],
@@ -95,7 +106,13 @@ function pickBusCandidates(
 
   const sameStopBusIds = stopBusMap.get(`${input.lineId}:${input.stopId}`) ?? new Set<string>();
   const sameStop = lineUnits.find((unit) => sameStopBusIds.has(unit.id) && hasRoom(unit));
-  const primary = sameStop ?? lineUnits.find(hasRoom) ?? null;
+  let primary: BusUnitRow | null = null;
+  if (sameStop) {
+    const sameStopIndex = lineUnits.findIndex((unit) => unit.id === sameStop.id);
+    const earlierWithRoom = sameStopIndex > 0 ? lineUnits.slice(0, sameStopIndex).find(hasRoom) ?? null : null;
+    primary = earlierWithRoom ?? sameStop;
+  }
+  if (!primary) primary = lineUnits.find(hasRoom) ?? null;
 
   const rest = lineUnits.filter((unit) => hasRoom(unit) && unit.id !== primary?.id);
   return primary ? [primary, ...rest] : rest;

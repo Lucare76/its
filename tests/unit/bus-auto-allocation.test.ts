@@ -158,3 +158,111 @@ describe("autoAllocateBusService — prefiltro exclusive + retry (FIX MIRATO)", 
     expect(rpcCalls).toHaveLength(1);
   });
 });
+
+/**
+ * FIX MIRATO — BOOKING GROUPS: PRIMO BUS UTILIZZABILE IN ORDINE (bug reale
+ * gruppo con ARRIVO 6/09/2026 - PARTENZA 13/09/2026: la PARTENZA partiva dal
+ * BUS 3 anche con BUS 1/2 liberi). Root cause: la preferenza "stessa
+ * fermata" in pickBusCandidates sceglieva il bus gia' usato per quella
+ * fermata anche quando un bus precedente in sort_order aveva ancora posto
+ * libero e non era mai stato usato per quella fermata.
+ */
+describe("autoAllocateBusService — primo bus utilizzabile in ordine per direzione (FIX MIRATO booking groups)", () => {
+  it("scenario minimo 1: BUS1=0/54, BUS2=0/54, BUS3=0/54 -> la prima prenotazione va sul BUS1", async () => {
+    const stopDeparture = { id: "canon-rimini-dep", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const { admin, rpcCalls } = makeAdmin(baseSeed({
+      services: [{ ...baseSeed().services[0], direction: "departure" }],
+      tenant_bus_line_stops: [stopDeparture],
+    }));
+    const res = await callAutoAllocate(admin);
+    expect(res.allocated).toBe(true);
+    if (res.allocated) expect(res.busUnitId).toBe(BUS_1);
+    expect(rpcCalls.map((c) => c.bus_unit_id)).toEqual([BUS_1]);
+  });
+
+  it("scenario minimo 2: BUS1=54/54 (pieno), BUS2=20/54, BUS3=0/54 -> la nuova prenotazione va sul BUS2, mai sul BUS3", async () => {
+    const stopDeparture = { id: "canon-rimini-dep", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const { admin, rpcCalls } = makeAdmin(baseSeed({
+      services: [{ ...baseSeed().services[0], direction: "departure" }],
+      tenant_bus_line_stops: [stopDeparture],
+      tenant_bus_allocations: [
+        { service_id: "other-1", tenant_id: TENANT, bus_unit_id: BUS_1, bus_line_id: LINE_ID, stop_id: stopDeparture.id, pax_assigned: 54, "services.date": "2026-09-13", "services.direction": "departure" },
+        { service_id: "other-2", tenant_id: TENANT, bus_unit_id: BUS_2, bus_line_id: LINE_ID, stop_id: stopDeparture.id, pax_assigned: 20, "services.date": "2026-09-13", "services.direction": "departure" },
+      ],
+    }));
+    const res = await callAutoAllocate(admin);
+    expect(res.allocated).toBe(true);
+    if (res.allocated) expect(res.busUnitId).toBe(BUS_2);
+    expect(rpcCalls.map((c) => c.bus_unit_id)).toEqual([BUS_2]);
+  });
+
+  it("BUG REALE: fermata gia' servita dal BUS3 (con posto) ma BUS1/BUS2 mai usati per quella fermata e liberi -> sceglie BUS1, non eredita il BUS3", async () => {
+    const stopDeparture = { id: "canon-rimini-dep", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const { admin, rpcCalls } = makeAdmin(baseSeed({
+      services: [{ ...baseSeed().services[0], direction: "departure" }],
+      tenant_bus_line_stops: [stopDeparture],
+      tenant_bus_allocations: [
+        // Un'altra prenotazione per la STESSA fermata era finita sul BUS3
+        // (es. perche' in un momento precedente BUS1/2 erano pieni). BUS1 e
+        // BUS2 non hanno mai servito questa fermata ma hanno posto libero.
+        { service_id: "other-svc", tenant_id: TENANT, bus_unit_id: BUS_3, bus_line_id: LINE_ID, stop_id: stopDeparture.id, pax_assigned: 5, "services.date": "2026-09-13", "services.direction": "departure" },
+      ],
+    }));
+    const res = await callAutoAllocate(admin);
+    expect(res.allocated).toBe(true);
+    if (res.allocated) expect(res.busUnitId).toBe(BUS_1);
+    expect(rpcCalls.map((c) => c.bus_unit_id)).toEqual([BUS_1]);
+  });
+
+  it("BUG REALE variante: BUS1 pieno, fermata gia' servita dal BUS3 (con posto), BUS2 mai usato per quella fermata ma libero -> sceglie BUS2, non BUS3", async () => {
+    const stopDeparture = { id: "canon-rimini-dep", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const { admin, rpcCalls } = makeAdmin(baseSeed({
+      services: [{ ...baseSeed().services[0], direction: "departure" }],
+      tenant_bus_line_stops: [stopDeparture],
+      tenant_bus_allocations: [
+        { service_id: "other-full", tenant_id: TENANT, bus_unit_id: BUS_1, bus_line_id: LINE_ID, stop_id: "altra-fermata", pax_assigned: 54, "services.date": "2026-09-13", "services.direction": "departure" },
+        { service_id: "other-svc", tenant_id: TENANT, bus_unit_id: BUS_3, bus_line_id: LINE_ID, stop_id: stopDeparture.id, pax_assigned: 5, "services.date": "2026-09-13", "services.direction": "departure" },
+      ],
+    }));
+    const res = await callAutoAllocate(admin);
+    expect(res.allocated).toBe(true);
+    if (res.allocated) expect(res.busUnitId).toBe(BUS_2);
+    expect(rpcCalls.map((c) => c.bus_unit_id)).toEqual([BUS_2]);
+  });
+
+  it("bus chiuso: BUS1 status=closed, BUS2/BUS3 liberi -> salta BUS1 e sceglie BUS2 (mai un bus chiuso)", async () => {
+    const stopDeparture = { id: "canon-rimini-dep", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const { admin, rpcCalls } = makeAdmin(baseSeed({
+      services: [{ ...baseSeed().services[0], direction: "departure" }],
+      tenant_bus_line_stops: [stopDeparture],
+      tenant_bus_units: [
+        { id: BUS_1, tenant_id: TENANT, bus_line_id: LINE_ID, label: "Bus 1", capacity: 54, status: "closed", sort_order: 1, active: true },
+        { id: BUS_2, tenant_id: TENANT, bus_line_id: LINE_ID, label: "Bus 2", capacity: 54, status: "open", sort_order: 2, active: true },
+        { id: BUS_3, tenant_id: TENANT, bus_line_id: LINE_ID, label: "Bus 3", capacity: 54, status: "open", sort_order: 3, active: true },
+      ],
+    }));
+    const res = await callAutoAllocate(admin);
+    expect(res.allocated).toBe(true);
+    if (res.allocated) expect(res.busUnitId).toBe(BUS_2);
+    expect(rpcCalls.map((c) => c.bus_unit_id)).toEqual([BUS_2]);
+  });
+
+  it("scenario 3: ARRIVO allocato sul BUS3 (altra data) non deve mai influenzare la scelta della PARTENZA -> PARTENZA sceglie BUS1", async () => {
+    const stopArrival = { id: "canon-rimini-arr-2", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "arrival", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const stopDeparture = { id: "canon-rimini-dep", tenant_id: TENANT, bus_line_id: LINE_ID, direction: "departure", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true };
+    const { admin, rpcCalls } = makeAdmin(baseSeed({
+      services: [{ ...baseSeed().services[0], id: SERVICE_ID, date: "2026-09-13", direction: "departure" }],
+      tenant_bus_line_stops: [stopArrival, stopDeparture],
+      tenant_bus_allocations: [
+        // Allocazione dell'ARRIVO (6/09) sul BUS3, stessa fermata/citta' ma
+        // data e direzione diverse: non deve mai comparire nel calcolo della
+        // PARTENZA (13/09).
+        { service_id: "arrival-svc", tenant_id: TENANT, bus_unit_id: BUS_3, bus_line_id: LINE_ID, stop_id: stopArrival.id, pax_assigned: 30, "services.date": "2026-09-06", "services.direction": "arrival" },
+      ],
+    }));
+    const res = await callAutoAllocate(admin);
+    expect(res.allocated).toBe(true);
+    if (res.allocated) expect(res.busUnitId).toBe(BUS_1);
+    expect(rpcCalls.map((c) => c.bus_unit_id)).toEqual([BUS_1]);
+  });
+});
