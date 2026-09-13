@@ -15,6 +15,14 @@ import type { Redis } from "@upstash/redis";
 import type { McpContext } from "@/lib/mcp/context";
 import { FakeUpstashRedis } from "./mario-fake-redis";
 
+// Timeout locale (default vitest 5000ms): sotto suite completa (22 worker,
+// CPU satura) il cold-import di orchestrator.ts + il suo grafo di dipendenze
+// puo' da solo superare 5s (misurato fino a ~7s in audit 2026-09-13), senza
+// che il test sia lento in se'. Un timeout scaduto NON cancella la promise in
+// volo: il suo "coda" puo' poi corrompere i mock condivisi del test
+// successivo — root cause reale della flakiness osservata sotto carico.
+vi.setConfig({ testTimeout: 20_000 });
+
 const mockGetTool = vi.fn();
 const mockRunTool = vi.fn();
 const mockRoute = vi.fn();
@@ -62,6 +70,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
+  // Ripristino incondizionato (non solo a fine test, vedi §13 sotto): se il
+  // test fallisce/scade PRIMA di raggiungere il suo vi.useRealTimers() finale,
+  // i fake timers restavano attivi — categoria C di flakiness (audit 2026-09-13).
+  vi.useRealTimers();
 });
 
 /** Un turno. Lo stato NON vive in variabili di modulo: tra un turno e l'altro
@@ -151,6 +163,7 @@ describe("FASE A.1 §12 — 5 turni, store condiviso, istanze diverse", () => {
     expect(mockRunTool).toHaveBeenCalledTimes(1); // solo la preview del primo turno, nessun WRITE
     expect(rr.intent).toBe("confirmation_expired");
     expect(rr.answer).toMatch(/scaduta/i);
-    vi.useRealTimers();
+    // vi.useRealTimers() e' garantito da afterEach sopra (incondizionato,
+    // anche su failure/timeout) — non duplicato qui.
   });
 });

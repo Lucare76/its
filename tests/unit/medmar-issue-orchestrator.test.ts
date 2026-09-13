@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueRepository, MedmarIssueAttempt, MedmarIssueSessionContext, MedmarMutationClient } from "@/lib/server/medmar-booking/issue-types";
 import { MedmarMutationRemoteUnknownError } from "@/lib/server/medmar-booking/medmar-mutation-client";
 
+// Timeout locale (default vitest 5000ms): sotto suite completa (22 worker,
+// CPU satura) il cold-import di issue-orchestrator.ts + il suo grafo di
+// dipendenze puo' da solo superare 5s (misurato in audit 2026-09-13), senza
+// che il test sia lento in se'. Un timeout scaduto NON cancella la promise in
+// volo: il suo "coda" puo' poi corrompere i mock condivisi del test
+// successivo — root cause reale della flakiness osservata sotto carico.
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock("@/lib/server/ops-audit", () => ({ auditLog: vi.fn() }));
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
