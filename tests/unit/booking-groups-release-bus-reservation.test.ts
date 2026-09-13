@@ -28,7 +28,7 @@ const OTHER_GROUP_RESERVATION_ID = "55555555-5555-4555-8555-555555555555";
 
 type Row = Record<string, unknown>;
 
-function makeAdmin(seed: Record<string, Row[]> = {}) {
+function makeAdmin(seed: Record<string, Row[]> = {}, opts: { forceEmptyDeleteFor?: string } = {}) {
   const writes = {
     inserts: [] as Array<{ table: string; row: Row }>,
     updates: [] as Array<{ table: string; filters: Row; payload: Row }>,
@@ -76,8 +76,18 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
     b.delete = () => { pending = { kind: "delete" }; return b; };
     b.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
       if (pending?.kind === "delete") {
+        // Riproduce il comportamento reale di Supabase: .delete().select()
+        // restituisce le righe EFFETTIVAMENTE rimosse (array, [] se il
+        // filtro non matcha nulla) — mai error per "0 righe". forceEmptyDeleteFor
+        // simula il caso "la SELECT trova la riga ma la DELETE non matcha
+        // nulla" (race/filtro divergente) senza mutare il seed.
         writes.deletes.push({ table, filters: { ...filters } });
-        return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+        if (opts.forceEmptyDeleteFor === table) {
+          return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+        }
+        const matched = rowsForFilters();
+        seed[table] = (seed[table] ?? []).filter((r) => !matched.includes(r));
+        return Promise.resolve({ data: matched, error: null }).then(resolve, reject);
       }
       if (pending) {
         return Promise.resolve(finish()).then(resolve, reject);
@@ -238,6 +248,23 @@ describe("delete_bus_reservation — Libera bus del gruppo", () => {
     expect(res.status).toBe(404);
     expect((await res.json()).error).toMatch(/non trovata/i);
     expect(writes.deletes.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(0);
+    expect(mocks.auditLog).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSIONE: SELECT trova la riga ma la DELETE non rimuove nulla -> risposta ok:false, nessun audit deleted (mai un falso successo)", async () => {
+    const { admin, writes } = makeAdmin(baseSeed(), { forceEmptyDeleteFor: "booking_group_bus_reservations" });
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+
+    const res = await POST(post({ action: "delete_bus_reservation", id: RESERVATION_ID }));
+    const json = await res.json();
+
+    expect(json.ok).toBe(false);
+    expect(res.status).toBe(500);
+    expect(json.error).toMatch(/nessuna riga rimossa/i);
+    // La SELECT e il tentativo di DELETE sono comunque avvenuti...
+    expect(writes.deletes.filter((w) => w.table === "booking_group_bus_reservations")).toHaveLength(1);
+    // ...ma senza righe realmente rimosse non deve mai essere scritto un
+    // audit "deleted" (sarebbe un log falso).
     expect(mocks.auditLog).not.toHaveBeenCalled();
   });
 
