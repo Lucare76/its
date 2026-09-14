@@ -13,6 +13,8 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { sendEmail } from "@/lib/server/send-email";
 import { emailHtml } from "@/lib/server/email-layout";
+import { getOperatorName } from "@/lib/server/service-audit-log";
+import { recordServiceAuditEvent, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 
 export const runtime = "nodejs";
 
@@ -81,6 +83,26 @@ export async function POST(
 
       // Nessun cambio di status_events: la modifica non cambia lo stato operativo del servizio.
     }
+
+    // Gap E (Timeline per-servizio) — approvazione/rifiuto agenzia non aveva
+    // alcuna traccia strutturata con esito dedicato (solo auditLog generico,
+    // verificato in audit): qui l'esito approved/rejected e le modifiche
+    // (mr.changes, già un diff controllato di campi — non un payload grezzo)
+    // sono persistiti esplicitamente. Best-effort, non blocca la risposta.
+    void getOperatorName(auth).then((operatorName) =>
+      recordServiceAuditEvent(admin, {
+        tenantId,
+        serviceId: mr.service_id as string,
+        eventType: action === "approve" ? SERVICE_AUDIT_EVENT_TYPES.AGENCY_APPROVED : SERVICE_AUDIT_EVENT_TYPES.AGENCY_REJECTED,
+        source: SERVICE_AUDIT_SOURCES.AGENCY_PORTAL,
+        actorUserId: userId,
+        actorName: operatorName,
+        actorEmail: user.email ?? null,
+        reason: notes ?? null,
+        newData: action === "approve" ? (mr.changes as Record<string, unknown>) : null,
+        metadata: { modification_request_id: id, requested_by_user_id: mr.requested_by_user_id ?? null },
+      })
+    );
 
     // Notifica in-app all'agenzia (chi ha fatto la richiesta)
     const svc = Array.isArray(mr.services) ? mr.services[0] : mr.services as Record<string, unknown> | null;

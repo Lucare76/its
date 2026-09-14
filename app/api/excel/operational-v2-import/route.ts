@@ -8,6 +8,7 @@ import {
 import { authorizePricingRequest, type PricingAuthContext } from "@/lib/server/pricing-auth";
 import type { OperationalV2PreviewRow } from "@/lib/operational-excel-normalize";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
+import { recordServiceAuditEventsBatch, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 
 export const runtime = "nodejs";
 
@@ -361,6 +362,21 @@ export async function POST(request: NextRequest) {
         status: "new",
         by_user_id: auth.user.id,
       })));
+
+      // Gap D (Timeline per-servizio) — stesso gap dell'import Excel legacy:
+      // nessuna traccia strutturata della fonte. Un insert batch (non N
+      // singoli), best-effort, non blocca la risposta.
+      void recordServiceAuditEventsBatch(
+        auth.admin,
+        serviceIds.map((serviceId) => ({
+          tenantId,
+          serviceId,
+          eventType: SERVICE_AUDIT_EVENT_TYPES.SERVICE_IMPORTED,
+          source: SERVICE_AUDIT_SOURCES.IMPORT_EXCEL,
+          actorUserId: auth.user.id,
+          newData: { template_kind: "operational_v2" },
+        }))
+      );
     }
 
     return NextResponse.json({

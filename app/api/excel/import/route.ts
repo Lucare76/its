@@ -13,6 +13,7 @@ import { resolveHotelMatch } from "@/lib/server/hotel-matching";
 import { serviceCreateSchema } from "@/lib/validation";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
+import { recordServiceAuditEvent, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 import {
   loadTenantPlaces,
   parseImportPlaceType,
@@ -1092,6 +1093,19 @@ export async function POST(request: NextRequest) {
         message: statusEventResult.error.message
       });
     }
+
+    // Gap D (Timeline per-servizio) — un servizio creato da import Excel non
+    // aveva alcuna traccia strutturata della fonte (verificato in audit):
+    // solo status_events "new", indistinguibile da una creazione manuale.
+    // Best-effort, non blocca il resto del batch.
+    void recordServiceAuditEvent(auth.admin, {
+      tenantId: auth.membership.tenant_id,
+      serviceId: insertResult.data.id,
+      eventType: SERVICE_AUDIT_EVENT_TYPES.SERVICE_IMPORTED,
+      source: SERVICE_AUDIT_SOURCES.IMPORT_EXCEL,
+      actorUserId: auth.user.id,
+      newData: { row_index: item.rowIndex, mode: item.mode },
+    });
   }
 
   if (insertedIds.length > 0) {

@@ -9,6 +9,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
+import { recordServiceAuditEvent, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 
 type AuthContext = {
   admin: SupabaseClient;
@@ -1790,6 +1791,18 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
       throw new Error(createAttempt.error?.message ?? "Creazione booking PDF finale fallita.");
     }
     finalServiceId = createAttempt.data.id;
+
+    // Gap D (Timeline per-servizio) — stesso gap degli altri import: nessuna
+    // traccia strutturata della fonte PDF/agenzia. Solo sul ramo di CREAZIONE
+    // (non sull'update di un draft esistente sopra). Best-effort.
+    void recordServiceAuditEvent(auth.admin, {
+      tenantId,
+      serviceId: createAttempt.data.id,
+      eventType: SERVICE_AUDIT_EVENT_TYPES.SERVICE_IMPORTED,
+      source: SERVICE_AUDIT_SOURCES.IMPORT_PDF,
+      actorUserId: auth.user.id ?? null,
+      newData: { inbound_email_id: input.inboundEmailId ?? null, external_reference: normalized.external_reference ?? null },
+    });
   }
 
   const existingStatus = await auth.admin

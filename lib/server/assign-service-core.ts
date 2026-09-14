@@ -22,6 +22,7 @@ import { vehicleIntervalsOverlap } from "@/lib/piano-vehicle-timeline";
 import { effectiveServiceDisembarkTime, minutesFromHHMM } from "@/lib/piano-arrival-time";
 import { extractFeatures, logAssignmentChange, buildAssignmentDecisionFeatures, type CandidateSnapshot } from "@/lib/server/assignment-history";
 import { updateLearnedPatterns } from "@/lib/server/learned-patterns";
+import { recordServiceAuditEvent, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 
 export type AssignServiceOutcome = { status: number; body: Record<string, unknown> };
 
@@ -713,6 +714,42 @@ export async function assignServiceCore(admin: SupabaseClient, params: AssignSer
     }
 
     await admin.from("services").update({ status: "new" }).eq("id", serviceId).eq("tenant_id", tenantId);
+
+    // Gap B/C (Timeline per-servizio) — l'ASSEGNAZIONE autista/mezzo è già
+    // tracciata più sotto (driver_assignment_history, changeType
+    // "driver_swap"/"vehicle_binding") ma la RIMOZIONE no: questo ramo non
+    // scriveva alcuna riga di audit. Un evento solo se c'era davvero
+    // qualcosa da rimuovere (driver e/o mezzo), best-effort. Il nome
+    // operatore NON viene risolto qui (niente query aggiuntiva a
+    // memberships su un path "remove" che oggi ne fa zero — vedi
+    // tests/unit/assign-service-driver-tenant-guard.test.ts #18): resta
+    // solo actorUserId, risolto a NOME in lettura dalla Timeline
+    // (lib/server/service-timeline.ts), stesso pattern già usato per
+    // status_events/driver_assignment_history.
+    const removedDriverUserId = (existingAssignment.driver_user_id as string | null | undefined) ?? null;
+    const removedDriverProfileId = (existingAssignment.driver_profile_id as string | null | undefined) ?? null;
+    const removedVehicleLabel = ((existingAssignment.vehicle_label as string | null | undefined) ?? null) || null;
+    if (removedDriverUserId || removedDriverProfileId) {
+      void recordServiceAuditEvent(admin, {
+        tenantId,
+        serviceId,
+        eventType: SERVICE_AUDIT_EVENT_TYPES.DRIVER_REMOVED,
+        source: SERVICE_AUDIT_SOURCES.MANUAL,
+        actorUserId: userId,
+        oldData: { driver_user_id: removedDriverUserId, driver_profile_id: removedDriverProfileId },
+      });
+    }
+    if (removedVehicleLabel) {
+      void recordServiceAuditEvent(admin, {
+        tenantId,
+        serviceId,
+        eventType: SERVICE_AUDIT_EVENT_TYPES.VEHICLE_REMOVED,
+        source: SERVICE_AUDIT_SOURCES.MANUAL,
+        actorUserId: userId,
+        oldData: { vehicle_label: removedVehicleLabel },
+      });
+    }
+
     return { status: 200, body: { ok: true } };
   }
 

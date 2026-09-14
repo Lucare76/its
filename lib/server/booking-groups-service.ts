@@ -21,6 +21,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
 import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
+import { recordServiceAuditEvent, resolveOperatorNameByUserId, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 import {
   computeBookingGroupStatusSummaryByDirection,
   summarizeStopPax,
@@ -1246,6 +1247,9 @@ export async function addBookingGroupPassengers(
 
   const created: AddPassengersResult["created"] = [];
   const failed: AddPassengersResult["failed"] = [];
+  // Gap F (Timeline per-servizio) — risolto una sola volta fuori dal loop
+  // (best-effort, mai N query per N passeggeri).
+  const auditActorName = userId ? await resolveOperatorNameByUserId(admin, tenantId, userId) : null;
   for (const row of input.passengers) {
     const existing = existingByName.get(row.customer_name.trim().toLowerCase());
     if (existing) {
@@ -1270,6 +1274,20 @@ export async function addBookingGroupPassengers(
       tenantId, userId, role,
       serviceId: svc.id as string, outcome: "created",
       details: { booking_group_id: input.bookingGroupId, booking_group_stop_id: input.bookingGroupStopId, pax: row.pax, city: st.city },
+    });
+    // Gap F (Timeline per-servizio) — un servizio creato dal flusso booking
+    // group non passa da logServiceChange (service_change_logs vede solo
+    // new-booking/route.ts), quindi non aveva alcuna traccia nella timeline
+    // per-servizio prima d'ora. Best-effort, non blocca il resto del loop.
+    void recordServiceAuditEvent(admin, {
+      tenantId,
+      serviceId: svc.id as string,
+      bookingId: input.bookingGroupId,
+      eventType: SERVICE_AUDIT_EVENT_TYPES.BOOKING_GROUP_SERVICE_CREATED,
+      source: SERVICE_AUDIT_SOURCES.BOOKING_GROUP,
+      actorUserId: userId,
+      actorName: auditActorName,
+      newData: { booking_group_stop_id: input.bookingGroupStopId, pax: row.pax, city: st.city },
     });
   }
 

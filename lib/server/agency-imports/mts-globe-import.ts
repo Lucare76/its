@@ -4,6 +4,7 @@ import { resolveHotelMatch, type HotelMatchRow } from "@/lib/server/hotel-matchi
 import { parseMtsGlobeRows, type MtsGlobeBookingDraft, type MtsGlobeParsedLeg } from "@/lib/server/agency-imports/mts-globe-parser";
 import { generateSunSeaServices, type GeneratedServiceDraft, type ResolvedHotelForLeg } from "@/lib/server/agency-imports/sunsea-service-generator";
 import { applyPickupCalc, type PickupCalcCanonicalContext } from "@/lib/server/apply-pickup-calc";
+import { recordServiceAuditEventsBatch, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
 
 const SOURCE = "mts_globe";
 
@@ -632,6 +633,29 @@ export async function confirmMtsGlobeImport(
 
     importedBookingCount += 1;
     importedServiceCount += servicesInsert.data?.length ?? 0;
+
+    // Gap D (MTS Globe, Timeline per-servizio) — SOLO qui, dopo la conferma
+    // che i servizi sono stati DAVVERO creati (sopra: se servicesInsert
+    // fallisce, il booking viene rollbackato e la funzione continua senza
+    // arrivare qui — nessun evento per un import fallito). Un evento per
+    // servizio creato; metadata minimi (voucher, id import sorgente), mai
+    // il payload Excel/righe grezze né dati cliente oltre a quanto già sul
+    // servizio stesso.
+    const createdServiceIds = ((servicesInsert.data ?? []) as Array<{ id: string }>).map((row) => row.id);
+    if (createdServiceIds.length > 0) {
+      void recordServiceAuditEventsBatch(
+        admin,
+        createdServiceIds.map((serviceId) => ({
+          tenantId,
+          serviceId,
+          bookingId: agencyBookingId,
+          eventType: SERVICE_AUDIT_EVENT_TYPES.SERVICE_IMPORTED,
+          source: SERVICE_AUDIT_SOURCES.IMPORT_MTS_GLOBE,
+          actorUserId: userId,
+          newData: { voucher_no: booking.voucherNo, source_import_id: sourceImportId },
+        }))
+      );
+    }
   }
 
   return { importedBookingCount, importedServiceCount, skippedDuplicateCount, failedBookings };

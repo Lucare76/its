@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DateInput, PageHeader } from "@/components/ui";
 import { WhatsAppButton } from "@/components/whatsapp-button";
+import { ServiceTimeline } from "@/components/service-timeline";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
@@ -57,16 +58,6 @@ type BookingQrSummary = {
   phone: string | null;
   codes: BookingQrRow[];
 };
-type ServiceChangeLog = {
-  id: string;
-  service_id: string;
-  root_service_id: string | null;
-  action: string;
-  changed_fields: string[] | null;
-  operator_name: string | null;
-  operator_email: string | null;
-  created_at: string;
-};
 type FerryLegMeta = {
   company: string | null;
   departure_port: string | null;
@@ -79,63 +70,6 @@ type FerryMeta = {
 
 function isValidTime(t: string) {
   return /^\d{2}:\d{2}$/.test(t.trim());
-}
-
-function formatLogDate(value: string) {
-  return new Intl.DateTimeFormat("it-IT", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function fieldLabel(field: string) {
-  const labels: Record<string, string> = {
-    customer_name: "cliente",
-    phone: "telefono",
-    pax: "pax",
-    time: "orario",
-    notes: "note",
-    hotel_id: "hotel",
-    agency_id: "agenzia",
-    billing_party_name: "intestatario",
-    meeting_point: "meeting point",
-    arrival_date: "data arrivo",
-    arrival_time: "ora arrivo",
-    departure_date: "data partenza",
-    departure_time: "ora partenza",
-    orario_barca: "orario barca",
-    pickup_time: "pickup",
-    transport_code: "rif. volo/treno",
-  };
-  return labels[field] ?? field.replace(/_/g, " ");
-}
-
-function logFerryDetails(fields: string[] | null | undefined, ferryMeta: FerryMeta, isFerryFormula: boolean) {
-  if (!isFerryFormula) return [];
-  const changed = new Set(fields ?? []);
-  const details: string[] = [];
-  if (ferryMeta.outbound && (changed.has("time") || changed.has("arrival_time"))) {
-    const route = [ferryMeta.outbound.departure_port, ferryMeta.outbound.arrival_port].filter(Boolean).join(" → ");
-    const parts = [
-      ferryMeta.outbound.company ? `Andata nave ${ferryMeta.outbound.company}` : "Andata nave",
-      route ? `tratta ${route}` : null,
-      ferryMeta.outbound.arrival_port ? `porto di arrivo ${ferryMeta.outbound.arrival_port}` : null,
-    ].filter(Boolean);
-    details.push(parts.join(" · "));
-  }
-  if (ferryMeta.return && (changed.has("pickup_time") || changed.has("departure_time") || changed.has("orario_barca"))) {
-    const route = [ferryMeta.return.departure_port, ferryMeta.return.arrival_port].filter(Boolean).join(" → ");
-    const parts = [
-      ferryMeta.return.company ? `Ritorno nave ${ferryMeta.return.company}` : "Ritorno nave",
-      route ? `tratta ${route}` : null,
-      ferryMeta.return.departure_port ? `porto di partenza ${ferryMeta.return.departure_port}` : null,
-    ].filter(Boolean);
-    details.push(parts.join(" · "));
-  }
-  return details;
 }
 
 export default function ServiceEditPage() {
@@ -185,7 +119,6 @@ export default function ServiceEditPage() {
   const [qrBusy, setQrBusy] = useState<"generate" | "pdf" | "whatsapp" | null>(null);
   const [whatsAppBusy, setWhatsAppBusy] = useState(false);
   const [whatsAppMessage, setWhatsAppMessage] = useState<string | null>(null);
-  const [changeLogs, setChangeLogs] = useState<ServiceChangeLog[]>([]);
   const [ferryMeta, setFerryMeta] = useState<FerryMeta>({ outbound: null, return: null });
 
   // Inline hotel creation
@@ -328,7 +261,6 @@ export default function ServiceEditPage() {
         ferry_meta?: FerryMeta;
         hotels?: HotelRow[];
         agencies?: AgencyRow[];
-        change_logs?: ServiceChangeLog[];
         error?: string;
       } | null;
 
@@ -343,7 +275,6 @@ export default function ServiceEditPage() {
       setService(svc);
       setHotels(body.hotels ?? []);
       setAgencies(body.agencies ?? []);
-      setChangeLogs(body.change_logs ?? []);
       setFerryMeta(body.ferry_meta ?? { outbound: null, return: null });
 
       setCustomerName(svc.customer_name ?? "");
@@ -784,37 +715,7 @@ export default function ServiceEditPage() {
         {whatsAppMessage ? <p className="text-xs text-slate-600">{whatsAppMessage}</p> : null}
         {service.sent_at ? <p className="text-xs text-slate-500">Ultimo invio WhatsApp: {new Date(service.sent_at).toLocaleString("it-IT")}</p> : null}
 
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-slate-900">Log modifiche prenotazione</p>
-              <p className="mt-1 text-xs text-slate-500">Storico operatori, giorno e ora delle modifiche salvate.</p>
-            </div>
-          </div>
-          {changeLogs.length === 0 ? (
-            <p className="mt-3 text-sm text-slate-500">Nessuna modifica registrata.</p>
-          ) : (
-            <div className="mt-3 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
-              {changeLogs.map((log) => {
-                const ferryDetails = logFerryDetails(log.changed_fields, ferryMeta, isFerryFormula);
-                return (
-                  <div key={log.id} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-800">{log.operator_name || log.operator_email || "Operatore"}</p>
-                      <p className="text-xs text-slate-500">
-                        Campi: {(log.changed_fields ?? []).map(fieldLabel).join(", ") || "modifica"}
-                      </p>
-                      {ferryDetails.map((detail) => (
-                        <p key={detail} className="mt-1 text-xs font-medium text-amber-800">{detail}</p>
-                      ))}
-                    </div>
-                    <p className="text-xs font-semibold text-slate-500">{formatLogDate(log.created_at)}</p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <ServiceTimeline serviceId={service.id} accessToken={accessToken} />
 
         {isBusBooking && (
           <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
