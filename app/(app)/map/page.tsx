@@ -14,7 +14,18 @@ const DynamicMap = dynamic(() => import("@/components/leaflet-map").then((mod) =
 });
 
 export default function MapPage() {
-  const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData();
+  // FIX MIRATO — Sprint Performance: questa pagina non ha MAI avuto un
+  // selettore data (nessuno stato/controllo UI per cambiare giorno), quindi
+  // non c'e' un percorso raggiungibile che dipenda dallo storico completo —
+  // "mappa live" e' per costruzione il tracking dei transfer di oggi. Prima
+  // di questo fix la chiamata era senza serviceScope: ramo LEGACY lato
+  // server -> fetchAllServices() (paginazione completa su TUTTO lo storico
+  // servizi del tenant, ~9 query da 1000 righe). Stesso serviceScope "date"
+  // gia' usato da arrivals/departures.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({
+    serviceScope: { mode: "date", date: todayIso }
+  });
   const [statusFilter, setStatusFilter] = useState<ServiceStatus | "all">("all");
   const [serviceTypeFilter, setServiceTypeFilter] = useState<ServiceType | "all">("all");
   const [driverFilter, setDriverFilter] = useState<string>("all");

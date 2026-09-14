@@ -41,12 +41,27 @@ function buildLotAlerts(input: {
 }
 
 export default function BusToursPage() {
-  // Sprint Performance 14D: only services, assignments, hotels, memberships,
-  // busLotConfigs (verified via grep) — still full-history services (no
-  // serviceScope): the date dropdown lists ALL historical dates, there is no
-  // "today/next N days" business rule in this page to scope by.
+  // FIX MIRATO — Sprint Performance: il selettore data (riga ~501) e' una
+  // <select> popolata SOLO da availableDates (derivato dai dati gia'
+  // caricati, riga 83) — non esiste un input data libero/calendario che
+  // possa puntare a una data fuori da cio' che e' stato caricato, quindi uno
+  // scope "range" ampio e' sicuro: il dropdown si autolimita di conseguenza,
+  // nessun percorso rimane raggiungibile ma "rotto". A differenza di
+  // crm-agencies (agencyStats calcola totali LIFETIME che uno scope
+  // limitato corromperebbe silenziosamente), qui non esiste alcun
+  // aggregato all-time — solo viste operative per data. Finestra
+  // volutamente larga (+/-180gg) per coprire l'intera stagione linee bus
+  // (BUS_LINES_2026) sia passata (tour recenti ancora consultabili) sia
+  // futura (pianificazione), eliminando comunque il fetch full-history
+  // (~9 pagine da 1000 righe) che va in ramo LEGACY -> fetchAllServices().
+  const today = new Date();
+  const rangeFrom = new Date(today);
+  rangeFrom.setDate(rangeFrom.getDate() - 180);
+  const rangeTo = new Date(today);
+  rangeTo.setDate(rangeTo.getDate() + 180);
   const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({
-    datasets: { services: true, assignments: true, hotels: true, memberships: true, busLotConfigs: true }
+    datasets: { services: true, assignments: true, hotels: true, memberships: true, busLotConfigs: true },
+    serviceScope: { mode: "range", from: rangeFrom.toISOString().slice(0, 10), to: rangeTo.toISOString().slice(0, 10) }
   });
   const [dateFilter, setDateFilter] = useState("all");
   const [tourNameFilter, setTourNameFilter] = useState("");
