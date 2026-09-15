@@ -175,6 +175,33 @@ function normalizeLooseText(value: string | null | undefined) {
     .trim();
 }
 
+// Fix P1-4 (audit pre-go-live): l'import Excel legacy non aveva alcuna
+// protezione anti-duplicato (a differenza di operational-v2/MTS Globe).
+// Fingerprint composita, stesso principio di duplicateKey() in
+// lib/server/operational-v2-server-preview.ts (stessa normalizzazione
+// testuale, campi analoghi) — riusata qui come pattern invece che importata,
+// perché i due import hanno forme di payload diverse (validated schema vs
+// raw insertPayload) e questo file ha già una copia locale identica della
+// normalizzazione (normalizeLooseText, sopra).
+// Campi scelti: date+time(HH:MM)+direction+hotel_id+customer_name+pax+
+// transport_code+billing_party_name — tutti presenti con lo stesso nome sia
+// sui payload "legacy" (serviceCreateSchema) sia "direct" (template
+// hotel/place), verificato leggendo entrambi i rami. hotel_id (già un id
+// risolto, non testo grezzo) rende la chiave più stabile di un nome hotel
+// testuale; transport_code + billing_party_name distinguono prenotazioni
+// diverse dello stesso cliente nello stesso giorno (Caso E dell'audit).
+function buildImportFingerprint(payload: Record<string, unknown>): string {
+  const date = String(payload.date ?? "").trim();
+  const time = String(payload.time ?? "").slice(0, 5);
+  const direction = String(payload.direction ?? "").trim();
+  const hotelId = String(payload.hotel_id ?? "").trim();
+  const customerName = normalizeLooseText(String(payload.customer_name ?? ""));
+  const pax = String(payload.pax ?? "").trim();
+  const transportCode = normalizeLooseText(String(payload.transport_code ?? ""));
+  const billingParty = normalizeLooseText(String(payload.billing_party_name ?? ""));
+  return [date, time, direction, hotelId, customerName, pax, transportCode, billingParty].join("|");
+}
+
 function mapImportedStatus(notes: string) {
   const normalized = normalizeLooseText(notes);
   if (normalized.includes("annullato")) return "cancelled" as const;
@@ -929,6 +956,61 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Fix P1-4 (audit pre-go-live): dedupe robusto prima dell'insert. Righe
+  // "bus_pending" non creano un service direttamente (finiscono in
+  // bus_import_pending, risolte poi manualmente) e restano fuori da questo
+  // controllo. Lookup batched: UNA query per ogni data distinta presente nel
+  // batch (stesso pattern di buildOperationalV2ServerPreview — mai una query
+  // per riga), tenant-scoped, esclusi i service cancellati (un import
+  // identico dopo una cancellazione deve poter ricreare il servizio).
+  const duplicates: Array<{ row_index: number; message: string }> = [];
+  {
+    const fingerprintableRows = validRows.filter(
+      (row): row is PreparedLegacyRow | PreparedDirectRow => row.mode === "legacy" || row.mode === "direct"
+    );
+    const distinctDates = [...new Set(
+      fingerprintableRows.map((row) => String((row.payload as Record<string, unknown>).date ?? "")).filter(Boolean)
+    )];
+
+    const existingFingerprints = new Set<string>();
+    if (distinctDates.length > 0) {
+      await Promise.all(distinctDates.map(async (date) => {
+        const { data } = await auth.admin
+          .from("services")
+          .select("date, time, direction, hotel_id, customer_name, pax, transport_code, billing_party_name")
+          .eq("tenant_id", auth.membership.tenant_id)
+          .eq("date", date)
+          .neq("status", "cancelled")
+          .limit(2000);
+        for (const existingRow of (data ?? []) as Array<Record<string, unknown>>) {
+          existingFingerprints.add(buildImportFingerprint(existingRow));
+        }
+      }));
+    }
+
+    const seenInThisBatch = new Set<string>();
+    const dedupedRows: Array<PreparedLegacyRow | PreparedDirectRow | PreparedBusPendingRow> = [];
+    for (const row of validRows) {
+      if (row.mode !== "legacy" && row.mode !== "direct") {
+        dedupedRows.push(row);
+        continue;
+      }
+      const fingerprint = buildImportFingerprint(row.payload as Record<string, unknown>);
+      if (existingFingerprints.has(fingerprint)) {
+        duplicates.push({ row_index: row.rowIndex, message: "Servizio già presente in archivio (stesso cliente/data/orario/hotel): riga saltata." });
+        continue;
+      }
+      if (seenInThisBatch.has(fingerprint)) {
+        duplicates.push({ row_index: row.rowIndex, message: "Duplicato interno al file (stessa riga ripetuta nel file caricato): riga saltata." });
+        continue;
+      }
+      seenInThisBatch.add(fingerprint);
+      dedupedRows.push(row);
+    }
+    validRows.length = 0;
+    validRows.push(...dedupedRows);
+  }
+
   if (parsed.data.dry_run) {
     return NextResponse.json({
       ok: true,
@@ -938,9 +1020,35 @@ export async function POST(request: NextRequest) {
         skipped_rows: skippedRows,
         valid_rows: validRows.length,
         invalid_rows: errors.length,
+        duplicate_rows: duplicates.length,
         pending_rows: validRows.filter((row) => row.mode === "bus_pending").length
       },
-      errors
+      errors,
+      duplicates
+    });
+  }
+
+  // Fix P1-4, Caso B: se l'unico motivo per cui non resta nulla da
+  // importare è che TUTTE le righe erano già presenti (nessun errore reale),
+  // non è una condizione di errore — è l'idempotenza attesa di un re-upload
+  // dello stesso file. ok:true, 0 importati, duplicati riportati chiaramente.
+  if (validRows.length === 0 && duplicates.length > 0 && errors.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      dry_run: false,
+      summary: {
+        total_rows: parsed.data.rows.length,
+        skipped_rows: skippedRows,
+        valid_rows: 0,
+        invalid_rows: 0,
+        duplicate_rows: duplicates.length,
+        imported_rows: 0,
+        pending_rows: 0,
+        allocated_bus_rows: 0
+      },
+      imported_service_ids: [],
+      errors: [],
+      duplicates
     });
   }
 
@@ -954,9 +1062,11 @@ export async function POST(request: NextRequest) {
           skipped_rows: skippedRows,
           valid_rows: 0,
           invalid_rows: errors.length,
+          duplicate_rows: duplicates.length,
           pending_rows: 0
         },
-        errors
+        errors,
+        duplicates
       },
       { status: 400 }
     );
@@ -1130,12 +1240,14 @@ export async function POST(request: NextRequest) {
           skipped_rows: skippedRows,
           valid_rows: validRows.length,
           invalid_rows: errors.length,
+          duplicate_rows: duplicates.length,
           imported_rows: 0,
           pending_rows: 0,
           allocated_bus_rows: 0
         },
         imported_service_ids: [],
-        errors
+        errors,
+        duplicates
       },
       { status: 400 }
     );
@@ -1149,11 +1261,13 @@ export async function POST(request: NextRequest) {
       skipped_rows: skippedRows,
       valid_rows: validRows.length,
       invalid_rows: errors.length,
+      duplicate_rows: duplicates.length,
       imported_rows: insertedIds.length,
       pending_rows: pendingRows,
       allocated_bus_rows: allocatedBusRows
     },
     imported_service_ids: insertedIds,
-    errors
+    errors,
+    duplicates
   });
 }
