@@ -10,6 +10,7 @@ import { getPianoServiceDisplay } from "@/lib/piano-service-display";
 import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
 import type { PianoDisplayUnit, PianoBookingGroupUnit } from "@/lib/piano-booking-group-display";
+import { deriveControlliStatus } from "@/lib/piano-controlli-status";
 import { todayIsoDate } from "@/lib/utils";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
@@ -2188,7 +2189,9 @@ export default function PianoGiornoPage() {
         });
         const json = (await res.json().catch(() => null)) as GroupDiagnosticsResponse | null;
         if (!active) return;
-        if (!res.ok || json?.ok === false) {
+        // Fix P2 (audit pre-go-live): payload nullo/malformato (anche con res.ok true)
+        // non e' un successo — deve andare in errore, mai trattato come "0 problemi".
+        if (!res.ok || json === null || json?.ok === false) {
           setGroupDiagnostics(null);
           setGroupDiagnosticsError(json?.error ?? "Diagnostica giri non disponibile.");
           return;
@@ -2901,6 +2904,10 @@ export default function PianoGiornoPage() {
     });
   }, [tripRows, unassignedServices, hotelMap, driverNameById, operatorRequiredDecisions]);
   const blockerCount = planIssues.filter((issue) => issue.severity === "blocker").length;
+  // Fix P2 (audit pre-go-live): non trattare un fallimento di group-diagnostics
+  // come "0 problemi" — planIssues perde silenziosamente operatorRequiredDecisions
+  // se la sorgente e' in errore, quindi lo stato va derivato separatamente.
+  const controlliStatus = deriveControlliStatus(groupDiagnosticsError, planIssues.length);
   const activeGeoPrecheckIssues = pendingAutoMode ? geoPrecheckIssuesByMode[pendingAutoMode] : [];
   const activeGeoHotelIssues = activeGeoPrecheckIssues.filter((issue) => issue.action === "geocode_hotel");
   const activeGeoPointIssues = activeGeoPrecheckIssues.filter((issue) => issue.action === "link_operational_point");
@@ -4350,8 +4357,14 @@ export default function PianoGiornoPage() {
                   <span className="flex h-14 w-14 items-center justify-center rounded-lg bg-rose-50 text-2xl font-black text-rose-600">△</span>
                   <span>
                     <span className="block text-sm font-semibold text-slate-500">Conflitti</span>
-                    <span className={`block text-3xl font-black leading-none ${blockerCount > 0 ? "text-red-600" : "text-slate-950"}`}>{planIssues.length}</span>
-                    <span className="mt-1 block text-xs text-slate-500">{blockerCount} bloccanti</span>
+                    <span className={`block text-3xl font-black leading-none ${
+                      controlliStatus === "error" ? "text-amber-600" : blockerCount > 0 ? "text-red-600" : "text-slate-950"
+                    }`}>
+                      {controlliStatus === "error" ? "—" : planIssues.length}
+                    </span>
+                    <span className="mt-1 block text-xs text-slate-500">
+                      {controlliStatus === "error" ? "Verifica necessaria" : `${blockerCount} bloccanti`}
+                    </span>
                   </span>
                 </div>
               </button>
@@ -4920,7 +4933,9 @@ export default function PianoGiornoPage() {
                       <h2 className="text-base font-black text-slate-950">Controlli</h2>
                       <p className="text-xs text-slate-500">Risolvi le anomalie prima della stampa.</p>
                     </div>
-                    {planIssues.length === 0 ? (
+                    {controlliStatus === "error" ? (
+                      <span className="rounded bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Verifica necessaria</span>
+                    ) : planIssues.length === 0 ? (
                       <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Ok</span>
                     ) : (
                       <span className="rounded bg-red-50 px-2 py-1 text-xs font-black text-red-700">{planIssues.length}</span>
@@ -4928,10 +4943,17 @@ export default function PianoGiornoPage() {
                   </div>
 
                   <div className="mt-3 divide-y divide-slate-100">
-                    {planIssues.length === 0 ? (
-                      <p className="rounded border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                        Nessun problema evidente.
+                    {controlliStatus === "error" && (
+                      <p className="rounded border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                        Controllo diagnostica giri non disponibile: alcune anomalie potrebbero non essere rilevate. Riprova o verifica manualmente prima della stampa.
                       </p>
+                    )}
+                    {planIssues.length === 0 ? (
+                      controlliStatus !== "error" && (
+                        <p className="rounded border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+                          Nessun problema evidente.
+                        </p>
+                      )
                     ) : (
                       planIssues.slice(0, 4).map((issue) => (
                         <div key={issue.id} className="flex items-center gap-3 py-3">

@@ -33,8 +33,9 @@ describe("map/page.tsx — non e' piu' sul ramo LEGACY", () => {
     expect(source).toMatch(/serviceScope:\s*\{\s*mode:\s*"date",\s*date:\s*todayIso\s*\}/);
   });
 
-  it("todayIso e' calcolato lato client (non hardcoded, non da API esterna)", () => {
-    expect(source).toMatch(/const todayIso = new Date\(\)\.toISOString\(\)\.slice\(0, 10\);/);
+  it("todayIso e' calcolato lato client (non hardcoded, non da API esterna); dal fix P2 timezone usa todayIsoDate() (Europe/Rome), non piu' new Date().toISOString() (UTC)", () => {
+    expect(source).toMatch(/const todayIso = todayIsoDate\(\);/);
+    expect(source).toMatch(/import \{ todayIsoDate \} from "@\/lib\/utils";/);
   });
 
   it("nessun filtro data preesistente e' stato toccato (la pagina non ne aveva: solo status/tipo/autista/nave/zona)", () => {
