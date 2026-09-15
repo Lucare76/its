@@ -1,0 +1,60 @@
+-- Migration 0282: booking_group_bus_reservations — vincolo DB reale che
+-- impedisce due prenotazioni ESCLUSIVE dello stesso bus nella stessa data
+-- per gruppi diversi (Fix P1-1, audit pre-go-live).
+--
+-- ROOT CAUSE: reserveBookingGroupBus (lib/server/booking-groups-service.ts)
+-- fa upsert con onConflict (tenant_id, booking_group_id, bus_unit_id,
+-- service_date) — la chiave include booking_group_id, quindi due gruppi
+-- DIVERSI non collidono mai a questo livello (la unique esistente, dalla
+-- migration 0263, serve solo a evitare che LO STESSO gruppo duplichi la
+-- propria riga). L'unico controllo applicativo oggi esistente
+-- (findAvailableBusesForGroup, usato solo dal flusso auto-assign "zero
+-- click") è un SELECT-poi-decide-poi-INSERT non atomico: due richieste
+-- concorrenti (o anche due chiamate sequenziali via l'azione API diretta
+-- upsert_bus_reservation, che non passa affatto da
+-- findAvailableBusesForGroup) possono entrambe riservare lo stesso bus in
+-- esclusiva per due gruppi diversi nella stessa data — CONFIRMED sia
+-- comportamentalmente (test dedicato) sia a livello di codice.
+--
+-- REGOLA DI BUSINESS (derivata dal codice esistente — vedi
+-- allocate_bus_service/move_bus_allocation, migration 0270/0274, che
+-- rifiutano qualunque allocazione di un servizio di un gruppo diverso su un
+-- bus con reservation exclusive attiva): al massimo UNA reservation con
+-- exclusive=true per (tenant_id, bus_unit_id, service_date). Reservation
+-- NON esclusive multiple per lo stesso bus/data (gruppi diversi che
+-- condividono legittimamente lo stesso bus, es. linee bus non "zero
+-- click") restano consentite e NON sono toccate da questo indice — la
+-- clausola WHERE exclusive = true lo garantisce.
+--
+-- Nessuna colonna nullable coinvolta: tenant_id, bus_unit_id, service_date
+-- ed exclusive sono tutte "not null" su questa tabella (migration 0263) —
+-- nessuna normalizzazione NULL necessaria (a differenza di
+-- system_job_runs.tenant_id, migration 0281). Nessuna colonna
+-- direction/leg/soft-delete su questa tabella da escludere dall'unicità
+-- (schema verificato: id, tenant_id, booking_group_id, bus_unit_id,
+-- service_date, reserved_pax, exclusive, notes, created_at, updated_at).
+--
+-- AMBIGUITÀ NOTE, NON RISOLTE QUI (fuori scope esplicito di questo fix):
+-- 1) un gruppo B potrebbe comunque creare una reservation NON esclusiva
+--    sullo stesso bus/data di una reservation ESCLUSIVA già attiva di un
+--    gruppo A — la riga verrebbe creata (non violerebbe questo indice
+--    parziale), ma qualunque allocazione risultante verrebbe comunque
+--    rifiutata a valle da allocate_bus_service (0270/0274). Una
+--    reservation "orfana"/inutilizzabile, non un dato inconsistente
+--    pericoloso, ma potenzialmente fuorviante in UI.
+-- 2) analogamente, una reservation NON esclusiva preesistente di un gruppo
+--    diverso non impedisce oggi la creazione successiva di una reservation
+--    ESCLUSIVA sullo stesso bus/data da parte di un altro gruppo.
+-- Chiudere questi due casi richiederebbe una regola cross-row più
+-- complessa di un semplice unique index (es. trigger) — non introdotta qui
+-- per non allargare lo scope oltre il finding originale (due ESCLUSIVE in
+-- conflitto tra loro).
+
+create unique index if not exists idx_bgbr_tenant_bus_date_exclusive
+  on public.booking_group_bus_reservations (tenant_id, bus_unit_id, service_date)
+  where exclusive = true;
+
+-- ROLLBACK logico (non eseguito qui, solo documentato):
+--   drop index if exists public.idx_bgbr_tenant_bus_date_exclusive;
+-- Sicuro: indice puramente additivo, nessuna colonna toccata, nessuna
+-- perdita di dati preesistenti in caso di rollback.

@@ -1702,7 +1702,20 @@ export async function reserveBookingGroupBus(
     .upsert(row, { onConflict: "tenant_id,booking_group_id,bus_unit_id,service_date" })
     .select("*")
     .single();
-  if (error) return err(500, error.message);
+  if (error) {
+    // Fix P1-1 (audit pre-go-live): idx_bgbr_tenant_bus_date_exclusive
+    // (migration 0282, partial unique su tenant_id+bus_unit_id+service_date
+    // WHERE exclusive=true) impedisce a livello DB due reservation
+    // esclusive dello stesso bus/data per gruppi diversi. L'onConflict qui
+    // sopra copre solo la unique preesistente (tenant+gruppo+bus+data,
+    // stesso gruppo che ri-riserva) — un 23505 a questo punto può arrivare
+    // SOLO dal nuovo indice parziale (un altro gruppo ha già l'esclusiva),
+    // quindi è un conflitto di business noto, mai un errore 500 generico.
+    if (error.code === "23505") {
+      return err(409, "Questo bus è già riservato in esclusiva per un altro gruppo in questa data.");
+    }
+    return err(500, error.message);
+  }
   auditLog({ event: "booking_group_bus_reservation_changed", tenantId, userId, role, outcome: "upserted", details: { booking_group_id: input.bookingGroupId, bus_unit_id: input.busUnitId, service_date: input.service_date, reserved_pax: input.reserved_pax, exclusive: input.exclusive ?? false } });
   return ok({ reservation: data as BookingGroupBusReservation });
 }
