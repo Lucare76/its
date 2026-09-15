@@ -96,12 +96,17 @@ export async function POST(request: NextRequest) {
   const failedTierABucket = (body.buckets ?? []).find((b) => b.tier === "A" && b.status === "failed");
   const firstBucketError = (body.buckets ?? []).find((b) => b.error)?.error;
 
+  // Fix P1-3 (audit pre-go-live): body.run_id e' generato una volta per
+  // esecuzione dello script GitHub Actions (scripts/storage-backup.mjs) —
+  // un retry/replay di QUESTA POST con lo stesso run_id non deve creare una
+  // seconda riga in system_job_runs (falsava consecutive failures/health).
   const runId = await startJobRun({
     admin,
     jobKey: "storage-backup",
     jobName: "Backup file Storage (DR V4)",
     source: "github-actions/storage-backup",
     metadata,
+    runId: body.run_id,
   });
 
   await completeJobRun({

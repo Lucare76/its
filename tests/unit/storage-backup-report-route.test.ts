@@ -19,24 +19,76 @@ vi.mock("@supabase/supabase-js", () => ({
 
 import { POST } from "@/app/api/cron/storage-backup-report/route";
 
-type FakeRow = SystemJobRunRow;
+type FakeRow = SystemJobRunRow & { run_id: string | null };
 
+const TENANT_SENTINEL = "00000000-0000-0000-0000-000000000000";
+const normTenant = (tenantId: string | null) => tenantId ?? TENANT_SENTINEL;
+
+/**
+ * Fix P1-3 (fix definitivo): startJobRun ora tenta SEMPRE prima l'INSERT
+ * diretto con run_id nella colonna dedicata (migration 0281, proposta, non
+ * applicata) e ripiega su una SELECT di sola lettura solo in caso di
+ * conflitto 23505 sull'unique index parziale
+ * (coalesce(tenant_id, sentinel), job_key, run_id). Questo fake modella
+ * quell'indice: il check-e-riserva della chiave avviene nello stesso tick
+ * sincrono dell'insert (nessun await in mezzo), cosi' anche due insert
+ * lanciati "insieme" non possono mai vedere entrambi "libero".
+ */
 function createFakeAdmin(rows: FakeRow[]) {
   let counter = 0;
+  const reservedKeys = new Set<string>();
   return {
     from(table: string) {
       if (table !== "system_job_runs") throw new Error(`tabella inattesa: ${table}`);
       return {
+        // Supporta il fallback di startJobRun dopo un 23505
+        // (select("id").eq("job_key",...).eq("run_id",...).limit(1)
+        // .eq/is("tenant_id",...).maybeSingle()).
+        select(_cols: string) {
+          const filters: Array<(r: FakeRow) => boolean> = [];
+          const builder = {
+            eq(col: string, val: unknown) {
+              filters.push((r) => (r as unknown as Record<string, unknown>)[col] === val);
+              return builder;
+            },
+            is(col: string, val: null) {
+              filters.push((r) => (r as unknown as Record<string, unknown>)[col] === val);
+              return builder;
+            },
+            limit(_n: number) {
+              return builder;
+            },
+            async maybeSingle() {
+              const match = rows.find((r) => filters.every((f) => f(r))) ?? null;
+              return { data: match ? { id: match.id } : null, error: null };
+            },
+          };
+          return builder;
+        },
         insert(data: Record<string, unknown>) {
           return {
             select() {
               return {
                 async single() {
+                  const runId = (data.run_id as string | null) ?? null;
+                  const tenantId = (data.tenant_id as string | null) ?? null;
+                  const key = runId != null ? `${normTenant(tenantId)}|${data.job_key}|${runId}` : null;
+
+                  if (key != null) {
+                    if (reservedKeys.has(key)) {
+                      return {
+                        data: null,
+                        error: { code: "23505", message: `duplicate key value violates unique constraint "idx_system_job_runs_tenant_job_run_unique"` },
+                      };
+                    }
+                    reservedKeys.add(key);
+                  }
+
                   const id = `run-${++counter}`;
                   const now = new Date().toISOString();
                   rows.push({
                     id,
-                    tenant_id: (data.tenant_id as string | null) ?? null,
+                    tenant_id: tenantId,
                     job_key: data.job_key as string,
                     job_name: data.job_name as string,
                     source: data.source as string,
@@ -49,6 +101,7 @@ function createFakeAdmin(rows: FakeRow[]) {
                     warning_count: 0,
                     error_message: null,
                     metadata: (data.metadata as Record<string, unknown>) ?? {},
+                    run_id: runId,
                     created_at: now,
                   });
                   return { data: { id }, error: null };
@@ -228,6 +281,19 @@ describe("POST /api/cron/storage-backup-report", () => {
   it("dry_run=true viene registrato nel metadata per tracciabilità (anche se in pratica il sender non invia report per i dry-run)", async () => {
     await POST(makeRequest({ ...VALID_PAYLOAD, dry_run: true }, AUTH));
     expect(rows[0]!.metadata.dry_run).toBe(true);
+  });
+
+  it("Fix P1-3: un replay della STESSA POST (stesso run_id, es. GitHub Actions che ripete la chiamata) non crea una seconda riga in system_job_runs", async () => {
+    const res1 = await POST(makeRequest(VALID_PAYLOAD, AUTH));
+    const body1 = await res1.json();
+    const res2 = await POST(makeRequest(VALID_PAYLOAD, AUTH));
+    const body2 = await res2.json();
+
+    expect(res2.status).toBe(200);
+    expect(body2.ok).toBe(true);
+    expect(body2.run_id).toBe(body1.run_id); // stessa riga riutilizzata, non una nuova
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.run_id).toBe(VALID_PAYLOAD.run_id);
   });
 
   it("5. reporting failure NON trasforma un backup riuscito in fallito: se la scrittura in system_job_runs fallisce, la route risponde comunque ok:true", async () => {

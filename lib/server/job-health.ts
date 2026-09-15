@@ -16,6 +16,19 @@ export type StartJobRunInput = {
   jobName: string;
   source: string;
   metadata?: Record<string, unknown> | null;
+  /**
+   * Fix P1-3 (audit pre-go-live): identificativo esterno della singola
+   * esecuzione (es. il `run_id` generato da scripts/storage-backup.mjs e
+   * riportato da app/api/cron/storage-backup-report/route.ts), OPZIONALE.
+   * Quando presente, startJobRun diventa idempotente: una seconda chiamata
+   * con lo stesso (tenant_id, jobKey, runId) restituisce la riga già
+   * esistente invece di inserirne una seconda. Quando assente (comportamento
+   * INVARIATO per tutti i chiamanti che non lo passano oggi — backup,
+   * poll-emails, whatsapp-reminders, postgres-backup-report, che non hanno
+   * un identificativo esterno stabile), startJobRun inserisce sempre una
+   * nuova riga esattamente come prima.
+   */
+  runId?: string | null;
 };
 
 export type CompleteJobRunInput = JobRunCounts & {
@@ -92,26 +105,84 @@ function sanitizedMetadataObject(metadata: Record<string, unknown> | null | unde
   return (sanitizeJobMetadata(metadata ?? {}) ?? {}) as Record<string, unknown>;
 }
 
+/** Postgres unique_violation — stesso codice già usato altrove nel repo (es. lib/server/whatsapp/contacts.ts, app/api/auth/register/route.ts) per rilevare un conflitto di unicità a livello DB. */
+function isUniqueViolation(error: { code?: string } | null | undefined): boolean {
+  return error?.code === "23505";
+}
+
+/**
+ * Fix P1-3: lookup della run esistente su (tenant_id, job_key, run_id),
+ * ora sulla colonna dedicata `run_id` (migration 0281, NON ancora
+ * applicata) — non più su metadata->>run_id. Chiamata SOLO come fallback
+ * dopo un conflitto 23505 sull'insert (vedi startJobRun): con l'unique
+ * index reale, l'insert stesso è l'operazione atomica che decide chi
+ * "vince"; questa query serve solo a recuperare l'id di chi ha vinto.
+ */
+async function findExistingRunByExternalId(input: StartJobRunInput): Promise<string | null> {
+  let query = input.admin
+    .from("system_job_runs")
+    .select("id")
+    .eq("job_key", input.jobKey)
+    .eq("run_id", input.runId as string)
+    .limit(1);
+  query = input.tenantId ? query.eq("tenant_id", input.tenantId) : query.is("tenant_id", null);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    console.error("Job health idempotency lookup failed", { jobKey: input.jobKey, runId: input.runId, message: error.message });
+    return null;
+  }
+  return typeof data?.id === "string" ? data.id : null;
+}
+
 export async function startJobRun(input: StartJobRunInput): Promise<string | null> {
   try {
+    // Fix P1-3 (idempotenza REALE sotto concorrenza): quando runId è
+    // presente, tenta SEMPRE prima l'INSERT diretto con run_id nella
+    // colonna dedicata — mai più un SELECT-poi-INSERT come meccanismo
+    // primario (non atomico, dimostrato insufficiente sotto vera
+    // concorrenza). L'unique index parziale della migration 0281 decide
+    // atomicamente, a livello DB, quale delle chiamate concorrenti
+    // inserisce davvero; l'altra riceve un conflitto 23505 e recupera
+    // l'id della riga vincente con una SELECT di sola lettura — non crea
+    // mai una seconda riga, non modifica mai started_at/metadata della
+    // prima.
+    const metadata = input.runId
+      ? { ...sanitizedMetadataObject(input.metadata), run_id: input.runId }
+      : sanitizedMetadataObject(input.metadata);
+
+    const insertPayload: Record<string, unknown> = {
+      tenant_id: input.tenantId ?? null,
+      job_key: input.jobKey,
+      job_name: input.jobName,
+      source: input.source,
+      status: "running",
+      metadata
+    };
+    if (input.runId) insertPayload.run_id = input.runId;
+
     const { data, error } = await input.admin
       .from("system_job_runs")
-      .insert({
-        tenant_id: input.tenantId ?? null,
-        job_key: input.jobKey,
-        job_name: input.jobName,
-        source: input.source,
-        status: "running",
-        metadata: sanitizedMetadataObject(input.metadata)
-      })
+      .insert(insertPayload)
       .select("id")
       .single();
 
-    if (error) {
-      console.error("Job health start failed", { jobKey: input.jobKey, message: error.message });
+    if (!error) {
+      return typeof data?.id === "string" ? data.id : null;
+    }
+
+    if (input.runId && isUniqueViolation(error)) {
+      const existingId = await findExistingRunByExternalId(input);
+      if (existingId) return existingId;
+      // Conflitto rilevato ma nessuna riga trovata dalla SELECT successiva
+      // (finestra estrema fra il fallimento dell'insert e questa lettura):
+      // fallback conservativo, MAI un secondo tentativo di insert.
+      console.error("Job health idempotency conflict without a matching row", { jobKey: input.jobKey, runId: input.runId });
       return null;
     }
-    return typeof data?.id === "string" ? data.id : null;
+
+    console.error("Job health start failed", { jobKey: input.jobKey, message: error.message });
+    return null;
   } catch (error) {
     console.error("Job health start crashed", { jobKey: input.jobKey, message: summarizeJobError(error) });
     return null;
