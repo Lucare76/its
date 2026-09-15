@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildPrintSections, buildShuttlePrintGroups, type PrintService } from "@/lib/piano-giorno-print";
 import { getLogoDataUri } from "@/lib/server/logo";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -122,7 +123,8 @@ export async function GET(req: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     const tenantId = auth.membership.tenant_id;
-    const date = req.nextUrl.searchParams.get("date")?.trim() || new Date().toISOString().slice(0, 10);
+    // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+    const date = req.nextUrl.searchParams.get("date")?.trim() || todayIsoDate();
 
     let serviceColumns = [...BASE_SERVICE_COLUMNS, ...OPTIONAL_SERVICE_COLUMNS];
     let servicesRes: { data: PrintService[] | null; error: { message: string } | null } = { data: null, error: null };

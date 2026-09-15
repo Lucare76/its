@@ -28,6 +28,7 @@ import {
   type OperationalDurationResult,
 } from "@/lib/piano-operational-duration";
 import { mergeSameStops, type ResolvedServiceForSameStop } from "@/lib/piano-same-stop-merge";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -536,7 +537,8 @@ export async function GET(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     const { searchParams } = new URL(request.url);
-    const date = searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
+    // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+    const date = searchParams.get("date") ?? todayIsoDate();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "Parametro date non valido (atteso YYYY-MM-DD)." }, { status: 400 });
     }

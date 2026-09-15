@@ -8,11 +8,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { buildAndPersistAssignmentPlan } from "@/lib/server/assignment-engine/build-plan";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
+// Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoDate();
 }
 
 export async function POST(request: NextRequest) {

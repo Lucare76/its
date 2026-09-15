@@ -4,9 +4,11 @@ import { useState } from "react";
 import Link from "next/link";
 import { ServicesTable } from "@/components/services-table";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
+import { todayIsoDate } from "@/lib/utils";
 
+// Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoDate();
 }
 
 export default function ServicesPage() {

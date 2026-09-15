@@ -10,6 +10,7 @@ import { getPianoServiceDisplay } from "@/lib/piano-service-display";
 import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
 import type { PianoDisplayUnit, PianoBookingGroupUnit } from "@/lib/piano-booking-group-display";
+import { todayIsoDate } from "@/lib/utils";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
 
@@ -381,7 +382,8 @@ function serviceDisplayTime(service: Service) {
   }
   return fmt(service.direction === "departure" ? service.pickup_hotel ?? service.time : service.time);
 }
-function today() { return new Date().toISOString().slice(0, 10); }
+// Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+function today() { return todayIsoDate(); }
 const STRESS_TEST_DATE = "2025-10-12";
 function companyLabel(c: string) {
   return c === "medmar" ? "Medmar" : c === "snav" ? "SNAV" : c === "alilauro" ? "Alilauro" : c;

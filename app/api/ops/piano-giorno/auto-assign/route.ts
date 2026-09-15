@@ -38,6 +38,7 @@ import { loadLearnedPatterns, updateLearnedPatterns } from "@/lib/server/learned
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { auditLog } from "@/lib/server/ops-audit";
 import { sanitizedErrorResponse } from "@/lib/server/api-error";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -1019,7 +1020,8 @@ export async function POST(request: NextRequest) {
     const tenantId = auth.membership.tenant_id;
     const userId = auth.user.id;
     const body = (await request.json().catch(() => ({}))) as { date?: string; mode?: string };
-    const date = body.date ?? new Date().toISOString().slice(0, 10);
+    // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+    const date = body.date ?? todayIsoDate();
     const mode: "unassigned_only" | "regenerate_all" =
       body.mode === "regenerate_all" ? "regenerate_all" : "unassigned_only";
 

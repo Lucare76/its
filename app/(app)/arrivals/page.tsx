@@ -10,6 +10,7 @@ import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-
 import { supabase } from "@/lib/supabase/client";
 import type { BookingGroupMeta } from "@/lib/booking-group-card";
 import type { Service, Hotel } from "@/lib/types";
+import { todayIsoDate } from "@/lib/utils";
 
 function isValidClockTime(value: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
@@ -555,7 +556,8 @@ ${buildTable(departures)}
 type AgencyOption = { id: string; name: string };
 
 export default function ArrivalsPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+  const todayIso = todayIsoDate();
   const [selectedDate, setSelectedDate] = useState(todayIso);
   // Sprint Performance 13: Arrivals only ever displays/exports the selected
   // business date (arrival_date, or `date` for direction=arrival legacy rows —

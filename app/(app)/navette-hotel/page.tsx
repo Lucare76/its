@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Assignment, Hotel, Service } from "@/lib/types";
+import { todayIsoDate } from "@/lib/utils";
 import { z } from "zod";
 
 type ShuttleGroup = {
@@ -52,7 +53,8 @@ const assignmentPayloadSchema = z.object({
   vehicle_label: z.string().max(120)
 });
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+// Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+const todayIso = () => todayIsoDate();
 
 function isShuttleService(service: Service) {
   const kind = service.booking_service_kind?.toLowerCase() ?? "";

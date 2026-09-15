@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { AutoAssignPreviewHotel, AutoAssignPreviewService } from "@/lib/piano-assignable-preview";
 import { buildUnassignedServicesDiagnostics } from "@/lib/piano-unassigned-services-diagnostics";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
@@ -64,7 +65,8 @@ async function handleDiagnostics(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     const url = new URL(request.url);
-    const date = url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
+    // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+    const date = url.searchParams.get("date") ?? todayIsoDate();
     let serviceColumns = [...BASE_SERVICE_COLUMNS, ...OPTIONAL_SERVICE_COLUMNS];
     let servicesResult: {
       data: Array<Record<string, unknown>> | null;

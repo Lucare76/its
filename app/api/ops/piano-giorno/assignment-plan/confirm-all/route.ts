@@ -13,11 +13,13 @@ import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { assignServiceCore } from "@/lib/server/assign-service-core";
 import { auditLog } from "@/lib/server/ops-audit";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
+// Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  return todayIsoDate();
 }
 
 export async function POST(request: NextRequest) {

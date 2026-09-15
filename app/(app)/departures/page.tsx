@@ -13,6 +13,7 @@ import { supabase } from "@/lib/supabase/client";
 import type { Service, Hotel } from "@/lib/types";
 import { getPickupRule, getPickupRuleByRange } from "@/lib/departure-pickup-rules";
 import { getBusLinePickup, getBusLinePickupByZone } from "@/lib/bus-line-pickup-rules";
+import { todayIsoDate } from "@/lib/utils";
 import type { BusLine } from "@/lib/bus-line-pickup-rules";
 import type { OperationalTimingContext } from "@/lib/operational-timing-resolver";
 import type { OperationalPickupRule } from "@/lib/operational-connection-resolver";
@@ -343,7 +344,8 @@ function AgencyKindBadge({ service }: { service: Service }) {
 }
 
 export default function DeparturesPage() {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+  const todayIso = todayIsoDate();
   const [selectedDate, setSelectedDate] = useState(todayIso);
   // Sprint Performance 13: same date-scope rationale as Arrivals (see that
   // page for details) — Departures only ever shows/exports one business date

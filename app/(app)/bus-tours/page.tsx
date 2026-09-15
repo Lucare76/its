@@ -10,6 +10,7 @@ import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { BusLotConfig, ServiceDirection, ServiceStatus } from "@/lib/types";
 import { SERVICE_STATUS_LABELS } from "@/lib/ui-labels";
+import { todayIsoDate } from "@/lib/utils";
 
 function isBusLineActiveOnDate(line: (typeof BUS_LINES_2026)[number], date: string) {
   if (line.validFrom && date < line.validFrom) return false;
@@ -121,7 +122,8 @@ export default function BusToursPage() {
 
   const selectedReferenceDate = useMemo(() => {
     if (dateFilter !== "all") return dateFilter;
-    return availableDates[0] ?? new Date().toISOString().slice(0, 10);
+    // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+    return availableDates[0] ?? todayIsoDate();
   }, [availableDates, dateFilter]);
 
   const actualBusLots = useMemo(() => buildBusLotAggregates(filteredBusLineServices, data.busLotConfigs), [filteredBusLineServices, data.busLotConfigs]);

@@ -17,6 +17,7 @@ import {
   type AutoAssignPreviewService,
   type AutoAssignPreviewTripGroup,
 } from "@/lib/piano-assignable-preview";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
@@ -72,16 +73,17 @@ function normalizeMode(value: string | null | undefined): AutoAssignPreviewMode 
 
 async function requestParams(request: NextRequest) {
   const url = new URL(request.url);
+  // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
   if (request.method === "GET") {
     return {
-      date: url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10),
+      date: url.searchParams.get("date") ?? todayIsoDate(),
       mode: normalizeMode(url.searchParams.get("mode")),
     };
   }
 
   const body = (await request.json().catch(() => ({}))) as { date?: string; mode?: string };
   return {
-    date: body.date ?? url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10),
+    date: body.date ?? url.searchParams.get("date") ?? todayIsoDate(),
     mode: normalizeMode(body.mode ?? url.searchParams.get("mode")),
   };
 }

@@ -9,6 +9,7 @@ import { formatDisplayUppercase, formatServiceSlot, getCustomerFullName, getOutb
 import { supabase } from "@/lib/supabase/client";
 import { useDashboardData } from "@/lib/supabase/use-dashboard-data";
 import type { Service } from "@/lib/types";
+import { todayIsoDate } from "@/lib/utils";
 
 interface SuggestedGroup {
   id: string;
@@ -54,8 +55,9 @@ export default function OperatorDashboardPage() {
   // Sprint Performance 14B: same formulas as before (untouched), just now
   // also doubling as the /api/ops/dashboard-data request window instead of
   // only being in-memory filter boundaries over a full-history fetch.
-  const todayIso = new Date(alertNowMs + dayOffset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const next48hIso = new Date(alertNowMs + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+  const todayIso = todayIsoDate(new Date(alertNowMs + dayOffset * 24 * 60 * 60 * 1000));
+  const next48hIso = todayIsoDate(new Date(alertNowMs + 48 * 60 * 60 * 1000));
   const { loading, liveConnected, errorMessage, data, refresh } = useDashboardData({ today: todayIso, next48h: next48hIso });
 
   useEffect(() => {

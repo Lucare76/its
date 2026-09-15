@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase/client";
 import { useTenantOperationalData } from "@/lib/supabase/use-tenant-operational-data";
 import type { ServiceStatus, ServiceType } from "@/lib/types";
 import { SERVICE_STATUS_LABELS, SERVICE_TYPE_LABELS } from "@/lib/ui-labels";
+import { todayIsoDate } from "@/lib/utils";
 
 const DynamicMap = dynamic(() => import("@/components/leaflet-map").then((mod) => mod.LeafletMap), {
   ssr: false,
@@ -22,7 +23,8 @@ export default function MapPage() {
   // server -> fetchAllServices() (paginazione completa su TUTTO lo storico
   // servizi del tenant, ~9 query da 1000 righe). Stesso serviceScope "date"
   // gia' usato da arrivals/departures.
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+  const todayIso = todayIsoDate();
   const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({
     serviceScope: { mode: "date", date: todayIso }
   });

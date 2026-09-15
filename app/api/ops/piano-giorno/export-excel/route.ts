@@ -16,6 +16,7 @@ import {
   toBrunoDeparture,
 } from "@/lib/server/continent-dispatch";
 import { getPianoServiceDisplay, type PianoDisplayService } from "@/lib/piano-service-display";
+import { todayIsoDate } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -136,7 +137,8 @@ export async function GET(req: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     const tenantId = auth.membership.tenant_id;
-    const date = req.nextUrl.searchParams.get("date")?.trim() || new Date().toISOString().slice(0, 10);
+    // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
+    const date = req.nextUrl.searchParams.get("date")?.trim() || todayIsoDate();
 
     // ─── Carica dati piano giorno + Bruno in parallelo ─────────────────────────
 
