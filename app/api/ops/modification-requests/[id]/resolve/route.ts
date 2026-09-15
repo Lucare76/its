@@ -57,8 +57,35 @@ export async function POST(
 
     const newStatus = action === "approve" ? "approved" : "rejected";
 
-    // Aggiorna richiesta
-    await admin
+    // Fix P1 (audit pre-go-live): se approvata, applica PRIMA le modifiche al
+    // servizio e verifica l'esito. La richiesta non deve mai passare a
+    // "approved" se l'update del servizio fallisce — evita lo stato
+    // incoerente modification_request.approved + services update fallito.
+    if (action === "approve") {
+      const changes = mr.changes as Record<string, unknown>;
+      const serviceUpdate: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(changes)) {
+        serviceUpdate[k] = v;
+      }
+      const { error: serviceError } = await admin
+        .from("services")
+        .update(serviceUpdate)
+        .eq("id", mr.service_id as string)
+        .eq("tenant_id", tenantId);
+
+      if (serviceError) {
+        return NextResponse.json(
+          { error: "Impossibile applicare le modifiche al servizio: " + serviceError.message },
+          { status: 500 }
+        );
+      }
+      // Nessun cambio di status_events: la modifica non cambia lo stato operativo del servizio.
+    }
+
+    // Aggiorna richiesta — solo ora che, per approve, il service update è
+    // riuscito. Se anche questo update fallisce, non proseguiamo con
+    // audit/notifiche/email di un'approvazione che non risulta persistita.
+    const { error: mrError } = await admin
       .from("modification_requests")
       .update({
         status:              newStatus,
@@ -68,20 +95,11 @@ export async function POST(
       })
       .eq("id", id);
 
-    // Se approvata — applica le modifiche al servizio
-    if (action === "approve") {
-      const changes = mr.changes as Record<string, unknown>;
-      const serviceUpdate: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(changes)) {
-        serviceUpdate[k] = v;
-      }
-      await admin
-        .from("services")
-        .update(serviceUpdate)
-        .eq("id", mr.service_id as string)
-        .eq("tenant_id", tenantId);
-
-      // Nessun cambio di status_events: la modifica non cambia lo stato operativo del servizio.
+    if (mrError) {
+      return NextResponse.json(
+        { error: "Impossibile registrare l'esito della richiesta: " + mrError.message },
+        { status: 500 }
+      );
     }
 
     // Gap E (Timeline per-servizio) — approvazione/rifiuto agenzia non aveva
