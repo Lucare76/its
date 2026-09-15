@@ -19,6 +19,13 @@ export const SERVICE_AUDIT_EVENT_TYPES = {
   AGENCY_APPROVED: "agency_approved",
   AGENCY_REJECTED: "agency_rejected",
   BOOKING_GROUP_SERVICE_CREATED: "booking_group_service_created",
+  // Modello a due fasi (mai un solo evento "deleted" scritto DOPO il
+  // delete): REQUESTED è scritto PRIMA di qualunque cancellazione
+  // distruttiva del chunk — se il delete fallisce o l'evento COMPLETED non
+  // può essere scritto, REQUESTED resta comunque come traccia forense.
+  // Vedi app/api/ops/bulk-delete-services/route.ts.
+  BULK_DELETE_REQUESTED: "bulk_delete_requested",
+  BULK_DELETE_COMPLETED: "bulk_delete_completed",
 } as const;
 
 export type ServiceAuditEventType = (typeof SERVICE_AUDIT_EVENT_TYPES)[keyof typeof SERVICE_AUDIT_EVENT_TYPES];
@@ -32,6 +39,7 @@ export const SERVICE_AUDIT_SOURCES = {
   IMPORT_MTS_GLOBE: "import_mts_globe",
   AGENCY_PORTAL: "agency_portal",
   BOOKING_GROUP: "booking_group",
+  BULK_DELETE: "bulk_delete",
 } as const;
 
 export type ServiceAuditSource = (typeof SERVICE_AUDIT_SOURCES)[keyof typeof SERVICE_AUDIT_SOURCES];
@@ -118,14 +126,27 @@ export async function recordServiceAuditEvent(admin: SupabaseClient, input: Serv
   }
 }
 
+export type ServiceAuditEventsBatchResult = { ok: boolean; error?: string };
+
 /**
  * Variante batch di recordServiceAuditEvent — stesso comportamento
- * best-effort, un solo insert invece di N (import bulk: excel/operational-v2,
- * più servizi creati in un'unica richiesta). Applica lo stesso sanitizer per
- * ogni riga, mai un insert grezzo che lo bypassi.
+ * best-effort (mai un throw), un solo insert invece di N (import bulk:
+ * excel/operational-v2, più servizi creati in un'unica richiesta; bulk
+ * delete: un evento per servizio cancellato). Applica lo stesso sanitizer
+ * per ogni riga, mai un insert grezzo che lo bypassi.
+ *
+ * A differenza della prima versione (Promise<void>), ora restituisce l'esito
+ * dell'insert: i chiamanti fire-and-forget esistenti (`void
+ * recordServiceAuditEventsBatch(...)`) restano invariati (il valore di
+ * ritorno resta ignorabile), mentre un chiamante per cui la persistenza
+ * dell'audit è parte necessaria del successo dell'operazione (bulk-delete-
+ * services) può ora verificarla esplicitamente.
  */
-export async function recordServiceAuditEventsBatch(admin: SupabaseClient, inputs: ServiceAuditEventInput[]): Promise<void> {
-  if (inputs.length === 0) return;
+export async function recordServiceAuditEventsBatch(
+  admin: SupabaseClient,
+  inputs: ServiceAuditEventInput[]
+): Promise<ServiceAuditEventsBatchResult> {
+  if (inputs.length === 0) return { ok: true };
   try {
     const { error } = await admin.from("service_audit_events").insert(
       inputs.map((input) => ({
@@ -145,8 +166,12 @@ export async function recordServiceAuditEventsBatch(admin: SupabaseClient, input
     );
     if (error) {
       console.error("[service-audit-events] batch insert fallito:", error.message);
+      return { ok: false, error: error.message };
     }
+    return { ok: true };
   } catch (err) {
-    console.error("[service-audit-events] batch insert fallito:", err instanceof Error ? err.message : err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[service-audit-events] batch insert fallito:", message);
+    return { ok: false, error: message };
   }
 }
