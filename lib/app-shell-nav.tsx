@@ -259,6 +259,7 @@ const OPERATIONS_MAIN_NAV: NavItem[] = [
   { href: "/piano-giorno", label: "Piano del Giorno", icon: "📋" },
   { href: "/piano-giorno/assegnazione-intelligente", label: "Assegnazione Intelligente", icon: "🧠" },
   { href: "/controllo-giornata", label: "Controllo Giornata", icon: "🚦" },
+  { href: "/emergenza-assistenza", label: "Emergenza / Assistenza", icon: "🆘" },
   { href: "/mario-assistant", label: "Assistente Mario", icon: "🤖" },
   { href: "/whatsapp", label: "Inbox WhatsApp", icon: "WA" },
 ];
