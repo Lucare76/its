@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/ui";
-import { EmergenzaCopyMessageButton, EMERGENCY_REPORT_TEMPLATE } from "@/components/emergenza-copy-button";
+import { EmergenzaCopyMessageButton, EMERGENCY_REPORT_TEMPLATE, EMERGENCY_SUPPORT_EMAIL } from "@/components/emergenza-copy-button";
 
 /**
  * Pagina interamente statica: nessun fetch, nessuna dipendenza da Supabase,
@@ -147,6 +147,8 @@ const QUICK_LINKS: Array<{ label: string; href: string }> = [
 ];
 
 export default function EmergenzaAssistenzaPage() {
+  const supportMailto = `mailto:${EMERGENCY_SUPPORT_EMAIL}?subject=${encodeURIComponent("AURIS - Segnalazione problema")}&body=${encodeURIComponent(EMERGENCY_REPORT_TEMPLATE)}`;
+
   return (
     <section className="page-section space-y-4">
       <PageHeader
@@ -212,8 +214,24 @@ export default function EmergenzaAssistenzaPage() {
       {/* Messaggio pronto — template statico + pulsante client isolato. */}
       <div className="card p-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <h2 className="text-base font-bold text-slate-900">Messaggio da inviare per chiedere assistenza</h2>
-          <EmergenzaCopyMessageButton />
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Messaggio da inviare per chiedere assistenza</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Invia la segnalazione a{" "}
+              <a className="font-semibold text-blue-700 underline-offset-2 hover:underline" href={`mailto:${EMERGENCY_SUPPORT_EMAIL}`}>
+                {EMERGENCY_SUPPORT_EMAIL}
+              </a>
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <EmergenzaCopyMessageButton />
+            <a
+              href={supportMailto}
+              className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-800 hover:bg-blue-100"
+            >
+              Apri email
+            </a>
+          </div>
         </div>
         <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">
           {EMERGENCY_REPORT_TEMPLATE}
