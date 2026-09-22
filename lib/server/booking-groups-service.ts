@@ -1703,16 +1703,24 @@ export async function reserveBookingGroupBus(
     .select("*")
     .single();
   if (error) {
-    // Fix P1-1 (audit pre-go-live): idx_bgbr_tenant_bus_date_exclusive
-    // (migration 0282, partial unique su tenant_id+bus_unit_id+service_date
-    // WHERE exclusive=true) impedisce a livello DB due reservation
-    // esclusive dello stesso bus/data per gruppi diversi. L'onConflict qui
-    // sopra copre solo la unique preesistente (tenant+gruppo+bus+data,
-    // stesso gruppo che ri-riserva) — un 23505 a questo punto può arrivare
-    // SOLO dal nuovo indice parziale (un altro gruppo ha già l'esclusiva),
-    // quindi è un conflitto di business noto, mai un errore 500 generico.
+    // Fix P1-1 + chiusura gap misto (migration 0282 + 0284): un 23505 qui
+    // arriva SOLO da vincoli di business noti sul bucket
+    // (tenant_id, bus_unit_id, service_date), mai da un errore generico —
+    // l'onConflict sopra copre solo la unique preesistente (stesso gruppo
+    // che ri-riserva, aggiorna in place senza mai sollevare 23505).
+    // - trg_bgbr_enforce_exclusivity (0284) solleva 23505 con marker
+    //   "bgbr_conflict_occupied" quando si tenta di riservare exclusive=true
+    //   su un bucket gia' occupato da un'altra reservation (esclusiva o no),
+    //   o "bgbr_conflict_exclusive_exists" quando si tenta una reservation
+    //   NON esclusiva su un bucket gia' occupato da un'esclusiva.
+    // - idx_bgbr_tenant_bus_date_exclusive (0282) resta come difesa
+    //   aggiuntiva per due esclusive in conflitto, ormai praticamente
+    //   irraggiungibile perche' il trigger 0284 la anticipa sempre.
     if (error.code === "23505") {
-      return err(409, "Questo bus è già riservato in esclusiva per un altro gruppo in questa data.");
+      if (error.message.includes("bgbr_conflict_exclusive_exists")) {
+        return err(409, "Questo bus è già riservato in esclusiva per un altro gruppo in questa data.");
+      }
+      return err(409, "Questo bus è già utilizzato da un'altra prenotazione incompatibile con una riserva esclusiva per questa data.");
     }
     return err(500, error.message);
   }

@@ -88,7 +88,12 @@ function makeAdmin(seed: Record<string, Row[]> = {}) {
       if (wouldBeExclusive) {
         const conflict = existingConflictingExclusive(payload, existing?.id as string | undefined);
         if (conflict) {
-          return { data: null, error: { code: "23505", message: `duplicate key value violates unique constraint "idx_bgbr_tenant_bus_date_exclusive"` } };
+          // Migration 0284: il trigger trg_bgbr_enforce_exclusivity anticipa
+          // sempre idx_bgbr_tenant_bus_date_exclusive e solleva 23505 con
+          // marker "bgbr_conflict_exclusive_exists" (vedi
+          // tests/unit/booking-group-bus-reservation-mixed-exclusivity.test.ts
+          // per la copertura completa del nuovo trigger).
+          return { data: null, error: { code: "23505", message: "bgbr_conflict_exclusive_exists: bus gia riservato in esclusiva" } };
         }
       }
 
