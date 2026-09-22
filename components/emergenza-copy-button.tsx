@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+export const EMERGENCY_SUPPORT_EMAIL = "luca_renna@hotmail.com";
+
 export const EMERGENCY_REPORT_TEMPLATE = `AURIS - Segnalazione problema
 
 Ora:
