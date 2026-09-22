@@ -163,6 +163,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     .eq("tenant_id", tenantId);
 
   if (error) {
+    // Migration 0285: uq_services_legacy_import_fingerprint (tenant_id,
+    // legacy_import_fingerprint WHERE ... AND status <> 'cancelled') resta
+    // scritto anche sulle righe cancelled (mai azzerato al cancel, per non
+    // permettere a un restore successivo di convivere con un fingerprint
+    // NULL accanto a un reimport identico — vedi audit pre-rollout). Se
+    // questo replace sta riportando un servizio da "cancelled" a "new"
+    // (update.status === "new" sopra, solo quando existing.status era
+    // "cancelled") e nel frattempo un reimport ha gia' creato un servizio
+    // attivo con lo stesso fingerprint, l'UPDATE fa rientrare la riga nello
+    // scope del partial index e collide: SQLSTATE 23505 su QUESTO
+    // constraint specifico, mai un 23505 generico di un altro vincolo. Mai
+    // il messaggio Postgres grezzo esposto al client.
+    if (error.code === "23505" && error.message.includes("uq_services_legacy_import_fingerprint")) {
+      return NextResponse.json({
+        ok: false,
+        error: "Questo servizio non può essere ripristinato perché esiste già un servizio attivo equivalente, probabilmente creato da un reimport."
+      }, { status: 409 });
+    }
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 

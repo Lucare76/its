@@ -1128,8 +1128,33 @@ export async function POST(request: NextRequest) {
         })()
       : item.payload;
 
-    const insertResult = await insertServiceWithSchemaFallback(auth.admin, payload as Record<string, unknown>);
+    // Migration 0285: services.legacy_import_fingerprint — stessa identica
+    // stringa gia' usata sopra per il lookup pre-insert (buildImportFingerprint),
+    // scritta sulla riga cosi' l'unique index parziale
+    // uq_services_legacy_import_fingerprint (tenant_id, legacy_import_fingerprint
+    // WHERE ... AND status <> 'cancelled') puo' rilevare atomicamente, a livello
+    // DB, un duplicato inserito da una richiesta concorrente che ha superato il
+    // lookup applicativo prima che questa scrivesse (gap di concorrenza — vedi
+    // commento nella migration). insertServiceWithSchemaFallback droppa
+    // automaticamente questa colonna se la migration non e' ancora applicata
+    // (stesso fallback schema-cache gia' esistente), degradando in sicurezza al
+    // solo controllo applicativo pre-insert.
+    const payloadWithFingerprint = {
+      ...(payload as Record<string, unknown>),
+      legacy_import_fingerprint: buildImportFingerprint(payload as Record<string, unknown>)
+    };
+
+    const insertResult = await insertServiceWithSchemaFallback(auth.admin, payloadWithFingerprint);
     if (insertResult.error || !insertResult.data?.id) {
+      // Conflitto DB concurrency-safe (vinto da una richiesta concorrente tra il
+      // lookup applicativo e questo insert): trattato come duplicate/skipped,
+      // MAI come errore 500, MAI come fallimento dell'intero batch, MAI con
+      // audit per la riga non inserita (nessun insertedIds.push, nessuna
+      // chiamata a recordServiceAuditEvent sotto per questo item).
+      if (insertResult.error?.code === "23505" && insertResult.error.message.includes("uq_services_legacy_import_fingerprint")) {
+        duplicates.push({ row_index: item.rowIndex, message: "Servizio già presente in archivio (conflitto database concorrente): riga saltata." });
+        continue;
+      }
       errors.push(formatImportStorageError(item.rowIndex, "Servizio non creato", insertResult.error?.message ?? "Errore sconosciuto."));
       continue;
     }
