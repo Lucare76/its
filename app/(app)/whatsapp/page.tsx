@@ -1016,6 +1016,8 @@ export default function WhatsAppInboxPage() {
   const loadRef = useRef<(nextThreadId?: string | null, options?: LoadOptions) => Promise<void>>(null!);
   const runLightPollRef = useRef<(threadId: string | null) => void>(null!);
   const lastPollAtRef = useRef(0);
+  const lastSummaryAtRef = useRef(0);
+  const summaryInFlightRef = useRef(false);
   const sendingRef = useRef(false);
   const loadSequenceRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
@@ -1205,24 +1207,31 @@ export default function WhatsAppInboxPage() {
         if (showBlockingLoading) setLoading(false);
         return;
       }
-      fetch("/api/ops/whatsapp-inbox/summary", {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      })
-        .then((summaryResponse) => summaryResponse.json())
-        .then((summary: InboxSummaryPayload) => {
-          if (!summary?.ok) return;
-          setGlobalInboxStats({
-            unread: summary.unread_count ?? 0,
-            open: summary.open_count ?? 0,
-            associated: summary.associated_count ?? 0,
-            unassociated: summary.unassociated_count ?? 0,
-            urgent: summary.urgent_count ?? 0,
-          });
+      // Il poll dei messaggi gira ogni 12/20s. Il riepilogo richiede sei query
+      // al DB: aggiorniamolo al massimo ogni 30s, senza richieste sovrapposte.
+      if (!summaryInFlightRef.current && Date.now() - lastSummaryAtRef.current >= 30_000) {
+        summaryInFlightRef.current = true;
+        lastSummaryAtRef.current = Date.now();
+        void fetch("/api/ops/whatsapp-inbox/summary", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
         })
-        .catch(() => {
-          // La lista principale resta utilizzabile anche se la summary globale non risponde.
-        });
+          .then((summaryResponse) => summaryResponse.json())
+          .then((summary: InboxSummaryPayload) => {
+            if (!summary?.ok) return;
+            setGlobalInboxStats({
+              unread: summary.unread_count ?? 0,
+              open: summary.open_count ?? 0,
+              associated: summary.associated_count ?? 0,
+              unassociated: summary.unassociated_count ?? 0,
+              urgent: summary.urgent_count ?? 0,
+            });
+          })
+          .catch(() => {
+            // La lista principale resta utilizzabile anche se la summary globale non risponde.
+          })
+          .finally(() => { summaryInFlightRef.current = false; });
+      }
       const keepNewChatDraft = newChatModeRef.current && !nextThreadId;
       const nextSelectedThreadId = keepNewChatDraft ? null : body.selected_thread_id ?? null;
       const currentSelectedThreadId = selectedThreadIdRef.current;
