@@ -25,6 +25,7 @@ export const routeRoleMap: Array<{ prefix: string; roles: UserRole[] }> = [
   { prefix: "/liste-bruno", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/smistamento-continente", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/bus-network", roles: ["admin", "operator", "supervisor"] },
+  { prefix: "/bus-convocations", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/medmar-convocations", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/snav-convocations", roles: ["admin", "operator", "supervisor"] },
   { prefix: "/excel-templates", roles: ["admin", "operator", "supervisor"] },

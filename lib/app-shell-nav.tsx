@@ -277,6 +277,7 @@ export const GESTIONE_GROUP: NavMainGroup = {
     { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
     { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
     { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
+    { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
     { href: "/medmar-convocations", label: "Convocazioni MEDMAR", icon: "🚢" },
     { href: "/snav-convocations", label: "Convocazioni SNAV", icon: "🚢" },
     { href: "/excel-templates", label: "Template Excel", icon: "📊" },
@@ -399,7 +400,6 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     title: "Sistema",
     items: [
       { href: "/settings/whatsapp", label: "WhatsApp", icon: "W" },
-      { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
       { href: "/whatsapp-costs", label: "Costi WhatsApp", icon: "€", adminOnly: true },
       { href: "/notifications", label: "Notifiche", icon: "!" },
       { href: "/scheduler", label: "Scheduler", icon: "J" },
