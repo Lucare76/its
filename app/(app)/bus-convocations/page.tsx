@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import * as XLSX from "xlsx";
 import { EmptyState, PageHeader, SectionCard, StatCard } from "@/components/ui";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -108,7 +109,7 @@ const STATUS_LABELS: Record<string, string> = {
   da_validare: "Da validare",
   pronto: "Pronto",
   da_inviare: "Da inviare",
-  inviato: "Inviato",
+  inviato: "Accettato da Meta",
   errore: "Errore",
   numero_non_valido: "N. non valido",
   duplicato: "Duplicato",
@@ -489,6 +490,11 @@ export default function BusConvocationsPage() {
         }
       />
 
+      <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+        I batch sono condivisi con gli operatori della struttura. Per verificare se i messaggi sono stati consegnati o letti,
+        {" "}<Link href="/whatsapp-log" className="font-semibold underline">apri WhatsApp Log</Link> e seleziona «Convocazioni Bus».
+      </div>
+
       {/* STEP 1: UPLOAD */}
       {step === "upload" && (
         <SectionCard title="Carica file Excel" subtitle="Seleziona il file .xlsx con i dati delle convocazioni bus">
@@ -697,7 +703,7 @@ export default function BusConvocationsPage() {
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatCard label="Totale" value={String(stats.total)} hint="Righe totali" />
-            <StatCard label="Inviati" value={String(stats.inviato)} hint="Messaggi inviati" />
+            <StatCard label="Accettati da Meta" value={String(stats.inviato)} hint="Controlla consegna e lettura nel log" />
             <StatCard label="Errori" value={String(stats.errore + stats.non_valido)} hint="Invii falliti" />
             <StatCard label="Esclusi" value={String(stats.escluso + stats.duplicato)} hint="Non inviati" />
           </div>
@@ -788,7 +794,7 @@ export default function BusConvocationsPage() {
 
       {/* STORICO BATCH */}
       {step === "upload" && (
-        <SectionCard title="Storico batch" subtitle="Batch caricati in precedenza">
+        <SectionCard title="Storico batch" subtitle="Batch della struttura, visibili anche agli altri operatori">
           {loadingBatches ? (
             <div className="py-4 text-center text-sm text-muted">Caricamento...</div>
           ) : batches.length === 0 ? (
