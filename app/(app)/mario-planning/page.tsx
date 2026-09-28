@@ -4,6 +4,40 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DateInput, PageHeader } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
 
+// La pagina può restare aperta per ore: il token passato al primo render può
+// scadere. Leggiamo la sessione aggiornata prima di ogni richiesta, inclusi i
+// salvataggi, invece di usare il token conservato alla prima apertura.
+async function planningFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  if (!supabase) throw new Error("Sessione non disponibile. Effettua di nuovo il login.");
+  const client = supabase;
+  const { data, error } = await client.auth.getSession();
+  if (error || !data.session?.access_token) {
+    throw new Error("Sessione scaduta. Effettua di nuovo il login.");
+  }
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${data.session.access_token}`);
+  const send = () => fetch(input, { ...init, headers });
+  const isRead = !init.method || init.method.toUpperCase() === "GET";
+  let response: Response;
+  try {
+    response = await send();
+  } catch (error) {
+    if (!isRead) throw error;
+    response = await send();
+  }
+  if (isRead && response.status >= 500) response = await send();
+  if (response.status !== 401) return response;
+
+  // Se una scheda rimane aperta mentre il token scade, ritenta una sola volta
+  // dopo il rinnovo. Una richiesta rifiutata con 401 non ha scritto dati.
+  const renewed = await client.auth.refreshSession();
+  if (renewed.error || !renewed.data.session?.access_token) {
+    throw new Error("Sessione scaduta. Effettua di nuovo il login.");
+  }
+  headers.set("Authorization", `Bearer ${renewed.data.session.access_token}`);
+  return send();
+}
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 type PlanningCell = {
@@ -226,7 +260,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
   const [savingRow, setSavingRow] = useState(false);
 
   const loadRows = useCallback(async () => {
-    const r = await fetch("/api/planning/bus-rows", { headers: { Authorization: `Bearer ${token}` } });
+    const r = await planningFetch("/api/planning/bus-rows", { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) {
       const d = await r.json().catch(() => ({})) as { error?: string };
       throw new Error(d.error ?? `HTTP ${r.status}`);
@@ -236,10 +270,13 @@ function BusGeneralPlanning({ token }: { token: string }) {
   }, [token]);
 
   const loadCells = useCallback(async () => {
-    const r = await fetch(`/api/planning/cells?type=bus&year=${year}&month=${month}`, {
+    const r = await planningFetch(`/api/planning/cells?type=bus&year=${year}&month=${month}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!r.ok) return;
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({})) as { error?: string };
+      throw new Error(d.error ?? `HTTP ${r.status}`);
+    }
     const d = (await r.json()) as { cells: PlanningCell[] };
     setCells(d.cells ?? []);
   }, [token, year, month]);
@@ -293,7 +330,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
     }
     setSaving(true);
     try {
-      await fetch("/api/planning/cells", {
+      await planningFetch("/api/planning/cells", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -320,13 +357,13 @@ function BusGeneralPlanning({ token }: { token: string }) {
     setSaving(true);
     try {
       // Delete old record first (key might change if dates changed)
-      await fetch("/api/planning/cells", {
+      await planningFetch("/api/planning/cells", {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ id: editBlock.cell.id }),
       });
       // Re-insert with new data
-      await fetch("/api/planning/cells", {
+      await planningFetch("/api/planning/cells", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -348,7 +385,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
     if (!editBlock || saving) return;
     setSaving(true);
     try {
-      await fetch("/api/planning/cells", {
+      await planningFetch("/api/planning/cells", {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ id: editBlock.cell.id }),
@@ -362,7 +399,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
     if (!newRowLabel.trim() || savingRow) return;
     setSavingRow(true);
     try {
-      await fetch("/api/planning/bus-rows", {
+      await planningFetch("/api/planning/bus-rows", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ label: newRowLabel.trim(), notes: newRowNotes.trim() || null }),
@@ -375,7 +412,7 @@ function BusGeneralPlanning({ token }: { token: string }) {
 
   const deleteRow = async (id: string) => {
     if (!confirm("Eliminare questo mezzo? I blocchi pianificati per questo mezzo rimarranno nel DB ma non saranno visibili.")) return;
-    await fetch("/api/planning/bus-rows", {
+    await planningFetch("/api/planning/bus-rows", {
       method: "DELETE",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ id }),
@@ -673,13 +710,13 @@ function GruppiPlanning({ token }: { token: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch(`/api/planning/cells?type=gruppi&year=${year}&month=${month}`, {
+      const r = await planningFetch(`/api/planning/cells?type=gruppi&year=${year}&month=${month}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!r.ok) throw new Error();
+      if (!r.ok) throw new Error(r.status === 401 ? "Sessione scaduta. Effettua di nuovo il login." : `Errore caricamento (HTTP ${r.status}).`);
       const d = (await r.json()) as { cells: PlanningCell[] };
       setCells(d.cells ?? []);
-    } catch { setError("Errore caricamento."); }
+    } catch (error) { setError(error instanceof Error ? error.message : "Errore caricamento."); }
   }, [token, year, month]);
 
   useEffect(() => { void load(); }, [load]);
@@ -705,13 +742,13 @@ function GruppiPlanning({ token }: { token: string }) {
     setSaving(true);
     try {
       if (!editVal.trim() && editState.cellId) {
-        await fetch("/api/planning/cells", {
+        await planningFetch("/api/planning/cells", {
           method: "DELETE",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ id: editState.cellId }),
         });
       } else if (editVal.trim()) {
-        await fetch("/api/planning/cells", {
+        await planningFetch("/api/planning/cells", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({
@@ -724,7 +761,7 @@ function GruppiPlanning({ token }: { token: string }) {
           }),
         });
         if (editState.cellId && editState.row !== editState.originalRow) {
-          await fetch("/api/planning/cells", {
+          await planningFetch("/api/planning/cells", {
             method: "DELETE",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
             body: JSON.stringify({ id: editState.cellId }),
@@ -739,7 +776,7 @@ function GruppiPlanning({ token }: { token: string }) {
     if (!editState?.cellId || saving) return;
     setSaving(true);
     try {
-      await fetch("/api/planning/cells", {
+      await planningFetch("/api/planning/cells", {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ id: editState.cellId }),
@@ -903,13 +940,13 @@ function TrattaPlanning({ token }: { token: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch(`/api/planning/cells?type=route&year=${year}&month=${month}`, {
+      const r = await planningFetch(`/api/planning/cells?type=route&year=${year}&month=${month}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!r.ok) throw new Error();
+      if (!r.ok) throw new Error(r.status === 401 ? "Sessione scaduta. Effettua di nuovo il login." : `Errore caricamento (HTTP ${r.status}).`);
       const d = (await r.json()) as { cells: PlanningCell[] };
       setCells(d.cells ?? []);
-    } catch { setError("Errore caricamento."); }
+    } catch (error) { setError(error instanceof Error ? error.message : "Errore caricamento."); }
   }, [token, year, month]);
 
   useEffect(() => { void load(); }, [load]);
@@ -935,13 +972,13 @@ function TrattaPlanning({ token }: { token: string }) {
     setSaving(true);
     try {
       if (!editVal.trim() && editState.cellId) {
-        await fetch("/api/planning/cells", {
+        await planningFetch("/api/planning/cells", {
           method: "DELETE",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ id: editState.cellId }),
         });
       } else if (editVal.trim()) {
-        await fetch("/api/planning/cells", {
+        await planningFetch("/api/planning/cells", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({
@@ -954,7 +991,7 @@ function TrattaPlanning({ token }: { token: string }) {
           }),
         });
         if (editState.cellId && editState.row !== editState.originalRow) {
-          await fetch("/api/planning/cells", {
+          await planningFetch("/api/planning/cells", {
             method: "DELETE",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
             body: JSON.stringify({ id: editState.cellId }),
@@ -969,7 +1006,7 @@ function TrattaPlanning({ token }: { token: string }) {
     if (!editState?.cellId || saving) return;
     setSaving(true);
     try {
-      await fetch("/api/planning/cells", {
+      await planningFetch("/api/planning/cells", {
         method: "DELETE",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ id: editState.cellId }),
@@ -1107,9 +1144,14 @@ export default function MarioPlanningPage() {
 
   useEffect(() => {
     if (!supabase) return;
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const client = supabase;
+    void client.auth.getSession().then(({ data: { session } }) => {
       setToken(session?.access_token ?? null);
     });
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+      setToken(session?.access_token ?? null);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   if (!token) {
