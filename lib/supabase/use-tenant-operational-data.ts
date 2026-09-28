@@ -47,6 +47,8 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
   const [userId, setUserId] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [retryableError, setRetryableError] = useState(false);
+  const [lastSuccessKey, setLastSuccessKey] = useState<string | null>(null);
   const [data, setData] = useState<TenantOperationalData>(EMPTY_DATA);
 
   // Sprint Performance 13 — FASE 26/27: when the scope changes rapidly (e.g.
@@ -68,11 +70,21 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
     const thisRequestKey = requestKey;
     const isStale = () => latestRequestKeyRef.current !== thisRequestKey;
 
-    const session = await getClientSessionContext();
+    let session;
+    try {
+      session = await getClientSessionContext();
+    } catch {
+      if (isStale()) return false;
+      setRetryableError(true);
+      setErrorMessage("Connessione temporaneamente non disponibile. Riprova tra poco.");
+      setLoading(false);
+      return false;
+    }
     if (isStale()) return false;
 
     const accessToken = session.accessToken;
     if (!supabase) {
+      setRetryableError(false);
       setTenantId(null);
       setUserId(null);
       setRole(null);
@@ -82,6 +94,7 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
       return false;
     }
     if (!session.userId) {
+      setRetryableError(false);
       setTenantId(null);
       setUserId(null);
       setRole(null);
@@ -91,6 +104,7 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
       return false;
     }
     if (!accessToken) {
+      setRetryableError(false);
       setTenantId(null);
       setUserId(session.userId);
       setRole(session.role);
@@ -100,6 +114,7 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
       return false;
     }
     if (!session.tenantId) {
+      setRetryableError(false);
       setTenantId(null);
       setUserId(session.userId);
       setRole(session.role);
@@ -113,9 +128,18 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
     setUserId(session.userId);
     setRole(session.role);
 
-    const response = await fetch(`/api/ops/tenant-data?${queryString}`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
+    let response: Response;
+    try {
+      response = await fetch(`/api/ops/tenant-data?${queryString}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+    } catch {
+      if (isStale()) return false;
+      setRetryableError(true);
+      setErrorMessage("Connessione temporaneamente non disponibile. Riprova tra poco.");
+      setLoading(false);
+      return false;
+    }
     const payload = (await response.json().catch(() => null)) as
       | {
           ok?: boolean;
@@ -133,6 +157,7 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
     if (isStale()) return false;
 
     if (!response.ok || !payload?.ok) {
+      setRetryableError(response.status >= 500 || response.ok);
       setErrorMessage(payload?.error ?? "Errore caricamento dati tenant.");
       setLoading(false);
       return false;
@@ -148,6 +173,8 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
       inboundEmails: payload.inbound_emails ?? []
     });
     setErrorMessage(null);
+    setRetryableError(false);
+    setLastSuccessKey(thisRequestKey);
     setLoading(false);
     return true;
   }, [requestKey, queryString]);
@@ -233,6 +260,7 @@ export function useTenantOperationalData(options?: TenantOperationalDataOptions)
     userId,
     role,
     errorMessage,
+    canShowStaleData: retryableError && lastSuccessKey === requestKey,
     data,
     refresh
   };

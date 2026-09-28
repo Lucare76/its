@@ -81,7 +81,7 @@ export default function PlanningPage() {
   // dedicated lightweight lookup below (see the fallback effect after
   // `availableDates`), instead of requiring the full history to be loaded
   // here. The normal load stays scoped to this range regardless.
-  const { loading, liveConnected, tenantId, errorMessage, data, refresh } = useTenantOperationalData({
+  const { loading, liveConnected, tenantId, errorMessage, canShowStaleData, data, refresh } = useTenantOperationalData({
     datasets: { services: true, assignments: true, memberships: true },
     serviceScope: computePlanningRangeScope(selectedDate)
   });
@@ -240,12 +240,18 @@ export default function PlanningPage() {
   };
 
   if (loading) return <div className="card p-4 text-sm text-muted">Caricamento pianificazione...</div>;
-  if (errorMessage) return <div className="card p-4 text-sm text-muted">{errorMessage}</div>;
+  if (errorMessage && !canShowStaleData) return <div className="card p-4 text-sm text-muted">{errorMessage}</div>;
 
   const drivers = data.memberships.filter((member) => member.role === "driver");
 
   return (
     <section className="page-section">
+      {errorMessage && canShowStaleData && (
+        <div role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Aggiornamento temporaneamente non riuscito. I dati mostrati sono quelli dell’ultimo caricamento riuscito.
+          <button type="button" className="ml-3 font-semibold underline" onClick={() => void refresh()}>Riprova</button>
+        </div>
+      )}
       <PageHeader
         title="Pianificazione"
         subtitle="Vista operativa per arrivi, partenze e servizi futuri. L'assegnazione resta opzionale."
