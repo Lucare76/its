@@ -12,7 +12,7 @@ import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 import { bookingListTransportTimes } from "@/lib/booking-list-display";
 import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
-import { hasAlesteMultiStopSummary, pairAlesteBusRows, type extractAlesteMultiStopRows } from "@/lib/server/aleste-multi-stop";
+import { alesteMultiStopHotel, hasAlesteMultiStopSummary, pairAlesteBusRows, type extractAlesteMultiStopRows } from "@/lib/server/aleste-multi-stop";
 import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
 import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, resolveGroupTotalPax, resolveGroupReturnStatus, type BookingGroupMeta } from "@/lib/booking-group-card";
 
@@ -1048,7 +1048,10 @@ export default function InboxPage() {
   useEffect(() => {
     if (!selectedEmail) { setForm(EMPTY_FORM); setApproveError(null); setApprovedServiceId(null); return; }
     const parsedJson = selectedEmail.parsed_json as Record<string, unknown>;
-    setForm(inboxParsedToForm(parsedJson));
+    const nextForm = inboxParsedToForm(parsedJson);
+    const multiStop = parsedJson.aleste_multi_stop as { hotel?: string | null; rows?: ReturnType<typeof extractAlesteMultiStopRows> } | null;
+    const pdfHotel = multiStop?.hotel || (multiStop?.rows ? alesteMultiStopHotel(multiStop.rows) : null);
+    setForm({ ...nextForm, hotel: nextForm.hotel || pdfHotel || "" });
     setApproveError(null);
     setApprovedServiceId(null);
   }, [selectedEmail]);
@@ -2084,7 +2087,7 @@ export default function InboxPage() {
                   {multiStopHint && (
                     <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
                       <p className="font-semibold">Pratica Aleste con più fermate</p>
-                      <p>Questa conferma richiede due servizi distinti da 1 passeggero. Il modulo singolo mostra solo la prima fermata.</p>
+                      <p>Questa conferma richiede due servizi distinti da 1 passeggero. Il modulo singolo mostra solo la prima fermata. Il nominativo della pratica sarà usato per entrambi.</p>
                       {multiStopPairs ? (
                         <div className="grid gap-2 sm:grid-cols-2">
                           {multiStopPairs.map(({ arrival, departure }, index) => (
@@ -2092,6 +2095,7 @@ export default function InboxPage() {
                               <p className="font-semibold">Tratta {index + 1} · {arrival.pax} pax</p>
                               <p>Andata {arrival.date} ore {arrival.time}: {arrival.stop}</p>
                               <p>Ritorno {departure.date} ore {departure.time}: {departure.destination}</p>
+                              <p className="mt-2 rounded-md bg-amber-100 px-2 py-1 font-semibold">Viaggia con 1 persona dalla fermata {multiStopPairs.filter((_, otherIndex) => otherIndex !== index).map((other) => other.arrival.stop).join(" e ")}</p>
                             </div>
                           ))}
                         </div>
@@ -2106,7 +2110,7 @@ export default function InboxPage() {
                           </div>
                         </div>
                       )}
-                      <p className="text-xs">L&apos;hotel e il nominativo di ciascun passeggero vanno verificati con l&apos;agenzia. I servizi creati resteranno da revisionare.</p>
+                      <p className="text-xs">Hotel indicato dal PDF: {alesteMultiStopHotel(multiStopRows) ?? "non riconosciuto"}. Il PDF riporta un solo nominativo per l&apos;intera pratica; i servizi resteranno da revisionare.</p>
                     </section>
                   )}
 

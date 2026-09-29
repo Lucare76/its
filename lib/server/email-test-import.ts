@@ -2,7 +2,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { isPdfAttachment, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
-import { extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
+import { alesteMultiStopHotel, extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
 import { claudeEmailExtract } from "@/lib/server/claude-email-extract";
 import { HaikuExtractError, MODEL as HAIKU_MODEL } from "@/lib/server/pdf-extract-haiku";
 import { logAiUsage, updateAiUsageImportId } from "@/lib/server/ai-usage-log";
@@ -237,7 +237,7 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
             received_at: new Date().toISOString(),
             review_status: "needs_operator_review",
             duplicate_alert: duplicateServiceAlert,
-            aleste_multi_stop: alesteMultiStop ? { rows: alesteBusRows, pairing_valid: Boolean(alestePairs) } : null,
+            aleste_multi_stop: alesteMultiStop ? { rows: alesteBusRows, pairing_valid: Boolean(alestePairs), hotel: alesteMultiStopHotel(alesteBusRows) } : null,
             attachments: [{ filename: firstPdfFilename, mime_type: "application/pdf", has_content: true }],
             claude_extracted: claudeResult
               ? {

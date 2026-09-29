@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
+import { alesteMultiStopHotel, extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
 
 const operationalRow = (date: string, description: string, time: string, stop: string, destination: string) =>
   `Il ${date} 1 BUS DA ${description} ${description === "HOTEL ISCHIA" ? "PICK-UP" : "PARTENZA"} ORE ${time}\nMeeting point: ${stop} da: ${description === "HOTEL ISCHIA" ? "HOTEL" : description} a: PORTO dest: ${destination}\nL'ORARIO DI PARTENZA SARA' RICONFERMATO IL GIORNO PRIMA`;
@@ -15,6 +15,7 @@ describe("Aleste multi fermata", () => {
     ]);
     expect(rows[2].time).toBe("05:00");
     expect(pairAlesteBusRows(rows)?.map((pair) => pair.departure.destination)).toEqual(["CASCINA GOBBA", "CASELLO VALDARNO"]);
+    expect(alesteMultiStopHotel(rows)).toBe("ISOLA VERDE");
   });
 
   it("riconosce anche l'estrazione PDF con Il attaccato alla data e 1BUS", () => {
