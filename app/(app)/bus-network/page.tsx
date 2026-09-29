@@ -36,7 +36,7 @@ type BusUnit = { id: string; bus_line_id: string; label: string; capacity: numbe
 type BusAllocation = { id: string; service_id: string; bus_line_id: string; bus_unit_id: string; stop_id?: string | null; stop_name: string; direction: "arrival" | "departure"; pax_assigned: number };
 type BusMove = { id: string; service_id: string; from_bus_unit_id?: string | null; to_bus_unit_id?: string | null; stop_name?: string | null; pax_moved: number; reason?: string | null; created_at: string; customer_name?: string | null; customer_phone?: string | null; hotel_name?: string | null; source_bus_label?: string | null; target_bus_label?: string | null; moved_full_allocation?: boolean };
 type AllocationDetail = { allocation_id: string; root_allocation_id: string; split_from_allocation_id?: string | null; service_id: string; bus_line_id: string; line_code: string; line_name: string; family_code: string; family_name: string; bus_unit_id: string; bus_label: string; stop_id?: string | null; stop_name: string; stop_city?: string | null; stop_pickup_note?: string | null; stop_pickup_time?: string | null; hotel_pickup_time?: string | null; direction: "arrival" | "departure"; pax_assigned: number; service_date: string; service_time: string; customer_name: string; customer_phone?: string | null; hotel_id?: string | null; hotel_name?: string | null; agency_name?: string | null; notes?: string | null; created_at?: string; group_notes_block?: string | null; is_booking_group?: boolean };
-type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null; booking_group_id?: string | null; booking_group_kind?: string | null; booking_group_name?: string | null; booking_group_stop_id?: string | null; booking_group_catalog_stop_id?: string | null; booking_group_contact_name?: string | null; booking_group_contact_phone?: string | null; booking_group_outbound_ferry_company?: string | null; booking_group_outbound_departure_port?: string | null; booking_group_outbound_ferry_time?: string | null; booking_group_outbound_arrival_port?: string | null; booking_group_return_ferry_company?: string | null; booking_group_return_departure_port?: string | null; booking_group_return_ferry_time?: string | null; booking_group_return_arrival_port?: string | null; notes?: string | null; booking_group_notes?: string | null; booking_group_stop_notes?: string | null };
+type BusService = { id: string; customer_name: string; customer_display_name: string; date: string; time: string; pax: number; direction: "arrival" | "departure"; practice_number?: string | null; meeting_point?: string | null; bus_city_origin?: string | null; transport_code?: string | null; phone_display: string; hotel_name: string; hotel_zone?: string | null; derived_family_code: string; derived_family_name: string; derived_line_code?: string | null; derived_line_name?: string | null; suggested_stop_name?: string | null; booking_group_id?: string | null; booking_group_kind?: string | null; booking_group_name?: string | null; booking_group_stop_id?: string | null; booking_group_catalog_stop_id?: string | null; booking_group_contact_name?: string | null; booking_group_contact_phone?: string | null; booking_group_outbound_ferry_company?: string | null; booking_group_outbound_departure_port?: string | null; booking_group_outbound_ferry_time?: string | null; booking_group_outbound_arrival_port?: string | null; booking_group_return_ferry_company?: string | null; booking_group_return_departure_port?: string | null; booking_group_return_ferry_time?: string | null; booking_group_return_arrival_port?: string | null; notes?: string | null; booking_group_notes?: string | null; booking_group_stop_notes?: string | null };
 // Fix C — riga aggregata "Da assegnare" per una fermata di un booking group
 // bus_exclusive: N passeggeri con lo stesso booking_group_stop_id diventano
 // UNA riga con "Assegna fermata", mai N righe da 1 pax.
@@ -538,6 +538,30 @@ export default function BusNetworkPage() {
     () => new Map(payload.services.map((service) => [service.id, service])),
     [payload.services]
   );
+
+  const pairedRouteByServiceId = useMemo(() => {
+    const groups = new Map<string, BusService[]>();
+    for (const service of payload.services) {
+      if (!service.practice_number || !service.notes?.includes("[aleste_route:")) continue;
+      groups.set(service.practice_number, [...(groups.get(service.practice_number) ?? []), service]);
+    }
+    const stopByServiceId = new Map(payload.allocation_details
+      .filter((allocation) => allocation.direction === "arrival")
+      .map((allocation) => [allocation.service_id, allocation.stop_name]));
+    const labels = new Map<string, string>();
+    for (const [practice, services] of groups) {
+      if (services.length < 2) continue;
+      for (const service of services) {
+        const others = services.filter((other) => other.id !== service.id);
+        const companions = others.map((other) => {
+          const stop = stopByServiceId.get(other.id) ?? other.meeting_point ?? other.bus_city_origin ?? "fermata da verificare";
+          return `${other.pax} ${other.pax === 1 ? "persona" : "persone"} da ${stop}`;
+        }).join(" e ");
+        labels.set(service.id, `Stessa pratica ${practice} · viaggia con ${companions}`);
+      }
+    }
+    return labels;
+  }, [payload.services, payload.allocation_details]);
 
   const withExportPassengerContact = useCallback((allocation: AllocationDetail): AllocationDetail => {
     const service = serviceById.get(allocation.service_id);
@@ -3393,6 +3417,11 @@ export default function BusNetworkPage() {
                                       {displayName}
                                     </div>
                                   )}
+                                  {pairedRouteByServiceId.get(alloc.service_id) && (
+                                    <div className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-[10px] font-semibold leading-snug text-amber-800">
+                                      🔗 {pairedRouteByServiceId.get(alloc.service_id)}
+                                    </div>
+                                  )}
                                   {showPassengerDetails && (
                                   <div className="mt-0.5">
                                     {editCardHotelId === alloc.allocation_id ? (
@@ -3556,6 +3585,11 @@ export default function BusNetworkPage() {
                                     title={displayName}
                                   >
                                     {displayName}
+                                  </div>
+                                )}
+                                {pairedRouteByServiceId.get(alloc.service_id) && (
+                                  <div className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-[10px] font-semibold leading-snug text-amber-800">
+                                    🔗 {pairedRouteByServiceId.get(alloc.service_id)}
                                   </div>
                                 )}
                                 {editCardHotelId === alloc.allocation_id ? (
@@ -4354,6 +4388,11 @@ export default function BusNetworkPage() {
                             onSave={async (city) => { await post("update_service_city", { service_id: svc.id, bus_city_origin: city }); }}
                             saving={saving}
                           />
+                          {pairedRouteByServiceId.get(svc.id) && (
+                            <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
+                              🔗 {pairedRouteByServiceId.get(svc.id)}
+                            </div>
+                          )}
                           {svc.phone_display && (
                             <span className="ml-2 text-xs text-slate-400">{svc.phone_display}</span>
                           )}
