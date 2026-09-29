@@ -5,6 +5,7 @@ import { DateInput, SectionCard } from "@/components/ui";
 import { summarizeBusReservationConflicts } from "@/lib/bus-network-reservations";
 import { formatBusNetworkUnassignedSummary, summarizeBusNetworkUnassigned } from "@/lib/bus-network-unassigned";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
 import BusImportModal from "./BusImportModal";
 
 function FerryIcon({ size = 20, className = "" }: { size?: number; className?: string }) {
@@ -1009,7 +1010,11 @@ export default function BusNetworkPage() {
     const bookingGroupStop = svc.booking_group_catalog_stop_id
       ? lineStops.find((s) => s.id === svc.booking_group_catalog_stop_id)
       : null;
-    const suggestedStop = bookingGroupStop ?? lineStops.find((s) => s.stop_name === svc.suggested_stop_name) ?? lineStops[0] ?? null;
+    const canonicalCity = resolveBusStop(svc.bus_city_origin)?.canonicalCity;
+    const suggestedStop = bookingGroupStop
+      ?? lineStops.find((s) => s.stop_name === svc.suggested_stop_name || s.city === svc.suggested_stop_name)
+      ?? lineStops.find((s) => canonicalCity && (s.city.toUpperCase() === canonicalCity || s.stop_name.toUpperCase() === canonicalCity))
+      ?? null;
     setAssignStopId(suggestedStop?.id ?? "");
     setAssignModalOpen(true);
   }, [dateUnitLoads, lineStops, selectedLine]);
@@ -1199,10 +1204,10 @@ export default function BusNetworkPage() {
       if (result?.stop_id) {
         setAssignStopId(result.stop_id);
       } else {
-        setAssignStopId(stops[0]?.id ?? "");
+        setAssignStopId("");
       }
     } else {
-      setAssignStopId(stops[0]?.id ?? "");
+      setAssignStopId("");
     }
   }, [payload.stops, payload.units, payload.allocation_details, direction, date, assignService, selectedLineId, post]);
 
@@ -4731,10 +4736,12 @@ export default function BusNetworkPage() {
               <label className="text-sm font-medium text-slate-700">Fermata di salita:</label>
               <select value={assignStopId} onChange={(e) => setAssignStopId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                <option value="">Seleziona la fermata corretta</option>
                 {assignLineStops.map((stop) => (
                   <option key={stop.id} value={stop.id}>{stop.stop_name}{stop.city && stop.city !== stop.stop_name ? ` (${stop.city})` : ""}</option>
                 ))}
               </select>
+              {!assignStopId && !assignCreatingStop ? <p className="text-xs font-medium text-amber-700">Nessuna fermata riconosciuta: scegli quella corretta prima di assegnare.</p> : null}
               {assignCreatingStop && (
                 <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
                   Creazione fermata in corso...

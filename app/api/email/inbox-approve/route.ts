@@ -418,6 +418,7 @@ export async function POST(request: NextRequest) {
     const totalPax = pairs.reduce((sum, pair) => sum + pair.arrival.pax, 0);
     const createdIds: string[] = [];
     for (const [index, pair] of pairs.entries()) {
+      const canonicalBusStop = resolveBusStop(pair.arrival.stop);
       const marker = `[aleste_route:${index + 1}]`;
       const existing = index === 0 ? primary : related?.find((row) => String(row.notes ?? "").includes(marker));
       const payload = {
@@ -444,7 +445,7 @@ export async function POST(request: NextRequest) {
         billing_party_name: clean(form.agenzia) ?? "ALESTE VIAGGI",
         phone: clean(form.cliente_cellulare) ?? "N/D",
         meeting_point: pair.arrival.stop,
-        bus_city_origin: pair.arrival.stop,
+        bus_city_origin: canonicalBusStop?.canonicalCity ?? pair.arrival.stop,
         pickup_hotel: pair.departure.time,
         practice_number: practice,
         source_total_amount_cents: Number.isFinite(totalCents) && totalCents > 0 ? Math.round(totalCents * pair.arrival.pax / totalPax) : null,
