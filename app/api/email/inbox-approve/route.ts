@@ -402,11 +402,11 @@ export async function POST(request: NextRequest) {
       }
     }
     const { data: related } = await admin.from("services")
-      .select("id, practice_number, notes")
+      .select("id, practice_number, notes, date")
       .eq("tenant_id", tenantId).ilike("notes", `%${sourceMarker}%`).limit(10);
     const alreadyConfirmed = primary && primary.is_draft === false &&
       pairs.every((_, index) => related?.some((row) => String(row.notes ?? "").includes(`[aleste_route:${index + 1}]`)));
-    if (alreadyConfirmed) return NextResponse.json({ ok: true, service_id: primary.id, service_ids: related?.map((row) => row.id) ?? [primary.id], bus_assign_date: dateIso(pairs[0].arrival.date), inbound_email_id, already_existed: true });
+    if (alreadyConfirmed) return NextResponse.json({ ok: true, service_id: primary.id, service_ids: related?.map((row) => row.id) ?? [primary.id], bus_assign_legs: related?.map((row) => ({ service_id: row.id, date: row.date })) ?? [], inbound_email_id, already_existed: true });
 
     const existingPractice = primary?.practice_number ?? related?.find((row) => row.practice_number)?.practice_number;
     const generated = existingPractice ? null : await admin.rpc("next_booking_practice_number", { p_tenant_id: tenantId });
@@ -472,7 +472,7 @@ export async function POST(request: NextRequest) {
       linked_service_id: createdIds[0], linked_service_ids: createdIds, confirmed_by: userId
     } }).eq("tenant_id", tenantId).eq("id", inbound_email_id);
     if (emailUpdate.error) return NextResponse.json({ ok: false, error: emailUpdate.error.message }, { status: 500 });
-    return NextResponse.json({ ok: true, service_id: createdIds[0], service_ids: createdIds, bus_assign_date: dateIso(pairs[0].arrival.date), inbound_email_id });
+    return NextResponse.json({ ok: true, service_id: createdIds[0], service_ids: createdIds, bus_assign_legs: createdIds.map((serviceId, index) => ({ service_id: serviceId, date: dateIso(pairs[index].arrival.date) })), inbound_email_id });
   }
 
   const { data: existingService } = await admin
@@ -955,5 +955,5 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, service_id: service.id, bus_assign_date: bookingKind === "bus_city_hotel" ? arrivalDate : null, inbound_email_id });
+  return NextResponse.json({ ok: true, service_id: service.id, bus_assign_legs: bookingKind === "bus_city_hotel" ? [{ service_id: service.id, date: arrivalDate }] : [], inbound_email_id });
 }
