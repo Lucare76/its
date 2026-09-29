@@ -211,7 +211,7 @@ export function deriveServiceBusIdentity(service: Pick<Service, "transport_code"
     lineName,
     family_code: family.family_code,
     family_name: family.family_name,
-    city: service.bus_city_origin ?? nearest?.stop.city ?? null,
+    city: pickupMatch?.canonicalCity ?? service.bus_city_origin ?? nearest?.stop.city ?? null,
     stop_name: service.bus_city_origin ?? nearest?.stop.city ?? null
   };
 }
