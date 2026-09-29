@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { isAlesteMultiStop } from "@/lib/server/aleste-multi-stop";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { type SupabaseClient } from "@supabase/supabase-js";
@@ -1544,6 +1545,10 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
     .maybeSingle();
   if (inboundRow.error || !inboundRow.data?.id) {
     throw new Error("Inbound email PDF non trovato.");
+  }
+
+  if (isAlesteMultiStop(inboundRow.data.extracted_text ?? "")) {
+    throw new Error("La conferma Aleste contiene più fermate per la stessa pratica. L'importazione singola non può rappresentarle: verifica le tratte e caricale separatamente, senza confermare questo draft come servizio da 2 passeggeri.");
   }
 
   const parsedJson = (inboundRow.data.parsed_json ?? {}) as Record<string, any>;

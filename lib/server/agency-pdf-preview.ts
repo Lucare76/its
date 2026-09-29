@@ -1,4 +1,5 @@
 import { parseInboundEmail } from "@/lib/email-parser";
+import { extractAlesteMultiStopRows, isAlesteMultiStop } from "@/lib/server/aleste-multi-stop";
 import { resolveBillingPartyFromRegistry } from "@/lib/server/billing-party-registry";
 import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 import { selectAgencyPdfParser, type AgencyPdfParserSelectionResult } from "@/lib/server/agency-pdf-parser-registry";
@@ -532,6 +533,7 @@ function normalizeCustomerPhone(
 
 export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPreviewResult {
   const cleanedExtractedText = cleanExtractedPdfText(input.extractedText);
+  const multiStopRows = isAlesteMultiStop(cleanedExtractedText) ? extractAlesteMultiStopRows(cleanedExtractedText) : [];
   const cleanedHeaderText = input.headerText ? cleanExtractedPdfText(input.headerText) : null;
   const inboundParsed = parseInboundEmail([input.subject, input.bodyText ?? ""].filter(Boolean).join("\n"), "agency-default", cleanedExtractedText);
   const selection = selectAgencyPdfParser({
@@ -583,7 +585,8 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
       transferParsed.practice_number ? `Pratica ${transferParsed.practice_number}` : null,
       transferParsed.ns_reference ? `Riferimento ${transferParsed.ns_reference}` : null,
       transferParsed.program,
-      transferParsed.anomaly_message
+      transferParsed.anomaly_message,
+      multiStopRows.length > 0 ? `ATTENZIONE: ${multiStopRows.length} tratte bus su più fermate; inserimento singolo bloccato. Verificare le fermate nel PDF.` : null
     ]
       .filter(Boolean)
       .join(" | ")
@@ -706,8 +709,8 @@ export function buildAgencyPdfPreview(input: AgencyPdfPreviewInput): AgencyPdfPr
     extracted,
     fields_found: fieldsFound,
     missing_fields: missingFields,
-    reliability: reliabilityAdjusted,
-    parser_logs: buildParserLogs(selection, missingFields),
+    reliability: multiStopRows.length > 0 ? "low" : reliabilityAdjusted,
+    parser_logs: [...buildParserLogs(selection, missingFields), ...(multiStopRows.length > 0 ? [`Aleste: ${multiStopRows.length} tratte bus su più fermate; conferma singola bloccata`] : [])],
     raw: {
       inbound_parser: inboundParsed,
       transfer_parser: transferParsed
