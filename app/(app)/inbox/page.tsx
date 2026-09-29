@@ -1262,7 +1262,7 @@ export default function InboxPage() {
         })
       });
       const body = (await res.json().catch(() => ({}))) as {
-        ok?: boolean; service_id?: string; service_ids?: string[]; bus_assign_date?: string | null; error?: string;
+        ok?: boolean; service_id?: string; service_ids?: string[]; bus_assign_legs?: Array<{ service_id: string; date: string | null }>; error?: string;
         duplicate?: boolean; matches?: DupMatch[]; certain_service_id?: string | null; incoming_ferry_meta?: FerryMeta;
       };
       if (res.status === 409 && body.duplicate && Array.isArray(body.matches) && body.matches.length > 0) {
@@ -1285,19 +1285,30 @@ export default function InboxPage() {
       } else {
         setApprovedServiceId(body.service_id ?? "ok");
         let busAssignmentMessage = "";
-        if (body.bus_assign_date && body.service_id) {
+        if (body.bus_assign_legs?.length) {
           try {
-            const assignRes = await fetch("/api/ops/bus-network", {
-              method: "POST",
-              headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-              body: JSON.stringify({ action: "auto_assign_services", date: body.bus_assign_date, direction: "arrival", service_ids: body.service_ids ?? [body.service_id] }),
-            });
-            const assignment = (await assignRes.json()) as { ok?: boolean; assigned?: number; skipped?: number; error?: string; skipped_detail?: Array<{ reason: string }> };
-            busAssignmentMessage = !assignRes.ok || !assignment.ok
-              ? ` Assegnazione bus non riuscita: ${assignment.error ?? "verifica Rete Bus"}.`
-              : assignment.skipped
-                ? ` ${assignment.assigned ?? 0} sul bus; ${assignment.skipped} da verificare: ${assignment.skipped_detail?.map((item) => item.reason).join("; ") ?? "controlla Rete Bus"}.`
-                : ` ${assignment.assigned ?? 0} assegnati direttamente al bus.`;
+            const byDate = new Map<string, string[]>();
+            for (const leg of body.bus_assign_legs) {
+              if (!leg.date) continue;
+              byDate.set(leg.date, [...(byDate.get(leg.date) ?? []), leg.service_id]);
+            }
+            let assigned = 0;
+            const issues: string[] = [];
+            for (const [date, serviceIds] of byDate) {
+              const assignRes = await fetch("/api/ops/bus-network", {
+                method: "POST",
+                headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+                body: JSON.stringify({ action: "auto_assign_services", date, direction: "arrival", service_ids: serviceIds }),
+              });
+              const assignment = (await assignRes.json()) as { ok?: boolean; assigned?: number; skipped?: number; error?: string; skipped_detail?: Array<{ reason: string }> };
+              assigned += assignment.assigned ?? 0;
+              if (!assignRes.ok || !assignment.ok) issues.push(`${date}: ${assignment.error ?? "verifica Rete Bus"}`);
+              else if (assignment.skipped) issues.push(`${date}: ${assignment.skipped_detail?.map((item) => item.reason).join("; ") ?? "controlla Rete Bus"}`);
+            }
+            if (body.bus_assign_legs.some((leg) => !leg.date)) issues.push("data mancante: controlla Rete Bus");
+            busAssignmentMessage = issues.length
+              ? ` ${assigned} sul bus; da verificare: ${issues.join(" | ")}.`
+              : ` ${assigned} assegnati direttamente al bus.`;
           } catch {
             busAssignmentMessage = " Assegnazione bus non riuscita: verifica Rete Bus.";
           }
