@@ -1715,38 +1715,23 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (action === "auto_assign_date" || action === "auto_assign_services") {
+    if (action === "auto_assign_date") {
       const autoSchema = z.object({
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        direction: z.enum(["arrival", "departure"]),
-        service_ids: z.array(z.string().uuid()).min(1).max(20).optional(),
+        direction: z.enum(["arrival", "departure"])
       });
       const parsed = autoSchema.parse(body);
-      if (action === "auto_assign_services" && !parsed.service_ids?.length) {
-        return NextResponse.json({ ok: false, error: "Servizi da assegnare mancanti." }, { status: 400 });
-      }
-
-      let serviceQuery = auth.admin.from("services")
-        .select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id,hotel_id")
-        .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction)
-        .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
-        .order("time");
-      if (parsed.service_ids) serviceQuery = serviceQuery.in("id", parsed.service_ids).eq("is_draft", false).neq("status", "cancelled");
-
-      const sameDateServiceIdsResult = await auth.admin.from("services").select("id")
-        .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction);
-      if (sameDateServiceIdsResult.error) throw new Error(sameDateServiceIdsResult.error.message);
-      const sameDateServiceIds = (sameDateServiceIdsResult.data ?? []).map((row) => row.id);
-      const dateAllocationsQuery = auth.admin.from("tenant_bus_allocations")
-        .select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId);
 
       // Carica dati necessari
       const [svcRes, linesRes, stopsRes, unitsRes, allocRes, exclusiveRes] = await Promise.all([
-        serviceQuery,
+        auth.admin.from("services").select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id,hotel_id")
+          .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction)
+          .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
+          .order("time"),
         auth.admin.from("tenant_bus_lines").select("id,code,name,family_code").eq("tenant_id", tenantId),
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,stop_order").eq("tenant_id", tenantId).eq("active", true),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status,sort_order").eq("tenant_id", tenantId).eq("active", true).order("sort_order"),
-        sameDateServiceIds.length ? dateAllocationsQuery.in("service_id", sameDateServiceIds) : Promise.resolve({ data: [], error: null }),
+        auth.admin.from("tenant_bus_allocations").select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId),
         // FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY.
         // Stessa condizione di lock applicata dentro allocate_bus_service
         // (per data, exclusive=true), letta qui a monte per evitare di
@@ -1839,12 +1824,6 @@ export async function POST(request: NextRequest) {
       });
       for (const svc of sortedServices) {
         if (allocatedIds.has(svc.id)) continue;
-        // Approvazione Inbox: mai inventare una fermata da un testo ambiguo.
-        // Se la fermata non e' riconosciuta nel catalogo, l'operatore la corregge.
-        if (parsed.service_ids && !resolveBusStop(svc.bus_city_origin)) {
-          skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: `Fermata ${svc.bus_city_origin ?? "N/D"} non riconosciuta: verifica prima di assegnare.` });
-          continue;
-        }
 
         const identity = deriveServiceBusIdentity(svc as Parameters<typeof deriveServiceBusIdentity>[0]);
         const line = familyLineByCode.get(identity.family_code ?? "") ?? lineByCode.get(identity.lineCode ?? "");
