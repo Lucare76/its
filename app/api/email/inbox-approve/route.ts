@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { extractAlesteMultiStopRows, hasAlesteMultiStopSummary, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
+import { alesteMultiStopHotel, extractAlesteMultiStopRows, hasAlesteMultiStopSummary, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
@@ -374,7 +374,9 @@ export async function POST(request: NextRequest) {
   if (multiStopDetected) {
     const rows = multiStopJson?.rows?.length ? multiStopJson.rows : extractAlesteMultiStopRows(sourceText);
     const pairs = pairAlesteBusRows(rows);
-    if (!pairs || !form.hotel.trim()) {
+    const hotelFromPdf = pairs ? alesteMultiStopHotel(rows) : null;
+    const hotelName = clean(form.hotel) ?? hotelFromPdf;
+    if (!pairs || !hotelName) {
       return NextResponse.json({ ok: false, error: "La pratica ha più fermate: serve il PDF con tutte le tratte e l'hotel verificato prima di approvarla." }, { status: 422 });
     }
     const dateIso = (value: string) => parseDate(value);
@@ -382,7 +384,7 @@ export async function POST(request: NextRequest) {
       pairs.reduce((sum, pair) => sum + pair.arrival.pax, 0) !== Number(form.n_pax)) {
       return NextResponse.json({ ok: false, error: "Date o numero passeggeri non coerenti con le tratte del PDF." }, { status: 422 });
     }
-    const hotelId = await resolveOrCreateHotel(admin, tenantId, form.hotel);
+    const hotelId = await resolveOrCreateHotel(admin, tenantId, hotelName);
     if (!hotelId) return NextResponse.json({ ok: false, error: "Hotel non disponibile." }, { status: 500 });
 
     // The inbox link is unique per tenant; the second service carries the same
@@ -438,7 +440,7 @@ export async function POST(request: NextRequest) {
         vessel: "BUS",
         pax: pair.arrival.pax,
         hotel_id: hotelId,
-        customer_name: `Pratica ${clean(form.numero_pratica) ?? practice} - passeggero ${index + 1} da verificare`,
+        customer_name: form.cliente_nome.trim(),
         billing_party_name: clean(form.agenzia) ?? "ALESTE VIAGGI",
         phone: clean(form.cliente_cellulare) ?? "N/D",
         meeting_point: pair.arrival.stop,
@@ -452,8 +454,8 @@ export async function POST(request: NextRequest) {
         notes: [sourceMarker, marker, `[practice:${clean(form.numero_pratica) ?? "N/D"}]`,
           `Andata: ${pair.arrival.stop} ore ${pair.arrival.time}`,
           `Ritorno: ${pair.departure.destination} ore ${pair.departure.time}`,
-          `Primo beneficiario indicato nel PDF: ${form.cliente_nome.trim()}`,
-          "Associazione nominativo/fermata da verificare con l'agenzia", clean(form.note)].filter(Boolean).join(" | ")
+          `VIAGGIA CON 1 PERSONA DALLA FERMATA ${pairs.filter((_, otherIndex) => otherIndex !== index).map((other) => other.arrival.stop).join(" E ")}`,
+          "Nominativo comune della pratica: verificare i nominativi individuali con l'agenzia", clean(form.note)].filter(Boolean).join(" | ")
       };
       const result = existing?.id
         ? await admin.from("services").update(payload).eq("tenant_id", tenantId).eq("id", existing.id).select("id").single()

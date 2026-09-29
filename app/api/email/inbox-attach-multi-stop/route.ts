@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { extractPdfTextFromBase64, isPdfAttachment } from "@/lib/server/pdf-text";
-import { extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
+import { alesteMultiStopHotel, extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
 
 export const runtime = "nodejs";
 
@@ -30,9 +30,10 @@ export async function POST(request: NextRequest) {
   if (!isAlesteMultiStop(text) || !pairs || (practice && !text.includes(practice))) {
     return NextResponse.json({ ok: false, error: "Il PDF non contiene le tratte complete della stessa pratica Aleste." }, { status: 422 });
   }
-  const nextJson = { ...(email.parsed_json ?? {}), aleste_multi_stop: { rows, pairing_valid: true } };
+  const hotel = alesteMultiStopHotel(rows);
+  const nextJson = { ...(email.parsed_json ?? {}), aleste_multi_stop: { rows, pairing_valid: true, hotel } };
   const updated = await auth.admin.from("inbound_emails").update({ extracted_text: text, parsed_json: nextJson })
     .eq("tenant_id", tenantId).eq("id", parsed.data);
   if (updated.error) return NextResponse.json({ ok: false, error: updated.error.message }, { status: 500 });
-  return NextResponse.json({ ok: true, rows });
+  return NextResponse.json({ ok: true, rows, hotel });
 }

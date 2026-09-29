@@ -260,6 +260,9 @@ describe("POST /api/email/inbox-approve — parità campi operativi con il fluss
     expect(serviceInserts[0].inbound_email_id).toBe(INBOUND_EMAIL_ID);
     expect(serviceInserts[1].inbound_email_id).toBeNull();
     expect(serviceInserts.every((row) => row.status === "needs_review")).toBe(true);
+    expect(serviceInserts.map((row) => row.customer_name)).toEqual(["IMPIOMBATO FRANCESCO", "IMPIOMBATO FRANCESCO"]);
+    expect(String(serviceInserts[0].notes)).toContain("VIAGGIA CON 1 PERSONA DALLA FERMATA CASELLO VALDARNO");
+    expect(String(serviceInserts[1].notes)).toContain("VIAGGIA CON 1 PERSONA DALLA FERMATA CASCINA GOBBA");
     expect(inboundEmailUpdates).toHaveLength(1);
   });
   it("import con arrivo + partenza: valorizza arrival_date/time, departure_date/time, meeting_point, transport_code", async () => {

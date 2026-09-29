@@ -46,6 +46,13 @@ export function pairAlesteBusRows(rows: ReturnType<typeof extractAlesteMultiStop
   return unused.size === 0 ? pairs : null;
 }
 
+/** The outbound destination is the hotel in Aleste bus confirmations. */
+export function alesteMultiStopHotel(rows: ReturnType<typeof extractAlesteMultiStopRows>) {
+  const destinations = [...new Set(rows.filter((row) => row.direction === "andata")
+    .map((row) => row.destination.trim()).filter(Boolean))];
+  return destinations.length === 1 && !/^HOTEL\s+ISCHIA$/i.test(destinations[0]) ? destinations[0] : null;
+}
+
 export function hasAlesteMultiStopSummary(input: { agency?: string | null; sender?: string | null; note?: string | null }) {
   return /aleste/i.test(`${input.agency ?? ""} ${input.sender ?? ""}`) &&
     /due\s+bus\s+separat|due\s+fermate|milano[\s\S]*valdarno|valdarno[\s\S]*milano/i.test(input.note ?? "");
