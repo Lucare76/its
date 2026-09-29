@@ -449,39 +449,16 @@ export default function OpsNewBookingPage() {
       body: JSON.stringify({ ...parsed.data, ...extraFields })
     });
     const body = (await response.json().catch(() => null)) as (CreatedBookingSummary & { ok?: boolean; error?: string }) | null;
+    setSubmitting(false);
+
     if (!response.ok || !body?.id) {
-      setSubmitting(false);
       setMessage(body?.error ?? "Creazione prenotazione non riuscita.");
       return;
     }
 
-    let busWarning = "";
-    if (parsed.data.booking_service_kind === "bus_city_hotel") {
-      const legs = [
-        { id: body.id, date: tripLeg === "return_only" ? parsed.data.departure_date : parsed.data.arrival_date, direction: tripLeg === "return_only" ? "departure" : "arrival" },
-        ...(body.id_return ? [{ id: body.id_return, date: parsed.data.departure_date, direction: "departure" }] : []),
-      ];
-      for (const leg of legs) {
-        try {
-          const assigned = await fetch("/api/ops/bus-network", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-            body: JSON.stringify({ action: "auto_assign_services", date: leg.date, direction: leg.direction, service_ids: [leg.id] }),
-          });
-          const result = (await assigned.json()) as { ok?: boolean; assigned?: number; error?: string; skipped_detail?: Array<{ reason: string }> };
-          if (!assigned.ok || !result.ok || result.assigned !== 1) {
-            busWarning += ` ${leg.direction === "arrival" ? "Andata" : "Ritorno"}: ${result.error ?? result.skipped_detail?.map((item) => item.reason).join("; ") ?? "verifica Rete Bus"}.`;
-          }
-        } catch {
-          busWarning += ` ${leg.direction === "arrival" ? "Andata" : "Ritorno"}: assegnazione non riuscita, verifica Rete Bus.`;
-        }
-      }
-    }
-    setSubmitting(false);
-
     // Il successo e' rappresentato SOLO dalla card verde (createdBooking), mai da `message`:
     // `message` resta riservato agli errori (rosso), coerente con la semantica colori del gestionale.
-    setMessage(busWarning ? `Prenotazione creata, ma non assegnata automaticamente al bus.${busWarning}` : "");
+    setMessage("");
     setCreatedBooking({
       id: body.id,
       id_return: body.id_return ?? null,
