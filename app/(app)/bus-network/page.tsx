@@ -431,6 +431,7 @@ export default function BusNetworkPage() {
   const [transferUnitId, setTransferUnitId] = useState("");
   const [transferStopId, setTransferStopId] = useState("");
   const [transferCreatingStop, setTransferCreatingStop] = useState(false);
+  const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
 
   const load = useCallback(async () => {
     const token = await getToken();
@@ -931,6 +932,7 @@ export default function BusNetworkPage() {
   const openTransferModal = useCallback((alloc: AllocationDetail) => {
     setTransferAlloc(alloc);
     setTransferCreatingStop(false);
+    setTransferConfirmOpen(false);
     setTransferLineId(alloc.bus_line_id);
     setTransferStopId(alloc.stop_id ?? "");
     setTransferUnitId(alloc.bus_unit_id);
@@ -951,15 +953,18 @@ export default function BusNetworkPage() {
   }, [transferAlloc, transferLineId, direction, post]);
 
   const confirmTransfer = useCallback(async () => {
-    if (!transferAlloc || !transferLineId || !transferUnitId || !transferStopId) return;
-    await post("transfer_allocation_line", {
+    if (!transferConfirmOpen || !transferAlloc || !transferLineId || !transferUnitId || !transferStopId) return;
+    const result = await post("transfer_allocation_line", {
       allocation_id: transferAlloc.allocation_id,
       target_bus_line_id: transferLineId,
       target_bus_unit_id: transferUnitId,
       target_stop_id: transferStopId,
     });
-    setTransferAlloc(null);
-  }, [transferAlloc, transferLineId, transferUnitId, transferStopId, post]);
+    if (result) {
+      setTransferConfirmOpen(false);
+      setTransferAlloc(null);
+    }
+  }, [transferConfirmOpen, transferAlloc, transferLineId, transferUnitId, transferStopId, post]);
 
   const openMoveModal = useCallback((alloc: AllocationDetail) => {
     setMoveSource(alloc);
@@ -5074,10 +5079,32 @@ export default function BusNetworkPage() {
         </div>
       )}
 
-      {/* ── Transfer to another line modal (admin only) ── */}
+      {/* ── Change stop or line (admin only) ── */}
       {transferAlloc && isAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+            {transferConfirmOpen ? (
+              <>
+                <h2 className="text-lg font-bold text-slate-900">Conferma cambio fermata</h2>
+                <p className="text-sm leading-relaxed text-slate-700">
+                  <strong>{transferAlloc.customer_name}</strong> era su <strong>{transferAlloc.stop_name}</strong>.{" "}
+                  Sei sicuro di volerlo spostare a <strong>{transferTargetStops.find((stop) => stop.id === transferStopId)?.stop_name}</strong>?
+                </p>
+                {(transferLineId !== transferAlloc.bus_line_id || transferUnitId !== transferAlloc.bus_unit_id) && (
+                  <p className="text-sm text-slate-600">
+                    Da {transferAlloc.line_name} / {transferAlloc.bus_label} a {payload.lines.find((line) => line.id === transferLineId)?.name} / {transferTargetUnits.find((unit) => unit.id === transferUnitId)?.label}.
+                  </p>
+                )}
+                <div className="flex gap-3 pt-1">
+                  <button onClick={() => setTransferConfirmOpen(false)} disabled={saving} className="btn-secondary flex-1 py-2.5">Torna indietro</button>
+                  <button onClick={() => void confirmTransfer()} disabled={saving}
+                    className="flex-1 rounded-lg bg-violet-600 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-40">
+                    {saving ? "Spostamento..." : "Sì, sposta fermata"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
             <div>
               <h2 className="text-lg font-bold text-slate-900">Cambia fermata o linea</h2>
               <p className="text-xs text-slate-400 mt-0.5">Scegli la fermata corretta, anche sul bus attuale</p>
@@ -5149,12 +5176,14 @@ export default function BusNetworkPage() {
               <button onClick={() => setTransferAlloc(null)}
                 className="btn-secondary flex-1 py-2.5">Annulla</button>
               <button
-                onClick={() => void confirmTransfer()}
+                onClick={() => setTransferConfirmOpen(true)}
                 disabled={saving || !transferLineId || !transferUnitId || !transferStopId || (transferUnitId === transferAlloc.bus_unit_id && transferStopId === transferAlloc.stop_id)}
                 className="flex-1 rounded-lg bg-violet-600 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-40">
-                {saving ? "Trasferimento..." : "Conferma trasferimento"}
+                Continua
               </button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
