@@ -1,4 +1,4 @@
-import { BUS_LINES_2026, findBusLineByCode, findNearestBusStop } from "@/lib/bus-lines-catalog";
+import { BUS_LINES_2026, findBusLineByCode, findNearestBusStop, resolveBusStop } from "@/lib/bus-lines-catalog";
 import type { Hotel, Service } from "@/lib/types";
 
 export type BusLineFamilyCode = "ITALIA" | "CENTRO" | "ADRIATICA" | "GRUPPI_ESCLUSIVI";
@@ -202,8 +202,9 @@ export function getDefaultBusUnitsForFamily(lineId: string, familyCode: BusLineF
 export function deriveServiceBusIdentity(service: Pick<Service, "transport_code" | "bus_city_origin" | "outbound_time" | "time" | "service_type_code" | "booking_service_kind">) {
   const directLine = service.transport_code ? findBusLineByCode(service.transport_code) : null;
   const nearest = !directLine ? findNearestBusStop(service.bus_city_origin, service.outbound_time ?? service.time) : null;
-  const lineCode = directLine?.code ?? nearest?.lineCode ?? null;
-  const lineName = directLine?.name ?? nearest?.lineName ?? null;
+  const pickupMatch = !directLine && !nearest ? resolveBusStop(service.bus_city_origin) : null;
+  const lineCode = directLine?.code ?? nearest?.lineCode ?? pickupMatch?.lineCode ?? null;
+  const lineName = directLine?.name ?? nearest?.lineName ?? pickupMatch?.lineName ?? null;
   const family = deriveBusFamily(lineCode, lineName);
   return {
     lineCode,
