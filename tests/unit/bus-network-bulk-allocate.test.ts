@@ -220,6 +220,7 @@ describe("POST auto_assign_date — prefiltro exclusive + retry su bus successiv
       b.order = () => b;
       b.limit = () => b;
       b.in = () => b;
+      b.neq = () => b;
       b.or = () => b;
       b.eq = (col: string, val: unknown) => { filters[col] = val; return b; };
       b.maybeSingle = async () => ({ data: rowsForFilters()[0] ?? null, error: null });
@@ -353,6 +354,21 @@ describe("POST auto_assign_date — prefiltro exclusive + retry su bus successiv
     const allocCalls = rpcCalls.filter((c) => c.name === "allocate_bus_service");
     expect(allocCalls).toHaveLength(1);
     expect(allocCalls[0]?.params.p_bus_unit_id).toBe(AA_BUS_1);
+  });
+
+  it("assegna subito il servizio bus appena approvato dalla Inbox", async () => {
+    const serviceId = "00000000-0000-4000-8000-000000000123";
+    const { admin, rpcCalls } = makeAutoAssignAdmin(autoAssignSeed({
+      tenant_bus_line_stops: [{ id: AA_STOP_ID, tenant_id: TENANT, bus_line_id: AA_LINE_ID, direction: "arrival", stop_name: "RIMINI", city: "Rimini", stop_order: 0, active: true }],
+      services: [{ id: serviceId, tenant_id: TENANT, customer_name: "Cliente Inbox", direction: "arrival", booking_service_kind: "bus_city_hotel", booking_group_id: null, date: "2026-09-13", time: "05:10", pax: 1, bus_city_origin: "Rimini", is_draft: false, status: "new" }],
+    }));
+    mocks.authorizePricingRequest.mockResolvedValue(authCtx(admin));
+    const res = await POST(post({ action: "auto_assign_services", date: "2026-09-13", direction: "arrival", service_ids: [serviceId] }));
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.assigned).toBe(1);
+    expect(json.skipped).toBe(0);
+    expect(rpcCalls.filter((call) => call.name === "allocate_bus_service")).toHaveLength(1);
   });
 
   it("8) same stop: preferisce il bus gia' usato per la stessa fermata; se quel bus fallisce, ritenta sul successivo", async () => {
