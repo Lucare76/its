@@ -12,6 +12,7 @@ import type { Hotel, InboundEmail, Membership, Service } from "@/lib/types";
 import { bookingListTransportTimes } from "@/lib/booking-list-display";
 import { derivePortCarrier, getPickupRule, listAvailableDepartures, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { dedupeAppend } from "@/lib/collection-utils";
+import { hasAlesteMultiStopSummary, pairAlesteBusRows, type extractAlesteMultiStopRows } from "@/lib/server/aleste-multi-stop";
 import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
 import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, resolveGroupTotalPax, resolveGroupReturnStatus, type BookingGroupMeta } from "@/lib/booking-group-card";
 
@@ -629,6 +630,8 @@ export default function InboxPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [hotelSuggestOpen, setHotelSuggestOpen] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [multiStopPdf, setMultiStopPdf] = useState<File | null>(null);
+  const [multiStopUploading, setMultiStopUploading] = useState(false);
   const [approvedServiceId, setApprovedServiceId] = useState<string | null>(null);
   const approvalInFlightRef = useRef(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -1092,6 +1095,17 @@ export default function InboxPage() {
     return hasInboxStructuredData((selectedEmail.parsed_json as Record<string, unknown>) ?? null);
   }, [selectedEmail]);
 
+  const multiStopRows = useMemo(() => {
+    const value = (selectedEmail?.parsed_json as Record<string, unknown> | null)?.aleste_multi_stop as { rows?: ReturnType<typeof extractAlesteMultiStopRows> } | undefined;
+    return Array.isArray(value?.rows) ? value.rows : [];
+  }, [selectedEmail]);
+  const multiStopPairs = useMemo(() => pairAlesteBusRows(multiStopRows), [multiStopRows]);
+  const multiStopHint = multiStopRows.length > 0 || hasAlesteMultiStopSummary({
+    agency: form.agenzia,
+    sender: String((selectedEmail?.parsed_json as Record<string, unknown> | null)?.from_email ?? ""),
+    note: form.note,
+  });
+
   const canApprove = form.cliente_nome.trim() !== "" && form.hotel.trim() !== "" && form.data_arrivo.trim() !== "";
 
   const hotelSuggestions = useMemo(() => {
@@ -1245,7 +1259,7 @@ export default function InboxPage() {
         })
       });
       const body = (await res.json().catch(() => ({}))) as {
-        ok?: boolean; service_id?: string; error?: string;
+        ok?: boolean; service_id?: string; service_ids?: string[]; error?: string;
         duplicate?: boolean; matches?: DupMatch[]; certain_service_id?: string | null; incoming_ferry_meta?: FerryMeta;
       };
       if (res.status === 409 && body.duplicate && Array.isArray(body.matches) && body.matches.length > 0) {
@@ -1268,7 +1282,9 @@ export default function InboxPage() {
       } else {
         setApprovedServiceId(body.service_id ?? "ok");
         await loadData(token);
-        setMessage(`Servizio approvato e confermato. ID: ${body.service_id?.slice(0, 8)}...`);
+        setMessage(body.service_ids?.length
+          ? `${body.service_ids.length} servizi creati nella stessa pratica. Verifica i nominativi prima dell'operatività.`
+          : `Servizio approvato e confermato. ID: ${body.service_id?.slice(0, 8)}...`);
       }
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : "Errore di rete.");
@@ -1276,6 +1292,29 @@ export default function InboxPage() {
       approvalInFlightRef.current = false;
       setSubmitting(false);
     }
+  };
+
+  const attachMultiStopPdf = async () => {
+    if (!selectedEmail || !multiStopPdf) return;
+    const token = await getToken();
+    if (!token) { setApproveError("Sessione scaduta."); return; }
+    setMultiStopUploading(true);
+    setApproveError(null);
+    try {
+      const data = new FormData();
+      data.append("inbound_email_id", selectedEmail.id);
+      data.append("file", multiStopPdf);
+      const response = await fetch("/api/email/inbox-attach-multi-stop", {
+        method: "POST", headers: { authorization: `Bearer ${token}` }, body: data,
+      });
+      const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!response.ok || !body.ok) throw new Error(body.error ?? "PDF non leggibile.");
+      await loadData(token);
+      setMultiStopPdf(null);
+      setMessage("Tratte del PDF caricate: verifica hotel e passeggeri prima di approvare.");
+    } catch (error) {
+      setApproveError(error instanceof Error ? error.message : "Caricamento PDF non riuscito.");
+    } finally { setMultiStopUploading(false); }
   };
 
   // ── Azioni pannello duplicati ──────────────────────────────────────────────
@@ -2042,6 +2081,35 @@ export default function InboxPage() {
                     </p>
                   )}
 
+                  {multiStopHint && (
+                    <section className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                      <p className="font-semibold">Pratica Aleste con più fermate</p>
+                      <p>Questa conferma richiede due servizi distinti da 1 passeggero. Il modulo singolo mostra solo la prima fermata.</p>
+                      {multiStopPairs ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {multiStopPairs.map(({ arrival, departure }, index) => (
+                            <div key={`${arrival.stop}-${index}`} className="rounded-lg border border-amber-200 bg-white p-3">
+                              <p className="font-semibold">Tratta {index + 1} · {arrival.pax} pax</p>
+                              <p>Andata {arrival.date} ore {arrival.time}: {arrival.stop}</p>
+                              <p>Ritorno {departure.date} ore {departure.time}: {departure.destination}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p>Il vecchio import ha conservato solo il riepilogo. Allega qui il PDF originale della stessa pratica per recuperare tutte le fermate.</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input type="file" accept="application/pdf,.pdf" onChange={(event) => setMultiStopPdf(event.target.files?.[0] ?? null)} className="max-w-full text-xs" aria-label="PDF originale Aleste" />
+                            <button type="button" onClick={() => void attachMultiStopPdf()} disabled={!multiStopPdf || multiStopUploading} className="btn-secondary px-3 py-1.5 text-xs disabled:opacity-50">
+                              {multiStopUploading ? "Lettura PDF..." : "Leggi le tratte"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <p className="text-xs">L&apos;hotel e il nominativo di ciascun passeggero vanno verificati con l&apos;agenzia. I servizi creati resteranno da revisionare.</p>
+                    </section>
+                  )}
+
                   {approveError && (
                     <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{approveError}</div>
                   )}
@@ -2312,9 +2380,9 @@ export default function InboxPage() {
                     ) : (
                       <>
                         <button type="button" onClick={() => void approveEmail()}
-                          disabled={submitting || !canApprove}
+                          disabled={submitting || !canApprove || (multiStopHint && !multiStopPairs)}
                           className="btn-primary px-6 py-2.5 text-sm disabled:opacity-50">
-                          {submitting ? "Approvazione..." : "Approva e crea servizio"}
+                          {submitting ? "Approvazione..." : multiStopPairs ? `Crea ${multiStopPairs.length} servizi da verificare` : "Approva e crea servizio"}
                         </button>
                         <button type="button" onClick={() => void openEscursionePanel()}
                           disabled={submitting}

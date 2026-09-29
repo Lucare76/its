@@ -119,6 +119,7 @@ function makeFakeAdmin(opts: {
   /** Servizi indirizzabili via link_to_service_id (id → riga). */
   existingServicesById?: Record<string, Record<string, unknown>>;
   inboundEmailUpdates?: Array<Record<string, unknown>>;
+  multiStopRows?: Array<{ direction: "andata" | "ritorno"; date: string; time: string; pax: number; stop: string; destination: string }>;
 }) {
   const genericBuilder = (): Record<string, unknown> => {
     const b: Record<string, unknown> = {};
@@ -164,7 +165,7 @@ function makeFakeAdmin(opts: {
   const inboundEmailsBuilder = (): Record<string, unknown> => {
     const b: Record<string, unknown> = {};
     for (const m of ["select", "eq"]) b[m] = () => b;
-    b.maybeSingle = async () => ({ data: { parsed_json: {} }, error: null });
+    b.maybeSingle = async () => ({ data: opts.multiStopRows ? { id: INBOUND_EMAIL_ID, extracted_text: "STAFF ALESTE", parsed_json: { aleste_multi_stop: { rows: opts.multiStopRows } } } : { parsed_json: {} }, error: null });
     b.single = async () => ({ data: { id: "inbound-1", parsed_json: {} }, error: null });
     b.update = (payload: Record<string, unknown>) => {
       (opts.inboundEmailUpdates ?? []).push(payload);
@@ -213,6 +214,7 @@ function makeFakeAdmin(opts: {
   };
 
   return {
+    rpc: async () => ({ data: "ITS-2026-99", error: null }),
     from(table: string) {
       if (table === "services") return servicesBuilder();
       if (table === "hotels") return hotelsBuilder();
@@ -237,6 +239,29 @@ beforeEach(() => {
 });
 
 describe("POST /api/email/inbox-approve — parità campi operativi con il flusso manuale", () => {
+  it("approva due fermate Aleste come due servizi da 1 pax nella stessa pratica", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const inboundEmailUpdates: Array<Record<string, unknown>> = [];
+    const rows = [
+      { direction: "andata" as const, date: "11-ott-26", time: "06:30", pax: 1, stop: "CASCINA GOBBA", destination: "ISOLA VERDE" },
+      { direction: "andata" as const, date: "11-ott-26", time: "11:15", pax: 1, stop: "CASELLO VALDARNO", destination: "ISOLA VERDE" },
+      { direction: "ritorno" as const, date: "18-ott-26", time: "05:00", pax: 1, stop: "DA HOTEL", destination: "CASCINA GOBBA" },
+      { direction: "ritorno" as const, date: "18-ott-26", time: "05:00", pax: 1, stop: "DA HOTEL", destination: "CASELLO VALDARNO" },
+    ];
+    mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(makeFakeAdmin({ serviceInserts, inboundEmailUpdates, multiStopRows: rows, hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }] })));
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: alesteForm({ cliente_nome: "IMPIOMBATO FRANCESCO", n_pax: "2", numero_pratica: "26/015394", data_arrivo: "2026-10-11", data_partenza: "2026-10-18", tipo_servizio: "bus_city_hotel", totale_pratica: "240" }) }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.service_ids).toHaveLength(2);
+    expect(serviceInserts.map((row) => [row.pax, row.time, row.meeting_point, row.departure_time, row.practice_number, row.source_total_amount_cents])).toEqual([
+      [1, "06:30", "CASCINA GOBBA", "05:00", "ITS-2026-99", 12000],
+      [1, "11:15", "CASELLO VALDARNO", "05:00", "ITS-2026-99", 12000],
+    ]);
+    expect(serviceInserts[0].inbound_email_id).toBe(INBOUND_EMAIL_ID);
+    expect(serviceInserts[1].inbound_email_id).toBeNull();
+    expect(serviceInserts.every((row) => row.status === "needs_review")).toBe(true);
+    expect(inboundEmailUpdates).toHaveLength(1);
+  });
   it("import con arrivo + partenza: valorizza arrival_date/time, departure_date/time, meeting_point, transport_code", async () => {
     const serviceInserts: Array<Record<string, unknown>> = [];
     mocks.authorizePricingRequest.mockResolvedValue(
