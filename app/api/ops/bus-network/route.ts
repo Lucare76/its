@@ -3153,7 +3153,7 @@ export async function POST(request: NextRequest) {
       await recordBusAssignmentFeedback(auth, {
         tenantId,
         serviceId: a.service_id,
-        actionType: "cross_line_move",
+        actionType: a.bus_line_id === parsed.target_bus_line_id ? "move" : "cross_line_move",
         source: "manual",
         oldBusUnitId: a.bus_unit_id,
         newBusUnitId: unitRow.id,
