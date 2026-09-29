@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
 import { resolveBusStop } from "@/lib/server/bus-lines-catalog";
+import { autoAllocateBusService } from "@/lib/server/bus-auto-allocation";
 import { autoLinkImportedServices } from "@/lib/server/transfer-ischia-blocks";
 import { applyPickupCalc } from "@/lib/server/apply-pickup-calc";
 import { buildDuplicateProbe, lookupBookingDuplicates, hydrateDuplicateMatches } from "@/lib/server/agency-pdf-import";
@@ -24,6 +25,21 @@ import { hasRealDepartureLeg } from "@/lib/booking-list-display";
 import { type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+
+async function assignImportedBusServices(admin: SupabaseClient, tenantId: string, userId: string, serviceIds: string[]) {
+  const assignments: Array<{ service_id: string; allocated: boolean; bus_label?: string; reason?: string }> = [];
+  for (const serviceId of serviceIds) {
+    try {
+      const result = await autoAllocateBusService({ admin, tenantId, serviceId, userId });
+      assignments.push(result.allocated
+        ? { service_id: serviceId, allocated: true, bus_label: result.busLabel }
+        : { service_id: serviceId, allocated: result.reason === "Già allocato", reason: result.reason });
+    } catch (error) {
+      assignments.push({ service_id: serviceId, allocated: false, reason: error instanceof Error ? error.message : "Assegnazione bus non riuscita" });
+    }
+  }
+  return assignments;
+}
 
 type FormState = {
   cliente_nome: string;
@@ -406,7 +422,11 @@ export async function POST(request: NextRequest) {
       .eq("tenant_id", tenantId).ilike("notes", `%${sourceMarker}%`).limit(10);
     const alreadyConfirmed = primary && primary.is_draft === false &&
       pairs.every((_, index) => related?.some((row) => String(row.notes ?? "").includes(`[aleste_route:${index + 1}]`)));
-    if (alreadyConfirmed) return NextResponse.json({ ok: true, service_id: primary.id, inbound_email_id, already_existed: true });
+    if (alreadyConfirmed) {
+      const serviceIds = related?.length ? related.map((row) => row.id) : [primary.id];
+      const bus_assignments = await assignImportedBusServices(admin, tenantId, userId, serviceIds);
+      return NextResponse.json({ ok: true, service_id: primary.id, service_ids: serviceIds, bus_assignments, inbound_email_id, already_existed: true });
+    }
 
     const existingPractice = primary?.practice_number ?? related?.find((row) => row.practice_number)?.practice_number;
     const generated = existingPractice ? null : await admin.rpc("next_booking_practice_number", { p_tenant_id: tenantId });
@@ -472,7 +492,8 @@ export async function POST(request: NextRequest) {
       linked_service_id: createdIds[0], linked_service_ids: createdIds, confirmed_by: userId
     } }).eq("tenant_id", tenantId).eq("id", inbound_email_id);
     if (emailUpdate.error) return NextResponse.json({ ok: false, error: emailUpdate.error.message }, { status: 500 });
-    return NextResponse.json({ ok: true, service_id: createdIds[0], service_ids: createdIds, inbound_email_id });
+    const bus_assignments = await assignImportedBusServices(admin, tenantId, userId, createdIds);
+    return NextResponse.json({ ok: true, service_id: createdIds[0], service_ids: createdIds, bus_assignments, inbound_email_id });
   }
 
   const { data: existingService } = await admin
@@ -844,7 +865,7 @@ export async function POST(request: NextRequest) {
       is_draft: false,
       date: arrivalDate,
       time: outboundTime,
-      service_type: "transfer",
+      service_type: bookingKind === "bus_city_hotel" ? "bus_tour" : "transfer",
       direction: "arrival",
       vessel: arrivalPlace ?? "Transfer da email",
       pax: passengers,
@@ -863,6 +884,7 @@ export async function POST(request: NextRequest) {
       departure_date: departureDate,
       departure_time: returnTime,
       meeting_point: arrivalPlace,
+      bus_city_origin: bookingKind === "bus_city_hotel" ? (resolvedBusStop?.canonicalCity ?? arrivalPlace) : null,
       transport_code: transportCode,
       service_type_code: serviceTypeCode,
       train_arrival_number: isTrainKind ? trainArrivalNumber : null,
@@ -955,5 +977,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, service_id: service.id, inbound_email_id });
+  const bus_assignments = bookingKind === "bus_city_hotel"
+    ? await assignImportedBusServices(admin, tenantId, userId, [service.id]) : [];
+  return NextResponse.json({ ok: true, service_id: service.id, bus_assignments, inbound_email_id });
 }

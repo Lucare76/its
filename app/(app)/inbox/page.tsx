@@ -1262,7 +1262,7 @@ export default function InboxPage() {
         })
       });
       const body = (await res.json().catch(() => ({}))) as {
-        ok?: boolean; service_id?: string; service_ids?: string[]; error?: string;
+        ok?: boolean; service_id?: string; service_ids?: string[]; bus_assignments?: Array<{ service_id: string; allocated: boolean; bus_label?: string; reason?: string }>; error?: string;
         duplicate?: boolean; matches?: DupMatch[]; certain_service_id?: string | null; incoming_ferry_meta?: FerryMeta;
       };
       if (res.status === 409 && body.duplicate && Array.isArray(body.matches) && body.matches.length > 0) {
@@ -1284,10 +1284,18 @@ export default function InboxPage() {
         setApproveError(body.error ?? `Errore HTTP ${res.status}`);
       } else {
         setApprovedServiceId(body.service_id ?? "ok");
+        let busAssignmentMessage = "";
+        if (body.bus_assignments?.length) {
+          const assigned = body.bus_assignments.filter((item) => item.allocated);
+          const pending = body.bus_assignments.filter((item) => !item.allocated);
+          busAssignmentMessage = pending.length
+            ? ` ${assigned.length} sul bus; ${pending.length} da verificare: ${pending.map((item) => item.reason ?? "controlla Rete Bus").join("; ")}.`
+            : ` ${assigned.length} assegnati direttamente al bus.`;
+        }
         await loadData(token);
         setMessage(body.service_ids?.length
-          ? `${body.service_ids.length} servizi creati nella stessa pratica. Verifica i nominativi prima dell'operatività.`
-          : `Servizio approvato e confermato. ID: ${body.service_id?.slice(0, 8)}...`);
+          ? `${body.service_ids.length} servizi creati nella stessa pratica. Verifica i nominativi prima dell'operatività.${busAssignmentMessage}`
+          : `Servizio approvato e confermato. ID: ${body.service_id?.slice(0, 8)}...${busAssignmentMessage}`);
       }
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : "Errore di rete.");

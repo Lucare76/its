@@ -2985,7 +2985,7 @@ export async function POST(request: NextRequest) {
       const [{ data: targetStop, error: targetStopErr }, { data: targetUnit, error: targetUnitErr }] = await Promise.all([
         auth.admin
           .from("tenant_bus_line_stops")
-          .select("id,bus_line_id,direction,stop_name,active")
+          .select("id,bus_line_id,direction,stop_name,pickup_note,active")
           .eq("tenant_id", tenantId)
           .eq("id", parsed.target_stop_id)
           .single(),
@@ -2999,7 +2999,7 @@ export async function POST(request: NextRequest) {
       if (targetStopErr || !targetStop) return NextResponse.json({ ok: false, error: "Fermata destinazione non trovata." }, { status: 404 });
       if (targetUnitErr || !targetUnit) return NextResponse.json({ ok: false, error: "Bus destinazione non trovato." }, { status: 404 });
 
-      const stopRow = targetStop as { id: string; bus_line_id: string; direction: string; stop_name: string; active: boolean };
+      const stopRow = targetStop as { id: string; bus_line_id: string; direction: string; stop_name: string; pickup_note: string | null; active: boolean };
       let unitRow = targetUnit as { id: string; bus_line_id: string; capacity: number; status: string; label?: string };
       if (!stopRow.active || stopRow.bus_line_id !== parsed.target_bus_line_id || stopRow.direction !== a.direction) {
         return NextResponse.json({ ok: false, error: "Fermata destinazione non coerente con linea/direzione." }, { status: 400 });
@@ -3010,11 +3010,14 @@ export async function POST(request: NextRequest) {
 
       const { data: serviceRow, error: serviceErr } = await auth.admin
         .from("services")
-        .select("date,direction")
+        .select("date,direction,booking_group_stop_id,booking_service_kind")
         .eq("tenant_id", tenantId)
         .eq("id", a.service_id)
         .single();
       if (serviceErr || !serviceRow) return NextResponse.json({ ok: false, error: "Servizio allocazione non trovato." }, { status: 404 });
+      if (a.bus_line_id === parsed.target_bus_line_id && serviceRow.booking_group_stop_id) {
+        return NextResponse.json({ ok: false, error: "Questa fermata appartiene a una pratica gruppo: modifica prima la fermata del gruppo." }, { status: 409 });
+      }
 
       const sameDateServices = await auth.admin
         .from("services")
@@ -3094,11 +3097,14 @@ export async function POST(request: NextRequest) {
         .eq("id", parsed.allocation_id);
       if (updateAllocErr) throw new Error(updateAllocErr.message);
 
-      await auth.admin
+      const { error: serviceUpdateErr } = await auth.admin
         .from("services")
-        .update({ bus_city_origin: targetStopName })
+        .update(a.bus_line_id === parsed.target_bus_line_id && serviceRow.booking_service_kind === "bus_city_hotel"
+          ? { bus_city_origin: targetStopName, meeting_point: stopRow.pickup_note?.trim() || targetStopName }
+          : { bus_city_origin: targetStopName })
         .eq("tenant_id", tenantId)
         .eq("id", a.service_id);
+      if (serviceUpdateErr) throw new Error(serviceUpdateErr.message);
 
       // Traccia nel log movimenti
       await auth.admin.from("tenant_bus_allocation_moves").insert({
@@ -3108,7 +3114,7 @@ export async function POST(request: NextRequest) {
         to_bus_unit_id: unitRow.id,
         stop_name: targetStopName,
         pax_moved: a.pax_assigned,
-        reason: `Trasferito a linea diversa`,
+        reason: a.bus_line_id === parsed.target_bus_line_id ? "Cambio fermata" : "Trasferito a linea diversa",
         created_by_user_id: auth.user.id,
       });
 
@@ -3126,7 +3132,7 @@ export async function POST(request: NextRequest) {
       await recordBusAssignmentFeedback(auth, {
         tenantId,
         serviceId: a.service_id,
-        actionType: "cross_line_move",
+        actionType: a.bus_line_id === parsed.target_bus_line_id ? "move" : "cross_line_move",
         source: "manual",
         oldBusUnitId: a.bus_unit_id,
         newBusUnitId: unitRow.id,
@@ -3143,7 +3149,7 @@ export async function POST(request: NextRequest) {
         hotelName: transferContext?.hotelName ?? null,
         derivedFamilyCode: transferContext?.derivedFamilyCode ?? null,
         finalFamilyCode: transferLineFamilyCodes.get(parsed.target_bus_line_id) ?? null,
-        reason: "Trasferito a linea diversa",
+        reason: a.bus_line_id === parsed.target_bus_line_id ? "Cambio fermata" : "Trasferito a linea diversa",
         createdByUserId: auth.user.id,
       });
 
