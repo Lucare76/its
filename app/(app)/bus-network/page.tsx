@@ -931,15 +931,10 @@ export default function BusNetworkPage() {
   const openTransferModal = useCallback((alloc: AllocationDetail) => {
     setTransferAlloc(alloc);
     setTransferCreatingStop(false);
-    const otherLines = payload.lines.filter((l) => l.id !== alloc.bus_line_id);
-    const firstLine = otherLines[0];
-    const firstLineId = firstLine?.id ?? "";
-    setTransferLineId(firstLineId);
-    const firstStop = payload.stops.find((s) => s.bus_line_id === firstLineId && s.direction === direction);
-    setTransferStopId(firstStop?.id ?? "");
-    const firstUnit = payload.units.find((u) => u.bus_line_id === firstLineId && u.status !== "closed" && u.status !== "completed");
-    setTransferUnitId(firstUnit?.id ?? "");
-  }, [payload.lines, payload.stops, payload.units, direction]);
+    setTransferLineId(alloc.bus_line_id);
+    setTransferStopId(alloc.stop_id ?? "");
+    setTransferUnitId(alloc.bus_unit_id);
+  }, []);
 
   const createStopForTransfer = useCallback(async () => {
     if (!transferAlloc || !transferLineId) return;
@@ -3509,9 +3504,9 @@ export default function BusNetworkPage() {
                                     </button>
                                     {isAdmin && (
                                       <button onClick={() => openTransferModal(alloc)}
-                                        title="Cambia linea: sposta questo servizio su un'altra linea (con nuova fermata)"
+                                        title="Cambia fermata o linea di questo passeggero"
                                         className="rounded border border-violet-200 px-1.5 py-0.5 text-xs text-violet-600 opacity-0 transition-opacity hover:bg-violet-50 group-hover:opacity-100">
-                                        ↔ Cambia linea
+                                        ↔ Cambia fermata
                                       </button>
                                     )}
                                     {deleteConfirmId === alloc.allocation_id ? (
@@ -3665,9 +3660,9 @@ export default function BusNetworkPage() {
                                   </button>
                                   {isAdmin && (
                                     <button onClick={() => openTransferModal(alloc)}
-                                      title="Cambia linea: sposta questo servizio su un'altra linea (con nuova fermata)"
+                                        title="Cambia fermata o linea di questo passeggero"
                                       className="rounded border border-violet-200 px-1.5 py-0.5 text-xs text-violet-600 opacity-0 transition-opacity hover:bg-violet-50 group-hover:opacity-100">
-                                      ↔ Cambia linea
+                                        ↔ Cambia fermata
                                     </button>
                                   )}
                                   {deleteConfirmId === alloc.allocation_id ? (
@@ -5084,8 +5079,8 @@ export default function BusNetworkPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Cambia linea</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Solo admin — sposta la prenotazione su un&apos;altra linea bus</p>
+              <h2 className="text-lg font-bold text-slate-900">Cambia fermata o linea</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Scegli la fermata corretta, anche sul bus attuale</p>
             </div>
 
             <div className="rounded-xl bg-slate-50 p-4 space-y-1">
@@ -5109,7 +5104,7 @@ export default function BusNetworkPage() {
                   setTransferUnitId(firstUnit?.id ?? "");
                 }}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
-                {payload.lines.filter((l) => l.id !== transferAlloc.bus_line_id).map((l) => (
+                {payload.lines.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
               </select>
@@ -5121,7 +5116,7 @@ export default function BusNetworkPage() {
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
                 {transferTargetStops.length === 0
                   ? <option value="">— nessuna fermata —</option>
-                  : transferTargetStops.map((s) => <option key={s.id} value={s.id}>{s.stop_name}{s.city && s.city !== s.stop_name ? ` (${s.city})` : ""}</option>)
+                  : transferTargetStops.map((s) => <option key={s.id} value={s.id}>{s.stop_name}{s.pickup_note ? ` — ${s.pickup_note}` : s.city && s.city !== s.stop_name ? ` (${s.city})` : ""}</option>)
                 }
               </select>
               {transferStopMissing && transferAlloc && (
@@ -5155,7 +5150,7 @@ export default function BusNetworkPage() {
                 className="btn-secondary flex-1 py-2.5">Annulla</button>
               <button
                 onClick={() => void confirmTransfer()}
-                disabled={saving || !transferLineId || !transferUnitId || !transferStopId}
+                disabled={saving || !transferLineId || !transferUnitId || !transferStopId || (transferUnitId === transferAlloc.bus_unit_id && transferStopId === transferAlloc.stop_id)}
                 className="flex-1 rounded-lg bg-violet-600 py-2.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-40">
                 {saving ? "Trasferimento..." : "Conferma trasferimento"}
               </button>
