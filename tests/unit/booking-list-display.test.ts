@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { bookingListTransportTimes, hasRealDepartureLeg } from "@/lib/booking-list-display";
 
 describe("bookingListTransportTimes", () => {
+  it("mostra anche il ritorno dei due servizi Aleste già creati, senza alterare gli altri arrivi", () => {
+    const result = bookingListTransportTimes({
+      booking_service_kind: "bus_city_hotel", direction: "arrival",
+      arrival_date: "2026-10-11", arrival_time: "06:30",
+      departure_date: "2026-10-18", departure_time: "05:00", pickup_hotel: "05:00",
+      notes: "[aleste_route:1] | Andata: CASCINA GOBBA ore 06:30 | Ritorno: CASCINA GOBBA ore 05:00 | VIAGGIA CON 1 PERSONA DALLA FERMATA CASELLO VALDARNO | Nominativo comune",
+    });
+    expect(result).toMatchObject({ returnDate: "18/10/2026", returnTime: "05:00", returnPickupTime: "05:00", returnDestination: "CASCINA GOBBA", travelCompanion: "VIAGGIA CON 1 PERSONA DALLA FERMATA CASELLO VALDARNO" });
+    expect(bookingListTransportTimes({ booking_service_kind: "bus_city_hotel", direction: "arrival", departure_date: "2026-10-18", departure_time: "05:00", pickup_hotel: "05:00" })).toMatchObject({ returnDate: null, returnTime: null, returnPickupTime: null });
+  });
   it("prenotazione importata via IMAP+Claude (fix inbox-approve): la card mostra gli stessi dati del flusso manuale", () => {
     // Forma esatta scritta da app/api/email/inbox-approve/route.ts dopo il fix
     // (nessun train_arrival_time/train_departure_time: solo i campi generici
