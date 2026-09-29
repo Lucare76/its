@@ -1,5 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { deriveServiceBusIdentity } from "@/lib/server/bus-network";
+
+it("riconosce Cascina Gobba come fermata Milano della linea Italia", () => {
+  const identity = deriveServiceBusIdentity({
+    transport_code: null, bus_city_origin: "CASCINA GOBBA",
+    outbound_time: "06:30", time: "06:30",
+    service_type_code: "bus_line", booking_service_kind: "bus_city_hotel",
+  });
+  expect(identity.family_code).toBe("ITALIA");
+  expect(identity.lineCode).toBe("LINEA_1_ITALIA");
+});
 
 /**
  * FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY.
