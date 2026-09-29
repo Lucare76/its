@@ -1715,23 +1715,38 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (action === "auto_assign_date") {
+    if (action === "auto_assign_date" || action === "auto_assign_services") {
       const autoSchema = z.object({
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        direction: z.enum(["arrival", "departure"])
+        direction: z.enum(["arrival", "departure"]),
+        service_ids: z.array(z.string().uuid()).min(1).max(20).optional(),
       });
       const parsed = autoSchema.parse(body);
+      if (action === "auto_assign_services" && !parsed.service_ids?.length) {
+        return NextResponse.json({ ok: false, error: "Servizi da assegnare mancanti." }, { status: 400 });
+      }
+
+      let serviceQuery = auth.admin.from("services")
+        .select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id,hotel_id")
+        .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction)
+        .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
+        .order("time");
+      if (parsed.service_ids) serviceQuery = serviceQuery.in("id", parsed.service_ids).eq("is_draft", false).neq("status", "cancelled");
+
+      const sameDateServiceIdsResult = await auth.admin.from("services").select("id")
+        .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction);
+      if (sameDateServiceIdsResult.error) throw new Error(sameDateServiceIdsResult.error.message);
+      const sameDateServiceIds = (sameDateServiceIdsResult.data ?? []).map((row) => row.id);
+      const dateAllocationsQuery = auth.admin.from("tenant_bus_allocations")
+        .select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId);
 
       // Carica dati necessari
       const [svcRes, linesRes, stopsRes, unitsRes, allocRes, exclusiveRes] = await Promise.all([
-        auth.admin.from("services").select("id,customer_name,customer_first_name,customer_last_name,pax,direction,bus_city_origin,transport_code,time,outbound_time,service_type_code,booking_service_kind,booking_group_id,hotel_id")
-          .eq("tenant_id", tenantId).eq("date", parsed.date).eq("direction", parsed.direction)
-          .or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel")
-          .order("time"),
+        serviceQuery,
         auth.admin.from("tenant_bus_lines").select("id,code,name,family_code").eq("tenant_id", tenantId),
         auth.admin.from("tenant_bus_line_stops").select("id,bus_line_id,direction,stop_name,city,stop_order").eq("tenant_id", tenantId).eq("active", true),
         auth.admin.from("tenant_bus_units").select("id,bus_line_id,label,capacity,status,sort_order").eq("tenant_id", tenantId).eq("active", true).order("sort_order"),
-        auth.admin.from("tenant_bus_allocations").select("id,service_id,bus_unit_id,bus_line_id,stop_id,pax_assigned").eq("tenant_id", tenantId),
+        sameDateServiceIds.length ? dateAllocationsQuery.in("service_id", sameDateServiceIds) : Promise.resolve({ data: [], error: null }),
         // FIX MIRATO — AUTO ASSEGNAZIONE BUS: PREFILTRO EXCLUSIVE + RETRY.
         // Stessa condizione di lock applicata dentro allocate_bus_service
         // (per data, exclusive=true), letta qui a monte per evitare di
@@ -1824,6 +1839,12 @@ export async function POST(request: NextRequest) {
       });
       for (const svc of sortedServices) {
         if (allocatedIds.has(svc.id)) continue;
+        // Approvazione Inbox: mai inventare una fermata da un testo ambiguo.
+        // Se la fermata non e' riconosciuta nel catalogo, l'operatore la corregge.
+        if (parsed.service_ids && !resolveBusStop(svc.bus_city_origin)) {
+          skipped.push({ serviceId: svc.id, customerName: svc.customer_name, reason: `Fermata ${svc.bus_city_origin ?? "N/D"} non riconosciuta: verifica prima di assegnare.` });
+          continue;
+        }
 
         const identity = deriveServiceBusIdentity(svc as Parameters<typeof deriveServiceBusIdentity>[0]);
         const line = familyLineByCode.get(identity.family_code ?? "") ?? lineByCode.get(identity.lineCode ?? "");
@@ -2985,7 +3006,7 @@ export async function POST(request: NextRequest) {
       const [{ data: targetStop, error: targetStopErr }, { data: targetUnit, error: targetUnitErr }] = await Promise.all([
         auth.admin
           .from("tenant_bus_line_stops")
-          .select("id,bus_line_id,direction,stop_name,active")
+          .select("id,bus_line_id,direction,stop_name,pickup_note,active")
           .eq("tenant_id", tenantId)
           .eq("id", parsed.target_stop_id)
           .single(),
@@ -2999,7 +3020,7 @@ export async function POST(request: NextRequest) {
       if (targetStopErr || !targetStop) return NextResponse.json({ ok: false, error: "Fermata destinazione non trovata." }, { status: 404 });
       if (targetUnitErr || !targetUnit) return NextResponse.json({ ok: false, error: "Bus destinazione non trovato." }, { status: 404 });
 
-      const stopRow = targetStop as { id: string; bus_line_id: string; direction: string; stop_name: string; active: boolean };
+      const stopRow = targetStop as { id: string; bus_line_id: string; direction: string; stop_name: string; pickup_note: string | null; active: boolean };
       let unitRow = targetUnit as { id: string; bus_line_id: string; capacity: number; status: string; label?: string };
       if (!stopRow.active || stopRow.bus_line_id !== parsed.target_bus_line_id || stopRow.direction !== a.direction) {
         return NextResponse.json({ ok: false, error: "Fermata destinazione non coerente con linea/direzione." }, { status: 400 });
@@ -3010,11 +3031,14 @@ export async function POST(request: NextRequest) {
 
       const { data: serviceRow, error: serviceErr } = await auth.admin
         .from("services")
-        .select("date,direction")
+        .select("date,direction,booking_group_stop_id,booking_service_kind")
         .eq("tenant_id", tenantId)
         .eq("id", a.service_id)
         .single();
       if (serviceErr || !serviceRow) return NextResponse.json({ ok: false, error: "Servizio allocazione non trovato." }, { status: 404 });
+      if (a.bus_line_id === parsed.target_bus_line_id && serviceRow.booking_group_stop_id) {
+        return NextResponse.json({ ok: false, error: "Questa fermata appartiene a una pratica gruppo: modifica prima la fermata del gruppo." }, { status: 409 });
+      }
 
       const sameDateServices = await auth.admin
         .from("services")
@@ -3094,11 +3118,14 @@ export async function POST(request: NextRequest) {
         .eq("id", parsed.allocation_id);
       if (updateAllocErr) throw new Error(updateAllocErr.message);
 
-      await auth.admin
+      const { error: serviceUpdateErr } = await auth.admin
         .from("services")
-        .update({ bus_city_origin: targetStopName })
+        .update(a.bus_line_id === parsed.target_bus_line_id && serviceRow.booking_service_kind === "bus_city_hotel"
+          ? { bus_city_origin: targetStopName, meeting_point: stopRow.pickup_note?.trim() || targetStopName }
+          : { bus_city_origin: targetStopName })
         .eq("tenant_id", tenantId)
         .eq("id", a.service_id);
+      if (serviceUpdateErr) throw new Error(serviceUpdateErr.message);
 
       // Traccia nel log movimenti
       await auth.admin.from("tenant_bus_allocation_moves").insert({
@@ -3108,7 +3135,7 @@ export async function POST(request: NextRequest) {
         to_bus_unit_id: unitRow.id,
         stop_name: targetStopName,
         pax_moved: a.pax_assigned,
-        reason: `Trasferito a linea diversa`,
+        reason: a.bus_line_id === parsed.target_bus_line_id ? "Cambio fermata" : "Trasferito a linea diversa",
         created_by_user_id: auth.user.id,
       });
 
@@ -3143,7 +3170,7 @@ export async function POST(request: NextRequest) {
         hotelName: transferContext?.hotelName ?? null,
         derivedFamilyCode: transferContext?.derivedFamilyCode ?? null,
         finalFamilyCode: transferLineFamilyCodes.get(parsed.target_bus_line_id) ?? null,
-        reason: "Trasferito a linea diversa",
+        reason: a.bus_line_id === parsed.target_bus_line_id ? "Cambio fermata" : "Trasferito a linea diversa",
         createdByUserId: auth.user.id,
       });
 
