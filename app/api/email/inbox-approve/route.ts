@@ -9,6 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isAlesteMultiStop } from "@/lib/server/aleste-multi-stop";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
@@ -358,6 +359,15 @@ export async function POST(request: NextRequest) {
   }
 
   if (!form) return NextResponse.json({ ok: false, error: "Dati form mancanti." }, { status: 400 });
+
+  const { data: multiStopSource } = await admin.from("inbound_emails")
+    .select("extracted_text")
+    .eq("tenant_id", tenantId)
+    .eq("id", inbound_email_id)
+    .maybeSingle();
+  if (isAlesteMultiStop(multiStopSource?.extracted_text ?? "")) {
+    return NextResponse.json({ ok: false, error: "Questa pratica Aleste ha più fermate. Il form singolo non può caricarla correttamente: inserisci separatamente le tratte per fermata e verifica i passeggeri." }, { status: 422 });
+  }
 
   const { data: existingService } = await admin
     .from("services")
