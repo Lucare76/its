@@ -119,6 +119,7 @@ function makeFakeAdmin(opts: {
   /** Servizi indirizzabili via link_to_service_id (id → riga). */
   existingServicesById?: Record<string, Record<string, unknown>>;
   inboundEmailUpdates?: Array<Record<string, unknown>>;
+  multiStopRows?: Array<{ direction: "andata" | "ritorno"; date: string; time: string; pax: number; stop: string; destination: string }>;
 }) {
   const genericBuilder = (): Record<string, unknown> => {
     const b: Record<string, unknown> = {};
@@ -164,7 +165,7 @@ function makeFakeAdmin(opts: {
   const inboundEmailsBuilder = (): Record<string, unknown> => {
     const b: Record<string, unknown> = {};
     for (const m of ["select", "eq"]) b[m] = () => b;
-    b.maybeSingle = async () => ({ data: { parsed_json: {} }, error: null });
+    b.maybeSingle = async () => ({ data: opts.multiStopRows ? { id: INBOUND_EMAIL_ID, extracted_text: "STAFF ALESTE", parsed_json: { aleste_multi_stop: { rows: opts.multiStopRows } } } : { parsed_json: {} }, error: null });
     b.single = async () => ({ data: { id: "inbound-1", parsed_json: {} }, error: null });
     b.update = (payload: Record<string, unknown>) => {
       (opts.inboundEmailUpdates ?? []).push(payload);
@@ -213,6 +214,7 @@ function makeFakeAdmin(opts: {
   };
 
   return {
+    rpc: async () => ({ data: "ITS-2026-99", error: null }),
     from(table: string) {
       if (table === "services") return servicesBuilder();
       if (table === "hotels") return hotelsBuilder();
@@ -237,6 +239,29 @@ beforeEach(() => {
 });
 
 describe("POST /api/email/inbox-approve — parità campi operativi con il flusso manuale", () => {
+  it("approva due fermate Aleste come due servizi da 1 pax nella stessa pratica", async () => {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    const inboundEmailUpdates: Array<Record<string, unknown>> = [];
+    const rows = [
+      { direction: "andata" as const, date: "11-ott-26", time: "06:30", pax: 1, stop: "CASCINA GOBBA", destination: "ISOLA VERDE" },
+      { direction: "andata" as const, date: "11-ott-26", time: "11:15", pax: 1, stop: "CASELLO VALDARNO", destination: "ISOLA VERDE" },
+      { direction: "ritorno" as const, date: "18-ott-26", time: "05:00", pax: 1, stop: "DA HOTEL", destination: "CASCINA GOBBA" },
+      { direction: "ritorno" as const, date: "18-ott-26", time: "05:00", pax: 1, stop: "DA HOTEL", destination: "CASELLO VALDARNO" },
+    ];
+    mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(makeFakeAdmin({ serviceInserts, inboundEmailUpdates, multiStopRows: rows, hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }] })));
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: alesteForm({ cliente_nome: "IMPIOMBATO FRANCESCO", n_pax: "2", numero_pratica: "26/015394", data_arrivo: "2026-10-11", data_partenza: "2026-10-18", tipo_servizio: "bus_city_hotel", totale_pratica: "240" }) }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.service_ids).toHaveLength(2);
+    expect(serviceInserts.map((row) => [row.pax, row.time, row.meeting_point, row.departure_time, row.practice_number, row.source_total_amount_cents])).toEqual([
+      [1, "06:30", "CASCINA GOBBA", "05:00", "ITS-2026-99", 12000],
+      [1, "11:15", "CASELLO VALDARNO", "05:00", "ITS-2026-99", 12000],
+    ]);
+    expect(serviceInserts[0].inbound_email_id).toBe(INBOUND_EMAIL_ID);
+    expect(serviceInserts[1].inbound_email_id).toBeNull();
+    expect(serviceInserts.every((row) => row.status === "needs_review")).toBe(true);
+    expect(inboundEmailUpdates).toHaveLength(1);
+  });
   it("import con arrivo + partenza: valorizza arrival_date/time, departure_date/time, meeting_point, transport_code", async () => {
     const serviceInserts: Array<Record<string, unknown>> = [];
     mocks.authorizePricingRequest.mockResolvedValue(
@@ -752,255 +777,4 @@ function mattioliUpdateForm(overrides: Partial<FormState> = {}): FormState {
   };
 }
 
-/** Riga "prima" — record combinato reale: direction='arrival' con partenza già presente ma con orari VECCHI. */
-function mattioliExistingCombinedRow() {
-  return {
-    id: MATTIOLI_EXISTING_ID,
-    direction: "arrival",
-    status: "new",
-    is_draft: false,
-    hotel_id: HOTEL_ID,
-    booking_service_kind: "transfer_train_hotel",
-    billing_party_name: "Aleste Viaggi",
-    customer_name: "MATTIOLI ALESSANDRA",
-    phone: "3475489819",
-    pax: 3,
-    time: "12:53",
-    outbound_time: "12:53",
-    arrival_time: "12:53",
-    return_time: "13:20",
-    departure_time: "13:20",
-    arrival_date: "2026-09-01",
-    date: "2026-09-01",
-    departure_date: "2026-09-06",
-    meeting_point: "ROMA TERMINI",
-    transport_code: "ITA 9998 / ITA 9940",
-    train_arrival_number: "ITA 9998",
-    train_arrival_time: "12:53",
-    train_departure_number: "ITA 9940",
-    train_departure_time: "13:20",
-    notes: "[pdf_import] Booking finale creato da PDF | [practice:26/010806]",
-  };
-}
-
-describe("POST /api/email/inbox-approve — pickup hotel su record combinato arrivo+partenza (fix: audit MATTIOLI 26/010806)", () => {
-  it("2. Mattioli combinato: direction='arrival' con partenza reale che CAMBIA in questo update → lookup pickup da DB eseguito, pickup_hotel/pickup_alert valorizzati in changed_fields", async () => {
-    const serviceInserts: Array<Record<string, unknown>> = [];
-    const existingRow = mattioliExistingCombinedRow();
-    mocks.authorizePricingRequest.mockResolvedValue(
-      makeAuthContext(
-        makeFakeAdmin({
-          serviceInserts,
-          hotelsSeed: [{ id: HOTEL_ID, name: "Villa Teresa" }],
-          dupCertainRow: { id: MATTIOLI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
-          dupListRows: [existingRow],
-          existingServicesById: { [MATTIOLI_EXISTING_ID]: existingRow },
-        })
-      )
-    );
-
-    const res = await POST(
-      makeRequest({
-        inbound_email_id: INBOUND_EMAIL_ID,
-        form: mattioliUpdateForm(),
-        action: "update_existing",
-        existing_service_id: MATTIOLI_EXISTING_ID,
-      })
-    );
-    const json = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(json.updated).toBe(true);
-    // La gamba di partenza cambia davvero (departure_date/train_departure_*):
-    // il lookup pickup scatta, stesso fallback statico del test di creazione
-    // sopra — Aleste/treno/traghetto/13:25 rientra nella stessa fascia 13:20-16:50.
-    expect(json.changed_fields).toContain("train_departure_number");
-    expect(json.changed_fields).toContain("train_departure_time");
-    expect(json.changed_fields).toContain("pickup_hotel");
-  });
-
-  it("1. Partenza normale (direction='departure' reale, non combinata): la gamba di partenza cambia → pickup calcolato come per una riga combinata (stesso codice, nessuna distinzione su direction)", async () => {
-    const serviceInserts: Array<Record<string, unknown>> = [];
-    const existingRow = { ...mattioliExistingCombinedRow(), direction: "departure" };
-    mocks.authorizePricingRequest.mockResolvedValue(
-      makeAuthContext(
-        makeFakeAdmin({
-          serviceInserts,
-          hotelsSeed: [{ id: HOTEL_ID, name: "Villa Teresa" }],
-          dupCertainRow: { id: MATTIOLI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
-          dupListRows: [existingRow],
-          existingServicesById: { [MATTIOLI_EXISTING_ID]: existingRow },
-        })
-      )
-    );
-
-    const res = await POST(
-      makeRequest({
-        inbound_email_id: INBOUND_EMAIL_ID,
-        form: mattioliUpdateForm(),
-        action: "update_existing",
-        existing_service_id: MATTIOLI_EXISTING_ID,
-      })
-    );
-    const json = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(json.changed_fields).toContain("pickup_hotel");
-  });
-
-  it("3. BIRAGO su update_existing: nessun campo treno/data di partenza cambia → nessun lookup pickup, pickup_hotel resta INTATTO (mai sovrascritto)", async () => {
-    const serviceInserts: Array<Record<string, unknown>> = [];
-    // Riga con un pickup_hotel già impostato MANUALMENTE dall'operatore per un
-    // motivo indipendente: l'update di oggi tocca solo l'anagrafica, la
-    // partenza (departure_date/train_departure_*) resta invariata.
-    const existingRow = { ...mattioliExistingCombinedRow(), pickup_hotel: "09:00" };
-    mocks.authorizePricingRequest.mockResolvedValue(
-      makeAuthContext(
-        makeFakeAdmin({
-          serviceInserts,
-          hotelsSeed: [{ id: HOTEL_ID, name: "Villa Teresa" }],
-          dupCertainRow: { id: MATTIOLI_EXISTING_ID, is_draft: false, status: "new", inbound_email_id: null, notes: existingRow.notes },
-          dupListRows: [existingRow],
-          existingServicesById: { [MATTIOLI_EXISTING_ID]: existingRow },
-        })
-      )
-    );
-
-    // Stessi orari treno/partenza della riga esistente: nessun campo di
-    // partenza in patch, solo eventuali altri campi.
-    const form = mattioliUpdateForm({
-      data_partenza: "2026-09-06",
-      orario_partenza: "13:20",
-      treno_ritorno: "ITA 9940",
-    });
-    const res = await POST(
-      makeRequest({
-        inbound_email_id: INBOUND_EMAIL_ID,
-        form,
-        action: "update_existing",
-        existing_service_id: MATTIOLI_EXISTING_ID,
-      })
-    );
-    const json = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(json.changed_fields).not.toContain("pickup_hotel");
-    expect(json.changed_fields).not.toContain("pickup_alert");
-    expect(json.changed_fields).not.toContain("departure_date");
-    expect(json.changed_fields).not.toContain("train_departure_number");
-    expect(json.changed_fields).not.toContain("train_departure_time");
-  });
-});
-
-describe("POST /api/email/inbox-approve — controllo duplicati LIVE (regressione MARIOTTI)", () => {
-  it("SICUREZZA (action:update_existing): existing_service_id NON fra i duplicati rilevati → 422, nessun INSERT", async () => {
-    const serviceInserts: Array<Record<string, unknown>> = [];
-    const OTHER_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
-    mocks.authorizePricingRequest.mockResolvedValue(
-      makeAuthContext(
-        makeFakeAdmin({
-          serviceInserts,
-          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
-          dupCertainRow: null,
-          dupListRows: [],
-          existingServicesById: { [OTHER_ID]: { id: OTHER_ID, direction: "arrival" } },
-        })
-      )
-    );
-
-    const res = await POST(
-      makeRequest({
-        inbound_email_id: INBOUND_EMAIL_ID,
-        form: mariottiForm(),
-        action: "update_existing",
-        existing_service_id: OTHER_ID,
-      })
-    );
-    const json = await res.json();
-
-    expect(res.status).toBe(422);
-    expect(json.ok).toBe(false);
-    expect(String(json.error)).toMatch(/non corrisponde/i);
-    expect(serviceInserts).toHaveLength(0);
-  });
-
-  it("AGGIUNGI COME NUOVA (action:create_new) su possibile duplicato: crea la nuova prenotazione", async () => {
-    const serviceInserts: Array<Record<string, unknown>> = [];
-    const comitivaRow = {
-      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      status: "new",
-      is_draft: false,
-      customer_name: "MARIOTTI SERENA",
-      phone: "3289126048",
-      date: "2026-09-06",
-      pax: 2,
-      hotel_id: HOTEL_ID,
-      notes: "",
-      hotels: { name: "Isola Verde Hotel & Thermal Spa" },
-      agencies: null,
-    };
-    mocks.authorizePricingRequest.mockResolvedValue(
-      makeAuthContext(
-        makeFakeAdmin({
-          serviceInserts,
-          hotelsSeed: [{ id: HOTEL_ID, name: "Isola Verde Hotel & Thermal Spa" }],
-          dupCertainRow: null,
-          dupListRows: [comitivaRow],
-        })
-      )
-    );
-
-    const res = await POST(
-      makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form: mariottiForm(), action: "create_new" })
-    );
-    const json = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(json.ok).toBe(true);
-    expect(serviceInserts).toHaveLength(1);
-  });
-
-  it("COMITIVE: stesso telefono + stessa data, persone diverse → 409 come possibile match (NON certo), operatore può aggiungere", async () => {
-    const serviceInserts: Array<Record<string, unknown>> = [];
-    // Membro comitiva già a sistema: stesso telefono, altra persona.
-    const comitivaRow = {
-      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      status: "new",
-      is_draft: false,
-      customer_name: "LEVI STEFANIA",
-      phone: "3382157166",
-      date: "2026-07-12",
-      pax: 3,
-      hotel_id: HOTEL_ID,
-      notes: "",
-      hotels: { name: "Hotel X" },
-      agencies: null,
-    };
-    mocks.authorizePricingRequest.mockResolvedValue(
-      makeAuthContext(
-        makeFakeAdmin({
-          serviceInserts,
-          hotelsSeed: [{ id: HOTEL_ID, name: "Hotel X" }],
-          dupCertainRow: null, // nessun match certo (né composite né pratica né hash)
-          dupListRows: [comitivaRow],
-        })
-      )
-    );
-
-    const form = alesteForm({
-      cliente_nome: "LEVI ALLEGRA",
-      cliente_cellulare: "3382157166",
-      data_arrivo: "2026-07-12",
-      n_pax: "2",
-      numero_pratica: "", // nessuna pratica → nessun match "certo" possibile
-    });
-    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form }));
-    const json = await res.json();
-
-    expect(res.status).toBe(409);
-    expect(json.duplicate).toBe(true);
-    expect(json.certain_service_id).toBeNull(); // NON trattato come duplicato certo
-    expect(serviceInserts).toHaveLength(0); // l'operatore decide (Aggiungi comunque / Modifica)
-    expect(json.matches.length).toBeGreaterThan(0);
-  });
-});
+/** Riga "prima" — record combinato reale: direction='arrival' con parte

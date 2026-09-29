@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { isAlesteMultiStop } from "@/lib/server/aleste-multi-stop";
+import { extractAlesteMultiStopRows, hasAlesteMultiStopSummary, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { canonicalizeKnownHotelName, normalizeHotelAliasValue } from "@/lib/server/hotel-aliases";
@@ -361,12 +361,115 @@ export async function POST(request: NextRequest) {
   if (!form) return NextResponse.json({ ok: false, error: "Dati form mancanti." }, { status: 400 });
 
   const { data: multiStopSource } = await admin.from("inbound_emails")
-    .select("extracted_text")
+    .select("extracted_text, parsed_json")
     .eq("tenant_id", tenantId)
     .eq("id", inbound_email_id)
     .maybeSingle();
-  if (isAlesteMultiStop(multiStopSource?.extracted_text ?? "")) {
-    return NextResponse.json({ ok: false, error: "Questa pratica Aleste ha più fermate. Il form singolo non può caricarla correttamente: inserisci separatamente le tratte per fermata e verifica i passeggeri." }, { status: 422 });
+  const multiStopJson = (multiStopSource?.parsed_json as Record<string, unknown> | null)?.aleste_multi_stop as { rows?: ReturnType<typeof extractAlesteMultiStopRows> } | undefined;
+  const sourceText = multiStopSource?.extracted_text ?? "";
+  const multiStopDetected = isAlesteMultiStop(sourceText) || Boolean(multiStopJson);
+  if (!multiStopDetected && hasAlesteMultiStopSummary({ agency: form.agenzia, sender: String((multiStopSource?.parsed_json as Record<string, unknown> | null)?.from_email ?? ""), note: form.note })) {
+    return NextResponse.json({ ok: false, error: "Questa conferma Aleste contiene due fermate. Allega il PDF originale nel riquadro delle tratte prima di approvare." }, { status: 422 });
+  }
+  if (multiStopDetected) {
+    const rows = multiStopJson?.rows?.length ? multiStopJson.rows : extractAlesteMultiStopRows(sourceText);
+    const pairs = pairAlesteBusRows(rows);
+    if (!pairs || !form.hotel.trim()) {
+      return NextResponse.json({ ok: false, error: "La pratica ha più fermate: serve il PDF con tutte le tratte e l'hotel verificato prima di approvarla." }, { status: 422 });
+    }
+    const dateIso = (value: string) => parseDate(value);
+    if (pairs.some(({ arrival, departure }) => !dateIso(arrival.date) || !dateIso(departure.date)) ||
+      pairs.reduce((sum, pair) => sum + pair.arrival.pax, 0) !== Number(form.n_pax)) {
+      return NextResponse.json({ ok: false, error: "Date o numero passeggeri non coerenti con le tratte del PDF." }, { status: 422 });
+    }
+    const hotelId = await resolveOrCreateHotel(admin, tenantId, form.hotel);
+    if (!hotelId) return NextResponse.json({ ok: false, error: "Hotel non disponibile." }, { status: 500 });
+
+    // The inbox link is unique per tenant; the second service carries the same
+    // practice number and the source email marker in notes for idempotent retry.
+    const { data: primary } = await admin.from("services")
+      .select("id, practice_number, is_draft")
+      .eq("tenant_id", tenantId).eq("inbound_email_id", inbound_email_id).maybeSingle();
+    const sourceMarker = `[inbound_email:${inbound_email_id}]`;
+    const agencyPractice = clean(form.numero_pratica);
+    if (agencyPractice) {
+      const { data: practiceRows } = await admin.from("services").select("id, inbound_email_id, notes, is_draft")
+        .eq("tenant_id", tenantId).ilike("notes", `%[practice:${agencyPractice}]%`).limit(20);
+      if (practiceRows?.some((row) => row.is_draft === false && row.inbound_email_id !== inbound_email_id && !String(row.notes ?? "").includes(sourceMarker))) {
+        return NextResponse.json({ ok: false, error: "La pratica Aleste risulta già presente in un'altra prenotazione. Verifica il duplicato prima di crearla di nuovo." }, { status: 409 });
+      }
+    }
+    const { data: related } = await admin.from("services")
+      .select("id, practice_number, notes")
+      .eq("tenant_id", tenantId).ilike("notes", `%${sourceMarker}%`).limit(10);
+    const alreadyConfirmed = primary && primary.is_draft === false &&
+      pairs.every((_, index) => related?.some((row) => String(row.notes ?? "").includes(`[aleste_route:${index + 1}]`)));
+    if (alreadyConfirmed) return NextResponse.json({ ok: true, service_id: primary.id, inbound_email_id, already_existed: true });
+
+    const existingPractice = primary?.practice_number ?? related?.find((row) => row.practice_number)?.practice_number;
+    const generated = existingPractice ? null : await admin.rpc("next_booking_practice_number", { p_tenant_id: tenantId });
+    if (!existingPractice && (generated?.error || !generated?.data)) {
+      return NextResponse.json({ ok: false, error: "Numero pratica ITS non generabile." }, { status: 500 });
+    }
+    const practice = existingPractice ?? String(generated?.data);
+    const totalCents = Math.round(Number(String(form.totale_pratica).replace(",", ".")) * 100);
+    const totalPax = pairs.reduce((sum, pair) => sum + pair.arrival.pax, 0);
+    const createdIds: string[] = [];
+    for (const [index, pair] of pairs.entries()) {
+      const marker = `[aleste_route:${index + 1}]`;
+      const existing = index === 0 ? primary : related?.find((row) => String(row.notes ?? "").includes(marker));
+      const payload = {
+        tenant_id: tenantId,
+        inbound_email_id: index === 0 ? inbound_email_id : null,
+        is_draft: false,
+        status: "needs_review",
+        date: dateIso(pair.arrival.date),
+        time: pair.arrival.time,
+        arrival_date: dateIso(pair.arrival.date),
+        arrival_time: pair.arrival.time,
+        departure_date: dateIso(pair.departure.date),
+        departure_time: pair.departure.time,
+        outbound_time: pair.arrival.time,
+        return_time: pair.departure.time,
+        service_type: "bus_tour",
+        direction: "arrival",
+        booking_service_kind: "bus_city_hotel",
+        service_type_code: "bus_line",
+        vessel: "BUS",
+        pax: pair.arrival.pax,
+        hotel_id: hotelId,
+        customer_name: `Pratica ${clean(form.numero_pratica) ?? practice} - passeggero ${index + 1} da verificare`,
+        billing_party_name: clean(form.agenzia) ?? "ALESTE VIAGGI",
+        phone: clean(form.cliente_cellulare) ?? "N/D",
+        meeting_point: pair.arrival.stop,
+        bus_city_origin: pair.arrival.stop,
+        pickup_hotel: pair.departure.time,
+        practice_number: practice,
+        source_total_amount_cents: Number.isFinite(totalCents) && totalCents > 0 ? Math.round(totalCents * pair.arrival.pax / totalPax) : null,
+        source_price_per_pax_cents: Number.isFinite(totalCents) && totalCents > 0 ? Math.round(totalCents / totalPax) : null,
+        source_amount_currency: "EUR",
+        created_by_user_id: userId,
+        notes: [sourceMarker, marker, `[practice:${clean(form.numero_pratica) ?? "N/D"}]`,
+          `Andata: ${pair.arrival.stop} ore ${pair.arrival.time}`,
+          `Ritorno: ${pair.departure.destination} ore ${pair.departure.time}`,
+          `Primo beneficiario indicato nel PDF: ${form.cliente_nome.trim()}`,
+          "Associazione nominativo/fermata da verificare con l'agenzia", clean(form.note)].filter(Boolean).join(" | ")
+      };
+      const result = existing?.id
+        ? await admin.from("services").update(payload).eq("tenant_id", tenantId).eq("id", existing.id).select("id").single()
+        : await admin.from("services").insert(payload).select("id").single();
+      if (result.error || !result.data?.id) {
+        return NextResponse.json({ ok: false, error: `Salvataggio tratta ${index + 1} fallito: ${result.error?.message ?? "errore sconosciuto"}. Riprova: le tratte già create saranno riutilizzate.` }, { status: 500 });
+      }
+      createdIds.push(result.data.id);
+    }
+    const parsedJson = (multiStopSource?.parsed_json ?? {}) as Record<string, unknown>;
+    const emailUpdate = await admin.from("inbound_emails").update({ parsed_json: {
+      ...parsedJson, review_status: "confirmed", confirmed_at: new Date().toISOString(),
+      linked_service_id: createdIds[0], linked_service_ids: createdIds, confirmed_by: userId
+    } }).eq("tenant_id", tenantId).eq("id", inbound_email_id);
+    if (emailUpdate.error) return NextResponse.json({ ok: false, error: emailUpdate.error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, service_id: createdIds[0], service_ids: createdIds, inbound_email_id });
   }
 
   const { data: existingService } = await admin

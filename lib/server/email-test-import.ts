@@ -1,7 +1,8 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { type SupabaseClient } from "@supabase/supabase-js";
-import { isPdfAttachment } from "@/lib/server/pdf-text";
+import { isPdfAttachment, extractPdfTextFromBase64 } from "@/lib/server/pdf-text";
+import { extractAlesteMultiStopRows, isAlesteMultiStop, pairAlesteBusRows } from "@/lib/server/aleste-multi-stop";
 import { claudeEmailExtract } from "@/lib/server/claude-email-extract";
 import { HaikuExtractError, MODEL as HAIKU_MODEL } from "@/lib/server/pdf-extract-haiku";
 import { logAiUsage, updateAiUsageImportId } from "@/lib/server/ai-usage-log";
@@ -176,6 +177,14 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
             });
           }
 
+          // Keep the operational rows from the PDF: the single AI form cannot
+          // represent two distinct boarding stops under the same practice.
+          const alesteCandidate = /aleste/i.test(`${sender} ${subject} ${claudeResult?.agency ?? ""}`);
+          const pdfText = firstPdfBase64 && alesteCandidate ? await extractPdfTextFromBase64(firstPdfBase64) : "";
+          const alesteMultiStop = isAlesteMultiStop(pdfText);
+          const alesteBusRows = alesteMultiStop ? extractAlesteMultiStopRows(pdfText) : [];
+          const alestePairs = pairAlesteBusRows(alesteBusRows);
+
           // ── Controlla duplicati (numero_pratica nelle inbound_emails) ────
           const practiceNumber = claudeResult?.form.numero_pratica || null;
           if (practiceNumber) {
@@ -228,6 +237,7 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
             received_at: new Date().toISOString(),
             review_status: "needs_operator_review",
             duplicate_alert: duplicateServiceAlert,
+            aleste_multi_stop: alesteMultiStop ? { rows: alesteBusRows, pairing_valid: Boolean(alestePairs) } : null,
             attachments: [{ filename: firstPdfFilename, mime_type: "application/pdf", has_content: true }],
             claude_extracted: claudeResult
               ? {
@@ -248,7 +258,7 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
               subject,
               raw_text: bodyText || subject,
               body_text: bodyText || subject,
-              extracted_text: claudeResult ? JSON.stringify(claudeResult.form, null, 2) : null,
+              extracted_text: alesteMultiStop ? pdfText : claudeResult ? JSON.stringify(claudeResult.form, null, 2) : null,
               parsed_json: parsedJson
             })
             .select("id")
