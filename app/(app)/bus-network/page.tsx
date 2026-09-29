@@ -715,7 +715,8 @@ export default function BusNetworkPage() {
       const catalogStop = payload.stops.find((stop) => stop.id === service.booking_group_catalog_stop_id);
       if (catalogStop) return catalogStop.bus_line_id === line.id;
     }
-    return service.derived_family_code === line.family_code;
+    return service.derived_family_code === line.family_code ||
+      resolveBusStop(service.bus_city_origin)?.familyCode === line.family_code;
   }, [payload.stops]);
 
   const unassigned = useMemo(
