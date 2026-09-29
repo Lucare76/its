@@ -259,6 +259,8 @@ describe("POST /api/email/inbox-approve — parità campi operativi con il fluss
     ]);
     expect(serviceInserts[0].inbound_email_id).toBe(INBOUND_EMAIL_ID);
     expect(serviceInserts[1].inbound_email_id).toBeNull();
+    expect(serviceInserts[0].bus_city_origin).toBe("MILANO");
+    expect(serviceInserts[1].bus_city_origin).toBe("VALDARNO");
     expect(serviceInserts.every((row) => row.status === "needs_review")).toBe(true);
     expect(serviceInserts.map((row) => row.customer_name)).toEqual(["IMPIOMBATO FRANCESCO", "IMPIOMBATO FRANCESCO"]);
     expect(String(serviceInserts[0].notes)).toContain("VIAGGIA CON 1 PERSONA DALLA FERMATA CASELLO VALDARNO");

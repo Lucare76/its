@@ -2,7 +2,7 @@ import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_number" | "train_arrival_time" | "train_departure_number" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_number" | "train_arrival_time" | "train_departure_number" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction" | "notes"
 >> & {
   pickup_time?: string | null;
   bus_outward_pickup_point?: string | null;
@@ -35,6 +35,8 @@ export type BookingListTransportTimes = {
   returnRoute?: string | null;
   returnDeparturePort?: string | null;
   outwardPickupPoint?: string | null;
+  returnDestination?: string | null;
+  travelCompanion?: string | null;
 };
 
 // Distingue una riga combinata (arrivo + partenza REALI sulla stessa riga,
@@ -122,6 +124,7 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
 
   const suffix = kind.endsWith("_exclusive") ? " (esclusivo)" : kind.endsWith("_aliscafo") ? " (aliscafo)" : "";
   const isBusLine = kind === "bus_city_hotel";
+  const isAlestePairedBus = isBusLine && /\[aleste_route:\d+\]/.test(service.notes ?? "");
   const outwardTime = cleanTime(service.train_arrival_time) ?? cleanTime(service.arrival_time);
   const outwardArrivalTime = cleanTime(service.outbound_ferry_arrival_time) ?? cleanTime(service.time);
   // Tratta nave collegata (fix: prima la card mostrava solo l'orario di
@@ -154,7 +157,8 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   // direction assente (dati storici/test) -> nessun filtro, comportamento
   // invariato.
   const hideOutward = service.direction === "departure";
-  const hideReturn = service.direction === "arrival" && !hasRealDepartureLeg(service);
+  const hideReturn = service.direction === "arrival" && !hasRealDepartureLeg(service)
+    && !(isAlestePairedBus && cleanDate(service.departure_date) && cleanTime(service.departure_time));
   // Tratta nave di ritorno: return_ferry_company/departure_port arrivano dai
   // valori GIÀ CALCOLATI E SALVATI sulla gamba di partenza (barca_compagnia/
   // porto_bruno, scritti da applyPickupCalc — stessa fonte di una partenza
@@ -177,7 +181,9 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
     returnLabel: isAirport ? "Partenza volo" : isBusLine ? "Partenza bus" : "Partenza treno",
     returnDate: hideReturn ? null : cleanDate(service.departure_date),
     returnTime: hideReturn ? null : cleanTime(service.train_departure_time) ?? cleanTime(service.departure_time),
-    returnPickupTime: hideReturn ? null : cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) : null),
+    returnPickupTime: hideReturn ? null : cleanTime(service.return_pickup_time) ?? (isBusLine ? cleanTime(service.pickup_time) ?? (isAlestePairedBus ? cleanTime(service.pickup_hotel) : null) : null),
+    returnDestination: isAlestePairedBus && !hideReturn ? service.notes?.match(/(?:^|\s\|\s)Ritorno:\s*(.*?)\s+ore\s+\d{1,2}:\d{2}/i)?.[1]?.trim() ?? null : null,
+    travelCompanion: isAlestePairedBus ? service.notes?.match(/(?:^|\s\|\s)(VIAGGIA CON 1 PERSONA DALLA FERMATA [^|]+)/i)?.[1]?.trim() ?? null : null,
     returnCompany: hideReturn ? null : returnFerryCompany,
     returnRoute: hideReturn ? null : returnFerryDepartureTime,
     returnDeparturePort: hideReturn ? null : returnFerryDeparturePort,
