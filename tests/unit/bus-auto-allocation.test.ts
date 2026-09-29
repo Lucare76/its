@@ -10,6 +10,7 @@ it("riconosce Cascina Gobba come fermata Milano della linea Italia", () => {
   });
   expect(identity.family_code).toBe("ITALIA");
   expect(identity.lineCode).toBe("LINEA_1_ITALIA");
+  expect(identity.city).toBe("MILANO");
 });
 
 /**
