@@ -30,6 +30,7 @@ import {
   MEDMAR_DELIVERY_AUTO_RETRY_STATUSES,
 } from "@/lib/medmar-delivery-card";
 import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
+import { evaluateMedmarIssuanceRequest, resolveMedmarQueueIssuanceView, type MedmarQueueIssuanceView, type MedmarServiceIssuanceEvidence } from "@/lib/medmar-issuance-guard";
 import {
   matchesMedmarSearch,
   matchesMedmarSentDateFilter,
@@ -479,6 +480,15 @@ function QueueStatChip({
 
 // ─── Componente ─────────────────────────────────────────────────────────────
 
+function MedmarAlreadyIssuedBanner({ view }: { view: MedmarQueueIssuanceView }) {
+  return (
+    <div role="alert" className="rounded-lg border-2 border-rose-400 bg-rose-50 px-3 py-2 text-rose-900">
+      <p className="text-[12px] font-extrabold">{view.warningTitle}</p>
+      <p className="text-[11px]">{view.warningDetail}</p>
+    </div>
+  );
+}
+
 export default function BigliettiMedmarPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [hotels, setHotels] = useState<Hotel[]>([]);
@@ -515,6 +525,9 @@ export default function BigliettiMedmarPage() {
     { phase: "idle" } as MedmarPrepareState
   );
   const [deliveryAttempts, setDeliveryAttempts] = useState<MedmarDeliveryAttemptRow[]>([]);
+  // Prove di emissione Medmar già avvenuta per servizio (stessa regola del guard server-side).
+  const [issuanceEvidence, setIssuanceEvidence] = useState<Record<string, MedmarServiceIssuanceEvidence>>({});
+  const [issuanceGuardError, setIssuanceGuardError] = useState<string | null>(null);
   const [resendsByDeliveryAttemptId, setResendsByDeliveryAttemptId] = useState<Map<string, MedmarTicketResendRow[]>>(new Map());
   const [resendModal, setResendModal] = useState<{ groupKey: string; customerName: string; attempt: MedmarDeliveryAttemptRow } | null>(null);
   const [resendSending, setResendSending] = useState(false);
@@ -849,12 +862,40 @@ export default function BigliettiMedmarPage() {
    * manuale gia' esistenti, sia dal refresh immediato post-emissione (PARTE
    * 2) aggiunto in handleConfirmIssueMedmar.
    */
+  /**
+   * Guard "biglietto già emesso" per la coda (sola lettura): la decisione
+   * vera resta server-side su preflight/prepare/issue, qui serve solo a
+   * spiegare all'operatore perché l'emissione è bloccata.
+   */
+  const loadIssuanceEvidence = useCallback(async (medmarServiceIds: string[]) => {
+    const accessToken = tokenRef.current;
+    if (!accessToken || medmarServiceIds.length === 0) {
+      setIssuanceEvidence({});
+      return;
+    }
+    try {
+      const merged: Record<string, MedmarServiceIssuanceEvidence> = {};
+      for (let i = 0; i < medmarServiceIds.length; i += 500) {
+        const data = await apiFetch<{ evidence: Record<string, MedmarServiceIssuanceEvidence> }>("/api/services/medmar-issuance-guard", accessToken, {
+          method: "POST",
+          body: JSON.stringify({ service_ids: medmarServiceIds.slice(i, i + 500) }),
+        });
+        Object.assign(merged, data.evidence);
+      }
+      setIssuanceEvidence(merged);
+      setIssuanceGuardError(null);
+    } catch {
+      setIssuanceGuardError("Storico emissioni Medmar non verificabile: l'emissione resta comunque protetta lato server.");
+    }
+  }, []);
+
   const refreshMedmarData = useCallback(async (tid: string, from?: string, to?: string) => {
     const loadedServices = await loadData(tid, from, to);
     const medmarIds = loadedServices.filter(isMedmarService).map((s) => s.id);
     await loadMedmarDeliveryStatus(tid, medmarIds);
+    await loadIssuanceEvidence(medmarIds);
     if (tokenRef.current) void loadMedmarQueueSummary(tokenRef.current);
-  }, [loadData, loadMedmarDeliveryStatus, loadMedmarQueueSummary]);
+  }, [loadData, loadMedmarDeliveryStatus, loadIssuanceEvidence, loadMedmarQueueSummary]);
 
   useEffect(() => {
     tokenRef.current = token;
@@ -944,9 +985,21 @@ export default function BigliettiMedmarPage() {
     return [...map.values()].sort((a, b) => a.refDate.localeCompare(b.refDate));
   }, [medmarServices, hotelsById]);
 
+  const issuanceViewByKey = useMemo(() => {
+    const map = new Map<string, MedmarQueueIssuanceView>();
+    for (const g of bookingGroups) {
+      map.set(g.key, resolveMedmarQueueIssuanceView(evaluateMedmarIssuanceRequest(g.allServiceIds, issuanceEvidence)));
+    }
+    return map;
+  }, [bookingGroups, issuanceEvidence]);
+
   const visibleGroups = useMemo(
-    () => showSent ? bookingGroups : bookingGroups.filter((g) => g.sentAt == null && !sentKeys.has(g.key)),
-    [bookingGroups, showSent, sentKeys]
+    () => showSent
+      ? bookingGroups
+      // Una prenotazione ripristinata con biglietto già emesso resta visibile
+      // (bloccata) anche se risulta "inviata": l'operatore deve vederla.
+      : bookingGroups.filter((g) => (g.sentAt == null && !sentKeys.has(g.key)) || issuanceViewByKey.get(g.key)?.forceVisible),
+    [bookingGroups, showSent, sentKeys, issuanceViewByKey]
   );
 
   const medmarAgencyOptions = useMemo(() => {
@@ -1332,6 +1385,7 @@ export default function BigliettiMedmarPage() {
 
       {loading && <p className="text-sm text-slate-500">Caricamento...</p>}
       {error && <p className="text-sm text-rose-600">{error}</p>}
+      {issuanceGuardError && <p className="text-sm text-amber-700">{issuanceGuardError}</p>}
 
       {/* "Credito e biglietti Medmar" — evoluzione del contatore coda (PARTE 3), sola lettura da GET /api/services/medmar-delivery-summary. */}
       {queueSummary && (
@@ -1652,6 +1706,7 @@ export default function BigliettiMedmarPage() {
                   const isDeliveredCompact = deliveryInfo?.isCompact ?? false;
                   const isSent = g.sentAt != null || sentKeys.has(g.key);
                   const hasIssuedAttempt = !!deliveryAttempt;
+                  const issuanceView = issuanceViewByKey.get(g.key);
                   const ferrySource = g.partenza ?? g.arrivo ?? null;
                   const routeLabel = ferrySource ? getDepartureFerryLabel(ferrySource) ?? ferrySource.vessel ?? "MEDMAR" : "MEDMAR";
                   const timeLabel = (g.arrivo?.time ?? g.partenza?.orario_barca ?? g.partenza?.time ?? "").slice(0, 5) || "-";
@@ -1684,10 +1739,18 @@ export default function BigliettiMedmarPage() {
                       <span className="truncate text-slate-700 max-xl:before:mr-1 max-xl:before:text-xs max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Tratta']">{routeLabel}</span>
                       <span className="font-mono text-xs font-bold text-slate-800 max-xl:before:mr-1 max-xl:before:font-sans max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Orario']">{timeLabel}</span>
                       <span className="truncate font-mono text-xs text-slate-500 max-xl:before:mr-1 max-xl:before:font-sans max-xl:before:font-semibold max-xl:before:text-slate-400 max-xl:before:content-['Pratica']">{g.pratica || g.key.slice(0, 12)}</span>
-                      <span className={`w-fit rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone}`}>{statusLabel}</span>
+                      {issuanceView && !issuanceView.issueAllowed ? (
+                        <span className="w-fit rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-bold text-rose-800" title={`${issuanceView.warningTitle} ${issuanceView.warningDetail}`}>{issuanceView.shortLabel}</span>
+                      ) : (
+                        <span className={`w-fit rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone}`}>{statusLabel}</span>
+                      )}
                       <div className="flex justify-end gap-1 max-xl:justify-start">
                         <button type="button" onClick={() => setSelectedMedmarGroupKey(g.key)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Dettagli</button>
-                        {!hasIssuedAttempt && !isSent ? (
+                        {issuanceView && !issuanceView.issueAllowed ? (
+                          <button type="button" disabled title={`${issuanceView.warningTitle} ${issuanceView.warningDetail}`} className="cursor-not-allowed rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700">
+                            Bloccato
+                          </button>
+                        ) : !hasIssuedAttempt && !isSent ? (
                           <button type="button" disabled={verifying === g.key} onClick={() => void handleVerifyMedmar(g)} className="rounded-lg bg-indigo-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
                             {verifying === g.key ? "..." : "Emetti"}
                           </button>
@@ -1787,7 +1850,11 @@ export default function BigliettiMedmarPage() {
                       <p>{verifyError}</p>
                     </div>
                   ) : null}
-                  {!deliveryAttempt && !(selectedMedmarGroup.sentAt != null || sentKeys.has(selectedMedmarGroup.key)) ? (
+                  {(() => {
+                    const view = issuanceViewByKey.get(selectedMedmarGroup.key);
+                    return view && !view.issueAllowed ? <MedmarAlreadyIssuedBanner view={view} /> : null;
+                  })()}
+                  {issuanceViewByKey.get(selectedMedmarGroup.key)?.issueAllowed !== false && !deliveryAttempt && !(selectedMedmarGroup.sentAt != null || sentKeys.has(selectedMedmarGroup.key)) ? (
                     <button type="button" disabled={verifying === selectedMedmarGroup.key} onClick={() => void handleVerifyMedmar(selectedMedmarGroup)} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
                       {verifying === selectedMedmarGroup.key ? "Verifica in corso..." : "Emetti biglietto Medmar"}
                     </button>
@@ -1867,12 +1934,14 @@ export default function BigliettiMedmarPage() {
               // poi il pulsante "Emetti biglietto Medmar" e il vecchio upload manuale non vanno piu' mostrati
               // come percorso normale, per non far pensare a un altro operatore che il biglietto sia da fare.
               const hasIssuedAttempt = !!deliveryAttempt;
+              const issuanceView = issuanceViewByKey.get(g.key);
               const finalTotalCents = deliveryAttempt ? issuingFinalTotalById.get(deliveryAttempt.issuing_attempt_id) ?? null : null;
 
               // FASE 2/3: card compatta solo quando l'esito e' davvero 'emesso e inviato'
               // (delivery attempt 'delivered', o fallback difensivo su medmar_ticket_sent_at
               // quando non esiste alcun attempt — mai quando l'attempt esiste con un altro stato).
-              if (isDeliveredCompact) {
+              // Ripristinata dopo l'emissione: niente card compatta "inviato", serve la card completa con l'avviso.
+              if (isDeliveredCompact && !issuanceView?.forceVisible) {
                 const sentAtIso = deliveryAttempt?.delivered_at ?? deliveryAttempt?.updated_at ?? g.sentAt ?? null;
                 const andataLabel = g.arrivo ? `${g.arrivo.date?.slice(5).split("-").reverse().join("/")} ${(g.arrivo.time ?? "").slice(0, 5)}`.trim() : null;
                 const ritornoLabel = hasPartenza
@@ -2073,8 +2142,18 @@ export default function BigliettiMedmarPage() {
                   {/* Azioni — pulsante principale: "Emetti biglietto Medmar" avvia direttamente il preflight
                       One Click (mai il vecchio upload manuale). Nascosto se il biglietto e' gia' stato emesso
                       (hasIssuedAttempt): un altro operatore non deve poter riavviare l'emissione. */}
+                  {issuanceView && !issuanceView.issueAllowed ? (
+                    <div className="border-t border-slate-100 px-3 py-2">
+                      <MedmarAlreadyIssuedBanner view={issuanceView} />
+                    </div>
+                  ) : null}
                   <div className="border-t border-slate-100 px-3 py-2 flex gap-1.5">
-                    {hasIssuedAttempt ? (
+                    {issuanceView && !issuanceView.issueAllowed ? (
+                      <button type="button" disabled title={issuanceView.warningDetail ?? undefined}
+                        className="flex-1 cursor-not-allowed rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700">
+                        Emissione bloccata
+                      </button>
+                    ) : hasIssuedAttempt ? (
                       <div className="flex-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1.5 text-center">
                         <span className="text-[11px] text-emerald-700 font-semibold">✅ Biglietto Medmar emesso</span>
                       </div>

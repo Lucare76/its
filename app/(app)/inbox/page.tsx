@@ -15,6 +15,8 @@ import { dedupeAppend } from "@/lib/collection-utils";
 import { alesteMultiStopHotel, hasAlesteMultiStopSummary, pairAlesteBusRows, type extractAlesteMultiStopRows } from "@/lib/server/aleste-multi-stop";
 import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
 import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, resolveGroupTotalPax, resolveGroupReturnStatus, type BookingGroupMeta } from "@/lib/booking-group-card";
+import { CancelledBookingButtons, CancelledBookingStatus, RestoredBadge, useCancelledBookingStates } from "@/components/cancelled-booking/cancelled-booking-actions";
+import { HardDeleteDialog } from "@/components/cancelled-booking/hard-delete-dialog";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -71,8 +73,6 @@ const CANCEL_REASONS = [
   "Errore di inserimento",
   "Altro",
 ] as const;
-
-const HARD_DELETE_REASONS = ["Prenotazione di test", "Inserimento errato", "Altro"] as const;
 
 const EMPTY_FORM: FormState = {
   cliente_nome: "", cliente_cellulare: "", n_pax: "1",
@@ -690,6 +690,9 @@ export default function InboxPage() {
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [agenciesMap, setAgenciesMap] = useState<Map<string, string>>(new Map());
   const [searchResults, setSearchResults] = useState<GlobalBookingSearchResult[]>([]);
+  // Stato derivato penale/ripristino (service_cancellation_penalties + audit), per le card della ricerca.
+  const searchResultIds = useMemo(() => searchResults.map((row) => row.id), [searchResults]);
+  const { states: cancelledBookingStates, reload: reloadCancelledBookingStates } = useCancelledBookingStates(searchResultIds);
   const [bookingGroups, setBookingGroups] = useState<BookingGroupMeta[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -700,7 +703,6 @@ export default function InboxPage() {
   // dopo un'azione di gruppo (es. "Genera ritorno da andata") — senza,
   // cambiare lo stesso searchQuery non ririesegue l'effetto.
   const [searchRefreshKey, setSearchRefreshKey] = useState(0);
-  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [cancelDialogService, setCancelDialogService] = useState<GlobalBookingSearchResult | null>(null);
   const [cancelReason, setCancelReason] = useState<(typeof CANCEL_REASONS)[number]>("Cliente ha annullato");
   const [cancelNote, setCancelNote] = useState("");
@@ -708,9 +710,6 @@ export default function InboxPage() {
   const [cancelScope, setCancelScope] = useState<"leg" | "practice">("leg");
   const [cancellingServiceId, setCancellingServiceId] = useState<string | null>(null);
   const [hardDeleteDialogService, setHardDeleteDialogService] = useState<GlobalBookingSearchResult | null>(null);
-  const [hardDeleteReason, setHardDeleteReason] = useState<(typeof HARD_DELETE_REASONS)[number]>("Prenotazione di test");
-  const [hardDeleteNote, setHardDeleteNote] = useState("");
-  const [hardDeleteConfirmStep, setHardDeleteConfirmStep] = useState<1 | 2>(1);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [aiUsageStats, setAiUsageStats] = useState<{
     month_cost_usd: number;
@@ -1546,45 +1545,25 @@ export default function InboxPage() {
   };
 
   const openHardDeleteDialog = (service: GlobalBookingSearchResult) => {
+    // Eliminazione definitiva SOLO admin (anche lato server, DELETE /api/ops/services/[id]).
+    if (authRole !== "admin") return;
     setHardDeleteDialogService(service);
-    setHardDeleteReason("Prenotazione di test");
-    setHardDeleteNote("");
-    setHardDeleteConfirmStep(1);
   };
 
-  const hardDeleteBooking = async () => {
-    if (!hardDeleteDialogService || deletingServiceId) return;
-    if (authRole !== "admin" && authRole !== "supervisor") return;
-    if (hardDeleteConfirmStep === 1) {
-      setHardDeleteConfirmStep(2);
-      return;
-    }
-    const customer = serviceCustomerLabel(hardDeleteDialogService);
-    const token = await getToken();
-    if (!token) { setMessage("Sessione scaduta."); return; }
-    setDeletingServiceId(hardDeleteDialogService.id);
-    try {
-      const res = await fetch(`/api/ops/services/${hardDeleteDialogService.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reason: hardDeleteReason,
-          note: hardDeleteNote,
-          confirmation: "ELIMINA_DEFINITIVAMENTE",
-        }),
-      });
-      const body = (await res.json().catch(() => null)) as { error?: string } | null;
-      if (!res.ok) {
-        setMessage(body?.error ?? "Eliminazione definitiva non riuscita.");
-        return;
-      }
-      setSearchResults((current) => current.filter((row) => row.id !== hardDeleteDialogService.id));
-      setServices((current) => current.filter((row) => row.id !== hardDeleteDialogService.id));
-      setHardDeleteDialogService(null);
-      setMessage(`Prenotazione di ${customer} eliminata definitivamente.`);
-    } finally {
-      setDeletingServiceId(null);
-    }
+  const handleHardDeleted = (serviceId: string, text: string) => {
+    setSearchResults((current) => current.filter((row) => row.id !== serviceId));
+    setServices((current) => current.filter((row) => row.id !== serviceId));
+    setHardDeleteDialogService(null);
+    setMessage(text);
+  };
+
+  const handleBookingRestored = (restoredIds: string[]) => {
+    if (restoredIds.length === 0) return;
+    const ids = new Set(restoredIds);
+    setSearchResults((current) => current.map((row) => ids.has(row.id) ? { ...row, status: "new" } : row));
+    setMessage("Prenotazione ripristinata: ora risulta da assegnare. Verificare autista, mezzo e allocazioni.");
+    void reloadCancelledBookingStates();
+    setSearchRefreshKey((key) => key + 1);
   };
 
   const openEscursionePanel = async () => {
@@ -1784,17 +1763,17 @@ export default function InboxPage() {
           const hotelName = service.hotel_name?.trim() || hotels.find((hotel) => hotel.id === service.hotel_id)?.name || "Struttura non indicata";
           const isCancelled = service.status === "cancelled";
           const statusOk = ["completato", "arrivato", "assigned"].includes(service.status);
-          const canHardDelete = authRole === "admin" || authRole === "supervisor";
+          const canHardDelete = authRole === "admin";
           return (
             <article key={service.id} className="pms-panel overflow-hidden">
               <div className={`grid items-center gap-4 p-4 ${expanded ? "lg:grid-cols-[minmax(0,1fr)_190px]" : "lg:grid-cols-[minmax(280px,1fr)_1fr_1fr_auto]"}`}>
                 <div className="flex min-w-0 items-start gap-3">
                   <button type="button" onClick={() => setExpandedServiceId(expanded ? "" : service.id)} className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-600">{expanded ? "⌃" : "⌄"}</button>
                   <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2"><p className="font-extrabold text-slate-900">{serviceCustomerLabel(service)}</p><span className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500">#{service.id.slice(0, 8).toUpperCase()}</span>{service.booking_service_kind === "bus_city_hotel" ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">🚌 Bus</span> : null}{isCancelled ? <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">CANCELLATA</span> : null}</div>
+                    <div className="flex flex-wrap items-center gap-2"><p className="font-extrabold text-slate-900">{serviceCustomerLabel(service)}</p><span className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500">#{service.id.slice(0, 8).toUpperCase()}</span>{service.booking_service_kind === "bus_city_hotel" ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">🚌 Bus</span> : null}{isCancelled ? <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">CANCELLATA</span> : <RestoredBadge state={cancelledBookingStates[service.id]} />}</div>
                     <p className="mt-1 text-xs text-slate-500">☎ {service.phone || "—"}　·　{service.pax} pax　 <span className="font-bold text-indigo-600">{service.owner_label ?? serviceOwnerLabel(service, agenciesMap)}</span></p>
                     <p className="mt-1 text-xs font-semibold text-slate-700">Hotel: {hotelName}</p>
-                    {isCancelled ? <p className="mt-1 text-xs text-rose-700">Cancellata{service.cancellation?.cancelled_at ? ` il ${new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" }).format(new Date(service.cancellation.cancelled_at))}` : ""}{service.cancellation?.operator_name ? ` da ${service.cancellation.operator_name}` : ""}{service.cancellation?.reason ? ` - ${service.cancellation.reason}` : ""}{service.cancellation?.note ? ` (${service.cancellation.note})` : ""}</p> : null}
+                    {isCancelled ? <div className="mt-1 text-xs text-rose-700"><p>Cancellata{service.cancellation?.cancelled_at ? ` il ${new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(service.cancellation.cancelled_at))} alle ${new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit" }).format(new Date(service.cancellation.cancelled_at))}` : ""}{service.cancellation?.operator_name ? ` da ${service.cancellation.operator_name}` : ""}</p>{service.cancellation?.reason ? <p>Motivo: {service.cancellation.reason}{service.cancellation?.note ? ` (${service.cancellation.note})` : ""}</p> : null}</div> : null}<CancelledBookingStatus state={cancelledBookingStates[service.id]} onChanged={() => void reloadCancelledBookingStates()} />
                   </div>
                 </div>
                 {!expanded && <><p className="text-xs text-slate-600"><strong className="text-blue-700">Arrivo</strong>　{transportTimes?.outwardDate ?? service.arrival_date ?? service.date}<br />{transportTimes?.outwardLabel}: {transportTimes?.outwardTime ?? service.arrival_time ?? "—"}</p><p className="text-xs text-slate-600"><strong className="text-violet-700">Partenza</strong>　{transportTimes?.returnDate ?? service.departure_date ?? "—"}<br />Pickup {transportTimes?.returnPickupTime ?? service.departure_time ?? "—"}</p></>}
@@ -1809,7 +1788,7 @@ export default function InboxPage() {
                     <div className="space-y-2 bg-blue-50/50 p-5 text-sm text-slate-700"><p className="font-extrabold text-blue-700">↓　ARRIVO</p><p>▣　{transportTimes?.outwardDate ?? service.arrival_date ?? service.date}</p><p>◷　{transportTimes?.outwardLabel}: <strong>{transportTimes?.outwardTime ?? "—"}</strong></p>{transportTimes?.outwardPickupPoint ? <p>⌖　Punto di carico: <strong>{transportTimes.outwardPickupPoint}</strong></p> : null}{transportTimes?.outwardArrivalTime ? <p>◷　Arrivo nave: <strong>{transportTimes.outwardArrivalTime}</strong></p> : null}{transportTimes?.outwardCompany ? <p>⚓　Compagnia: <strong>{transportTimes.outwardCompany}</strong></p> : null}{transportTimes?.outwardRoute ? <p>↔　Tratta nave: <strong>{transportTimes.outwardRoute}</strong></p> : null}{transportTimes?.outwardArrivalPort ? <p>⌖　Porto di arrivo: <strong>{transportTimes.outwardArrivalPort}</strong></p> : null}<p>⌖　{hotelName}</p></div>
                     <div className="space-y-2 border-l border-slate-200 bg-violet-50/50 p-5 text-sm text-slate-700"><p className="font-extrabold text-violet-700">↑　PARTENZA</p><p>▣　{transportTimes?.returnDate ?? service.departure_date ?? "—"}</p><p>◷　Pickup hotel: <strong>{transportTimes?.returnPickupTime ?? "—"}</strong></p><p>◷　{transportTimes?.returnLabel}: <strong>{transportTimes?.returnTime ?? "—"}</strong></p>{transportTimes?.returnDestination ? <p>⌖　Destinazione: <strong>{transportTimes.returnDestination}</strong></p> : null}{transportTimes?.travelCompanion ? <p className="rounded-md bg-amber-100 px-2 py-1 font-semibold text-amber-900">{transportTimes.travelCompanion}</p> : null}{transportTimes?.returnCompany ? <p>⚓　Compagnia: <strong>{transportTimes.returnCompany}</strong></p> : null}{transportTimes?.returnRoute ? <p>↔　Tratta nave: <strong>{transportTimes.returnRoute}</strong></p> : null}{transportTimes?.returnDeparturePort ? <p>⌖　Porto di partenza: <strong>{transportTimes.returnDeparturePort}</strong></p> : null}</div>
                   </div>
-                  <div className="flex flex-col gap-2 border-l border-slate-200 pl-4"><Link href={`/services/${service.id}/edit`} className="btn-primary">Dettagli</Link>{!isCancelled ? <Link href={`/services/${service.id}/edit`} className="btn-secondary">✎ Modifica</Link> : null}{!isCancelled ? <Link href={`/dispatch?q=${encodeURIComponent(serviceCustomerLabel(service))}&date=${encodeURIComponent(service.date)}`} className="btn-secondary flex min-h-[42px] items-center justify-center text-center">⇄ Cambio operativo</Link> : null}{!isCancelled ? <button type="button" onClick={() => openCancelDialog(service)} disabled={cancellingServiceId !== null} className="btn-secondary text-rose-600">{cancellingServiceId === service.id ? "Cancello..." : "Cancella prenotazione"}</button> : null}{canHardDelete ? <button type="button" onClick={() => openHardDeleteDialog(service)} disabled={deletingServiceId !== null} className="btn-secondary text-rose-700">{deletingServiceId === service.id ? "Elimino..." : "Elimina definitivamente"}</button> : null}</div>
+                  <div className="flex flex-col gap-2 border-l border-slate-200 pl-4">{isCancelled ? <CancelledBookingButtons serviceId={service.id} state={cancelledBookingStates[service.id]} onRestored={handleBookingRestored} onPenaltyChanged={() => void reloadCancelledBookingStates()} /> : null}<Link href={`/services/${service.id}/edit`} className={isCancelled ? "btn-secondary" : "btn-primary"}>Dettagli</Link>{!isCancelled ? <Link href={`/services/${service.id}/edit`} className="btn-secondary">✎ Modifica</Link> : null}{!isCancelled ? <Link href={`/dispatch?q=${encodeURIComponent(serviceCustomerLabel(service))}&date=${encodeURIComponent(service.date)}`} className="btn-secondary flex min-h-[42px] items-center justify-center text-center">⇄ Cambio operativo</Link> : null}{!isCancelled ? <button type="button" onClick={() => openCancelDialog(service)} disabled={cancellingServiceId !== null} className="btn-secondary text-rose-600">{cancellingServiceId === service.id ? "Cancello..." : "Cancella prenotazione"}</button> : null}{canHardDelete ? <button type="button" onClick={() => openHardDeleteDialog(service)} className="mt-3 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100">🗑 Elimina definitivamente</button> : null}</div>
                 </div>
               ) : null}
             </article>
@@ -1866,35 +1845,11 @@ export default function InboxPage() {
       ) : null}
 
       {hardDeleteDialogService ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
-            <h2 className="text-lg font-extrabold text-slate-950">Elimina definitivamente</h2>
-            <p className="mt-1 text-sm text-rose-700">
-              Questa azione rimuove la pratica di {serviceCustomerLabel(hardDeleteDialogService)} dal database operativo. Usa questa opzione solo per test o inserimenti errati.
-            </p>
-            <label className="mt-4 block text-sm font-semibold text-slate-700">
-              Motivo*
-              <select value={hardDeleteReason} onChange={(event) => setHardDeleteReason(event.target.value as (typeof HARD_DELETE_REASONS)[number])} className="input-saas mt-1 w-full">
-                {HARD_DELETE_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
-              </select>
-            </label>
-            <label className="mt-3 block text-sm font-semibold text-slate-700">
-              Note
-              <textarea value={hardDeleteNote} onChange={(event) => setHardDeleteNote(event.target.value)} className="input-saas mt-1 min-h-[90px] w-full" placeholder={hardDeleteReason === "Altro" ? "Obbligatorio per Altro..." : "Dettaglio facoltativo..."} />
-            </label>
-            {hardDeleteConfirmStep === 2 ? (
-              <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800">
-                Conferma finale: dopo questo click la prenotazione verrà eliminata definitivamente.
-              </p>
-            ) : null}
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button type="button" className="btn-secondary px-4 py-2 text-sm" onClick={() => setHardDeleteDialogService(null)} disabled={deletingServiceId !== null}>Annulla</button>
-              <button type="button" className="btn-primary bg-rose-600 px-4 py-2 text-sm hover:bg-rose-700" onClick={() => void hardDeleteBooking()} disabled={deletingServiceId !== null}>
-                {deletingServiceId === hardDeleteDialogService.id ? "Eliminazione..." : hardDeleteConfirmStep === 1 ? "Continua" : "Elimina definitivamente"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <HardDeleteDialog
+          service={{ id: hardDeleteDialogService.id, label: serviceCustomerLabel(hardDeleteDialogService) }}
+          onClose={() => setHardDeleteDialogService(null)}
+          onDeleted={(text) => handleHardDeleted(hardDeleteDialogService.id, text)}
+        />
       ) : null}
 
       {blockingNotice && (

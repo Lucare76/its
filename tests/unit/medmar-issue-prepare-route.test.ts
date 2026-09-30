@@ -23,6 +23,15 @@ vi.mock("@/lib/server/medmar-booking/issue-config", () => ({
   getMedmarIssueConfig: mocks.getMedmarIssueConfig,
 }));
 
+// Guard "biglietto già emesso" (prior-issuance): coperto da
+// medmar-prior-issuance-guard.test.ts; qui neutro per testare solo il contratto della route.
+vi.mock("@/lib/server/medmar-booking/prior-issuance", () => ({
+  checkMedmarIssuanceGuard: vi.fn(async () => ({
+    blocked: false,
+    decision: { blocked: false, reason: "none", blocking_service_ids: [], cancelled_after_issuance: false },
+  })),
+}));
+
 import { POST } from "@/app/api/services/medmar-issue/prepare/route";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

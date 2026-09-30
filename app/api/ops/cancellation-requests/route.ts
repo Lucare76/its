@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
         requested_by_role, requested_by_user_id, created_at, updated_at,
         agency_response, agency_response_note, agency_counter_cents, agency_responded_at,
         services(
-          id, customer_name, pax, date, time, direction,
+          id, status, linked_service_id, customer_name, pax, date, time, direction,
           arrival_date, arrival_time, departure_date, departure_time,
           booking_service_kind,
           hotels(name),
@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
 
     const { data: directlyCancelled } = await admin
       .from("services")
-      .select("id, customer_name, pax, date, time, arrival_date, arrival_time, departure_date, departure_time, booking_service_kind, hotels(name), agencies(name, booking_email)")
+      .select("id, status, linked_service_id, customer_name, pax, date, time, arrival_date, arrival_time, departure_date, departure_time, booking_service_kind, updated_at, hotels(name), agencies(name, booking_email)")
       .eq("tenant_id", tenantId)
       .eq("status", "cancelled")
       .gte("updated_at", thirtyDaysAgo);

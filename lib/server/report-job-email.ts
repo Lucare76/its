@@ -54,7 +54,7 @@ function arrayEmails(value: unknown) {
   return value.map((item) => normalizeEmail(String(item))).filter((item): item is string => Boolean(item));
 }
 
-async function resolveAgencyRecipient(admin: SupabaseClient, tenantId: string, ownerName: string | null) {
+export async function resolveAgencyRecipient(admin: SupabaseClient, tenantId: string, ownerName: string | null) {
   if (!ownerName) {
     return { recipient: null, matchedAgency: null };
   }

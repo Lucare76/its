@@ -555,6 +555,12 @@ export async function DELETE(
   try {
     const auth = await authorizePricingRequest(request, ["admin"]);
     if (auth instanceof NextResponse) return auth;
+    // authorizePricingRequest estende automaticamente ["admin"] anche a
+    // "supervisor" (lib/server/pricing-auth.ts): l'eliminazione definitiva
+    // resta invece SOLO admin, verificato qui esplicitamente.
+    if (auth.membership.role !== "admin") {
+      return NextResponse.json({ error: "Solo un amministratore può eliminare definitivamente una prenotazione." }, { status: 403 });
+    }
 
     const { id: serviceId } = await params;
     const tenantId = auth.membership.tenant_id;
@@ -572,6 +578,23 @@ export async function DELETE(
 
     if (!svc) {
       return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
+    }
+
+    // Una penale di cancellazione attiva è un dato economico: la prenotazione
+    // non può sparire finché la penale non viene annullata (lo storico in
+    // service_cancellation_penalties sopravvive comunque all'eliminazione).
+    const { data: activePenalties } = await auth.admin
+      .from("service_cancellation_penalties")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("status", "active")
+      .or(`service_id.eq.${serviceId},linked_service_id.eq.${serviceId}`)
+      .limit(1);
+    if ((activePenalties ?? []).length > 0) {
+      return NextResponse.json({
+        error: "Questa prenotazione ha una penale di cancellazione attiva: annullala prima di eliminarla definitivamente.",
+        code: "active_penalty",
+      }, { status: 409 });
     }
 
     // Recupera nome hotel
