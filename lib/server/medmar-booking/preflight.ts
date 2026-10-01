@@ -17,7 +17,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { matchCourseByRouteAndTime } from "./course-matcher";
 import { romeDateTimeToUtc, formatItalianDateTime } from "./departure-datetime";
-import { resolveLegRouteCode } from "./port-resolution";
+import { resolveIslandPortFromSchedules, resolveLegRouteCode, resolveMainlandPort, type ScheduleIslandPortLookup } from "./port-resolution";
+import type { FerryScheduleRow } from "@/lib/ferry-schedule-options";
 import { mapTariffFromTicketMemory } from "./ticket-mapper";
 import { getIdTrattaForRouteCode, getExpectedPortsForRouteCode } from "./route-mapping";
 import type { CorsaMedmarRaw } from "./types";
@@ -235,7 +236,8 @@ function hasEmbeddedReturnData(row: MedmarPreflightServiceRow): boolean {
 async function resolveEmbeddedReturnLeg(
   row: MedmarPreflightServiceRow,
   warnings: MedmarPreflightWarning[],
-  now: Date
+  now: Date,
+  medmarSchedules: FerryScheduleRow[] | null
 ): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
   const returnMainlandPort =
     row.booking_service_kind === "transfer_port_hotel" ? readReturnMainlandPort(row.ferry_details) : null;
@@ -296,27 +298,80 @@ async function resolveEmbeddedReturnLeg(
     // transfer_port_hotel: il resolver legge il porto terraferma da
     // meeting_point, che sulla riga è quello dell'ANDATA. Per il ritorno si
     // passa solo il porto letto dal blocco ritorno; le regole del porto
-    // isolano restano quelle di port-resolution.ts (Napoli -> Ischia,
-    // Pozzuoli -> revisione manuale).
+    // isolano restano quelle di port-resolution.ts (corsa canonica
+    // ferry_schedules, altrimenti revisione manuale).
     ...(returnMainlandPort ? { meeting_point: returnMainlandPort === "napoli" ? "PORTO DI NAPOLI" : "PORTO DI POZZUOLI" } : {}),
     date: row.departure_date ?? row.date,
     direction: "departure",
     orario_barca: row.orario_barca ?? row.return_time ?? null,
   };
 
-  return resolveLegLive(syntheticDepartureRow, "return", warnings, now);
+  return resolveLegLive(syntheticDepartureRow, "return", warnings, now, medmarSchedules);
+}
+
+/**
+ * transfer_port_hotel (Napoli e Pozzuoli): il porto isolano viene SOLO dalla
+ * corsa Medmar canonica (ferry_schedules) con lo stesso orario di partenza
+ * usato poi per la ricerca live. formula_medmar_* e gli altri kind non
+ * passano di qui.
+ */
+function lookupScheduleIslandPort(
+  row: MedmarPreflightServiceRow,
+  direction: "outward" | "return",
+  medmarSchedules: FerryScheduleRow[] | null
+): ScheduleIslandPortLookup | null {
+  if (row.booking_service_kind !== "transfer_port_hotel") return null;
+  if (row.direction !== "arrival" && row.direction !== "departure") return null;
+  const mainland = resolveMainlandPort(row.booking_service_kind, row.meeting_point);
+  if (mainland.status !== "resolved" || (mainland.port !== "napoli" && mainland.port !== "pozzuoli")) return null;
+  return resolveIslandPortFromSchedules(medmarSchedules, {
+    mainlandPort: mainland.port,
+    direction: row.direction,
+    departureTime: resolveBookedFerryTime(row, direction).normalized,
+    date: row.date,
+  });
+}
+
+async function loadMedmarSchedules(admin: SupabaseClient): Promise<FerryScheduleRow[] | null> {
+  try {
+    const { data, error } = await admin
+      .from("ferry_schedules")
+      .select("company, departure_port, arrival_port, departure_time, direction, days_of_week, valid_from, valid_to")
+      .eq("company", "medmar");
+    if (error || !data) return null;
+    return data as FerryScheduleRow[];
+  } catch {
+    return null;
+  }
 }
 
 async function resolveLegLive(
   row: MedmarPreflightServiceRow,
   direction: "outward" | "return",
   warnings: MedmarPreflightWarning[],
-  now: Date
+  now: Date,
+  medmarSchedules: FerryScheduleRow[] | null = null
 ): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
+  const scheduleIslandPort = lookupScheduleIslandPort(row, direction, medmarSchedules);
+  if (scheduleIslandPort?.status === "resolved") {
+    warnings.push({
+      code: "island_port_from_schedule",
+      leg: direction,
+      message: `Porto isolano = ${scheduleIslandPort.port}, dalla corsa Medmar canonica (ferry_schedules) con partenza ${resolveBookedFerryTime(row, direction).normalized}.`,
+    });
+  } else if (scheduleIslandPort) {
+    warnings.push({
+      code: "island_port_schedule_unresolved",
+      leg: direction,
+      message: `Porto isolano non determinabile dagli orari Medmar canonici (ferry_schedules, motivo: ${scheduleIslandPort.reason}): nessun porto assunto, revisione manuale richiesta.`,
+    });
+  }
+
   const resolution = resolveLegRouteCode({
     bookingServiceKind: row.booking_service_kind,
     direction: row.direction,
     meetingPoint: row.meeting_point,
+    scheduleIslandPort,
   });
 
   const leg: MedmarPreflightLeg = {
@@ -594,11 +649,17 @@ export async function runMedmarPreflight(
   const embeddedReturnRow =
     rows.length === 1 && arrivalRow && !departureRow && hasEmbeddedReturnData(arrivalRow) ? arrivalRow : null;
 
-  const outwardOutcome = arrivalRow ? await resolveLegLive(arrivalRow, "outward", warnings, now) : null;
+  // Orari Medmar canonici: servono solo per il porto isolano delle
+  // transfer_port_hotel. Errore di lettura -> null -> manual_review.
+  const medmarSchedules = rows.some((r) => r.booking_service_kind === "transfer_port_hotel")
+    ? await loadMedmarSchedules(admin)
+    : null;
+
+  const outwardOutcome = arrivalRow ? await resolveLegLive(arrivalRow, "outward", warnings, now, medmarSchedules) : null;
   const returnOutcome = departureRow
-    ? await resolveLegLive(departureRow, "return", warnings, now)
+    ? await resolveLegLive(departureRow, "return", warnings, now, medmarSchedules)
     : embeddedReturnRow
-      ? await resolveEmbeddedReturnLeg(embeddedReturnRow, warnings, now)
+      ? await resolveEmbeddedReturnLeg(embeddedReturnRow, warnings, now, medmarSchedules)
       : null;
 
   const legStatuses = [outwardOutcome?.liveStatus, returnOutcome?.liveStatus].filter((s): s is LiveLegStatus => Boolean(s));

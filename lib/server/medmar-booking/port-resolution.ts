@@ -24,17 +24,57 @@
  * punto sull'isola. Quindi:
  *   - terraferma: da meeting_point, solo se identifica in modo univoco
  *     Napoli (Porta di Massa / Porto di Napoli) oppure Pozzuoli;
- *   - isola: Napoli -> ischia (stessa regola di formula_medmar_napoli: è
- *     l'unica tratta Medmar verificata da Napoli, vedi route-mapping.ts);
- *     Pozzuoli -> unknown, perché nessun campo della pratica distingue
- *     Ischia da Casamicciola.
+ *   - isola: SOLO dalla corsa canonica in ferry_schedules
+ *     (resolveIslandPortFromSchedules sotto), sia per Napoli sia per
+ *     Pozzuoli; nessun fallback fisso: senza esito certo resta unknown.
  *
  * Se non risolvibile: unknown. Mai un fallback automatico verso ischia.
  */
 
 import type { MedmarTicketRouteCode } from "@/lib/medmar-ticket-memory";
+import { isScheduleActiveOnDate, type FerryScheduleRow } from "@/lib/ferry-schedule-options";
 
 export type MedmarPort = "ischia" | "casamicciola" | "napoli" | "pozzuoli";
+
+export type ScheduleIslandPortLookup =
+  | { status: "resolved"; port: "ischia" | "casamicciola" }
+  | {
+      status: "unknown";
+      reason: "schedules_unavailable" | "missing_ferry_time" | "no_schedule_match" | "ambiguous_schedule_match" | "unmapped_schedule_port";
+    };
+
+const SCHEDULE_MAINLAND_PORT: Record<"napoli" | "pozzuoli", string> = { napoli: "napoli_beverello", pozzuoli: "pozzuoli" };
+const SCHEDULE_ISLAND_PORT: Record<string, "ischia" | "casamicciola"> = { ischia_porto: "ischia", casamicciola: "casamicciola" };
+
+/**
+ * Porto isolano di una corsa Medmar letto dalla tabella canonica
+ * ferry_schedules (supabase/migrations/0089_ferry_schedules.sql): corsa con
+ * lo stesso porto terraferma, la stessa direzione, lo stesso orario di
+ * PARTENZA esatto e attiva nella data. Risolto solo se tutte le corse che
+ * combaciano indicano lo stesso porto isolano; nessuna corsa "più vicina".
+ */
+export function resolveIslandPortFromSchedules(
+  schedules: FerryScheduleRow[] | null,
+  input: { mainlandPort: "napoli" | "pozzuoli"; direction: "arrival" | "departure"; departureTime: string | null; date: string }
+): ScheduleIslandPortLookup {
+  if (!schedules) return { status: "unknown", reason: "schedules_unavailable" };
+  if (!input.departureTime) return { status: "unknown", reason: "missing_ferry_time" };
+  const toIschia = input.direction === "arrival";
+  const mainland = SCHEDULE_MAINLAND_PORT[input.mainlandPort];
+  const islandPorts = new Set<string>();
+  for (const row of schedules) {
+    if (row.company !== "medmar") continue;
+    if (row.direction !== (toIschia ? "mainland_to_ischia" : "ischia_to_mainland")) continue;
+    if ((toIschia ? row.departure_port : row.arrival_port) !== mainland) continue;
+    if (String(row.departure_time ?? "").slice(0, 5) !== input.departureTime) continue;
+    if (!isScheduleActiveOnDate(row, input.date)) continue;
+    islandPorts.add(toIschia ? row.arrival_port : row.departure_port);
+  }
+  if (islandPorts.size === 0) return { status: "unknown", reason: "no_schedule_match" };
+  if (islandPorts.size > 1) return { status: "unknown", reason: "ambiguous_schedule_match" };
+  const port = SCHEDULE_ISLAND_PORT[[...islandPorts][0]!];
+  return port ? { status: "resolved", port } : { status: "unknown", reason: "unmapped_schedule_port" };
+}
 
 export type MedmarPortResolution =
   | { status: "resolved"; port: MedmarPort }
@@ -75,13 +115,17 @@ export function resolveMainlandPort(bookingServiceKind: string | null, meetingPo
   return { status: "unknown", reason: "unmapped_booking_service_kind" };
 }
 
-export function resolveIslandPort(bookingServiceKind: string | null, meetingPoint: string | null): MedmarPortResolution {
+export function resolveIslandPort(
+  bookingServiceKind: string | null,
+  meetingPoint: string | null,
+  scheduleIslandPort: ScheduleIslandPortLookup | null = null
+): MedmarPortResolution {
   if (!bookingServiceKind) return { status: "unknown", reason: "missing_booking_service_kind" };
   if (bookingServiceKind === "formula_medmar_napoli") return { status: "resolved", port: "ischia" };
   if (bookingServiceKind === "transfer_port_hotel") {
     const mainland = resolveImportedMainlandPort(meetingPoint);
     if (mainland.status === "unknown") return mainland;
-    if (mainland.port === "napoli") return { status: "resolved", port: "ischia" };
+    if (scheduleIslandPort?.status === "resolved") return { status: "resolved", port: scheduleIslandPort.port };
     return { status: "unknown", reason: "missing_island_port" };
   }
   if (bookingServiceKind === "formula_medmar_pozzuoli") {
@@ -127,6 +171,8 @@ export function resolveLegRouteCode(input: {
   bookingServiceKind: string | null;
   direction: string | null;
   meetingPoint: string | null;
+  /** Solo transfer_port_hotel: esito di resolveIslandPortFromSchedules. */
+  scheduleIslandPort?: ScheduleIslandPortLookup | null;
 }): LegRouteResolution {
   const isArrival = input.direction === "arrival";
   const isDeparture = input.direction === "departure";
@@ -137,7 +183,7 @@ export function resolveLegRouteCode(input: {
   const mainland = resolveMainlandPort(input.bookingServiceKind, input.meetingPoint);
   if (mainland.status === "unknown") return { status: "unknown", reason: mainland.reason };
 
-  const island = resolveIslandPort(input.bookingServiceKind, input.meetingPoint);
+  const island = resolveIslandPort(input.bookingServiceKind, input.meetingPoint, input.scheduleIslandPort ?? null);
   if (island.status === "unknown") return { status: "unknown", reason: island.reason };
 
   const key = isArrival ? `${mainland.port}_${island.port}` : `${island.port}_${mainland.port}`;

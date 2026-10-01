@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { resolveMainlandPort, resolveIslandPort, resolveLegRouteCode } from "@/lib/server/medmar-booking/port-resolution";
+import { resolveMainlandPort, resolveIslandPort, resolveIslandPortFromSchedules, resolveLegRouteCode } from "@/lib/server/medmar-booking/port-resolution";
+import type { FerryScheduleRow } from "@/lib/ferry-schedule-options";
 
 describe("port-resolution — resolveMainlandPort", () => {
   it("formula_medmar_napoli -> napoli", () => {
@@ -123,13 +124,17 @@ describe("port-resolution — resolveLegRouteCode: casi unknown / edge case A/R"
 });
 
 describe("port-resolution — pratiche importate transfer_port_hotel (meeting_point = porto terraferma di partenza)", () => {
-  it("A. MEDMAR + PORTO DI NAPOLI PORTA DI MASSA -> mainland napoli, isola ischia, tratta napoli_ischia", () => {
+  it("A. MEDMAR + PORTO DI NAPOLI PORTA DI MASSA -> mainland napoli; isola SOLO dalla corsa canonica, nessun fallback fisso", () => {
     const mp = "PORTO DI NAPOLI PORTA DI MASSA";
     expect(resolveMainlandPort("transfer_port_hotel", mp)).toEqual({ status: "resolved", port: "napoli" });
-    expect(resolveIslandPort("transfer_port_hotel", mp)).toEqual({ status: "resolved", port: "ischia" });
+    expect(resolveIslandPort("transfer_port_hotel", mp)).toEqual({ status: "unknown", reason: "missing_island_port" });
     expect(resolveLegRouteCode({ bookingServiceKind: "transfer_port_hotel", direction: "arrival", meetingPoint: mp })).toEqual({
-      status: "resolved", routeCode: "napoli_ischia", mainlandPort: "napoli", islandPort: "ischia",
+      status: "unknown", reason: "missing_island_port",
     });
+    expect(resolveLegRouteCode({
+      bookingServiceKind: "transfer_port_hotel", direction: "arrival", meetingPoint: mp,
+      scheduleIslandPort: { status: "resolved", port: "ischia" },
+    })).toEqual({ status: "resolved", routeCode: "napoli_ischia", mainlandPort: "napoli", islandPort: "ischia" });
     expect(resolveMainlandPort("transfer_port_hotel", "Napoli - Calata Porta di Massa")).toEqual({ status: "resolved", port: "napoli" });
   });
 
@@ -159,5 +164,87 @@ describe("port-resolution — pratiche importate transfer_port_hotel (meeting_po
     }
     expect(resolveMainlandPort("transfer_port_hotel", null)).toEqual({ status: "unknown", reason: "missing_meeting_point" });
     expect(resolveMainlandPort("transfer_port_hotel", "   ")).toEqual({ status: "unknown", reason: "missing_meeting_point" });
+  });
+});
+
+describe("port-resolution — resolveIslandPortFromSchedules (ferry_schedules canonico)", () => {
+  function row(departure_port: string, arrival_port: string, time: string, direction: FerryScheduleRow["direction"], overrides: Partial<FerryScheduleRow> = {}): FerryScheduleRow {
+    return { company: "medmar", departure_port, arrival_port, departure_time: `${time}:00`, direction, days_of_week: null, valid_from: null, valid_to: null, ...overrides };
+  }
+  // Righe Medmar Pozzuoli del seed supabase/migrations/0089_ferry_schedules.sql.
+  const SCHEDULES: FerryScheduleRow[] = [
+    row("napoli_beverello", "ischia_porto", "08:40", "mainland_to_ischia"),
+    row("napoli_beverello", "ischia_porto", "14:20", "mainland_to_ischia"),
+    row("napoli_beverello", "ischia_porto", "19:00", "mainland_to_ischia"),
+    row("pozzuoli", "ischia_porto", "09:40", "mainland_to_ischia"),
+    row("pozzuoli", "casamicciola", "08:15", "mainland_to_ischia"),
+    row("ischia_porto", "pozzuoli", "11:10", "ischia_to_mainland"),
+    row("casamicciola", "pozzuoli", "10:10", "ischia_to_mainland"),
+    row("ischia_porto", "napoli_beverello", "10:35", "ischia_to_mainland"),
+    row("pozzuoli", "ischia_porto", "06:25", "mainland_to_ischia", { days_of_week: [1, 2, 3, 4, 5] }),
+    row("pozzuoli", "casamicciola", "09:40", "mainland_to_ischia", { company: "snav" }),
+  ];
+  const lookup = (direction: "arrival" | "departure", departureTime: string | null, date = "2026-04-04", schedules: FerryScheduleRow[] | null = SCHEDULES) =>
+    resolveIslandPortFromSchedules(schedules, { mainlandPort: "pozzuoli", direction, departureTime, date });
+
+  it("Napoli: andata 08:40 / 14:20 / 19:00 -> ischia, ritorno 10:35 -> ischia; orario Pozzuoli non vale per Napoli", () => {
+    const napoli = (direction: "arrival" | "departure", departureTime: string) =>
+      resolveIslandPortFromSchedules(SCHEDULES, { mainlandPort: "napoli", direction, departureTime, date: "2026-10-08" });
+    for (const t of ["08:40", "14:20", "19:00"]) expect(napoli("arrival", t)).toEqual({ status: "resolved", port: "ischia" });
+    expect(napoli("departure", "10:35")).toEqual({ status: "resolved", port: "ischia" });
+    expect(napoli("arrival", "09:40")).toEqual({ status: "unknown", reason: "no_schedule_match" });
+    expect(napoli("departure", "11:10")).toEqual({ status: "unknown", reason: "no_schedule_match" });
+  });
+
+  it("andata Pozzuoli: 09:40 -> ischia, 08:15 -> casamicciola (le righe non Medmar sono ignorate)", () => {
+    expect(lookup("arrival", "09:40")).toEqual({ status: "resolved", port: "ischia" });
+    expect(lookup("arrival", "08:15")).toEqual({ status: "resolved", port: "casamicciola" });
+  });
+
+  it("ritorno verso Pozzuoli: 11:10 -> ischia, 10:10 -> casamicciola; la corsa per Napoli non conta", () => {
+    expect(lookup("departure", "11:10")).toEqual({ status: "resolved", port: "ischia" });
+    expect(lookup("departure", "10:10")).toEqual({ status: "resolved", port: "casamicciola" });
+    expect(lookup("departure", "10:35")).toEqual({ status: "unknown", reason: "no_schedule_match" });
+  });
+
+  it("nessuna corsa più vicina: orario non presente o direzione sbagliata -> no_schedule_match", () => {
+    expect(lookup("arrival", "09:45")).toEqual({ status: "unknown", reason: "no_schedule_match" });
+    expect(lookup("departure", "09:40")).toEqual({ status: "unknown", reason: "no_schedule_match" });
+  });
+
+  it("days_of_week / validità: corsa feriale di domenica -> no_schedule_match", () => {
+    expect(lookup("arrival", "06:25", "2026-04-06")).toEqual({ status: "resolved", port: "ischia" });
+    expect(lookup("arrival", "06:25", "2026-04-05")).toEqual({ status: "unknown", reason: "no_schedule_match" });
+    const seasonal = [row("pozzuoli", "ischia_porto", "09:40", "mainland_to_ischia", { valid_from: "2026-05-01", valid_to: "2026-09-15" })];
+    expect(lookup("arrival", "09:40", "2026-04-04", seasonal)).toEqual({ status: "unknown", reason: "no_schedule_match" });
+  });
+
+  it("stesso orario con porti isolani diversi -> ambiguous_schedule_match", () => {
+    const ambiguous = [...SCHEDULES, row("pozzuoli", "casamicciola", "09:40", "mainland_to_ischia")];
+    expect(lookup("arrival", "09:40", "2026-04-04", ambiguous)).toEqual({ status: "unknown", reason: "ambiguous_schedule_match" });
+  });
+
+  it("tabella non disponibile, orario mancante o porto non mappato -> unknown", () => {
+    expect(lookup("arrival", "09:40", "2026-04-04", null)).toEqual({ status: "unknown", reason: "schedules_unavailable" });
+    expect(lookup("arrival", null)).toEqual({ status: "unknown", reason: "missing_ferry_time" });
+    expect(lookup("arrival", "09:40", "2026-04-04", [row("pozzuoli", "forio", "09:40", "mainland_to_ischia")])).toEqual({ status: "unknown", reason: "unmapped_schedule_port" });
+  });
+
+  it("resolveLegRouteCode: transfer_port_hotel Pozzuoli usa il porto dalla tabella; senza esito resta missing_island_port", () => {
+    const base = { bookingServiceKind: "transfer_port_hotel", direction: "arrival", meetingPoint: "PORTO DI POZZUOLI" };
+    expect(resolveLegRouteCode({ ...base, scheduleIslandPort: { status: "resolved", port: "casamicciola" } })).toEqual({
+      status: "resolved", routeCode: "pozzuoli_casamicciola", mainlandPort: "pozzuoli", islandPort: "casamicciola",
+    });
+    expect(resolveLegRouteCode({ ...base, scheduleIslandPort: { status: "unknown", reason: "no_schedule_match" } })).toEqual({ status: "unknown", reason: "missing_island_port" });
+    expect(resolveLegRouteCode(base)).toEqual({ status: "unknown", reason: "missing_island_port" });
+  });
+
+  it("transfer_port_hotel Napoli segue l'esito della tabella; formula_medmar_* e SNAV lo ignorano", () => {
+    const casamicciola = { status: "resolved", port: "casamicciola" } as const;
+    expect(resolveIslandPort("transfer_port_hotel", "PORTO DI NAPOLI PORTA DI MASSA", { status: "resolved", port: "ischia" })).toEqual({ status: "resolved", port: "ischia" });
+    expect(resolveIslandPort("transfer_port_hotel", "PORTO DI NAPOLI PORTA DI MASSA", { status: "unknown", reason: "no_schedule_match" })).toEqual({ status: "unknown", reason: "missing_island_port" });
+    expect(resolveIslandPort("formula_medmar_napoli", null, casamicciola)).toEqual({ status: "resolved", port: "ischia" });
+    expect(resolveIslandPort("formula_medmar_pozzuoli", "Ischia Porto", casamicciola)).toEqual({ status: "resolved", port: "ischia" });
+    expect(resolveIslandPort("formula_snav", "Casamicciola", casamicciola)).toEqual({ status: "unknown", reason: "unmapped_booking_service_kind" });
   });
 });
