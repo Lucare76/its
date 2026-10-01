@@ -90,8 +90,8 @@ ISTRUZIONI CAMPO PER CAMPO:
 - hotel: PRIMA guarda il campo DESCRIZIONE della riga PROGRAMMA (rimuovi eventuale prefisso "AV " o "26/TRENOB" ecc.), MA SOLO se contiene un vero nome di struttura — NON un codice/riferimento trasporto (es. "TRASPORTO TRS-2026-1249 - BK-2026-32138" NON è un hotel). Se la riga PROGRAMMA non contiene un nome hotel, prendi il valore dopo "dest:" nel blocco operativo dell'ANDATA (es. "...CON SNAV a: CELL:3488803921 dest: ISOLA VERDE" → hotel: "ISOLA VERDE"). ATTENZIONE: nel testo estratto il valore dopo "dest:" va spesso a capo prima di finire (es. "dest: LA\nVILLA" significa hotel: "LA VILLA", non "LA"): unisci sempre le righe che seguono "dest:" rimuovendo l'a-capo, fino alla prima riga vuota o all'inizio di un nuovo blocco ("Il DD-mese-AA", "Cliente:") — non fermarti alla prima riga se il nome hotel potrebbe continuare. NON usare MAI un valore del tipo "HOTEL <città>" (es. "HOTEL ISCHIA", "HOTEL NAPOLI") come nome hotel: quel testo è il punto di ritiro generico del RITORNO ("M.p.: HOTEL ISCHIA"), non il nome della struttura — se non trovi altro, lascia il campo vuoto piuttosto che usare quel valore generico.
 - data_arrivo: colonna DAL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "19-apr-26" → "2026-04-19")
 - data_partenza: colonna AL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "26-apr-26" → "2026-04-26")
-- orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA (STAZIONE/HOTEL o PORTO/HOTEL): il valore dopo "Alle" (es: "13:43")
-- orario_partenza: dalla sezione operativa, nel blocco del servizio RITORNO (HOTEL/STAZIONE o HOTEL/PORTO): il valore dopo "Dalle" (es: "13:20")
+- orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA STAZIONE/HOTEL: il valore dopo "Alle" (es: "13:43"). Per PORTO/TRAGHETTO ("TRAGHETTO NAPOLI + TRS H. ISCHIA 08:40", "TRAGHETTO POZZUOLI + TRS H. ISCHIA 09:40") NON c'è "Alle": usa l'orario nel titolo del servizio andata (uguale al "Dalle" del blocco), cioè la PARTENZA della nave dalla terraferma.
+- orario_partenza: dalla sezione operativa, nel blocco del servizio RITORNO (HOTEL/STAZIONE o HOTEL/PORTO): il valore dopo "Dalle" (es: "13:20"). Per PORTO/TRAGHETTO usa l'orario nel titolo del servizio ritorno ("TRS H. ISCHIA + TRAGHETTO POZZUOLI 11:10"), cioè la PARTENZA della nave da Ischia.
 - numero_mezzo_andata: per PORTO/TRAGHETTO scrivi esattamente "MEDMAR" oppure "SNAV" (deduci dal documento). Per treni/aerei: codice treno/volo dalla tabella operativa riga 1, colonna "num." (es: "ITA 9919") OPPURE dopo "da:" (es: "ITALO 9919")
 - numero_mezzo_ritorno: per PORTO/TRAGHETTO scrivi "MEDMAR" oppure "SNAV" (stesso del ritorno). Per treni/aerei: codice treno/volo riga 2 (es: "ITA 9940") OPPURE dopo "da:" nel blocco ritorno
 - citta_partenza: dopo "M.p.:" nel blocco andata OPPURE prima riga della tabella operativa (es: "TORINO P. NUOVA")
@@ -446,6 +446,30 @@ function overrideNumeroPraticaFromSubject(form: ClaudeFormState, agency: string,
   return { ...form, numero_pratica: match[1] };
 }
 
+/**
+ * Aleste PORTO/TRAGHETTO (MEDMAR): l'orario nave è nel titolo del servizio,
+ * non dopo "Alle" — andata "TRAGHETTO <PORTO> + TRS H. ISCHIA HH:MM" =
+ * partenza dalla terraferma, ritorno "TRS H. ISCHIA + TRAGHETTO <PORTO> HH:MM"
+ * = partenza da Ischia. Stessi titoli letti dal parser deterministico
+ * (agency-aleste-viaggi.ts:extractAlesteMarineJourney). Il valore del titolo
+ * sostituisce quello di Haiku solo se nel testo compare un solo orario per
+ * quel titolo; treni/voli/bus/aliscafo restano invariati.
+ */
+export function applyAlesteFerryTitleTimes(form: ClaudeFormState, agency: string, pageText: string): ClaudeFormState {
+  if (agency !== "aleste" || form.tipo_servizio !== "transfer_port_hotel") return form;
+  const uniqueTime = (pattern: RegExp) => {
+    const times = new Set([...pageText.matchAll(pattern)].map((m) => `${m[1]!.padStart(2, "0")}:${m[2]}`));
+    return times.size === 1 ? [...times][0]! : null;
+  };
+  const outward = uniqueTime(/TRAGHETTO\s+(?:NAPOLI|POZZUOLI)\s*\+\s*TRS\s+H\.?\s*ISCHIA\s*([0-2]?\d)[:.]([0-5]\d)/gi);
+  const ret = uniqueTime(/TRS\s+H\.?\s*ISCHIA\s*\+\s*TRAGHETTO\s+(?:NAPOLI|POZZUOLI)\s*([0-2]?\d)[:.]([0-5]\d)/gi);
+  return {
+    ...form,
+    orario_arrivo: outward ?? form.orario_arrivo,
+    orario_partenza: ret ?? form.orario_partenza,
+  };
+}
+
 // ─── Funzione principale ─────────────────────────────────────────────────────
 
 export async function extractWithHaiku(
@@ -562,7 +586,7 @@ export async function extractWithHaiku(
           const rawJson2 = JSON.parse(match2[0]) as ClaudeJson & { agency_key?: string };
           return {
             agency: finalAgency,
-            form: overrideNumeroPraticaFromSubject(jsonToForm(rawJson2, finalAgency), finalAgency, emailSubject),
+            form: applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson2, finalAgency), finalAgency, emailSubject), finalAgency, page1Text),
             rawJson: rawJson2 as Record<string, unknown>,
             textMode,
             usage: addUsage(usage, usage2)
@@ -572,7 +596,7 @@ export async function extractWithHaiku(
           // ma conserva comunque i token consumati anche dal secondo tentativo per il costo.
           return {
             agency: finalAgency,
-            form: overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject),
+            form: applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject), finalAgency, page1Text),
             rawJson: rawJson as Record<string, unknown>,
             textMode,
             usage: addUsage(usage, usage2)
@@ -581,7 +605,7 @@ export async function extractWithHaiku(
       }
       return {
         agency: finalAgency,
-        form: overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject),
+        form: applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject), finalAgency, page1Text),
         rawJson: rawJson as Record<string, unknown>,
         textMode,
         usage: addUsage(usage, usage2)
@@ -589,7 +613,7 @@ export async function extractWithHaiku(
     }
   }
 
-  const form = overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject);
+  const form = applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject), finalAgency, page1Text);
 
   return {
     agency: finalAgency,

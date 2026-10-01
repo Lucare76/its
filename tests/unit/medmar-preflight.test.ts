@@ -29,10 +29,46 @@ vi.mock("@/lib/server/medmar-booking/route-mapping", () => ({
 // Import DOPO i vi.mock, così runMedmarPreflight usa i moduli mockati.
 const { runMedmarPreflight } = await import("@/lib/server/medmar-booking/preflight");
 
-function fakeAdmin(services: Row[], ticketMemory: Row[] = []) {
+// Corse Medmar del seed supabase/migrations/0089_ferry_schedules.sql: per le
+// transfer_port_hotel il porto isolano viene solo da qui.
+function sched(departure_port: string, arrival_port: string, departure_time: string, direction: string, days_of_week: number[] | null = null): Row {
+  return { company: "medmar", departure_port, arrival_port, departure_time: `${departure_time}:00`, direction, days_of_week, valid_from: null, valid_to: null };
+}
+const FERIALE = [1, 2, 3, 4, 5];
+const MEDMAR_SCHEDULES: Row[] = [
+  sched("ischia_porto", "napoli_beverello", "06:25", "ischia_to_mainland", FERIALE),
+  sched("ischia_porto", "napoli_beverello", "10:35", "ischia_to_mainland"),
+  sched("ischia_porto", "napoli_beverello", "17:00", "ischia_to_mainland"),
+  sched("ischia_porto", "pozzuoli", "04:30", "ischia_to_mainland", FERIALE),
+  sched("ischia_porto", "pozzuoli", "08:10", "ischia_to_mainland"),
+  sched("ischia_porto", "pozzuoli", "11:10", "ischia_to_mainland"),
+  sched("ischia_porto", "pozzuoli", "15:00", "ischia_to_mainland"),
+  sched("casamicciola", "pozzuoli", "02:30", "ischia_to_mainland", FERIALE),
+  sched("casamicciola", "pozzuoli", "06:20", "ischia_to_mainland"),
+  sched("casamicciola", "pozzuoli", "10:10", "ischia_to_mainland"),
+  sched("casamicciola", "pozzuoli", "13:35", "ischia_to_mainland"),
+  sched("casamicciola", "pozzuoli", "16:50", "ischia_to_mainland"),
+  sched("napoli_beverello", "ischia_porto", "08:40", "mainland_to_ischia"),
+  sched("napoli_beverello", "ischia_porto", "14:20", "mainland_to_ischia"),
+  sched("napoli_beverello", "ischia_porto", "19:00", "mainland_to_ischia"),
+  sched("pozzuoli", "ischia_porto", "06:25", "mainland_to_ischia", FERIALE),
+  sched("pozzuoli", "ischia_porto", "09:40", "mainland_to_ischia"),
+  sched("pozzuoli", "ischia_porto", "13:30", "mainland_to_ischia"),
+  sched("pozzuoli", "ischia_porto", "16:30", "mainland_to_ischia"),
+  sched("pozzuoli", "casamicciola", "04:10", "mainland_to_ischia", FERIALE),
+  sched("pozzuoli", "casamicciola", "08:15", "mainland_to_ischia"),
+  sched("pozzuoli", "casamicciola", "12:00", "mainland_to_ischia"),
+  sched("pozzuoli", "casamicciola", "15:00", "mainland_to_ischia"),
+  sched("pozzuoli", "casamicciola", "18:30", "mainland_to_ischia"),
+];
+
+function fakeAdmin(services: Row[], ticketMemory: Row[] = [], ferrySchedules: Row[] = MEDMAR_SCHEDULES) {
   return {
     from(table: string) {
-      const source = table === "services" ? services : table === "medmar_ticket_memory" ? ticketMemory : [];
+      const source = table === "services" ? services
+        : table === "medmar_ticket_memory" ? ticketMemory
+        : table === "ferry_schedules" ? ferrySchedules
+        : [];
       let filtered = [...source];
       const builder = {
         select() { return builder; },
@@ -2021,4 +2057,152 @@ describe("preflight — ritorno transfer_port_hotel da ferry_details.return_main
     expect(pozzuoli.warnings.some((w) => w.code === "embedded_return_island_port_ambiguous")).toBe(true);
     expect(pozzuoli.return?.route_code).toBeNull();
   });
+});
+
+describe("preflight — porto isolano transfer_port_hotel dagli orari Medmar canonici (ferry_schedules)", () => {
+  // Forma della pratica Aleste 001233 (26/002905) dopo inbox-approve.
+  function pozzuoliRow(overrides: Row = {}): Row {
+    return {
+      id: SVC_ARR, tenant_id: TENANT_A, date: "2026-04-04", time: "09:40", outbound_time: "09:40",
+      customer_name: "Cliente Aleste", pax: 2, vessel: "PORTO DI POZZUOLI", notes: "[practice:26/002905]",
+      booking_service_kind: "transfer_port_hotel", direction: "arrival", status: "new",
+      meeting_point: "PORTO DI POZZUOLI", transport_code: "MEDMAR",
+      departure_date: "2026-04-07", departure_time: "11:10", return_time: "11:10",
+      ferry_details: { return_mainland_port: "pozzuoli" },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) =>
+      route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : route === "pozzuoli_ischia" ? 56 : route === "ischia_pozzuoli" ? 14 : null
+    );
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockClear();
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+  });
+
+  it("Pozzuoli 09:40 -> Ischia Porto e ritorno 11:10 da Ischia Porto, risolti dalla tabella; la ricerca live usa gli stessi orari", async () => {
+    const result = await runMedmarPreflight(fakeAdmin([pozzuoliRow()], [], MEDMAR_SCHEDULES), TENANT_A, [SVC_ARR]);
+    expect(result.outward?.route_code).toBe("pozzuoli_ischia");
+    expect(result.outward?.island_port).toBe("ischia");
+    expect(result.return?.route_code).toBe("ischia_pozzuoli");
+    expect(result.return?.island_port).toBe("ischia");
+    expect(result.warnings.filter((w) => w.code === "island_port_from_schedule").map((w) => w.leg)).toEqual(["outward", "return"]);
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 56, partenzaDataDal: "2026-04-04", dopoLe: "09:40:00" });
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 14, partenzaDataDal: "2026-04-07", dopoLe: "11:10:00" });
+  });
+
+  it("Pozzuoli 08:15 -> Casamicciola e ritorno 10:10 da Casamicciola, come da tabella", async () => {
+    const row = pozzuoliRow({ time: "08:15", outbound_time: "08:15", departure_time: "10:10", return_time: "10:10" });
+    const result = await runMedmarPreflight(fakeAdmin([row], [], MEDMAR_SCHEDULES), TENANT_A, [SVC_ARR]);
+    expect(result.outward?.route_code).toBe("pozzuoli_casamicciola");
+    expect(result.outward?.island_port).toBe("casamicciola");
+    expect(result.return?.route_code).toBe("casamicciola_pozzuoli");
+    expect(result.return?.island_port).toBe("casamicciola");
+  });
+
+  it("orario assente dalla tabella -> manual_review, nessun porto assunto, nessuna ricerca live per quella gamba", async () => {
+    // Ritorno senza porto terraferma: anche l'altra gamba resta manual_review,
+    // così lo stato complessivo riflette solo l'andata.
+    const row = pozzuoliRow({ time: "10:00", outbound_time: "10:00", ferry_details: {} });
+    const result = await runMedmarPreflight(fakeAdmin([row], [], MEDMAR_SCHEDULES), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.outward?.route_code).toBeNull();
+    expect(result.warnings.find((w) => w.code === "island_port_schedule_unresolved" && w.leg === "outward")?.message).toContain("no_schedule_match");
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalledWith(expect.objectContaining({ partenzaDataDal: "2026-04-04" }));
+  });
+
+  it("corsa feriale in un giorno festivo (days_of_week) -> non conta, manual_review", async () => {
+    // 2026-04-05 è domenica: la Pozzuoli 06:25 è solo lun-ven.
+    const row = pozzuoliRow({ date: "2026-04-05", time: "06:25", outbound_time: "06:25" });
+    const result = await runMedmarPreflight(fakeAdmin([row], [], MEDMAR_SCHEDULES), TENANT_A, [SVC_ARR]);
+    expect(result.outward?.route_code).toBeNull();
+    expect(result.warnings.find((w) => w.code === "island_port_schedule_unresolved" && w.leg === "outward")?.message).toContain("no_schedule_match");
+  });
+
+  it("stesso orario con due porti isolani diversi -> ambiguo, manual_review", async () => {
+    const ambiguous = [...MEDMAR_SCHEDULES, sched("pozzuoli", "casamicciola", "09:40", "mainland_to_ischia")];
+    const result = await runMedmarPreflight(fakeAdmin([pozzuoliRow({ ferry_details: {} })], [], ambiguous), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.outward?.route_code).toBeNull();
+    expect(result.warnings.find((w) => w.code === "island_port_schedule_unresolved" && w.leg === "outward")?.message).toContain("ambiguous_schedule_match");
+  });
+
+  it("lettura ferry_schedules in errore -> manual_review (fail-closed)", async () => {
+    const base = fakeAdmin([pozzuoliRow()]);
+    const failing = {
+      from(table: string) {
+        if (table !== "ferry_schedules") return base.from(table);
+        const builder = {
+          select() { return builder; },
+          eq() { return builder; },
+          then(resolve: (v: { data: null; error: { message: string } }) => void) { resolve({ data: null, error: { message: "boom" } }); },
+        };
+        return builder;
+      },
+    } as unknown as import("@supabase/supabase-js").SupabaseClient;
+    const result = await runMedmarPreflight(failing, TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.outward?.route_code).toBeNull();
+    expect(result.warnings.find((w) => w.code === "island_port_schedule_unresolved")?.message).toContain("schedules_unavailable");
+  });
+
+  it("ritorno senza return_mainland_port: resta manual_review anche se la tabella conosce l'orario (mai porto dell'andata)", async () => {
+    const result = await runMedmarPreflight(fakeAdmin([pozzuoliRow({ ferry_details: {} })], [], MEDMAR_SCHEDULES), TENANT_A, [SVC_ARR]);
+    expect(result.outward?.route_code).toBe("pozzuoli_ischia");
+    expect(result.return?.route_code).toBeNull();
+    expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_ambiguous")).toBe(true);
+  });
+
+  function napoliRow(outward: string, ret: string, overrides: Row = {}): Row {
+    return pozzuoliRow({
+      date: "2026-10-08", time: outward, outbound_time: outward, meeting_point: "PORTO DI NAPOLI PORTA DI MASSA",
+      departure_date: "2026-10-11", departure_time: ret, return_time: ret, ferry_details: { return_mainland_port: "napoli" },
+      ...overrides,
+    });
+  }
+
+  it("Napoli 08:40 e 14:20 -> Ischia Porto, ritorno Ischia 10:35 -> Napoli: tutto dalla tabella", async () => {
+    for (const outward of ["08:40", "14:20"]) {
+      vi.mocked(medmarClient.fetchCorseReadOnly).mockClear();
+      const result = await runMedmarPreflight(fakeAdmin([napoliRow(outward, "10:35")]), TENANT_A, [SVC_ARR]);
+      expect(result.outward?.route_code).toBe("napoli_ischia");
+      expect(result.outward?.island_port).toBe("ischia");
+      expect(result.return?.route_code).toBe("ischia_napoli");
+      expect(result.return?.island_port).toBe("ischia");
+      expect(result.warnings.filter((w) => w.code === "island_port_from_schedule").map((w) => w.leg)).toEqual(["outward", "return"]);
+      expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 59, partenzaDataDal: "2026-10-08", dopoLe: `${outward}:00` });
+      expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 47, partenzaDataDal: "2026-10-11", dopoLe: "10:35:00" });
+    }
+  });
+
+  it("Napoli senza corsa canonica: nessun fallback fisso verso Ischia -> manual_review", async () => {
+    // 09:40 è un orario Pozzuoli, non Napoli.
+    const unknownTime = await runMedmarPreflight(fakeAdmin([napoliRow("09:40", "10:35", { ferry_details: {} })]), TENANT_A, [SVC_ARR]);
+    expect(unknownTime.status).toBe("manual_review");
+    expect(unknownTime.outward?.route_code).toBeNull();
+    expect(unknownTime.warnings.find((w) => w.code === "island_port_schedule_unresolved" && w.leg === "outward")?.message).toContain("no_schedule_match");
+
+    const emptyTable = await runMedmarPreflight(fakeAdmin([napoliRow("08:40", "10:35", { ferry_details: {} })], [], []), TENANT_A, [SVC_ARR]);
+    expect(emptyTable.status).toBe("manual_review");
+    expect(emptyTable.outward?.route_code).toBeNull();
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("formula_medmar_* e SNAV: ferry_schedules non viene nemmeno letta", async () => {
+    for (const row of [
+      arrivalRow(),
+      arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Casamicciola" }),
+      pozzuoliRow({ vessel: "PORTO NAPOLI", transport_code: "SNAV / SNAV" }),
+    ]) {
+      const admin = fakeAdmin([row], [], MEDMAR_SCHEDULES);
+      const fromSpy = vi.spyOn(admin, "from");
+      const result = await runMedmarPreflight(admin, TENANT_A, [SVC_ARR]);
+      expect(fromSpy).not.toHaveBeenCalledWith("ferry_schedules");
+      expect(result.warnings.some((w) => w.code === "island_port_from_schedule" || w.code === "island_port_schedule_unresolved")).toBe(false);
+    }
+  });
+
 });
