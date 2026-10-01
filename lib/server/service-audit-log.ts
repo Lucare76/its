@@ -47,7 +47,7 @@ export async function logServiceChange(input: {
   before: ServiceSnapshot | null;
   after: ServiceSnapshot | null;
   fields: string[];
-  action?: "CREATED" | "CANCELLED" | "updated";
+  action?: "CREATED" | "CANCELLED" | "RESTORED" | "updated";
   operatorName?: string;
 }) {
   const fields = changedFields(input.before, input.after, input.fields);

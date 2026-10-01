@@ -26,11 +26,11 @@ type CallSpy = (table: string, method: string, args: unknown[]) => void;
  * oggetto (chainable) e l'oggetto stesso e' awaitable via .then() —
  * la route reale termina la catena in punti diversi per tabella
  * (.eq per medmar_delivery_attempts, .limit per medmar_issuing_attempts,
- * .ilike per services), quindi il mock deve restare risolvibile a
+ * .or per services), quindi il mock deve restare risolvibile a
  * qualunque punto della catena, non solo all'ultimo metodo chiamato.
  */
 function makeQueryBuilder(result: QueryResult | { data: unknown; error: unknown }, onCall: (method: string, args: unknown[]) => void) {
-  const methods = ["select", "eq", "neq", "gte", "lte", "ilike", "order", "limit", "maybeSingle"] as const;
+  const methods = ["select", "eq", "neq", "gte", "lte", "ilike", "or", "order", "limit", "maybeSingle"] as const;
   const builder: Record<string, unknown> = {};
   for (const method of methods) {
     builder[method] = (...args: unknown[]) => {
@@ -237,8 +237,8 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
       makeAuthContext(TENANT_A, {
         issuing: [{ id: "i1", status: "completed", completed_at: "2026-08-20T07:00:00.000Z", final_total_cents: 5000, service_ids: [] }],
         services: [
-          { id: "svc-arrivo", customer_name: "Mario Rossi", notes: "[practice:PR-1]" },
-          { id: "svc-partenza", customer_name: "Mario Rossi", notes: "[practice:PR-1]" },
+          { id: "svc-arrivo", customer_name: "Mario Rossi", notes: "[practice:PR-1]", vessel: "Medmar" },
+          { id: "svc-partenza", customer_name: "Mario Rossi", notes: "[practice:PR-1]", vessel: "Medmar" },
         ],
       })
     );
@@ -254,7 +254,7 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     mocks.authorizePricingRequest.mockResolvedValue(
       makeAuthContext(TENANT_A, {
         issuing: [],
-        services: [{ id: "svc-1", customer_name: "Mario Rossi", notes: null }],
+        services: [{ id: "svc-1", customer_name: "Mario Rossi", notes: null, vessel: "Medmar" }],
       })
     );
 
@@ -315,7 +315,7 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     mocks.authorizePricingRequest.mockResolvedValue(
       makeAuthContext(TENANT_A, {
         issuing: [{ id: "i1", status: "completed", completed_at: "2026-08-20T07:00:00.000Z", final_total_cents: 5000, service_ids: [] }],
-        services: [{ id: "svc-1", customer_name: "Mario Rossi", notes: null }],
+        services: [{ id: "svc-1", customer_name: "Mario Rossi", notes: null, vessel: "Medmar" }],
       })
     );
 
@@ -330,7 +330,7 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     mocks.authorizePricingRequest.mockResolvedValue(
       makeAuthContext(TENANT_A, {
         issuing: [{ id: "i1", status: "completed", completed_at: "2026-08-20T07:00:00.000Z", final_total_cents: 50000, service_ids: [] }],
-        services: [{ id: "svc-1", customer_name: "Mario Rossi", notes: null }],
+        services: [{ id: "svc-1", customer_name: "Mario Rossi", notes: null, vessel: "Medmar" }],
       })
     );
 
@@ -380,5 +380,53 @@ describe("GET /api/services/medmar-delivery-summary — coda + Credito e fabbiso
     expect(res.status).toBe(500);
     expect(json.ok).toBe(false);
     expect(json.error).not.toContain("connection reset");
+  });
+});
+
+describe("GET /api/services/medmar-delivery-summary — stessa classificazione Medmar della coda e del preflight", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T10:00:00+02:00"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    mocks.authorizePricingRequest.mockReset();
+  });
+
+  it("prefiltra services con .or su vessel/kind/transport_code invece del solo vessel", async () => {
+    const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(TENANT_A, {}, {}, (table, method, args) => calls.push({ table, method, args }))
+    );
+
+    await GET(makeRequest());
+
+    const serviceCalls = calls.filter((c) => c.table === "services");
+    expect(serviceCalls.some((c) => c.method === "ilike")).toBe(false);
+    const orCall = serviceCalls.find((c) => c.method === "or");
+    expect(orCall?.args[0]).toContain("vessel.ilike.%medmar%");
+    expect(orCall?.args[0]).toContain("booking_service_kind.in.(formula_medmar_napoli,formula_medmar_pozzuoli)");
+    expect(orCall?.args[0]).toContain("transport_code.ilike.%medmar%");
+  });
+
+  it("conta le formule Medmar e i porto-hotel MEDMAR, esclude i porto-hotel SNAV/altro", async () => {
+    mocks.authorizePricingRequest.mockResolvedValue(
+      makeAuthContext(TENANT_A, {
+        issuing: [],
+        services: [
+          { id: "f-napoli", customer_name: "A", notes: "[practice:P1]", vessel: "Napoli", booking_service_kind: "formula_medmar_napoli" },
+          { id: "pth-medmar", customer_name: "B", notes: "[practice:P2]", vessel: "Ischia Porto", booking_service_kind: "transfer_port_hotel", transport_code: "MEDMAR Pozzuoli" },
+          // Riga che passerebbe il prefiltro SQL (transport_code) ma non la regola esatta: kind diverso.
+          { id: "other-kind", customer_name: "C", notes: "[practice:P3]", vessel: "Ischia Porto", booking_service_kind: "transfer_hotel_hotel", transport_code: "MEDMAR" },
+          { id: "pth-snav", customer_name: "D", notes: "[practice:P4]", vessel: "Ischia Porto", booking_service_kind: "transfer_port_hotel", transport_code: "SNAV Napoli" },
+        ],
+      })
+    );
+
+    const res = await GET(makeRequest());
+    const json = (await res.json()) as { forecast: { upcoming_3d_estimated_tickets: number } };
+
+    expect(json.forecast.upcoming_3d_estimated_tickets).toBe(2);
   });
 });

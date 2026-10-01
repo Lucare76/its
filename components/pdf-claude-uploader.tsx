@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { supabase, getToken} from "@/lib/supabase/client";
+import { normalizeMedmarReturnMainlandPort } from "@/lib/medmar-return-port";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  porto_ritorno?: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -68,6 +70,7 @@ type ClaudeJson = {
   hotel?: string | null; data_arrivo?: string | null; data_partenza?: string | null;
   totale_pratica?: number | null; note_operative?: string | null; numero_pratica?: string | null;
   agenzia?: string | null; servizi?: ExtractedService[];
+  porto_ritorno?: string | null;
 };
 
 function deduceTipo(servizi: ExtractedService[] = [], agency: string): string {
@@ -99,7 +102,8 @@ function claudeToForm(json: ClaudeJson, agency: string): FormState {
     totale_pratica: json.totale_pratica ? String(json.totale_pratica) : "",
     note: json.note_operative ?? "",
     numero_pratica: json.numero_pratica ?? "",
-    agenzia: AGENCY_LABELS[agency] ?? json.agenzia ?? agency
+    agenzia: AGENCY_LABELS[agency] ?? json.agenzia ?? agency,
+    porto_ritorno: deduceTipo(servizi, agency) === "transfer_port_hotel" ? (normalizeMedmarReturnMainlandPort(json.porto_ritorno) ?? "") : ""
   };
 }
 

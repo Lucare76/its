@@ -121,3 +121,43 @@ describe("port-resolution — resolveLegRouteCode: casi unknown / edge case A/R"
     }
   });
 });
+
+describe("port-resolution — pratiche importate transfer_port_hotel (meeting_point = porto terraferma di partenza)", () => {
+  it("A. MEDMAR + PORTO DI NAPOLI PORTA DI MASSA -> mainland napoli, isola ischia, tratta napoli_ischia", () => {
+    const mp = "PORTO DI NAPOLI PORTA DI MASSA";
+    expect(resolveMainlandPort("transfer_port_hotel", mp)).toEqual({ status: "resolved", port: "napoli" });
+    expect(resolveIslandPort("transfer_port_hotel", mp)).toEqual({ status: "resolved", port: "ischia" });
+    expect(resolveLegRouteCode({ bookingServiceKind: "transfer_port_hotel", direction: "arrival", meetingPoint: mp })).toEqual({
+      status: "resolved", routeCode: "napoli_ischia", mainlandPort: "napoli", islandPort: "ischia",
+    });
+    expect(resolveMainlandPort("transfer_port_hotel", "Napoli - Calata Porta di Massa")).toEqual({ status: "resolved", port: "napoli" });
+  });
+
+  it("B. MEDMAR + POZZUOLI -> mainland pozzuoli; porto isolano non ricavabile -> nessuna tratta", () => {
+    expect(resolveMainlandPort("transfer_port_hotel", "PORTO DI POZZUOLI")).toEqual({ status: "resolved", port: "pozzuoli" });
+    expect(resolveIslandPort("transfer_port_hotel", "PORTO DI POZZUOLI")).toEqual({ status: "unknown", reason: "missing_island_port" });
+    expect(resolveLegRouteCode({ bookingServiceKind: "transfer_port_hotel", direction: "arrival", meetingPoint: "PORTO DI POZZUOLI" })).toEqual({
+      status: "unknown", reason: "missing_island_port",
+    });
+  });
+
+  it("D. formula_medmar_napoli invariato (meeting_point ignorato)", () => {
+    expect(resolveMainlandPort("formula_medmar_napoli", "PORTO DI POZZUOLI")).toEqual({ status: "resolved", port: "napoli" });
+    expect(resolveIslandPort("formula_medmar_napoli", "PORTO DI POZZUOLI")).toEqual({ status: "resolved", port: "ischia" });
+  });
+
+  it("E. formula_medmar_pozzuoli invariato (meeting_point = punto sull'isola)", () => {
+    expect(resolveMainlandPort("formula_medmar_pozzuoli", "PORTO DI NAPOLI PORTA DI MASSA")).toEqual({ status: "resolved", port: "pozzuoli" });
+    expect(resolveIslandPort("formula_medmar_pozzuoli", "Casamicciola")).toEqual({ status: "resolved", port: "casamicciola" });
+    expect(resolveIslandPort("formula_medmar_pozzuoli", "Ischia Porto")).toEqual({ status: "resolved", port: "ischia" });
+  });
+
+  it("F. porto ambiguo o assente -> unknown, nessun fallback", () => {
+    for (const mp of ["Napoli Beverello", "Napoli", "Ischia Porto", "Casamicciola", "Porta di Massa / Pozzuoli"]) {
+      expect(resolveMainlandPort("transfer_port_hotel", mp)).toEqual({ status: "unknown", reason: "unmapped_meeting_point" });
+      expect(resolveLegRouteCode({ bookingServiceKind: "transfer_port_hotel", direction: "arrival", meetingPoint: mp }).status).toBe("unknown");
+    }
+    expect(resolveMainlandPort("transfer_port_hotel", null)).toEqual({ status: "unknown", reason: "missing_meeting_point" });
+    expect(resolveMainlandPort("transfer_port_hotel", "   ")).toEqual({ status: "unknown", reason: "missing_meeting_point" });
+  });
+});

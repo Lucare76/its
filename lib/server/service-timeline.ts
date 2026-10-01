@@ -349,6 +349,9 @@ function normalizeServiceChangeLog(row: ServiceChangeLogRow): TimelineEvent {
   } else if (row.action === "CANCELLED") {
     eventType = "service_cancelled";
     title = `${actorName ?? "Operatore"} ha annullato il servizio`;
+  } else if (row.action === "RESTORED") {
+    eventType = "service_restored";
+    title = `${actorName ?? "Operatore"} ha ripristinato la prenotazione cancellata`;
   }
   return {
     id: `service_change_logs:${row.id}`,
@@ -567,6 +570,15 @@ function normalizeServiceAuditEvent(row: ServiceAuditEventRow, resolvedActorName
       break;
     case SERVICE_AUDIT_EVENT_TYPES.BOOKING_GROUP_SERVICE_CREATED:
       title = `${actor.name ?? "Operatore"} ha creato il servizio dal gruppo prenotazioni`;
+      break;
+    case SERVICE_AUDIT_EVENT_TYPES.CANCELLATION_PENALTY_APPLIED:
+      title = `${actor.name ?? "Operatore"} ha registrato la penale di cancellazione`;
+      break;
+    case SERVICE_AUDIT_EVENT_TYPES.CANCELLATION_PENALTY_MODIFIED:
+      title = `${actor.name ?? "Operatore"} ha modificato la penale di cancellazione`;
+      break;
+    case SERVICE_AUDIT_EVENT_TYPES.CANCELLATION_PENALTY_VOIDED:
+      title = `${actor.name ?? "Operatore"} ha annullato la penale di cancellazione`;
       break;
     default:
       title = `${actor.name ?? "Operatore"} — ${row.event_type.replace(/_/g, " ")}`;

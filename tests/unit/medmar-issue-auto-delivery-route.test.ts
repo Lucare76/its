@@ -29,6 +29,22 @@ vi.mock("@/lib/server/medmar-booking/pdf-delivery", () => ({
   deliverMedmarTicketWithTimeout: mocks.deliverMedmarTicketWithTimeout,
 }));
 
+// Guard "biglietto già emesso" (prior-issuance): coperto da
+// medmar-prior-issuance-guard.test.ts; qui neutro per testare solo il contratto della route.
+vi.mock("@/lib/server/medmar-booking/prior-issuance", () => ({
+  checkMedmarIssuanceGuard: vi.fn(async () => ({
+    blocked: false,
+    decision: { blocked: false, reason: "none", blocking_service_ids: [], cancelled_after_issuance: false },
+  })),
+}));
+
+// Lock di concorrenza (0288): coperto da medmar-issuance-lock.test.ts; qui sempre libero.
+vi.mock("@/lib/server/medmar-booking/issuance-lock", () => ({
+  MEDMAR_ISSUANCE_LOCK_BUSY_MESSAGE: "busy",
+  acquireMedmarIssuanceLock: vi.fn(async () => ({ acquired: true, lockToken: "lock-1", expiresAt: null })),
+  releaseMedmarIssuanceLock: vi.fn(async () => undefined),
+}));
+
 import { POST } from "@/app/api/services/medmar-issue/route";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

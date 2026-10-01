@@ -1,8 +1,10 @@
 ﻿"use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
+import { CancelledBookingButtons, CancelledBookingStatus, RestoredBadge, useCancelledBookingStates } from "@/components/cancelled-booking/cancelled-booking-actions";
+import { HardDeleteDialog } from "@/components/cancelled-booking/hard-delete-dialog";
 
 type CancellationRequest = {
   id: string;
@@ -19,6 +21,8 @@ type CancellationRequest = {
   agency_responded_at: string | null;
   services: {
     id: string;
+    status?: string | null;
+    linked_service_id?: string | null;
     customer_name: string;
     pax: number;
     date: string;
@@ -62,8 +66,7 @@ export default function CancellazioniPage() {
   const [restoring, setRestoring] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ serviceId: string; customerName: string } | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Modale penale
   const [modal, setModal] = useState<CancellationRequest | null>(null);
@@ -109,30 +112,10 @@ export default function CancellazioniPage() {
     }
   };
 
+  // Eliminazione definitiva: stessa dialog (e stesse regole) della ricerca globale.
   const confirmDelete = (serviceId: string, customerName: string) => {
+    if (!isAdmin) return;
     setDeleteTarget({ serviceId, customerName });
-    setDeleteError(null);
-  };
-
-  const executeDelete = async () => {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      const session = await supabase?.auth.getSession();
-      const token = session?.data.session?.access_token;
-      if (!token) { setDeleteError("Sessione scaduta."); return; }
-      const res = await fetch(`/api/ops/services/${deleteTarget.serviceId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const body = await res.json() as { ok?: boolean; error?: string };
-      if (!body.ok) { setDeleteError(body.error ?? "Errore eliminazione."); return; }
-      setDeleteTarget(null);
-      void load();
-    } finally {
-      setDeleting(false);
-    }
   };
 
   const openModal = (req: CancellationRequest) => {
@@ -184,6 +167,8 @@ export default function CancellazioniPage() {
   const archived = requests
     .filter((r) => r.status === "closed" || r.status === "approved")
     .filter(matchesSearch);
+  const archivedServiceIds = useMemo(() => archived.map((req) => req.services?.id).filter((id): id is string => Boolean(id)), [archived]);
+  const { states: bookingStates, reload: reloadBookingStates } = useCancelledBookingStates(archivedServiceIds);
   const agencyCount = requests.filter((req) => req.services?.agencies).length;
   const refundCount = requests.filter((req) => (req.penalty_cents ?? 0) > 0 || req.agency_response === "counter").length;
   const urgentCount = requests.filter((req) => req.agency_response === "rejected" || (req.penalty_cents ?? 0) > 0).length;
@@ -240,6 +225,7 @@ export default function CancellazioniPage() {
       </div>
 
       {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+      {notice && <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div>}
 
       {loading ? (
         <div className="rounded-3xl border border-slate-200 bg-white p-8 text-sm text-slate-400 shadow-sm">Caricamento cancellazioni...</div>
@@ -305,7 +291,7 @@ export default function CancellazioniPage() {
                         onClick={() => confirmDelete(svc.id, svc.customer_name)}
                         className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 transition"
                       >
-                        Elimina
+                        🗑 Elimina definitivamente
                       </button>
                     )}
                   </div>
@@ -357,13 +343,19 @@ export default function CancellazioniPage() {
               return (
                 <div key={req.id} className="card flex flex-wrap items-center gap-3 p-4 text-sm opacity-80">
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold uppercase text-slate-800">{svc?.customer_name ?? "—"}</p>
+                    <p className="flex flex-wrap items-center gap-2 font-semibold uppercase text-slate-800">
+                      {svc?.customer_name ?? "—"}
+                      {svc?.status === "cancelled"
+                        ? <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold normal-case text-rose-700">CANCELLATA</span>
+                        : <RestoredBadge state={svc ? bookingStates[svc.id] : undefined} />}
+                    </p>
                     <p className="text-xs text-slate-500 mt-0.5">
                       {hotel?.name && <span>🏨 {hotel.name} · </span>}
                       {svc?.arrival_date && <span>📅 {formatDate(svc.arrival_date)} · </span>}
                       {agency?.name && <span>🏢 {agency.name} · </span>}
                       <span>{legLabel(req.cancel_legs)}</span>
                     </p>
+                    {svc ? <CancelledBookingStatus state={bookingStates[svc.id]} onChanged={() => void reloadBookingStates()} /> : null}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {req.penalty_cents != null && req.penalty_cents > 0 && (
@@ -374,12 +366,21 @@ export default function CancellazioniPage() {
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-500">
                       {req.id.startsWith("direct_") ? "Cancellata direttamente" : "Chiusa"} · {new Date(req.created_at).toLocaleDateString("it-IT")}
                     </span>
-                    {isAdmin && (
+                    {svc?.status === "cancelled" ? (
+                      <CancelledBookingButtons
+                        serviceId={svc.id}
+                        state={bookingStates[svc.id]}
+                        onRestored={() => { setNotice("Prenotazione ripristinata: ora risulta da assegnare. Verificare autista, mezzo e allocazioni."); void load(); }}
+                        onPenaltyChanged={() => void reloadBookingStates()}
+                        buttonClassName="rounded-xl border border-slate-200 bg-white px-2 py-1 text-xs font-semibold hover:bg-slate-50"
+                      />
+                    ) : null}
+                    {isAdmin && svc && (
                       <button
                         onClick={() => confirmDelete(svc.id, svc.customer_name ?? "—")}
-                        className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition"
+                        className="rounded-xl border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-100 transition"
                       >
-                        Elimina
+                        🗑 Elimina definitivamente
                       </button>
                     )}
                   </div>
@@ -390,36 +391,13 @@ export default function CancellazioniPage() {
         </div>
       )}
 
-      {/* Modale conferma eliminazione definitiva */}
+      {/* Eliminazione definitiva: dialog condivisa con la ricerca globale */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !deleting && setDeleteTarget(null)}>
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">⚠️</span>
-              <h2 className="text-base font-semibold text-slate-800">Eliminazione definitiva</h2>
-            </div>
-            <p className="text-sm text-slate-600">
-              Stai per eliminare <span className="font-semibold uppercase">{deleteTarget.customerName}</span> in modo permanente. L&apos;operazione non è reversibile e lascerà traccia nel log di sistema con il tuo nome e l&apos;orario.
-            </p>
-            {deleteError && <p className="text-sm text-rose-600">{deleteError}</p>}
-            <div className="flex gap-2 pt-1">
-              <button
-                onClick={() => setDeleteTarget(null)}
-                disabled={deleting}
-                className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              >
-                Annulla
-              </button>
-              <button
-                onClick={() => void executeDelete()}
-                disabled={deleting}
-                className="flex-1 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50 transition"
-              >
-                {deleting ? "Eliminazione..." : "Elimina definitivamente"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <HardDeleteDialog
+          service={{ id: deleteTarget.serviceId, label: deleteTarget.customerName }}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={(text) => { setDeleteTarget(null); setNotice(text); void load(); }}
+        />
       )}
 
       {/* Modale gestione penale */}

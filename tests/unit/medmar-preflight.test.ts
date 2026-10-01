@@ -1707,3 +1707,318 @@ describe("runMedmarPreflight — Fase 2B.8: usa l'orario nave Medmar, mai il pic
     );
   });
 });
+
+describe("runMedmarPreflight — classificazione Medmar condivisa con la Biglietteria", () => {
+  it("H. pratica importata formula_medmar_napoli con vessel senza Medmar (prima not_medmar) arriva al preflight live", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const imported = arrivalRow({ vessel: "Napoli Porta di Massa", import_id: "imp-1" });
+    const result = await runMedmarPreflight(fakeAdmin([imported]), TENANT_A, [SVC_ARR]);
+    expect(result.status).not.toBe("not_medmar");
+    expect(result.warnings.some((w) => w.code === "not_medmar")).toBe(false);
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 59, partenzaDataDal: "2026-08-20", dopoLe: "08:40:00" });
+  });
+
+  it("H. pratica importata transfer_port_hotel con transport_code MEDMAR supera il gate; la tratta resta fail-closed (route_not_determined)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const imported = arrivalRow({
+      vessel: "Ischia Porto",
+      booking_service_kind: "transfer_port_hotel",
+      transport_code: "MEDMAR Napoli 08:40",
+      import_id: "imp-1",
+    });
+    const result = await runMedmarPreflight(fakeAdmin([imported]), TENANT_A, [SVC_ARR]);
+    expect(result.status).not.toBe("not_medmar");
+    expect(result.warnings.some((w) => w.code === "not_medmar")).toBe(false);
+    // Nessun porto viene dedotto da transfer_port_hotel (port-resolution.ts):
+    // il gate Medmar è superato ma serve revisione manuale della tratta.
+    expect(result.status).toBe("manual_review");
+    expect(result.warnings.some((w) => w.code === "route_not_determined")).toBe(true);
+  });
+
+  it("transfer_port_hotel con transport_code SNAV resta not_medmar con il nuovo messaggio", async () => {
+    const snav = arrivalRow({ vessel: "Ischia Porto", booking_service_kind: "transfer_port_hotel", transport_code: "SNAV Napoli 08:40" });
+    const result = await runMedmarPreflight(fakeAdmin([snav]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("not_medmar");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings[0]?.message).toBe("Uno o più servizi selezionati non risultano appartenere a un servizio Medmar.");
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+});
+
+describe("runMedmarPreflight — pratiche Medmar importate transfer_port_hotel", () => {
+  // Forma reale della pratica D'ALESSANDRO LUIGI 26/015805 (import PDF/email,
+  // modello single-row): meeting_point = citta_partenza dell'import.
+  function dalessandroRow(overrides: Row = {}): Row {
+    return {
+      id: SVC_ARR, tenant_id: TENANT_A, date: "2026-10-08", time: "08:40",
+      customer_name: "D'ALESSANDRO LUIGI", pax: 2, vessel: "MEDMAR", notes: "[practice:26/015805]",
+      booking_service_kind: "transfer_port_hotel", direction: "arrival", status: "new",
+      meeting_point: "PORTO DI NAPOLI PORTA DI MASSA", transport_code: "MEDMAR / MEDMAR",
+      departure_date: "2026-10-11", departure_time: "15:30", return_time: "15:30",
+      ...overrides,
+    };
+  }
+
+  it("G. D'ALESSANDRO: l'andata risolve Napoli -> Ischia e interroga Medmar; non si ferma più su unmapped_booking_service_kind", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const result = await runMedmarPreflight(fakeAdmin([dalessandroRow()]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).not.toBe("not_medmar");
+    expect(result.warnings.some((w) => w.message.includes("unmapped_booking_service_kind"))).toBe(false);
+    expect(result.outward?.route_code).toBe("napoli_ischia");
+    expect(result.outward?.mainland_port).toBe("napoli");
+    expect(result.outward?.island_port).toBe("ischia");
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 59, partenzaDataDal: "2026-10-08", dopoLe: "08:40:00" });
+  });
+
+  it("G. D'ALESSANDRO: andata con corsa trovata, ma il ritorno sulla stessa riga non assume il porto terraferma -> manual_review, non emettibile", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([{ ...NAPOLI_ISCHIA_CORSA, partenza_data: "2026-10-08" }] as never);
+    const result = await runMedmarPreflight(fakeAdmin([dalessandroRow()]), TENANT_A, [SVC_ARR]);
+
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.return?.route_code).toBeNull();
+    expect(result.return?.service_ids).toEqual([SVC_ARR]);
+    expect(result.outward?.id_corsa).toBe(131943);
+    expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_ambiguous")).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledTimes(1);
+  });
+
+  it("B. transfer_port_hotel MEDMAR da Pozzuoli: porto isolano non ricavabile -> route_not_determined, nessuna chiamata Medmar", async () => {
+    const row = dalessandroRow({ meeting_point: "PORTO DI POZZUOLI", departure_date: null, departure_time: null, return_time: null });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.warnings.some((w) => w.code === "route_not_determined" && w.message.includes("missing_island_port"))).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("C. transfer_port_hotel SNAV con porto Napoli non entra nel flusso Medmar", async () => {
+    const row = dalessandroRow({ vessel: "SNAV", transport_code: "SNAV / SNAV" });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("not_medmar");
+    expect(result.can_issue).toBe(false);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("F. transfer_port_hotel MEDMAR con porto ambiguo (Beverello) -> manual_review, nessun fallback", async () => {
+    const row = dalessandroRow({ meeting_point: "NAPOLI BEVERELLO", departure_date: null, departure_time: null, return_time: null });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.outward?.route_code).toBeNull();
+    expect(result.warnings.some((w) => w.code === "route_not_determined" && w.message.includes("unmapped_meeting_point"))).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("D/E. formula_medmar_napoli single-row invariato: il ritorno resta ricostruito (embedded_return_leg_used)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) => (route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : null));
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const result = await runMedmarPreflight(fakeAdmin([singleRowRoundTrip()]), TENANT_A, [SVC_ARR]);
+    expect(result.warnings.some((w) => w.code === "embedded_return_leg_used")).toBe(true);
+    expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_ambiguous")).toBe(false);
+    expect(result.return?.route_code).toBe("ischia_napoli");
+  });
+});
+
+describe("7. chiamata diretta al preflight con servizi SNAV -> not_medmar, nessuna tratta risolta, nessuna chiamata Medmar", () => {
+  const snavCases: Array<[string, Row]> = [
+    ["formula_snav", { booking_service_kind: "formula_snav", vessel: "SNAV", transport_code: null, meeting_point: "Casamicciola" }],
+    ["vessel SNAV", { booking_service_kind: "transfer_port_hotel", vessel: "SNAV", transport_code: null, meeting_point: "PORTO DI NAPOLI PORTA DI MASSA" }],
+    ["transfer_port_hotel + transport_code SNAV", { booking_service_kind: "transfer_port_hotel", vessel: "NAPOLI BEVERELLO", transport_code: "SNAV / SNAV", meeting_point: "PORTO DI NAPOLI PORTA DI MASSA" }],
+  ];
+
+  for (const [label, overrides] of snavCases) {
+    it(label, async () => {
+      vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+      const result = await runMedmarPreflight(fakeAdmin([arrivalRow(overrides)]), TENANT_A, [SVC_ARR]);
+      expect(result.status).toBe("not_medmar");
+      expect(result.can_issue).toBe(false);
+      expect(result.outward).toBeNull();
+      expect(result.return).toBeNull();
+      expect(routeMapping.getIdTrattaForRouteCode).not.toHaveBeenCalled();
+      expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+    });
+  }
+
+  it("un servizio SNAV in un gruppo con un servizio Medmar rende not_medmar l'intero gruppo", async () => {
+    const result = await runMedmarPreflight(
+      fakeAdmin([arrivalRow(), departureRow({ booking_service_kind: "formula_snav", vessel: "SNAV" })]),
+      TENANT_A,
+      [SVC_ARR, SVC_DEP]
+    );
+    expect(result.status).toBe("not_medmar");
+    expect(result.can_issue).toBe(false);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+});
+
+describe("Regola definitiva SNAV/MEDMAR — preflight", () => {
+  it("A. formula_snav + vessel MEDMAR -> not_medmar con segnalazione di dato incoerente, nessuna chiamata Medmar", async () => {
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ booking_service_kind: "formula_snav", vessel: "MEDMAR" })]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("not_medmar");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "inconsistent_carrier_data")).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("B. formula_snav + transport_code MEDMAR -> not_medmar con segnalazione di dato incoerente", async () => {
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow({ booking_service_kind: "formula_snav", vessel: "SNAV", transport_code: "MEDMAR" })]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("not_medmar");
+    expect(result.warnings.some((w) => w.code === "inconsistent_carrier_data")).toBe(true);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("E. transfer_port_hotel single-row SNAV / MEDMAR -> manual_review, nessuna tratta risolta, nessuna chiamata Medmar", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    const row = arrivalRow({
+      booking_service_kind: "transfer_port_hotel", vessel: "PORTO DI NAPOLI PORTA DI MASSA", transport_code: "SNAV / MEDMAR",
+      meeting_point: "PORTO DI NAPOLI PORTA DI MASSA", departure_date: "2026-08-25", return_time: "10:35",
+    });
+    const result = await runMedmarPreflight(fakeAdmin([row]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.outward).toBeNull();
+    expect(result.return).toBeNull();
+    expect(result.warnings.map((w) => w.code)).toEqual(["mixed_snav_medmar_carrier"]);
+    expect(routeMapping.getIdTrattaForRouteCode).not.toHaveBeenCalled();
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("F. due righe distinte: la riga MEDMAR da sola arriva al preflight live; la riga SNAV non entra", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const medmar = arrivalRow();
+    const snav = departureRow({ booking_service_kind: "formula_snav", vessel: "SNAV", meeting_point: "Casamicciola" });
+
+    const onlyMedmar = await runMedmarPreflight(fakeAdmin([medmar, snav]), TENANT_A, [SVC_ARR]);
+    expect(onlyMedmar.status).not.toBe("not_medmar");
+    expect(onlyMedmar.outward?.service_ids).toEqual([SVC_ARR]);
+    expect(onlyMedmar.return).toBeNull();
+
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockClear();
+    const withSnav = await runMedmarPreflight(fakeAdmin([medmar, snav]), TENANT_A, [SVC_ARR, SVC_DEP]);
+    expect(withSnav.status).toBe("not_medmar");
+    expect(withSnav.can_issue).toBe(false);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("G. formula_medmar_napoli invariato", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const result = await runMedmarPreflight(fakeAdmin([arrivalRow()]), TENANT_A, [SVC_ARR]);
+    expect(result.outward?.route_code).toBe("napoli_ischia");
+    expect(result.warnings.some((w) => w.code === "mixed_snav_medmar_carrier" || w.code === "not_medmar")).toBe(false);
+  });
+
+  it("H. formula_medmar_pozzuoli invariato", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(56);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const result = await runMedmarPreflight(
+      fakeAdmin([arrivalRow({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Ischia Porto" })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+    expect(result.outward?.route_code).toBe("pozzuoli_ischia");
+    expect(result.warnings.some((w) => w.code === "mixed_snav_medmar_carrier" || w.code === "not_medmar")).toBe(false);
+  });
+});
+
+describe("preflight — ritorno transfer_port_hotel da ferry_details.return_mainland_port", () => {
+  function importedRow(overrides: Row = {}): Row {
+    return {
+      id: SVC_ARR, tenant_id: TENANT_A, date: "2026-10-08", time: "08:40",
+      customer_name: "Cliente Import", pax: 2, vessel: "MEDMAR", notes: "[practice:26/000001]",
+      booking_service_kind: "transfer_port_hotel", direction: "arrival", status: "new",
+      meeting_point: "PORTO DI NAPOLI PORTA DI MASSA", transport_code: "MEDMAR / MEDMAR",
+      departure_date: "2026-10-11", departure_time: "10:35", return_time: "10:35",
+      ferry_details: { return_mainland_port: "napoli" },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockImplementation((route) =>
+      route === "napoli_ischia" ? 59 : route === "ischia_napoli" ? 47 : route === "pozzuoli_ischia" ? 56 : route === "ischia_pozzuoli" ? 14 : null
+    );
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+  });
+
+  it("G. return_mainland_port = napoli: il ritorno risolve Ischia -> Napoli e cerca la corsa su Medmar", async () => {
+    const result = await runMedmarPreflight(fakeAdmin([importedRow()]), TENANT_A, [SVC_ARR]);
+    expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_ambiguous")).toBe(false);
+    expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_from_document")).toBe(true);
+    expect(result.return?.route_code).toBe("ischia_napoli");
+    expect(result.return?.mainland_port).toBe("napoli");
+    expect(result.return?.island_port).toBe("ischia");
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 47, partenzaDataDal: "2026-10-11", dopoLe: "10:35:00" });
+  });
+
+  it("H. return_mainland_port = pozzuoli: usa Pozzuoli, poi il porto isolano non è determinabile -> manual_review", async () => {
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([{ ...NAPOLI_ISCHIA_CORSA, partenza_data: "2026-10-08" }] as never);
+    const result = await runMedmarPreflight(
+      fakeAdmin([importedRow({ ferry_details: { return_mainland_port: "pozzuoli" } })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+    expect(result.status).toBe("manual_review");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_ambiguous")).toBe(false);
+    const returnRoute = result.warnings.find((w) => w.code === "route_not_determined" && w.leg === "return");
+    expect(returnRoute?.message).toContain("missing_island_port");
+    expect(result.return?.route_code).toBeNull();
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalledWith(expect.objectContaining({ partenzaDataDal: "2026-10-11" }));
+  });
+
+  it("I. chiave mancante o non valida -> manual_review invariato, nessun porto assunto", async () => {
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([{ ...NAPOLI_ISCHIA_CORSA, partenza_data: "2026-10-08" }] as never);
+    for (const ferry_details of [{}, null, { return_mainland_port: "NAPOLI" }, { return_mainland_port: "beverello" }]) {
+      vi.mocked(medmarClient.fetchCorseReadOnly).mockClear();
+      const result = await runMedmarPreflight(fakeAdmin([importedRow({ ferry_details })]), TENANT_A, [SVC_ARR]);
+      expect(result.status).toBe("manual_review");
+      expect(result.can_issue).toBe(false);
+      expect(result.warnings.some((w) => w.code === "embedded_return_mainland_port_ambiguous")).toBe(true);
+      expect(result.return?.route_code).toBeNull();
+      expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalledWith(expect.objectContaining({ partenzaDataDal: "2026-10-11" }));
+    }
+  });
+
+  it("J. SNAV con return_mainland_port resta fuori dal flusso Medmar; il misto resta manual_review", async () => {
+    const snav = await runMedmarPreflight(
+      fakeAdmin([importedRow({ vessel: "NAPOLI BEVERELLO", transport_code: "SNAV / SNAV" })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+    expect(snav.status).toBe("not_medmar");
+    const formulaSnav = await runMedmarPreflight(
+      fakeAdmin([importedRow({ booking_service_kind: "formula_snav", vessel: "MEDMAR" })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+    expect(formulaSnav.status).toBe("not_medmar");
+    const mixed = await runMedmarPreflight(fakeAdmin([importedRow({ transport_code: "SNAV / MEDMAR" })]), TENANT_A, [SVC_ARR]);
+    expect(mixed.status).toBe("manual_review");
+    expect(mixed.warnings.map((w) => w.code)).toEqual(["mixed_snav_medmar_carrier"]);
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+
+  it("K. formula_medmar_napoli / formula_medmar_pozzuoli ignorano return_mainland_port", async () => {
+    const napoli = await runMedmarPreflight(
+      fakeAdmin([singleRowRoundTrip({ ferry_details: { return_mainland_port: "pozzuoli" } })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+    expect(napoli.return?.route_code).toBe("ischia_napoli");
+    expect(napoli.warnings.some((w) => w.code === "embedded_return_mainland_port_from_document")).toBe(false);
+
+    const pozzuoli = await runMedmarPreflight(
+      fakeAdmin([singleRowRoundTrip({ booking_service_kind: "formula_medmar_pozzuoli", meeting_point: "Ischia Porto", ferry_details: { return_mainland_port: "napoli" } })]),
+      TENANT_A,
+      [SVC_ARR]
+    );
+    expect(pozzuoli.warnings.some((w) => w.code === "embedded_return_island_port_ambiguous")).toBe(true);
+    expect(pozzuoli.return?.route_code).toBeNull();
+  });
+});

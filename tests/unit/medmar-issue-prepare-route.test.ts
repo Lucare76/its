@@ -23,6 +23,15 @@ vi.mock("@/lib/server/medmar-booking/issue-config", () => ({
   getMedmarIssueConfig: mocks.getMedmarIssueConfig,
 }));
 
+// Guard "biglietto già emesso" (prior-issuance): coperto da
+// medmar-prior-issuance-guard.test.ts; qui neutro per testare solo il contratto della route.
+vi.mock("@/lib/server/medmar-booking/prior-issuance", () => ({
+  checkMedmarIssuanceGuard: vi.fn(async () => ({
+    blocked: false,
+    decision: { blocked: false, reason: "none", blocking_service_ids: [], cancelled_after_issuance: false },
+  })),
+}));
+
 import { POST } from "@/app/api/services/medmar-issue/prepare/route";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -105,6 +114,13 @@ describe("POST /api/services/medmar-issue/prepare — contratto (Fase 2B.4)", ()
     const res = await POST(makeRequest({ service_ids: [SVC] }));
     const body = await res.json();
     expect(body.issuing_enabled).toBe(true);
+  });
+
+  it("7. preflight not_medmar (servizio SNAV) -> 422, zero token, emissione non preparabile", async () => {
+    mocks.runMedmarPreflight.mockResolvedValue(preflightOk({ ok: true, can_issue: false, is_live: false, status: "not_medmar" }));
+    const res = await POST(makeRequest({ service_ids: [SVC] }));
+    expect(res.status).toBe(422);
+    expect(mocks.createConfirmationToken).not.toHaveBeenCalled();
   });
 
   it("preflight non ok -> 422, zero token creato (sensitivity #6/7/8: prepare non muta nulla)", async () => {

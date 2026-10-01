@@ -26,6 +26,12 @@ export const SERVICE_AUDIT_EVENT_TYPES = {
   // Vedi app/api/ops/bulk-delete-services/route.ts.
   BULK_DELETE_REQUESTED: "bulk_delete_requested",
   BULK_DELETE_COMPLETED: "bulk_delete_completed",
+  // Penali di cancellazione (service_cancellation_penalties, migration 0286).
+  // Il dettaglio economico resta nella tabella storica; qui solo la traccia
+  // per la Timeline per-servizio.
+  CANCELLATION_PENALTY_APPLIED: "cancellation_penalty_applied",
+  CANCELLATION_PENALTY_MODIFIED: "cancellation_penalty_modified",
+  CANCELLATION_PENALTY_VOIDED: "cancellation_penalty_voided",
 } as const;
 
 export type ServiceAuditEventType = (typeof SERVICE_AUDIT_EVENT_TYPES)[keyof typeof SERVICE_AUDIT_EVENT_TYPES];

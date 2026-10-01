@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { isMedmarService, type MedmarClassifiableService } from "@/lib/medmar-service-classification";
 import {
   summarizeMedmarDeliveryAttempts,
   summarizeMedmarIssuedAndDelivered,
@@ -73,8 +74,14 @@ function addDaysToDateKey(dateKey: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Mirror server-side di isMedmarService() in app/(app)/biglietti-medmar/page.tsx (vessel contiene "medmar", case-insensitive). */
-const MEDMAR_VESSEL_FILTER = "%medmar%";
+/**
+ * Prefiltro SQL volutamente largo (vessel/kind/transport_code): la regola
+ * esatta resta solo isMedmarService() (lib/medmar-service-classification.ts),
+ * la stessa usata dalla coda Biglietti Medmar e dal preflight, applicata in
+ * memoria sulle righe lette.
+ */
+const MEDMAR_CANDIDATE_OR_FILTER =
+  "vessel.ilike.%medmar%,booking_service_kind.in.(formula_medmar_napoli,formula_medmar_pozzuoli),transport_code.ilike.%medmar%";
 
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -104,14 +111,14 @@ export async function GET(request: NextRequest) {
       .limit(200),
     admin
       .from("services")
-      .select("id, customer_name, notes, linked_service_id, inbound_email_id, import_id, source_quote_id")
+      .select("id, customer_name, notes, linked_service_id, inbound_email_id, import_id, source_quote_id, vessel, booking_service_kind, transport_code")
       .eq("tenant_id", tenantId)
       .eq("is_draft", false)
       .neq("status", "cancelled")
       .neq("status", "pending_cancellation")
       .gte("date", todayKey)
       .lte("date", plus3Key)
-      .ilike("vessel", MEDMAR_VESSEL_FILTER),
+      .or(MEDMAR_CANDIDATE_OR_FILTER),
     admin
       .from("medmar_credit_settings")
       .select("initial_credit_cents, safety_threshold_cents, updated_at")
@@ -144,7 +151,7 @@ export async function GET(request: NextRequest) {
 
   const deliveryRows = (deliveryResult.data ?? []) as MedmarDeliverySummaryRow[];
   const issuingRows = (issuingResult.data ?? []) as MedmarIssuingActivityRow[];
-  const candidateServices = (candidateServicesResult.data ?? []) as MedmarCandidateServiceRow[];
+  const candidateServices = ((candidateServicesResult.data ?? []) as (MedmarCandidateServiceRow & MedmarClassifiableService)[]).filter(isMedmarService);
   const creditSettingsRow = (creditSettingsResult.data ?? null) as MedmarCreditSettingsRow | null;
   const creditTopupRows = (creditTopupsResult.data ?? []) as MedmarCreditTopupRow[];
   const issuedTotalRows = (issuedTotalResult.data ?? []) as MedmarIssuedAmountRow[];

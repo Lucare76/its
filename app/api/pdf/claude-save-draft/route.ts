@@ -21,6 +21,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 import { hasRealDepartureLeg } from "@/lib/booking-list-display";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { normalizeMedmarReturnMainlandPort, readReturnMainlandPort, withReturnMainlandPort } from "@/lib/medmar-return-port";
 
 export const runtime = "nodejs";
 
@@ -43,6 +44,8 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  /** Porto terraferma di arrivo del ritorno (napoli/pozzuoli/""), vedi lib/medmar-return-port.ts. */
+  porto_ritorno?: string;
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -406,6 +409,7 @@ export async function POST(request: NextRequest) {
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
   const isTrainKind = bookingKind === "transfer_train_hotel";
+  const returnMainlandPort = bookingKind === "transfer_port_hotel" ? normalizeMedmarReturnMainlandPort(form.porto_ritorno) : null;
   const serviceTypeCode = toServiceTypeCode(form.tipo_servizio);
   // Regola condivisa insert/update: se ci sono entrambi i numeri treno, li
   // combina "andata / ritorno"; altrimenti il singolo disponibile; altrimenti
@@ -513,6 +517,10 @@ export async function POST(request: NextRequest) {
         ? currentNotes.replace(/\[practice:[^\]]+\]/, `[practice:${practiceNumber}]`)
         : `${currentNotes}${currentNotes ? " | " : ""}[practice:${practiceNumber}]`;
       if (nextNotes !== currentNotes) patch.notes = nextNotes;
+    }
+
+    if (returnMainlandPort && readReturnMainlandPort(before.ferry_details) !== returnMainlandPort) {
+      patch.ferry_details = withReturnMainlandPort(before.ferry_details, returnMainlandPort);
     }
 
     // Pickup hotel: ricalcola SOLO se la gamba di partenza cambia davvero in
@@ -842,7 +850,8 @@ export async function POST(request: NextRequest) {
       notes: notesParts,
       status: "new",
       created_by_user_id: userId,
-      booking_service_kind: bookingKind
+      booking_service_kind: bookingKind,
+      ...(returnMainlandPort ? { ferry_details: withReturnMainlandPort({}, returnMainlandPort) } : {})
     })
     .select("id").single();
 

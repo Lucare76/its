@@ -46,6 +46,7 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  porto_ritorno?: string;
 };
 
 function mattioliForm(overrides: Partial<FormState> = {}): FormState {
@@ -271,5 +272,39 @@ describe("POST /api/pdf/claude-save-draft — campi operativi strutturati (audit
     // Zona hotel non disponibile nel mock -> pickup_alert esplicito (stesso
     // comportamento fail-safe di applyPickupCalc usato da inbox-approve).
     expect(row.pickup_alert).toEqual(expect.any(String));
+  });
+});
+
+describe("POST /api/pdf/claude-save-draft — porto terraferma del ritorno (ferry_details.return_mainland_port)", () => {
+  const medmarPort = (porto_ritorno?: string) =>
+    mattioliForm({
+      tipo_servizio: "transfer_port_hotel", treno_andata: "MEDMAR", treno_ritorno: "MEDMAR",
+      citta_partenza: "PORTO DI NAPOLI PORTA DI MASSA", porto_ritorno,
+    });
+
+  async function save(form: FormState) {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(makeFakeAdmin({ serviceInserts, hotelsSeed: [] })));
+    const res = await POST(makeRequest({ form, agency: "Aleste Viaggi" }));
+    expect(res.status).toBe(200);
+    return serviceInserts[0]!;
+  }
+
+  it("E. porto_ritorno napoli -> salvato", async () => {
+    expect((await save(medmarPort("napoli"))).ferry_details).toEqual({ return_mainland_port: "napoli" });
+  });
+
+  it("F. porto_ritorno pozzuoli -> salvato", async () => {
+    expect((await save(medmarPort("pozzuoli"))).ferry_details).toEqual({ return_mainland_port: "pozzuoli" });
+  });
+
+  it("C. porto_ritorno assente o ambiguo -> nessuna chiave", async () => {
+    for (const value of [undefined, "", "NAPOLI BEVERELLO"]) {
+      expect(await save(medmarPort(value))).not.toHaveProperty("ferry_details");
+    }
+  });
+
+  it("porto_ritorno ignorato per servizi treno", async () => {
+    expect(await save(mattioliForm({ porto_ritorno: "napoli" }))).not.toHaveProperty("ferry_details");
   });
 });
