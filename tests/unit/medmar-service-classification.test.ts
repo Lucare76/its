@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
-import { isMedmarService } from "@/lib/medmar-service-classification";
+import { hasContradictorySnavMedmarData, hasMixedSnavMedmarTransportCode, isMedmarService } from "@/lib/medmar-service-classification";
 
 describe("isMedmarService — regola condivisa UI/preflight", () => {
   it("A. vessel contenente MEDMAR -> Medmar", () => {
@@ -48,4 +48,75 @@ describe("G. UI e preflight usano la stessa funzione condivisa", () => {
       expect(source).not.toMatch(/function\s+isMedmarService\s*\(/);
     });
   }
+});
+
+describe("SNAV non entra mai nella biglietteria Medmar — casi espliciti", () => {
+  it("1. transfer_port_hotel + transport_code MEDMAR -> Medmar", () => {
+    expect(isMedmarService({ booking_service_kind: "transfer_port_hotel", vessel: "PORTO DI NAPOLI PORTA DI MASSA", transport_code: "MEDMAR / MEDMAR" })).toBe(true);
+  });
+
+  it("2. transfer_port_hotel + transport_code SNAV -> escluso", () => {
+    expect(isMedmarService({ booking_service_kind: "transfer_port_hotel", vessel: "NAPOLI BEVERELLO", transport_code: "SNAV / SNAV" })).toBe(false);
+    expect(isMedmarService({ booking_service_kind: "transfer_port_hotel", vessel: "SNAV", transport_code: "SNAV" })).toBe(false);
+  });
+
+  it("3. formula_medmar_napoli -> incluso", () => {
+    expect(isMedmarService({ booking_service_kind: "formula_medmar_napoli", vessel: null, transport_code: null })).toBe(true);
+  });
+
+  it("4. formula_medmar_pozzuoli -> incluso", () => {
+    expect(isMedmarService({ booking_service_kind: "formula_medmar_pozzuoli", vessel: null, transport_code: null })).toBe(true);
+  });
+
+  it("5. formula_snav -> escluso", () => {
+    expect(isMedmarService({ booking_service_kind: "formula_snav", vessel: "SNAV", transport_code: "SNAV" })).toBe(false);
+    expect(isMedmarService({ booking_service_kind: "formula_snav", vessel: null, transport_code: null })).toBe(false);
+  });
+
+  it("6. vessel = SNAV -> escluso, qualunque sia il kind non Medmar", () => {
+    for (const kind of [null, "transfer_port_hotel", "transfer_hotel_port", "formula_snav"]) {
+      expect(isMedmarService({ booking_service_kind: kind, vessel: "SNAV", transport_code: null })).toBe(false);
+    }
+  });
+});
+
+describe("Regola definitiva SNAV/MEDMAR", () => {
+  it("A. formula_snav + vessel MEDMAR -> escluso, segnalato come incoerente", () => {
+    const svc = { booking_service_kind: "formula_snav", vessel: "MEDMAR", transport_code: null };
+    expect(isMedmarService(svc)).toBe(false);
+    expect(hasContradictorySnavMedmarData(svc)).toBe(true);
+  });
+
+  it("B. formula_snav + transport_code MEDMAR -> escluso, segnalato come incoerente", () => {
+    const svc = { booking_service_kind: "formula_snav", vessel: "SNAV", transport_code: "MEDMAR" };
+    expect(isMedmarService(svc)).toBe(false);
+    expect(hasContradictorySnavMedmarData(svc)).toBe(true);
+  });
+
+  it("C. transfer_port_hotel + solo SNAV -> escluso", () => {
+    expect(isMedmarService({ booking_service_kind: "transfer_port_hotel", vessel: "NAPOLI BEVERELLO", transport_code: "SNAV / SNAV" })).toBe(false);
+  });
+
+  it("D. transfer_port_hotel + solo MEDMAR -> incluso, non misto", () => {
+    const svc = { booking_service_kind: "transfer_port_hotel", vessel: "PORTO DI NAPOLI PORTA DI MASSA", transport_code: "MEDMAR / MEDMAR" };
+    expect(isMedmarService(svc)).toBe(true);
+    expect(hasMixedSnavMedmarTransportCode(svc)).toBe(false);
+  });
+
+  it("E. transfer_port_hotel + SNAV / MEDMAR -> resta in coda ma è marcato misto", () => {
+    for (const code of ["SNAV / MEDMAR", "MEDMAR / SNAV", "snav-medmar"]) {
+      const svc = { booking_service_kind: "transfer_port_hotel", vessel: null, transport_code: code };
+      expect(isMedmarService(svc)).toBe(true);
+      expect(hasMixedSnavMedmarTransportCode(svc)).toBe(true);
+    }
+  });
+
+  it("G/H. formula_medmar_* invariati, mai misti né incoerenti", () => {
+    for (const kind of ["formula_medmar_napoli", "formula_medmar_pozzuoli"]) {
+      const svc = { booking_service_kind: kind, vessel: "SNAV", transport_code: "SNAV" };
+      expect(isMedmarService(svc)).toBe(true);
+      expect(hasMixedSnavMedmarTransportCode(svc)).toBe(false);
+      expect(hasContradictorySnavMedmarData(svc)).toBe(false);
+    }
+  });
 });

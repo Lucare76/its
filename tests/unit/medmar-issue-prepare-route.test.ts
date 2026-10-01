@@ -116,6 +116,13 @@ describe("POST /api/services/medmar-issue/prepare — contratto (Fase 2B.4)", ()
     expect(body.issuing_enabled).toBe(true);
   });
 
+  it("7. preflight not_medmar (servizio SNAV) -> 422, zero token, emissione non preparabile", async () => {
+    mocks.runMedmarPreflight.mockResolvedValue(preflightOk({ ok: true, can_issue: false, is_live: false, status: "not_medmar" }));
+    const res = await POST(makeRequest({ service_ids: [SVC] }));
+    expect(res.status).toBe(422);
+    expect(mocks.createConfirmationToken).not.toHaveBeenCalled();
+  });
+
   it("preflight non ok -> 422, zero token creato (sensitivity #6/7/8: prepare non muta nulla)", async () => {
     mocks.runMedmarPreflight.mockResolvedValue(preflightOk({ ok: false, can_issue: false, status: "no_match" }));
     const res = await POST(makeRequest({ service_ids: [SVC] }));

@@ -17,6 +17,18 @@
  * servizio Pozzuoli, il porto isola resta "unknown" — non si assume mai
  * Ischia per assenza di dati (requisito di sicurezza Fase 1.7).
  *
+ * Pratiche importate transfer_port_hotel (già classificate Medmar da
+ * lib/medmar-service-classification.ts PRIMA di arrivare qui): il kind non
+ * porta il porto, e meeting_point contiene il porto di PARTENZA terraferma
+ * (citta_partenza dell'import, es. "PORTO DI NAPOLI PORTA DI MASSA"), non un
+ * punto sull'isola. Quindi:
+ *   - terraferma: da meeting_point, solo se identifica in modo univoco
+ *     Napoli (Porta di Massa / Porto di Napoli) oppure Pozzuoli;
+ *   - isola: Napoli -> ischia (stessa regola di formula_medmar_napoli: è
+ *     l'unica tratta Medmar verificata da Napoli, vedi route-mapping.ts);
+ *     Pozzuoli -> unknown, perché nessun campo della pratica distingue
+ *     Ischia da Casamicciola.
+ *
  * Se non risolvibile: unknown. Mai un fallback automatico verso ischia.
  */
 
@@ -28,23 +40,50 @@ export type MedmarPortResolution =
   | { status: "resolved"; port: MedmarPort }
   | {
       status: "unknown";
-      reason: "missing_booking_service_kind" | "unmapped_booking_service_kind" | "missing_meeting_point";
+      reason:
+        | "missing_booking_service_kind"
+        | "unmapped_booking_service_kind"
+        | "missing_meeting_point"
+        | "unmapped_meeting_point"
+        | "missing_island_port";
     };
 
 function normalize(value: string | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-export function resolveMainlandPort(bookingServiceKind: string | null): MedmarPortResolution {
+/**
+ * transfer_port_hotel: porto terraferma da meeting_point (citta_partenza
+ * dell'import). Napoli e Pozzuoli devono escludersi a vicenda: un testo che
+ * li cita entrambi, o nessuno dei due, resta unknown.
+ */
+function resolveImportedMainlandPort(meetingPoint: string | null): MedmarPortResolution {
+  const mp = normalize(meetingPoint);
+  if (!mp) return { status: "unknown", reason: "missing_meeting_point" };
+  const napoli = mp.includes("porta di massa") || mp.includes("porto di napoli");
+  const pozzuoli = mp.includes("pozzuoli");
+  if (napoli && !pozzuoli) return { status: "resolved", port: "napoli" };
+  if (pozzuoli && !napoli) return { status: "resolved", port: "pozzuoli" };
+  return { status: "unknown", reason: "unmapped_meeting_point" };
+}
+
+export function resolveMainlandPort(bookingServiceKind: string | null, meetingPoint: string | null = null): MedmarPortResolution {
   if (!bookingServiceKind) return { status: "unknown", reason: "missing_booking_service_kind" };
   if (bookingServiceKind === "formula_medmar_napoli") return { status: "resolved", port: "napoli" };
   if (bookingServiceKind === "formula_medmar_pozzuoli") return { status: "resolved", port: "pozzuoli" };
+  if (bookingServiceKind === "transfer_port_hotel") return resolveImportedMainlandPort(meetingPoint);
   return { status: "unknown", reason: "unmapped_booking_service_kind" };
 }
 
 export function resolveIslandPort(bookingServiceKind: string | null, meetingPoint: string | null): MedmarPortResolution {
   if (!bookingServiceKind) return { status: "unknown", reason: "missing_booking_service_kind" };
   if (bookingServiceKind === "formula_medmar_napoli") return { status: "resolved", port: "ischia" };
+  if (bookingServiceKind === "transfer_port_hotel") {
+    const mainland = resolveImportedMainlandPort(meetingPoint);
+    if (mainland.status === "unknown") return mainland;
+    if (mainland.port === "napoli") return { status: "resolved", port: "ischia" };
+    return { status: "unknown", reason: "missing_island_port" };
+  }
   if (bookingServiceKind === "formula_medmar_pozzuoli") {
     const mp = normalize(meetingPoint);
     if (!mp) return { status: "unknown", reason: "missing_meeting_point" };
@@ -73,6 +112,8 @@ export type LegRouteResolution =
         | "missing_booking_service_kind"
         | "unmapped_booking_service_kind"
         | "missing_meeting_point"
+        | "unmapped_meeting_point"
+        | "missing_island_port"
         | "unmapped_port_combo";
     };
 
@@ -93,7 +134,7 @@ export function resolveLegRouteCode(input: {
     return { status: "unknown", reason: "missing_or_invalid_direction" };
   }
 
-  const mainland = resolveMainlandPort(input.bookingServiceKind);
+  const mainland = resolveMainlandPort(input.bookingServiceKind, input.meetingPoint);
   if (mainland.status === "unknown") return { status: "unknown", reason: mainland.reason };
 
   const island = resolveIslandPort(input.bookingServiceKind, input.meetingPoint);

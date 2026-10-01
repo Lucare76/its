@@ -12,6 +12,7 @@
  */
 
 import { cleanExtractedPdfText } from "@/lib/server/pdf-text-cleaning";
+import { normalizeMedmarReturnMainlandPort } from "@/lib/medmar-return-port";
 
 export const MODEL = "claude-haiku-4-5-20251001";
 
@@ -42,6 +43,7 @@ Restituisci ESATTAMENTE questo JSON:
   "totale_pratica": 000.00,
   "tipo_servizio": "transfer_station_hotel oppure transfer_airport_hotel oppure transfer_port_hotel oppure bus_city_hotel oppure excursion",
   "tipo_barca_ritorno": "traghetto oppure aliscafo oppure null",
+  "porto_ritorno": "napoli oppure pozzuoli oppure null",
   "agenzia": "Nome Agenzia",
   "note_operative": "note aggiuntive oppure null",
   "agency_key": "aleste oppure angelino oppure holidayweb oppure sosandra oppure zigolo oppure unknown"
@@ -57,6 +59,12 @@ Regole tipo_servizio:
 
 Regole numero_mezzo:
 - Se tipo_servizio è "bus_city_hotel" → numero_mezzo_andata e numero_mezzo_ritorno sono sempre null. Non inventare codici treno o volo.
+
+Regole porto_ritorno (solo tipo_servizio "transfer_port_hotel"):
+- porto_ritorno è il porto di terraferma di arrivo del viaggio di ritorno, non il porto dell'andata e non il porto isolano.
+- Leggilo SOLO dal blocco del RITORNO (es. "TRS H. ISCHIA + TRAGHETTO POZZUOLI", "a: PORTO PER NAPOLI CON MEDMAR", "dest: PORTO DI NAPOLI"). Non copiarlo mai da citta_partenza o dal blocco andata.
+- "napoli" se il ritorno arriva a Napoli (Porto di Napoli / Porta di Massa); "pozzuoli" se arriva a Pozzuoli.
+- null se il blocco ritorno non indica il porto, se è ambiguo, se è Beverello, o per qualunque altro tipo_servizio.
 
 Regole tipo_barca_ritorno (solo per transfer stazione o aeroporto con ritorno):
 - Se nel documento del RITORNO è specificato TRAGHETTO / MEDMAR / NAVE → "traghetto"
@@ -87,6 +95,7 @@ ISTRUZIONI CAMPO PER CAMPO:
 - numero_mezzo_andata: per PORTO/TRAGHETTO scrivi esattamente "MEDMAR" oppure "SNAV" (deduci dal documento). Per treni/aerei: codice treno/volo dalla tabella operativa riga 1, colonna "num." (es: "ITA 9919") OPPURE dopo "da:" (es: "ITALO 9919")
 - numero_mezzo_ritorno: per PORTO/TRAGHETTO scrivi "MEDMAR" oppure "SNAV" (stesso del ritorno). Per treni/aerei: codice treno/volo riga 2 (es: "ITA 9940") OPPURE dopo "da:" nel blocco ritorno
 - citta_partenza: dopo "M.p.:" nel blocco andata OPPURE prima riga della tabella operativa (es: "TORINO P. NUOVA")
+- porto_ritorno: solo per PORTO/TRAGHETTO, dal blocco RITORNO "TRS H. ISCHIA + TRAGHETTO <PORTO>" oppure "a: PORTO PER <PORTO> CON MEDMAR" / "dest: PORTO DI <PORTO>" → "napoli" o "pozzuoli"; null se il blocco ritorno non lo indica. Mai dal blocco andata.
 - totale_pratica: numero dopo "Totale pratica EUR" (es: 104.00)
 - tipo_servizio: deduci dalla descrizione servizi (STAZIONE→station, AEROPORTO→airport, TRAGHETTO/MEDMAR/SNAV→port)
 
@@ -254,6 +263,8 @@ export type ClaudeFormState = {
   numero_pratica: string;
   agenzia: string;
   tipo_barca_ritorno: string;
+  /** "napoli" | "pozzuoli" | "" — porto terraferma di arrivo del ritorno (lib/medmar-return-port.ts). */
+  porto_ritorno: string;
 };
 
 export type HaikuUsage = {
@@ -309,6 +320,7 @@ type ClaudeJson = {
   agenzia?: string | null;
   tipo_servizio?: string | null;
   tipo_barca_ritorno?: string | null;
+  porto_ritorno?: string | null;
   servizi?: Array<{
     orario?: string | null;
     numero_mezzo?: string | null;
@@ -414,7 +426,8 @@ function jsonToForm(json: ClaudeJson, agency: string): ClaudeFormState {
     note: json.note_operative ?? "",
     numero_pratica: json.numero_pratica ?? "",
     agenzia: AGENCY_LABELS[agency] ?? json.agenzia ?? agency,
-    tipo_barca_ritorno: agency === "aleste" ? "traghetto" : (json.tipo_barca_ritorno ?? "")
+    tipo_barca_ritorno: agency === "aleste" ? "traghetto" : (json.tipo_barca_ritorno ?? ""),
+    porto_ritorno: normalizeTipo(json.tipo_servizio) === "transfer_port_hotel" ? (normalizeMedmarReturnMainlandPort(json.porto_ritorno) ?? "") : ""
   };
 }
 

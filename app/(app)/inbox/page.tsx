@@ -38,6 +38,8 @@ export type FormState = {
   numero_pratica: string;
   agenzia: string;
   pickup_hotel: string;
+  /** Porto terraferma di arrivo del ritorno (napoli/pozzuoli), dal parser. Non editabile qui. */
+  porto_ritorno?: string;
 };
 
 type GlobalBookingSearchResult = Partial<Service> & {
@@ -161,6 +163,7 @@ function claudeExtractedToForm(claudeExtracted: Record<string, unknown> | null):
     numero_pratica: f.numero_pratica ?? "",
     agenzia: f.agenzia ?? "",
     pickup_hotel: f.pickup_hotel ?? "",
+    porto_ritorno: f.porto_ritorno ?? "",
   };
 }
 
@@ -258,6 +261,7 @@ function normalizedPdfToForm(normalized: Record<string, unknown> | null): FormSt
     numero_pratica: text((normalized.dedupe_components as Record<string, unknown> | undefined)?.practice_number ?? normalized.external_reference),
     agenzia: text(normalized.billing_party_name || normalized.agency_name),
     pickup_hotel: "",
+    porto_ritorno: text(normalized.return_mainland_port),
   };
 }
 

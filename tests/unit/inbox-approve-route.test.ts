@@ -51,6 +51,7 @@ type FormState = {
   numero_pratica: string;
   agenzia: string;
   pickup_hotel?: string;
+  porto_ritorno?: string;
 };
 
 /** Dati reali del caso di bug: conferma Aleste Viaggi, treno A/R. */
@@ -1032,5 +1033,41 @@ describe("POST /api/email/inbox-approve — controllo duplicati LIVE (regression
     expect(json.certain_service_id).toBeNull(); // NON trattato come duplicato certo
     expect(serviceInserts).toHaveLength(0); // l'operatore decide (Aggiungi comunque / Modifica)
     expect(json.matches.length).toBeGreaterThan(0);
+  });
+});
+
+describe("POST /api/email/inbox-approve — porto terraferma del ritorno (ferry_details.return_mainland_port)", () => {
+  const medmarPort = (porto_ritorno?: string) =>
+    portForm({ treno_andata: "MEDMAR", treno_ritorno: "MEDMAR", citta_partenza: "PORTO DI NAPOLI PORTA DI MASSA", porto_ritorno });
+
+  async function approve(form: FormState) {
+    const serviceInserts: Array<Record<string, unknown>> = [];
+    mocks.authorizePricingRequest.mockResolvedValue(makeAuthContext(makeFakeAdmin({ serviceInserts })));
+    const res = await POST(makeRequest({ inbound_email_id: INBOUND_EMAIL_ID, form }));
+    expect(res.status).toBe(200);
+    return serviceInserts[0]!;
+  }
+
+  it("E. porto_ritorno napoli -> ferry_details.return_mainland_port = napoli", async () => {
+    const row = await approve(medmarPort("napoli"));
+    expect(row.ferry_details).toEqual({ return_mainland_port: "napoli" });
+    expect(row.meeting_point).toBe("PORTO DI NAPOLI PORTA DI MASSA");
+  });
+
+  it("F. porto_ritorno pozzuoli -> ferry_details.return_mainland_port = pozzuoli", async () => {
+    const row = await approve(medmarPort("pozzuoli"));
+    expect(row.ferry_details).toEqual({ return_mainland_port: "pozzuoli" });
+  });
+
+  it("C. porto_ritorno assente o ambiguo -> ferry_details non toccato", async () => {
+    for (const value of [undefined, "", "beverello", "Napoli / Pozzuoli"]) {
+      const row = await approve(medmarPort(value));
+      expect(row).not.toHaveProperty("ferry_details");
+    }
+  });
+
+  it("porto_ritorno ignorato per servizi non transfer_port_hotel", async () => {
+    const row = await approve(alesteForm({ porto_ritorno: "napoli" }));
+    expect(row).not.toHaveProperty("ferry_details");
   });
 });

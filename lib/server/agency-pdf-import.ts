@@ -11,6 +11,7 @@ import { extractPdfHeaderTextFromBase64, extractPdfTextFromBase64 } from "@/lib/
 import { tryMatchAndApplyPricing } from "@/lib/server/pricing-matching";
 import { ensureWhatsAppContact } from "@/lib/server/whatsapp/contacts";
 import { recordServiceAuditEvent, SERVICE_AUDIT_EVENT_TYPES, SERVICE_AUDIT_SOURCES } from "@/lib/server/service-audit-events";
+import { normalizeMedmarReturnMainlandPort, withReturnMainlandPort, type MedmarReturnMainlandPort } from "@/lib/medmar-return-port";
 
 type AuthContext = {
   admin: SupabaseClient;
@@ -52,6 +53,8 @@ export type NormalizedPdfImport = {
   departure_date: string | null;
   return_time: string | null;
   arrival_place: string | null;
+  /** Porto terraferma di arrivo del ritorno, solo dal blocco ritorno (lib/medmar-return-port.ts). */
+  return_mainland_port?: MedmarReturnMainlandPort | null;
   hotel_or_destination: string | null;
   passengers: number;
   source_total_amount_cents: number | null;
@@ -448,6 +451,10 @@ function buildNormalizedImport(preview: ReturnType<typeof buildAgencyPdfPreview>
     departure_date: departureDate,
     return_time: returnTime,
     arrival_place: clean(preview.extracted.arrival_place),
+    // Solo transfer_port_hotel: per treni/aerei la destinazione del ritorno è
+    // una stazione/aeroporto, non un porto Medmar.
+    return_mainland_port:
+      bookingKind === "transfer_port_hotel" ? normalizeMedmarReturnMainlandPort(departureService?.destination ?? null) : null,
     hotel_or_destination: hotel,
     passengers: Math.max(1, Math.min(16, Number(preview.extracted.passengers ?? 1))),
     source_total_amount_cents: eurosToCents(preview.extracted.source_total_amount),
@@ -1070,15 +1077,7 @@ function buildServicePayload(
     train_departure_time: null,
     bus_city_origin: normalized.bus_city_origin,
     include_ferry_tickets: normalized.include_ferry_tickets,
-    ferry_details: {
-      transport_mode: normalized.transport_mode,
-      arrival_place: normalized.arrival_place,
-      carrier_company: normalized.carrier_company,
-      transport_reference_outward: normalized.transport_reference_outward,
-      transport_reference_return: normalized.transport_reference_return,
-      arrival_transport_code: normalized.arrival_transport_code,
-      departure_transport_code: normalized.departure_transport_code
-    },
+    ferry_details: buildImportFerryDetails(normalized),
     excursion_details: {
       source: "pdf",
       import_mode: params.importMode,
@@ -1086,6 +1085,27 @@ function buildServicePayload(
       reviewed: params.hasManualReview
     }
   };
+}
+
+/**
+ * ferry_details del servizio importato: chiavi esistenti preservate, chiavi
+ * dell'import aggiornate, return_mainland_port aggiunto solo se il blocco
+ * ritorno lo indica senza ambiguità (lib/medmar-return-port.ts).
+ */
+export function buildImportFerryDetails(normalized: NormalizedPdfImport, existing?: unknown): Record<string, unknown> {
+  return withReturnMainlandPort(
+    {
+      ...withReturnMainlandPort(existing, null),
+      transport_mode: normalized.transport_mode,
+      arrival_place: normalized.arrival_place,
+      carrier_company: normalized.carrier_company,
+      transport_reference_outward: normalized.transport_reference_outward,
+      transport_reference_return: normalized.transport_reference_return,
+      arrival_transport_code: normalized.arrival_transport_code,
+      departure_transport_code: normalized.departure_transport_code,
+    },
+    normalized.return_mainland_port ?? null
+  );
 }
 
 export async function parseAgencyPdfUpload(input: {
@@ -1362,7 +1382,7 @@ async function syncDraftServiceFromNormalized(
   const tenantId = auth.membership.tenant_id;
   const draftRow = await auth.admin
     .from("services")
-    .select("id, is_draft")
+    .select("id, is_draft, ferry_details")
     .eq("tenant_id", tenantId)
     .eq("inbound_email_id", inboundEmailId)
     .order("created_at", { ascending: false })
@@ -1413,15 +1433,7 @@ async function syncDraftServiceFromNormalized(
       train_departure_time: null,
       bus_city_origin: normalized.bus_city_origin,
       include_ferry_tickets: normalized.include_ferry_tickets,
-      ferry_details: {
-        transport_mode: normalized.transport_mode,
-        arrival_place: normalized.arrival_place,
-        carrier_company: normalized.carrier_company,
-        transport_reference_outward: normalized.transport_reference_outward,
-        transport_reference_return: normalized.transport_reference_return,
-        arrival_transport_code: normalized.arrival_transport_code,
-        departure_transport_code: normalized.departure_transport_code
-      },
+      ferry_details: buildImportFerryDetails(normalized, draftService.ferry_details),
       excursion_details: {
         ...(parsedJson?.pdf_import?.normalized?.excursion_details ?? {}),
         source: "pdf",
@@ -1567,7 +1579,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
   const dedupeHit = await findExistingPdfImport(auth.admin, tenantId, duplicateProbeFromNormalized(normalized));
   const linkedDraft = await auth.admin
     .from("services")
-    .select("id, is_draft, notes, status")
+    .select("id, is_draft, notes, status, ferry_details")
     .eq("tenant_id", tenantId)
     .eq("inbound_email_id", input.inboundEmailId)
     .order("created_at", { ascending: false })
@@ -1712,15 +1724,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         train_departure_time: null,
         bus_city_origin: normalized.bus_city_origin,
         include_ferry_tickets: normalized.include_ferry_tickets,
-        ferry_details: {
-          transport_mode: normalized.transport_mode,
-          arrival_place: normalized.arrival_place,
-          carrier_company: normalized.carrier_company,
-          transport_reference_outward: normalized.transport_reference_outward,
-          transport_reference_return: normalized.transport_reference_return,
-          arrival_transport_code: normalized.arrival_transport_code,
-          departure_transport_code: normalized.departure_transport_code
-        },
+        ferry_details: buildImportFerryDetails(normalized, draftService.ferry_details),
         excursion_details: {
           source: "pdf",
           import_mode: "final",
@@ -1775,15 +1779,7 @@ export async function confirmPdfImport(auth: AuthContext, input: { inboundEmailI
         train_departure_number: normalized.train_departure_number,
         train_departure_time: null,
         include_ferry_tickets: normalized.include_ferry_tickets,
-        ferry_details: {
-          transport_mode: normalized.transport_mode,
-          arrival_place: normalized.arrival_place,
-          carrier_company: normalized.carrier_company,
-          transport_reference_outward: normalized.transport_reference_outward,
-          transport_reference_return: normalized.transport_reference_return,
-          arrival_transport_code: normalized.arrival_transport_code,
-          departure_transport_code: normalized.departure_transport_code
-        },
+        ferry_details: buildImportFerryDetails(normalized),
         excursion_details: {
           source: "pdf",
           import_mode: "final",

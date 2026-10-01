@@ -35,7 +35,8 @@ import type { PassengerCategorySelection, PassengerTariffSelection, MedmarPassen
 import { resolvePassengerComposition } from "./passenger-composition";
 import { getRouteDefinition } from "@/lib/medmar-ticket-memory";
 import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
-import { isMedmarService } from "@/lib/medmar-service-classification";
+import { hasContradictorySnavMedmarData, hasMixedSnavMedmarTransportCode, isMedmarService } from "@/lib/medmar-service-classification";
+import { readReturnMainlandPort } from "@/lib/medmar-return-port";
 import type {
   MedmarPreflightLeg,
   MedmarPreflightResult,
@@ -224,19 +225,36 @@ function hasEmbeddedReturnData(row: MedmarPreflightServiceRow): boolean {
  * ritorno sarebbe un'assunzione silenziosa (l'andata potrebbe essere da
  * Casamicciola e il ritorno verso Ischia, o viceversa). Fail-closed:
  * manual_review, mai un porto indovinato.
+ *
+ * transfer_port_hotel (pratiche importate): meeting_point è il porto
+ * terraferma di PARTENZA dell'andata; riusarlo come porto di arrivo del
+ * ritorno sarebbe la stessa assunzione silenziosa. Il porto del ritorno si
+ * usa solo se l'import lo ha letto dal blocco ritorno del documento
+ * (ferry_details.return_mainland_port); altrimenti fail-closed come sopra.
  */
 async function resolveEmbeddedReturnLeg(
   row: MedmarPreflightServiceRow,
   warnings: MedmarPreflightWarning[],
   now: Date
 ): Promise<{ leg: MedmarPreflightLeg; liveStatus: LiveLegStatus }> {
-  if (row.booking_service_kind === "formula_medmar_pozzuoli") {
-    warnings.push({
-      code: "embedded_return_island_port_ambiguous",
-      leg: "return",
-      message:
-        "Ritorno imbarcato nella stessa riga services (modello single-row) su tratta Pozzuoli: il porto isolano del ritorno non è determinabile da un campo distinto (l'unico meeting_point disponibile è quello dell'andata) — nessun fallback verso Ischia/Casamicciola, revisione manuale richiesta.",
-    });
+  const returnMainlandPort =
+    row.booking_service_kind === "transfer_port_hotel" ? readReturnMainlandPort(row.ferry_details) : null;
+  const ambiguousReturn =
+    row.booking_service_kind === "formula_medmar_pozzuoli"
+      ? {
+          code: "embedded_return_island_port_ambiguous",
+          message:
+            "Ritorno imbarcato nella stessa riga services (modello single-row) su tratta Pozzuoli: il porto isolano del ritorno non è determinabile da un campo distinto (l'unico meeting_point disponibile è quello dell'andata) — nessun fallback verso Ischia/Casamicciola, revisione manuale richiesta.",
+        }
+      : row.booking_service_kind === "transfer_port_hotel" && !returnMainlandPort
+        ? {
+            code: "embedded_return_mainland_port_ambiguous",
+            message:
+              "Pratica importata transfer_port_hotel con ritorno nella stessa riga services: meeting_point indica solo il porto terraferma di partenza dell'andata e ferry_details.return_mainland_port non è valorizzato — nessun porto assunto, revisione manuale richiesta.",
+          }
+        : null;
+  if (ambiguousReturn) {
+    warnings.push({ code: ambiguousReturn.code, leg: "return", message: ambiguousReturn.message });
     return {
       leg: {
         direction: "return",
@@ -265,8 +283,22 @@ async function resolveEmbeddedReturnLeg(
       "Ritorno ricostruito dai campi departure_date/departure_time/orario_barca della stessa riga services (modello single-row, nessuna seconda riga direction=\"departure\" collegata).",
   });
 
+  if (returnMainlandPort) {
+    warnings.push({
+      code: "embedded_return_mainland_port_from_document",
+      leg: "return",
+      message: `Porto terraferma del ritorno = ${returnMainlandPort}, letto dal blocco ritorno del documento (ferry_details.return_mainland_port).`,
+    });
+  }
+
   const syntheticDepartureRow: MedmarPreflightServiceRow = {
     ...row,
+    // transfer_port_hotel: il resolver legge il porto terraferma da
+    // meeting_point, che sulla riga è quello dell'ANDATA. Per il ritorno si
+    // passa solo il porto letto dal blocco ritorno; le regole del porto
+    // isolano restano quelle di port-resolution.ts (Napoli -> Ischia,
+    // Pozzuoli -> revisione manuale).
+    ...(returnMainlandPort ? { meeting_point: returnMainlandPort === "napoli" ? "PORTO DI NAPOLI" : "PORTO DI POZZUOLI" } : {}),
     date: row.departure_date ?? row.date,
     direction: "departure",
     orario_barca: row.orario_barca ?? row.return_time ?? null,
@@ -491,7 +523,32 @@ export async function runMedmarPreflight(
       customer_name: rows[0]!.customer_name, pratica: extractMedmarPractice(rows[0]!.notes) || null,
       pax: Math.max(...rows.map((r) => r.pax ?? 1)),
       outward: null, return: null, tariff: null, taxes: [], expected_total_cents: null, is_live: false,
-      warnings: [{ code: "not_medmar", message: "Uno o più servizi selezionati non risultano appartenere a un servizio Medmar." }],
+      warnings: [
+        { code: "not_medmar", message: "Uno o più servizi selezionati non risultano appartenere a un servizio Medmar." },
+        ...(rows.some(hasContradictorySnavMedmarData)
+          ? [{ code: "inconsistent_carrier_data", message: "Servizio formula_snav con MEDMAR in vessel/transport_code: dato incoerente, trattato come SNAV. Correggere la prenotazione." }]
+          : []),
+      ],
+      error: null,
+      passengers: null,
+      ticket_breakdown: null,
+    };
+  }
+
+  // SNAV e MEDMAR nello stesso transport_code: nessuna tratta viene risolta
+  // né cercata su Medmar, perché la tratta SNAV non deve mai arrivare
+  // all'emissione Medmar e qui non è identificabile con certezza.
+  if (rows.some(hasMixedSnavMedmarTransportCode)) {
+    return {
+      ok: true, can_issue: false, status: "manual_review",
+      group_key: medmarBookingGroupKey(rows[0]!),
+      customer_name: rows[0]!.customer_name, pratica: extractMedmarPractice(rows[0]!.notes) || null,
+      pax: Math.max(...rows.map((r) => r.pax ?? 1)),
+      outward: null, return: null, tariff: null, taxes: [], expected_total_cents: null, is_live: false,
+      warnings: [{
+        code: "mixed_snav_medmar_carrier",
+        message: "transport_code indica sia SNAV sia MEDMAR: non è possibile stabilire con certezza quale tratta sia Medmar. Nessuna emissione automatica: revisione manuale richiesta.",
+      }],
       error: null,
       passengers: null,
       ticket_breakdown: null,

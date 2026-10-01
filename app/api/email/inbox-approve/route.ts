@@ -23,6 +23,7 @@ import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 import { hasRealDepartureLeg } from "@/lib/booking-list-display";
 import { type SupabaseClient } from "@supabase/supabase-js";
+import { normalizeMedmarReturnMainlandPort, readReturnMainlandPort, withReturnMainlandPort } from "@/lib/medmar-return-port";
 
 export const runtime = "nodejs";
 
@@ -58,6 +59,8 @@ type FormState = {
   note: string;
   numero_pratica: string;
   agenzia: string;
+  /** Porto terraferma di arrivo del ritorno (napoli/pozzuoli/""), vedi lib/medmar-return-port.ts. */
+  porto_ritorno?: string;
   /** Opzionale: orario pickup hotel scelto/corretto manualmente dall'operatore
    * nel pannello Inbox (vedi app/(app)/inbox/page.tsx). Se presente ha priorità
    * sul calcolo automatico sotto (applyPickupCalc) — l'operatore vede già un
@@ -498,7 +501,7 @@ export async function POST(request: NextRequest) {
 
   const { data: existingService } = await admin
     .from("services")
-    .select("id")
+    .select("id, ferry_details")
     .eq("tenant_id", tenantId)
     .eq("inbound_email_id", inbound_email_id)
     .order("created_at", { ascending: true })
@@ -527,6 +530,7 @@ export async function POST(request: NextRequest) {
   const sourcePricePerPaxCents = sourceTotalCents && passengers > 0 ? Math.round(sourceTotalCents / passengers) : null;
 
   const { bookingKind, transportMode } = tipoToBookingKind(form.tipo_servizio ?? "transfer_station_hotel");
+  const returnMainlandPort = bookingKind === "transfer_port_hotel" ? normalizeMedmarReturnMainlandPort(form.porto_ritorno) : null;
   const isTrainKind = bookingKind === "transfer_train_hotel";
   const serviceTypeCode = toServiceTypeCode(form.tipo_servizio);
 
@@ -641,6 +645,10 @@ export async function POST(request: NextRequest) {
         ? currentNotes.replace(/\[practice:[^\]]+\]/, `[practice:${practiceNumber}]`)
         : `${currentNotes}${currentNotes ? " | " : ""}[practice:${practiceNumber}]`;
       if (nextNotes !== currentNotes) patch.notes = nextNotes;
+    }
+
+    if (returnMainlandPort && readReturnMainlandPort(before.ferry_details) !== returnMainlandPort) {
+      patch.ferry_details = withReturnMainlandPort(before.ferry_details, returnMainlandPort);
     }
 
     // Pickup hotel: ricalcola SOLO se la gamba di partenza cambia davvero in
@@ -900,7 +908,10 @@ export async function POST(request: NextRequest) {
       notes: notesParts,
       status: "new",
       created_by_user_id: userId,
-      booking_service_kind: bookingKind
+      booking_service_kind: bookingKind,
+      // Solo se il ritorno indica il porto: le altre chiavi della bozza email
+      // restano intatte, e senza porto ferry_details non viene toccato.
+      ...(returnMainlandPort ? { ferry_details: withReturnMainlandPort(existingService?.ferry_details, returnMainlandPort) } : {})
   };
 
   // L'ingest email crea gia una bozza: l'approvazione deve confermare quel
