@@ -66,6 +66,9 @@ const SERVICE_SEARCH_COLUMNS = [
   // filtro is_draft sotto, sia per risolvere/esporre il nome del gruppo
   // (badge "Gruppo" in risposta).
   "booking_group_id",
+  // Porto terraferma di arrivo del ritorno (return_mainland_port) mostrato
+  // nel blocco PARTENZA della card transfer_port_hotel.
+  "ferry_details",
   "created_at",
 ].join(", ");
 
@@ -847,6 +850,7 @@ export async function GET(req: NextRequest) {
           // fallback dedicato, MAI come sostituto di return_pickup_time già esistente.
           pickup_hotel: departureLeg?.pickup_hotel ?? r.pickup_hotel ?? null,
           notes: r.notes ?? null,
+          ferry_details: r.ferry_details ?? null,
           linked_service_id: r.linked_service_id ?? null,
           practice_number: r.practice_number ?? null,
           agency_booking_id: r.agency_booking_id ?? null,

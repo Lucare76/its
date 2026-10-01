@@ -381,6 +381,57 @@ describe("bookingListTransportTimes", () => {
       });
     });
 
+    describe("porto di arrivo del ritorno (ferry_details.return_mainland_port)", () => {
+      const roundTrip = {
+        booking_service_kind: "transfer_port_hotel",
+        arrival_date: "2026-08-30",
+        arrival_time: "16:20",
+        departure_date: "2026-09-05",
+        departure_time: "14:00",
+        meeting_point: "PORTO NAPOLI",
+        transport_code: "MEDMAR",
+      } as const;
+
+      it("napoli -> NAPOLI", () => {
+        const result = bookingListTransportTimes({ ...roundTrip, ferry_details: { return_mainland_port: "napoli" } });
+        expect(result?.showReturnArrivalPort).toBe(true);
+        expect(result?.returnArrivalPort).toBe("NAPOLI");
+      });
+
+      it("pozzuoli -> POZZUOLI", () => {
+        const result = bookingListTransportTimes({ ...roundTrip, ferry_details: { return_mainland_port: "pozzuoli" } });
+        expect(result?.returnArrivalPort).toBe("POZZUOLI");
+      });
+
+      it("assente o non valido -> null ('non indicato'), MAI dedotto da meeting_point dell'andata", () => {
+        for (const ferry_details of [undefined, null, {}, { return_mainland_port: "NAPOLI" }, { return_mainland_port: "beverello" }]) {
+          const result = bookingListTransportTimes({ ...roundTrip, ferry_details });
+          expect(result?.showReturnArrivalPort).toBe(true);
+          expect(result?.returnArrivalPort).toBeNull();
+        }
+      });
+
+      it("senza ritorno (nessuna departure_date): la riga non viene mostrata", () => {
+        const result = bookingListTransportTimes({
+          ...roundTrip,
+          departure_date: null,
+          ferry_details: { return_mainland_port: "napoli" },
+        });
+        expect(result?.showReturnArrivalPort).toBe(false);
+        expect(result?.returnArrivalPort).toBeNull();
+      });
+
+      it("formula_medmar_*: nessuna riga porto di arrivo dal ritorno (logica invariata)", () => {
+        const result = bookingListTransportTimes({
+          ...roundTrip,
+          booking_service_kind: "formula_medmar_napoli",
+          ferry_details: { return_mainland_port: "pozzuoli" },
+        });
+        expect(result?.showReturnArrivalPort).toBeUndefined();
+        expect(result?.returnArrivalPort).toBeUndefined();
+      });
+    });
+
     it("nessun crash con oggetto minimale (nessun campo di partenza/pickup presente)", () => {
       expect(() =>
         bookingListTransportTimes({ booking_service_kind: "transfer_port_hotel", date: "2026-08-30" })

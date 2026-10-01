@@ -1,8 +1,9 @@
+import { readReturnMainlandPort } from "@/lib/medmar-return-port";
 import type { Service } from "@/lib/types";
 
 type BookingListService = Partial<Pick<
   Service,
-  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_number" | "train_arrival_time" | "train_departure_number" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction" | "notes"
+  "booking_service_kind" | "date" | "time" | "arrival_date" | "arrival_time" | "departure_date" | "departure_time" | "train_arrival_number" | "train_arrival_time" | "train_departure_number" | "train_departure_time" | "orario_barca" | "bus_city_origin" | "meeting_point" | "transport_code" | "pickup_hotel" | "direction" | "notes" | "ferry_details"
 >> & {
   pickup_time?: string | null;
   bus_outward_pickup_point?: string | null;
@@ -34,6 +35,10 @@ export type BookingListTransportTimes = {
   returnCompany?: string | null;
   returnRoute?: string | null;
   returnDeparturePort?: string | null;
+  // Porto terraferma di arrivo del ritorno (solo transfer_port_hotel con
+  // ritorno): showReturnArrivalPort true + returnArrivalPort null = "non indicato".
+  showReturnArrivalPort?: boolean;
+  returnArrivalPort?: "NAPOLI" | "POZZUOLI" | null;
   outwardPickupPoint?: string | null;
   returnDestination?: string | null;
   travelCompanion?: string | null;
@@ -94,9 +99,12 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
   // Il vero orario di pickup in hotel va SOLO da return_pickup_time (calcolato,
   // stessa fonte usata da bus/treno/aeroporto) o da pickup_hotel (calcPickupTime,
   // supabase/migrations/0106_pickup_calc_fields.sql) — mai da departure_time.
+  // Porto di arrivo del ritorno: SOLO da ferry_details.return_mainland_port
+  // (lib/medmar-return-port.ts), mai dedotto da meeting_point dell'andata.
   if (kind === "transfer_port_hotel") {
     const hasReturn = Boolean(cleanDate(service.departure_date));
     const [outwardCompany, returnCompanyCandidate] = splitTransportCode(service.transport_code);
+    const returnMainlandPort = hasReturn ? readReturnMainlandPort(service.ferry_details) : null;
     return {
       serviceLabel: "Trasferimento porto - hotel",
       outwardLabel: "Arrivo traghetto/aliscafo",
@@ -110,6 +118,8 @@ export function bookingListTransportTimes(service: BookingListService): BookingL
       returnTime: cleanTime(service.orario_barca) ?? cleanTime(service.departure_time),
       returnPickupTime: hasReturn ? (cleanTime(service.return_pickup_time) ?? cleanTime(service.pickup_hotel)) : null,
       returnCompany: hasReturn ? returnCompanyCandidate : null,
+      showReturnArrivalPort: hasReturn,
+      returnArrivalPort: returnMainlandPort ? (returnMainlandPort === "napoli" ? "NAPOLI" : "POZZUOLI") : null,
     };
   }
 

@@ -367,6 +367,27 @@ describe("GET /api/ops/search — risposta conserva phone_e164", () => {
   });
 });
 
+describe("GET /api/ops/search — ferry_details (porto di arrivo del ritorno nella card PARTENZA)", () => {
+  it("ferry_details è tra le colonne selezionate", () => {
+    const source = readFileSync(join(process.cwd(), "app/api/ops/search/route.ts"), "utf8");
+    expect(source).toMatch(/SERVICE_SEARCH_COLUMNS\s*=\s*\[[^\]]*"ferry_details"/);
+  });
+
+  it("inoltra ferry_details.return_mainland_port in risposta; assente -> null", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("s1", TENANT_A, { customer_name: "Mario Rossi", ferry_details: { return_mainland_port: "pozzuoli" } }),
+        service("s2", TENANT_A, { customer_name: "Mario Bianchi" }),
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=Mario")).json();
+    const byId = new Map(body.results.map((r: Row) => [r.id, r]));
+    expect((byId.get("s1") as Row).ferry_details).toEqual({ return_mainland_port: "pozzuoli" });
+    expect((byId.get("s2") as Row).ferry_details).toBeNull();
+  });
+});
+
 describe("GET /api/ops/search — tratta nave (fix: card mostra compagnia/orari nave, non solo 'Arrivo indicativo')", () => {
   it("Mattioli combinato: direction='arrival' con partenza reale -> outbound_ferry_company/arrival_port da ferry_pickup_rules (to_ischia), return_ferry_company/departure_port dalla gamba stessa (barca_compagnia/porto_bruno)", async () => {
     const fake = createFakeAdmin({
