@@ -38,6 +38,7 @@ describe("G. UI e preflight usano la stessa funzione condivisa", () => {
   const sources = [
     "app/(app)/biglietti-medmar/page.tsx",
     "lib/server/medmar-booking/preflight.ts",
+    "app/api/services/medmar-delivery-summary/route.ts",
   ];
 
   for (const file of sources) {
