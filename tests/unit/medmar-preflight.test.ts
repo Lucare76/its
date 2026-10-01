@@ -1707,3 +1707,42 @@ describe("runMedmarPreflight — Fase 2B.8: usa l'orario nave Medmar, mai il pic
     );
   });
 });
+
+describe("runMedmarPreflight — classificazione Medmar condivisa con la Biglietteria", () => {
+  it("H. pratica importata formula_medmar_napoli con vessel senza Medmar (prima not_medmar) arriva al preflight live", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const imported = arrivalRow({ vessel: "Napoli Porta di Massa", import_id: "imp-1" });
+    const result = await runMedmarPreflight(fakeAdmin([imported]), TENANT_A, [SVC_ARR]);
+    expect(result.status).not.toBe("not_medmar");
+    expect(result.warnings.some((w) => w.code === "not_medmar")).toBe(false);
+    expect(medmarClient.fetchCorseReadOnly).toHaveBeenCalledWith({ idTratta: 59, partenzaDataDal: "2026-08-20", dopoLe: "08:40:00" });
+  });
+
+  it("H. pratica importata transfer_port_hotel con transport_code MEDMAR supera il gate; la tratta resta fail-closed (route_not_determined)", async () => {
+    vi.mocked(routeMapping.getIdTrattaForRouteCode).mockReturnValue(59);
+    vi.mocked(medmarClient.fetchCorseReadOnly).mockResolvedValue([]);
+    const imported = arrivalRow({
+      vessel: "Ischia Porto",
+      booking_service_kind: "transfer_port_hotel",
+      transport_code: "MEDMAR Napoli 08:40",
+      import_id: "imp-1",
+    });
+    const result = await runMedmarPreflight(fakeAdmin([imported]), TENANT_A, [SVC_ARR]);
+    expect(result.status).not.toBe("not_medmar");
+    expect(result.warnings.some((w) => w.code === "not_medmar")).toBe(false);
+    // Nessun porto viene dedotto da transfer_port_hotel (port-resolution.ts):
+    // il gate Medmar è superato ma serve revisione manuale della tratta.
+    expect(result.status).toBe("manual_review");
+    expect(result.warnings.some((w) => w.code === "route_not_determined")).toBe(true);
+  });
+
+  it("transfer_port_hotel con transport_code SNAV resta not_medmar con il nuovo messaggio", async () => {
+    const snav = arrivalRow({ vessel: "Ischia Porto", booking_service_kind: "transfer_port_hotel", transport_code: "SNAV Napoli 08:40" });
+    const result = await runMedmarPreflight(fakeAdmin([snav]), TENANT_A, [SVC_ARR]);
+    expect(result.status).toBe("not_medmar");
+    expect(result.can_issue).toBe(false);
+    expect(result.warnings[0]?.message).toBe("Uno o più servizi selezionati non risultano appartenere a un servizio Medmar.");
+    expect(medmarClient.fetchCorseReadOnly).not.toHaveBeenCalled();
+  });
+});

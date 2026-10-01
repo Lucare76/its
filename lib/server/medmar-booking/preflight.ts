@@ -35,6 +35,7 @@ import type { PassengerCategorySelection, PassengerTariffSelection, MedmarPassen
 import { resolvePassengerComposition } from "./passenger-composition";
 import { getRouteDefinition } from "@/lib/medmar-ticket-memory";
 import { extractMedmarPractice, medmarBookingGroupKey } from "@/lib/medmar-booking-group";
+import { isMedmarService } from "@/lib/medmar-service-classification";
 import type {
   MedmarPreflightLeg,
   MedmarPreflightResult,
@@ -131,10 +132,6 @@ function sumTicketBreakdownTotal(breakdown: MedmarPreflightTicketBreakdown): num
     total += breakdown.taxes.total_amount_cents;
   }
   return total;
-}
-
-function isMedmarService(row: MedmarPreflightServiceRow): boolean {
-  return (row.vessel ?? "").toLowerCase().includes("medmar");
 }
 
 function toDopoLe(time: string | null): string {
@@ -470,7 +467,7 @@ export async function runMedmarPreflight(
 
   const { data, error } = await admin
     .from("services")
-    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, notes, linked_service_id, inbound_email_id, import_id, source_quote_id, booking_service_kind, direction, status, meeting_point, ferry_details, departure_date, departure_time")
+    .select("id, tenant_id, date, time, outbound_time, return_time, orario_barca, customer_name, pax, vessel, transport_code, notes, linked_service_id, inbound_email_id, import_id, source_quote_id, booking_service_kind, direction, status, meeting_point, ferry_details, departure_date, departure_time")
     .in("id", serviceIds)
     .eq("tenant_id", tenantId);
 
@@ -494,7 +491,7 @@ export async function runMedmarPreflight(
       customer_name: rows[0]!.customer_name, pratica: extractMedmarPractice(rows[0]!.notes) || null,
       pax: Math.max(...rows.map((r) => r.pax ?? 1)),
       outward: null, return: null, tariff: null, taxes: [], expected_total_cents: null, is_live: false,
-      warnings: [{ code: "not_medmar", message: "Uno o più servizi selezionati non sono servizi Medmar (campo vessel)." }],
+      warnings: [{ code: "not_medmar", message: "Uno o più servizi selezionati non risultano appartenere a un servizio Medmar." }],
       error: null,
       passengers: null,
       ticket_breakdown: null,

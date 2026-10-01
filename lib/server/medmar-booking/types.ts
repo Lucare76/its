@@ -264,6 +264,8 @@ export type MedmarPreflightServiceRow = {
   customer_name: string | null;
   pax: number | null;
   vessel: string | null;
+  /** Compagnia per le pratiche PDF porto-hotel (vedi lib/medmar-service-classification.ts). */
+  transport_code?: string | null;
   notes: string | null;
   linked_service_id?: string | null;
   inbound_email_id?: string | null;

@@ -40,16 +40,9 @@ import {
   type MedmarSearchableGroup,
   type MedmarSentDateFilter,
 } from "@/lib/medmar-ticket-search";
+import { isMedmarService } from "@/lib/medmar-service-classification";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function isMedmarService(s: Service): boolean {
-  if (s.booking_service_kind === "formula_medmar_napoli" || s.booking_service_kind === "formula_medmar_pozzuoli") return true;
-  if ((s.vessel ?? "").toLowerCase().includes("medmar")) return true;
-  // Le pratiche PDF porto-hotel mostrano la compagnia da transport_code:
-  // vessel puo' contenere solo il porto di arrivo, pur essendo MEDMAR.
-  return s.booking_service_kind === "transfer_port_hotel" && /medmar/i.test(s.transport_code ?? "");
-}
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
