@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 import { supabase, getToken} from "@/lib/supabase/client";
 import { normalizeMedmarReturnMainlandPort } from "@/lib/medmar-return-port";
+import { ReviewWarningsBanner } from "@/components/review-warnings-banner";
+import { normalizeReviewWarnings } from "@/lib/review-warnings";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -107,6 +109,22 @@ function claudeToForm(json: ClaudeJson, agency: string): FormState {
   };
 }
 
+/**
+ * Il form restituito da /api/pdf/claude-extract ha già i controlli
+ * deterministici applicati (pax, treno ritorno): va usato così com'è.
+ * claudeToForm sul JSON grezzo resta solo come fallback per risposte
+ * senza `form` — ricostruirlo dal grezzo scartava le correzioni.
+ */
+function serverFormToForm(serverForm: Partial<FormState>): FormState {
+  const next = { ...EMPTY_FORM };
+  for (const key of Object.keys(EMPTY_FORM) as Array<keyof FormState>) {
+    const value = serverForm[key];
+    if (typeof value === "string") next[key] = value;
+  }
+  if (typeof serverForm.porto_ritorno === "string") next.porto_ritorno = serverForm.porto_ritorno;
+  return next;
+}
+
 // ─── Componente ────────────────────────────────────────────────────────────
 
 export function PdfClaudeUploader() {
@@ -119,6 +137,7 @@ export function PdfClaudeUploader() {
   const [dragOver, setDragOver] = useState(false);
   const [open, setOpen] = useState(false);
   const [savedServiceId, setSavedServiceId] = useState<string | null>(null);
+  const [reviewWarnings, setReviewWarnings] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function set(field: keyof FormState, value: string) {
@@ -127,7 +146,7 @@ export function PdfClaudeUploader() {
 
   async function process(file: File) {
     if (!file.name.toLowerCase().endsWith(".pdf")) { setError("Seleziona un file PDF."); return; }
-    setStep("detecting"); setError(null); setSavedServiceId(null); setFilename(file.name);
+    setStep("detecting"); setError(null); setSavedServiceId(null); setFilename(file.name); setReviewWarnings([]);
 
     const token = await getToken();
     if (!token) { setStep("error"); setError("Sessione scaduta."); return; }
@@ -159,9 +178,10 @@ export function PdfClaudeUploader() {
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({ pdf_base64: base64, step: "extract", agency: detectedAgency })
       });
-      const body = (await res.json()) as { ok?: boolean; data?: ClaudeJson; error?: string };
+      const body = (await res.json()) as { ok?: boolean; data?: ClaudeJson; form?: Partial<FormState>; review_warnings?: unknown; error?: string };
       if (!res.ok || !body.ok || !body.data) { setStep("error"); setError(body.error ?? `Errore HTTP ${res.status}`); return; }
-      setForm(claudeToForm(body.data, detectedAgency));
+      setForm(body.form ? serverFormToForm(body.form) : claudeToForm(body.data, detectedAgency));
+      setReviewWarnings(normalizeReviewWarnings(body.review_warnings));
       setStep("form");
     } catch (e) { setStep("error"); setError(e instanceof Error ? e.message : "Errore di rete."); }
   }
@@ -174,7 +194,7 @@ export function PdfClaudeUploader() {
       const res = await fetch("/api/pdf/claude-save-draft", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({ form, pdf_base64: pdfBase64, filename, agency, confirm: true })
+        body: JSON.stringify({ form, pdf_base64: pdfBase64, filename, agency, confirm: true, review_warnings: reviewWarnings })
       });
       let body: { ok?: boolean; draft_service_id?: string; error?: string } = {};
       try { body = await res.json(); } catch { /* empty */ }
@@ -185,7 +205,7 @@ export function PdfClaudeUploader() {
 
   function reset() {
     setStep("idle"); setError(null); setAgency(null); setForm(EMPTY_FORM);
-    setPdfBase64(null); setSavedServiceId(null); setFilename(null);
+    setPdfBase64(null); setSavedServiceId(null); setFilename(null); setReviewWarnings([]);
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -255,6 +275,8 @@ export function PdfClaudeUploader() {
           {/* ── STEP: form editabile ─────────────────────────────────────── */}
           {(step === "form" || step === "saving") && (
             <div className="p-5 space-y-5">
+
+              <ReviewWarningsBanner warnings={reviewWarnings} />
 
               {/* Agenzia rilevata */}
               <div className="flex items-center gap-2">

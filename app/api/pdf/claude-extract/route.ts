@@ -72,7 +72,9 @@ export async function POST(request: NextRequest) {
       agency: result.agency,
       data: result.rawJson,
       form,
-      text_mode: result.textMode
+      text_mode: result.textMode,
+      // Avvisi dei controlli deterministici sul testo PDF (revisione manuale).
+      review_warnings: result.reviewWarnings
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Errore sconosciuto.";

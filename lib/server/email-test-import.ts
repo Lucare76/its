@@ -79,6 +79,38 @@ function isPdfMailAttachment(filename?: string | null, mimeType?: string | null)
   return isPdfAttachment(filename ?? "", mimeType);
 }
 
+/** Limite di sicurezza sul testo conservato (il PDF binario non viene mai salvato). */
+const MAX_STORED_PDF_TEXT_CHARS = 50_000;
+
+/**
+ * Conserva il testo estratto dal PDF in inbound_email_attachments (tabella
+ * già esistente, stesso schema usato da app/api/inbound/email) così ogni
+ * anomalia di parsing resta ricostruibile dal DB anche per gli import normali
+ * (prima il testo restava solo per gli Aleste multi-stop, in extracted_text).
+ * Best-effort: un errore qui non blocca mai l'import.
+ */
+async function storePdfAttachmentText(
+  admin: SupabaseClient,
+  input: { inboundEmailId: string; tenantId: string; filename: string; pdfBase64: string | null; text: string }
+) {
+  const text = input.text.trim();
+  if (!text) return;
+  try {
+    const { error } = await admin.from("inbound_email_attachments").insert({
+      inbound_email_id: input.inboundEmailId,
+      tenant_id: input.tenantId,
+      filename: input.filename,
+      mimetype: "application/pdf",
+      size_bytes: input.pdfBase64 ? Buffer.byteLength(input.pdfBase64, "base64") : 0,
+      stored: false,
+      extracted_text: text.slice(0, MAX_STORED_PDF_TEXT_CHARS)
+    });
+    if (error) console.error("[email-import] Salvataggio testo PDF fallito:", error.message);
+  } catch (error) {
+    console.error("[email-import] Salvataggio testo PDF fallito:", error);
+  }
+}
+
 export async function runEmailOperationalImport(auth: OperationalImportAuth): Promise<EmailOperationalImportResult> {
   const config = getConfig();
   const client = new ImapFlow({
@@ -237,6 +269,9 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
             received_at: new Date().toISOString(),
             review_status: "needs_operator_review",
             duplicate_alert: duplicateServiceAlert,
+            // Avvisi dei controlli deterministici sul testo PDF (pax/treno
+            // ritorno Aleste): l'email resta comunque needs_operator_review.
+            review_warnings: claudeResult?.reviewWarnings ?? [],
             aleste_multi_stop: alesteMultiStop ? { rows: alesteBusRows, pairing_valid: Boolean(alestePairs), hotel: alesteMultiStopHotel(alesteBusRows) } : null,
             attachments: [{ filename: firstPdfFilename, mime_type: "application/pdf", has_content: true }],
             claude_extracted: claudeResult
@@ -267,6 +302,13 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
           if (inboundData?.id) {
             console.log(`[email-import] Email salvata con ID: ${inboundData.id}`);
             draftsCreated += 1;
+            await storePdfAttachmentText(auth.admin, {
+              inboundEmailId: inboundData.id,
+              tenantId: auth.membership.tenant_id,
+              filename: firstPdfFilename,
+              pdfBase64: firstPdfBase64,
+              text: pdfText || claudeResult?.pdfText || ""
+            });
             if (aiUsageLogId) {
               await updateAiUsageImportId(aiUsageLogId, inboundData.id);
             }

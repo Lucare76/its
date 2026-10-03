@@ -481,6 +481,171 @@ describe("GET /api/ops/search — tratta nave (fix: card mostra compagnia/orari 
     expect(row.outbound_ferry_company).toBeNull();
     expect(row.outbound_ferry_arrival_port).toBeNull();
   });
+
+  it("VITTORIA 26/015895: treno ritorno 16:55 -> nave MEDMAR 13:35 Casamicciola -> Pozzuoli da UNA sola fonte, mai ALILAURO 16:55 (coincidenza con l'orario treno)", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("vittoria-1", TENANT_A, {
+          customer_name: "VITTORIA MARIA",
+          booking_service_kind: "transfer_train_hotel",
+          direction: "arrival",
+          billing_party_name: "Aleste Viaggi",
+          hotel_id: "hotel-la-villa",
+          arrival_date: "2026-10-18",
+          arrival_time: "10:33:00",
+          train_arrival_time: "10:33",
+          train_arrival_number: "FS 9505",
+          departure_date: "2026-10-25",
+          departure_time: "16:55:00",
+          train_departure_time: "16:55",
+          train_departure_number: "FS 9432",
+          transport_code: "FS 9505 / FS 9432",
+          // Nessun valore nave salvato sulla gamba (come nel DB reale).
+          barca_compagnia: null,
+          porto_bruno: null,
+          orario_barca: null,
+        }),
+      ],
+      hotels: [{ id: "hotel-la-villa", tenant_id: TENANT_A, name: "LA VILLA", zone: "Forio" }],
+      ferry_pickup_rules: [
+        {
+          id: "rule-from-ischia-forio",
+          agency_logic: "aleste",
+          transport_type: "train",
+          direction: "from_ischia",
+          boat_type: "traghetto",
+          hotel_id: null,
+          zone: "forio",
+          transport_from: "16:35",
+          transport_to: "18:40",
+          company: "medmar",
+          departure_time: "13:35",
+          embark_port: "casamicciola",
+          arrival_port: "pozzuoli",
+          arrival_time: "14:40",
+          pickup_time: "12:15",
+          valid_from: null,
+          valid_to: null,
+          days_of_week: null,
+        },
+      ],
+      ferry_schedules: [
+        // Aliscafo che coincide con l'orario del TRENO di ritorno: era la
+        // fonte della compagnia sbagliata.
+        { id: "s-alilauro-1655", company: "alilauro", departure_port: "ischia_porto", arrival_port: "napoli_beverello", departure_time: "16:55:00", arrival_time: "17:40:00", direction: "ischia_to_mainland", days_of_week: null, valid_from: null, valid_to: null },
+        { id: "s-medmar-1335", company: "medmar", departure_port: "casamicciola", arrival_port: "pozzuoli", departure_time: "13:35:00", arrival_time: "14:40:00", direction: "ischia_to_mainland", days_of_week: null, valid_from: null, valid_to: null },
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=VITTORIA")).json();
+    const row = body.results.find((r: Row) => r.id === "vittoria-1");
+
+    expect(row.return_ferry_company).toBe("MEDMAR");
+    expect(row.return_ferry_departure_time).toBe("13:35");
+    expect(row.return_ferry_departure_port).toBe("Casamicciola");
+    expect(row.return_ferry_arrival_port).toBe("Pozzuoli");
+    expect(row.return_ferry_company).not.toBe("ALILAURO");
+    expect(row.return_ferry_departure_time).not.toBe("16:55");
+    expect(row.return_ferry_departure_port).not.toBe("Ischia Porto");
+
+    // Il treno resta il mezzo TERRESTRE della partenza, invariato.
+    expect(row.departure_time).toBe("16:55:00");
+    expect(row.train_departure_time).toBe("16:55");
+    expect(row.transport_code).toBe("FS 9505 / FS 9432");
+
+    // Card PARTENZA (stessa funzione usata da app/(app)/inbox/page.tsx).
+    const { bookingListTransportTimes } = await import("@/lib/booking-list-display");
+    const card = bookingListTransportTimes(row);
+    expect(card?.returnLabel).toBe("Partenza treno");
+    expect(card?.returnTime).toBe("16:55"); // treno FS 9432, invariato
+    expect(card?.returnCompany).toBe("MEDMAR");
+    expect(card?.returnRoute).toBe("13:35");
+    expect(card?.returnDeparturePort).toBe("Casamicciola");
+    expect(card?.returnCompany).not.toBe("ALILAURO");
+    expect(card?.returnRoute).not.toBe("16:55");
+  });
+
+  it("VITTORIA 26/015895: con SOLO l'aliscafo ALILAURO 16:55 in ferry_schedules il risultato resta MEDMAR 13:35 (l'orario treno non cerca mai la nave)", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("vittoria-2", TENANT_A, {
+          customer_name: "VITTORIA MARIA",
+          booking_service_kind: "transfer_train_hotel",
+          direction: "arrival",
+          billing_party_name: "Aleste Viaggi",
+          hotel_id: "hotel-la-villa",
+          arrival_date: "2026-10-18",
+          arrival_time: "10:33:00",
+          departure_date: "2026-10-25",
+          departure_time: "16:55:00",
+          train_departure_time: "16:55",
+          train_departure_number: "FS 9432",
+        }),
+      ],
+      hotels: [{ id: "hotel-la-villa", tenant_id: TENANT_A, name: "LA VILLA", zone: "Forio" }],
+      ferry_pickup_rules: [
+        {
+          id: "rule-from-ischia-forio",
+          agency_logic: "aleste",
+          transport_type: "train",
+          direction: "from_ischia",
+          boat_type: "traghetto",
+          hotel_id: null,
+          zone: "forio",
+          transport_from: "16:35",
+          transport_to: "18:40",
+          company: "medmar",
+          departure_time: "13:35",
+          embark_port: "casamicciola",
+          arrival_port: "pozzuoli",
+          arrival_time: "14:40",
+          pickup_time: "12:15",
+          valid_from: null,
+          valid_to: null,
+          days_of_week: null,
+        },
+      ],
+      ferry_schedules: [
+        { id: "s-alilauro-1655", company: "alilauro", departure_port: "ischia_porto", arrival_port: "napoli_beverello", departure_time: "16:55:00", arrival_time: "17:40:00", direction: "ischia_to_mainland", days_of_week: null, valid_from: null, valid_to: null },
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=VITTORIA")).json();
+    const row = body.results.find((r: Row) => r.id === "vittoria-2");
+    expect(row.return_ferry_company).toBe("MEDMAR");
+    expect(row.return_ferry_departure_time).toBe("13:35");
+    expect(row.return_ferry_departure_port).toBe("Casamicciola");
+    expect(row.return_ferry_arrival_port).toBe("Pozzuoli");
+    expect(row.train_departure_time).toBe("16:55");
+  });
+
+  it("treno senza regola canonica di ritorno: nessuna compagnia da ferry_schedules sull'orario treno -> return_ferry_* null", async () => {
+    const fake = createFakeAdmin({
+      services: [
+        service("no-return-rule", TENANT_A, {
+          customer_name: "SENZA RITORNO",
+          booking_service_kind: "transfer_train_hotel",
+          direction: "arrival",
+          billing_party_name: "Aleste Viaggi",
+          arrival_date: "2026-10-18",
+          arrival_time: "10:33",
+          departure_date: "2026-10-25",
+          departure_time: "16:55",
+          train_departure_time: "16:55",
+          train_departure_number: "FS 9432",
+        }),
+      ],
+      ferry_schedules: [
+        { id: "s-alilauro-1655", company: "alilauro", departure_port: "ischia_porto", arrival_port: "napoli_beverello", departure_time: "16:55:00", arrival_time: "17:40:00", direction: "ischia_to_mainland", days_of_week: null, valid_from: null, valid_to: null },
+      ],
+    });
+    authorizeAs(fake.admin);
+    const body = await (await callGet("?q=SENZA RITORNO")).json();
+    const row = body.results.find((r: Row) => r.id === "no-return-rule");
+    expect(row.return_ferry_company).toBeNull();
+    expect(row.return_ferry_departure_time).toBeNull();
+    expect(row.return_ferry_departure_port).toBeNull();
+  });
 });
 
 describe("Sprint 3566212 — ranking booking search non regredito dal fix", () => {

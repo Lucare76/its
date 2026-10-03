@@ -17,6 +17,8 @@ import { computeDuplicateDiff, sameDisplayText } from "@/lib/duplicate-compare";
 import { GROUP_KIND_LABEL, formatGroupContact, formatStopLine, groupSearchResults, resolveGroupTotalPax, resolveGroupReturnStatus, type BookingGroupMeta } from "@/lib/booking-group-card";
 import { CancelledBookingButtons, CancelledBookingStatus, RestoredBadge, useCancelledBookingStates } from "@/components/cancelled-booking/cancelled-booking-actions";
 import { HardDeleteDialog } from "@/components/cancelled-booking/hard-delete-dialog";
+import { ReviewWarningsBanner } from "@/components/review-warnings-banner";
+import { normalizeReviewWarnings } from "@/lib/review-warnings";
 
 // ─── Tipi ──────────────────────────────────────────────────────────────────
 
@@ -664,6 +666,11 @@ export default function InboxPage() {
   const [pdfUploadSaving, setPdfUploadSaving] = useState(false);
   const [pdfUploadError, setPdfUploadError] = useState<string | null>(null);
   const [pdfUploadPreview, setPdfUploadPreview] = useState<Record<string, unknown> | null>(null);
+  // Avvisi controlli deterministici della preview PDF manuale: derivati dalla
+  // preview stessa (si azzerano con lei), inoltrati al salvataggio bozza.
+  const pdfUploadReviewWarnings = normalizeReviewWarnings(
+    (pdfUploadPreview?.claude_extracted as Record<string, unknown> | undefined)?.review_warnings
+  );
   const [pdfEditForm, setPdfEditForm] = useState<FormState>(EMPTY_FORM);
   const [pdfDuplicateWarning, setPdfDuplicateWarning] = useState<string | null>(null);
   // Pannello "prenotazione già esistente" (SCARTA NUOVA / AGGIORNA ESISTENTE /
@@ -999,7 +1006,8 @@ export default function InboxPage() {
           pdf_base64: pdfBase64,
           filename: pdfUploadFile.name,
           agency: detectedAgency,
-          force
+          force,
+          review_warnings: pdfUploadReviewWarnings
         })
       });
       const body = (await response.json().catch(() => null)) as {
@@ -1388,6 +1396,7 @@ export default function InboxPage() {
             agency: detectedAgency,
             action: "update_existing",
             existing_service_id: matchId,
+            review_warnings: pdfUploadReviewWarnings,
           }),
         });
       }
@@ -1973,6 +1982,9 @@ export default function InboxPage() {
                 <p><span className="font-semibold">Da:</span> {(selectedEmail.parsed_json as Record<string, unknown>).from_email as string ?? "N/D"}</p>
                 <p><span className="font-semibold">Oggetto:</span> {(selectedEmail.parsed_json as Record<string, unknown>).subject as string ?? "N/D"}</p>
               </div>
+
+              {/* Avvisi controlli deterministici PDF (pax / treno ritorno): revisione manuale */}
+              <ReviewWarningsBanner warnings={(selectedEmail.parsed_json as Record<string, unknown>).review_warnings} />
 
               {/* Già approvata */}
               {isConfirmed && (
@@ -2602,6 +2614,11 @@ export default function InboxPage() {
                       ) : null}
                       <span className="ml-auto text-xs text-slate-400">{pdfUploadFile?.name ?? "PDF"}</span>
                     </div>
+                    {pdfUploadReviewWarnings.length > 0 ? (
+                      <div className="border-b border-slate-200 px-4 py-3">
+                        <ReviewWarningsBanner warnings={pdfUploadReviewWarnings} />
+                      </div>
+                    ) : null}
 
                     {/* Form editabile */}
                     <div className="overflow-y-auto max-h-[480px] p-4 space-y-4">

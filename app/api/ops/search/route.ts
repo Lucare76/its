@@ -5,6 +5,7 @@ import { ferryPortLabel, findArrivalScheduleForService, findDepartureScheduleFor
 import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 import { findFerryPickupRule, resolveAgencyLogic, type FerryPickupRule } from "@/lib/ferry-pickup-rules";
 import { hasRealDepartureLeg } from "@/lib/booking-list-display";
+import { ferryLegForResponse, hotelZoneFromRaw, loadFerryConnectionContext, resolveFerryLeg } from "@/lib/server/ferry-connection-lookup";
 import type { Service } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -590,7 +591,7 @@ export async function GET(req: NextRequest) {
     ]));
     const serviceIds = Array.from(new Set(serviceRows.map((service) => service.id).filter(Boolean)));
 
-    const [hotelsResult, agenciesResult, bookingGroupsResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult, cancellationLogsResult] = await Promise.all([
+    const [hotelsResult, agenciesResult, bookingGroupsResult, schedulesResult, ferryPickupRulesResult, busAllocationsResult, busFerryConfigsResult, busStopsResult, busLinesResult, hotelPickupTimesResult, cancellationLogsResult, ferryConnectionContext] = await Promise.all([
       hotelIds.length
         ? auth.admin.from("hotels").select("id,name,zone").eq("tenant_id", tenantId).in("id", hotelIds)
         : Promise.resolve({ data: [], error: null }),
@@ -635,6 +636,10 @@ export async function GET(req: NextRequest) {
           .in("service_id", serviceIds)
           .order("created_at", { ascending: false })
         : Promise.resolve({ data: [], error: null }),
+      // Contesto canonico (ferry_pickup_rules tutte le direzioni + ferry_schedules)
+      // per la nave di RITORNO dei servizi treno/volo — stessa fonte di
+      // GET /api/ops/services/[id] (resolveFerryLeg).
+      loadFerryConnectionContext(auth.admin),
     ]);
 
     const error = hotelsResult.error ?? agenciesResult.error ?? bookingGroupsResult.error ?? schedulesResult.error ?? ferryPickupRulesResult.error ?? busAllocationsResult.error ?? busFerryConfigsResult.error ?? busStopsResult.error ?? busLinesResult.error ?? hotelPickupTimesResult.error ?? cancellationLogsResult.error ?? null;
@@ -774,6 +779,48 @@ export async function GET(req: NextRequest) {
         const departurePickupRule = departureRuleType && departureTransportTime
           ? getPickupRuleByRange(owner, departureRuleType, departureTransportTime, normalizeZonaIschia(hotelZone))
           : null;
+        // Nave di RITORNO per servizi treno/volo (audit VITTORIA 26/015895):
+        // compagnia, porto e orario arrivano da UNA sola fonte. Prima la
+        // compagnia veniva da ferry_schedules cercato con l'orario del TRENO
+        // (departure_time 16:55 -> aliscafo ALILAURO 16:55, pura coincidenza)
+        // e l'orario da boat_t della regola MEDMAR (13:35): due fonti
+        // mescolate nella stessa card. Ordine: 1) valori già salvati sulla
+        // gamba (applyPickupCalc, caso MATTIOLI 26/010806); 2) resolveFerryLeg
+        // (regola canonica, come GET /api/ops/services/[id]); 3) null.
+        const isTrainOrFlightReturn = transferTransportType(departureLeg?.booking_service_kind ?? r.booking_service_kind) !== null;
+        let trainReturnFerry: { company: string | null; departurePort: string | null; arrivalPort: string | null; departureTime: string | null } | null = null;
+        if (isTrainOrFlightReturn && departureLeg) {
+          const savedCompany = departureLeg.barca_compagnia ?? r.barca_compagnia ?? null;
+          const savedPort = departureLeg.porto_bruno ?? r.porto_bruno ?? null;
+          if (savedCompany || departureLeg.orario_barca) {
+            trainReturnFerry = {
+              company: savedCompany ? savedCompany.toUpperCase() : null,
+              departurePort: savedPort ? ferryPortLabel(savedPort) : null,
+              arrivalPort: null,
+              departureTime: departureLeg.orario_barca ?? null,
+            };
+          } else {
+            const zone = hotelZoneFromRaw(hotelZone);
+            const resolved = ferryLegForResponse(resolveFerryLeg({
+              direction: "from_ischia",
+              bookingServiceKind: departureLeg.booking_service_kind ?? r.booking_service_kind ?? null,
+              transportTime: departureTransportTime,
+              date: departureLeg.departure_date ?? departureLeg.date ?? null,
+              hotelId: r.hotel_id ?? null,
+              zone: zone.zone,
+              zoneRecognized: zone.zoneRecognized,
+              agencyName: owner,
+              pax: r.pax ?? null,
+              context: ferryConnectionContext,
+            }));
+            trainReturnFerry = {
+              company: resolved?.company ?? null,
+              departurePort: resolved?.departure_port ?? null,
+              arrivalPort: resolved?.arrival_port ?? null,
+              departureTime: resolved?.departure_time ?? null,
+            };
+          }
+        }
         const isBus =
           isBusBooking(r) ||
           isBusBooking(arrivalLeg) ||
@@ -859,7 +906,9 @@ export async function GET(req: NextRequest) {
           return_pickup_time: isBus
             ? busReturnPickupTime ?? departureLeg?.departure_time ?? null
             : departureLeg?.pickup_time ?? departurePickupRule?.pickup ?? departureLeg?.departure_time ?? null,
-          return_ferry_departure_time: departureLeg?.orario_barca ?? departurePickupRule?.boat_t ?? null,
+          return_ferry_departure_time: isTrainOrFlightReturn
+            ? trainReturnFerry?.departureTime ?? null
+            : departureLeg?.orario_barca ?? departurePickupRule?.boat_t ?? null,
           bus_outward_pickup_point: isBus ? busPickupPoint(arrivalBusAllocation) : null,
           // Compagnia/porto ARRIVO: preferisce SEMPRE ferryPickupRule (stessa
           // regola canonica ferry_pickup_rules già usata per l'orario sopra —
@@ -878,12 +927,19 @@ export async function GET(req: NextRequest) {
           // MATTIOLI 26/010806). returnSchedule (ferry_schedules, legacy)
           // resta un fallback per righe più vecchie mai passate da
           // applyPickupCalc.
-          return_ferry_company: (departureLeg?.barca_compagnia ?? r.barca_compagnia)?.toUpperCase()
-            ?? returnSchedule?.company?.toUpperCase() ?? null,
-          return_ferry_departure_port: (departureLeg?.porto_bruno ?? r.porto_bruno)
-            ? ferryPortLabel((departureLeg?.porto_bruno ?? r.porto_bruno) as string)
-            : returnSchedule ? ferryPortLabel(returnSchedule.departurePort) : null,
-          return_ferry_arrival_port: returnSchedule ? ferryPortLabel(returnSchedule.arrivalPort) : null,
+          // Treno/volo: sempre e solo trainReturnFerry (fonte unica, vedi sopra).
+          return_ferry_company: isTrainOrFlightReturn
+            ? trainReturnFerry?.company ?? null
+            : (departureLeg?.barca_compagnia ?? r.barca_compagnia)?.toUpperCase()
+              ?? returnSchedule?.company?.toUpperCase() ?? null,
+          return_ferry_departure_port: isTrainOrFlightReturn
+            ? trainReturnFerry?.departurePort ?? null
+            : (departureLeg?.porto_bruno ?? r.porto_bruno)
+              ? ferryPortLabel((departureLeg?.porto_bruno ?? r.porto_bruno) as string)
+              : returnSchedule ? ferryPortLabel(returnSchedule.departurePort) : null,
+          return_ferry_arrival_port: isTrainOrFlightReturn
+            ? trainReturnFerry?.arrivalPort ?? null
+            : returnSchedule ? ferryPortLabel(returnSchedule.arrivalPort) : null,
           cancellation: cancellationLog ? {
             cancelled_at: cancellationLog.created_at,
             operator_name: cancellationLog.operator_name ?? cancellationLog.operator_email ?? null,

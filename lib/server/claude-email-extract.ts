@@ -12,6 +12,8 @@ export type ClaudeEmailExtractResult = {
   form: ClaudeFormState;
   rawJson: Record<string, unknown>;
   usage: HaikuUsage;
+  reviewWarnings: string[];
+  pdfText: string;
 };
 
 export async function claudeEmailExtract(
@@ -24,6 +26,8 @@ export async function claudeEmailExtract(
     agency: result.agency,
     form: result.form,
     rawJson: result.rawJson,
-    usage: result.usage
+    usage: result.usage,
+    reviewWarnings: result.reviewWarnings,
+    pdfText: result.pdfText
   };
 }

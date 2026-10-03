@@ -62,10 +62,14 @@ export async function POST(request: NextRequest) {
       ok: true,
       mode: "claude_preview",
       filename: file.name,
+      // Avvisi dei controlli deterministici sul testo PDF (stesso formato di
+      // parsed_json.review_warnings dell'import IMAP): la UI li mostra sempre.
+      review_warnings: result.reviewWarnings,
       claude_extracted: {
         agency: result.agency,
         form: enrichedForm,
-        raw_json: result.rawJson
+        raw_json: result.rawJson,
+        review_warnings: result.reviewWarnings
       }
     });
   } catch (err) {
