@@ -72,7 +72,12 @@ export async function resolveHotelZone(
 ): Promise<{ zone: string | null; zoneRecognized: boolean }> {
   if (!hotelId) return { zone: null, zoneRecognized: false };
   const { data } = await admin.from("hotels").select("zone").eq("id", hotelId).maybeSingle();
-  const rawZone = String((data as { zone?: string | null } | null)?.zone ?? "").toLowerCase();
+  return hotelZoneFromRaw((data as { zone?: string | null } | null)?.zone ?? null);
+}
+
+/** Stessa normalizzazione di resolveHotelZone, per chi ha già la zona hotel in memoria (es. /api/ops/search). */
+export function hotelZoneFromRaw(zone: string | null | undefined): { zone: string | null; zoneRecognized: boolean } {
+  const rawZone = String(zone ?? "").toLowerCase();
   return { zone: rawZone || null, zoneRecognized: ZONE_PATTERN.test(rawZone) };
 }
 

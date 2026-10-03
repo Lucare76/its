@@ -12,6 +12,7 @@
  */
 
 import { cleanExtractedPdfText } from "@/lib/server/pdf-text-cleaning";
+import { applyAlesteDeterministicChecks } from "@/lib/server/aleste-deterministic-checks";
 import { normalizeMedmarReturnMainlandPort } from "@/lib/medmar-return-port";
 
 export const MODEL = "claude-haiku-4-5-20251001";
@@ -92,8 +93,8 @@ ISTRUZIONI CAMPO PER CAMPO:
 - data_partenza: colonna AL nella riga PROGRAMMA → converti in YYYY-MM-DD (es: "26-apr-26" → "2026-04-26")
 - orario_arrivo: dalla sezione operativa, nel blocco del servizio ANDATA STAZIONE/HOTEL: il valore dopo "Alle" (es: "13:43"). Per PORTO/TRAGHETTO ("TRAGHETTO NAPOLI + TRS H. ISCHIA 08:40", "TRAGHETTO POZZUOLI + TRS H. ISCHIA 09:40") NON c'è "Alle": usa l'orario nel titolo del servizio andata (uguale al "Dalle" del blocco), cioè la PARTENZA della nave dalla terraferma.
 - orario_partenza: dalla sezione operativa, nel blocco del servizio RITORNO (HOTEL/STAZIONE o HOTEL/PORTO): il valore dopo "Dalle" (es: "13:20"). Per PORTO/TRAGHETTO usa l'orario nel titolo del servizio ritorno ("TRS H. ISCHIA + TRAGHETTO POZZUOLI 11:10"), cioè la PARTENZA della nave da Ischia.
-- numero_mezzo_andata: per PORTO/TRAGHETTO scrivi esattamente "MEDMAR" oppure "SNAV" (deduci dal documento). Per treni/aerei: codice treno/volo dalla tabella operativa riga 1, colonna "num." (es: "ITA 9919") OPPURE dopo "da:" (es: "ITALO 9919")
-- numero_mezzo_ritorno: per PORTO/TRAGHETTO scrivi "MEDMAR" oppure "SNAV" (stesso del ritorno). Per treni/aerei: codice treno/volo riga 2 (es: "ITA 9940") OPPURE dopo "da:" nel blocco ritorno
+- numero_mezzo_andata: per PORTO/TRAGHETTO scrivi esattamente "MEDMAR" oppure "SNAV" (deduci dal documento). Per treni/aerei: il codice dopo "da:" nel blocco operativo dell'ANDATA (TRANSFER STAZIONE/HOTEL o AEROPORTO/HOTEL) il cui orario coincide con orario_arrivo/partenza del treno (es: "da: ITALO 9919"), oppure la riga della tabella operativa con lo STESSO orario di partenza di quel treno (colonna "num.", es: "ITA 9919"). NON scegliere mai in base alla posizione della riga.
+- numero_mezzo_ritorno: per PORTO/TRAGHETTO scrivi "MEDMAR" oppure "SNAV" (stesso del ritorno). Per treni/aerei: il codice dopo "da:" nel blocco del servizio RITORNO (TRANSFER HOTEL/STAZIONE o HOTEL/AEROPORTO) che ha "Dalle" uguale a orario_partenza (es: "Dalle 13:20 ... da: ITALO 9940"), oppure la riga della tabella operativa che parte ESATTAMENTE a orario_partenza (es: "NAPOLI CENTRALE 13:20 ... ITA 9940"). NON usare mai la posizione della riga (la tabella può avere più treni, es. cambi). Se ci sono più codici possibili per quell'orario e non è chiaro quale sia, restituisci null.
 - citta_partenza: dopo "M.p.:" nel blocco andata OPPURE prima riga della tabella operativa (es: "TORINO P. NUOVA")
 - porto_ritorno: solo per PORTO/TRAGHETTO, dal blocco RITORNO "TRS H. ISCHIA + TRAGHETTO <PORTO>" oppure "a: PORTO PER <PORTO> CON MEDMAR" / "dest: PORTO DI <PORTO>" → "napoli" o "pozzuoli"; null se il blocco ritorno non lo indica. Mai dal blocco andata.
 - totale_pratica: numero dopo "Totale pratica EUR" (es: 104.00)
@@ -278,6 +279,10 @@ export type HaikuExtractResult = {
   rawJson: Record<string, unknown>;
   textMode: boolean; // true = testo estratto, false = PDF base64
   usage: HaikuUsage; // somma dei token consumati da tutte le chiamate (1 o 2 in caso di correzione agenzia)
+  /** Avvisi di revisione manuale dai controlli deterministici sul testo PDF (oggi solo Aleste). */
+  reviewWarnings: string[];
+  /** Testo pagina 1 effettivamente letto (vuoto se il PDF non ha testo usabile) — solo per tracciabilità. */
+  pdfText: string;
 };
 
 /** Errore di estrazione che porta con sé i token eventualmente già consumati (per il logging costi anche sui fallimenti). */
@@ -470,6 +475,29 @@ export function applyAlesteFerryTitleTimes(form: ClaudeFormState, agency: string
   };
 }
 
+// Controlli deterministici post-Haiku (audit 26/015867 pax, 26/015929 treno
+// ritorno): corregge solo dati letti univocamente dal testo PDF, altrimenti
+// lascia il valore del modello e aggiunge un avviso di revisione.
+// Ordine: jsonToForm -> pratica da oggetto -> orari nave dai titoli Aleste
+// (applyAlesteFerryTitleTimes, fix Medmar) -> controlli deterministici, che
+// lavorano quindi sul form già corretto dagli orari nave.
+function finalizeForm(
+  json: ClaudeJson,
+  agency: string,
+  emailSubject: string,
+  page1Text: string,
+  usableText: string
+): { form: ClaudeFormState; reviewWarnings: string[] } {
+  const form = applyAlesteFerryTitleTimes(
+    overrideNumeroPraticaFromSubject(jsonToForm(json, agency), agency, emailSubject),
+    agency,
+    page1Text
+  );
+  if (agency !== "aleste" || !usableText) return { form, reviewWarnings: [] };
+  const checked = applyAlesteDeterministicChecks(form, usableText);
+  return { form: checked.form, reviewWarnings: checked.warnings };
+}
+
 // ─── Funzione principale ─────────────────────────────────────────────────────
 
 export async function extractWithHaiku(
@@ -493,6 +521,8 @@ export async function extractWithHaiku(
       // fallback: useremo il PDF base64
     }
   }
+
+  const usableText = textMode ? page1Text : "";
 
   // 2. Rileva agenzia via regex (0 costo)
   const agency = detectAgencyFromText(page1Text + " " + emailBody, emailSubject);
@@ -586,7 +616,8 @@ export async function extractWithHaiku(
           const rawJson2 = JSON.parse(match2[0]) as ClaudeJson & { agency_key?: string };
           return {
             agency: finalAgency,
-            form: applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson2, finalAgency), finalAgency, emailSubject), finalAgency, page1Text),
+            ...finalizeForm(rawJson2, finalAgency, emailSubject, page1Text, usableText),
+            pdfText: usableText,
             rawJson: rawJson2 as Record<string, unknown>,
             textMode,
             usage: addUsage(usage, usage2)
@@ -596,7 +627,8 @@ export async function extractWithHaiku(
           // ma conserva comunque i token consumati anche dal secondo tentativo per il costo.
           return {
             agency: finalAgency,
-            form: applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject), finalAgency, page1Text),
+            ...finalizeForm(rawJson, finalAgency, emailSubject, page1Text, usableText),
+            pdfText: usableText,
             rawJson: rawJson as Record<string, unknown>,
             textMode,
             usage: addUsage(usage, usage2)
@@ -605,7 +637,8 @@ export async function extractWithHaiku(
       }
       return {
         agency: finalAgency,
-        form: applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject), finalAgency, page1Text),
+        ...finalizeForm(rawJson, finalAgency, emailSubject, page1Text, usableText),
+        pdfText: usableText,
         rawJson: rawJson as Record<string, unknown>,
         textMode,
         usage: addUsage(usage, usage2)
@@ -613,11 +646,13 @@ export async function extractWithHaiku(
     }
   }
 
-  const form = applyAlesteFerryTitleTimes(overrideNumeroPraticaFromSubject(jsonToForm(rawJson, finalAgency), finalAgency, emailSubject), finalAgency, page1Text);
+  const { form, reviewWarnings } = finalizeForm(rawJson, finalAgency, emailSubject, page1Text, usableText);
 
   return {
     agency: finalAgency,
     form,
+    reviewWarnings,
+    pdfText: usableText,
     rawJson: rawJson as Record<string, unknown>,
     textMode,
     usage

@@ -20,6 +20,7 @@ import { resolveIncomingFerryMeta } from "@/lib/server/ferry-connection-lookup";
 import { auditLog } from "@/lib/server/ops-audit";
 import { logServiceChange, readServiceSnapshot } from "@/lib/server/service-audit-log";
 import { hasRealDepartureLeg } from "@/lib/booking-list-display";
+import { normalizeReviewWarnings } from "@/lib/review-warnings";
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { normalizeMedmarReturnMainlandPort, readReturnMainlandPort, withReturnMainlandPort } from "@/lib/medmar-return-port";
 
@@ -379,6 +380,8 @@ export async function POST(request: NextRequest) {
     action?: "update_existing" | "create_new";
     /** Service esistente scelto per "update_existing" (ri-validato server-side). */
     existing_service_id?: string;
+    /** Avvisi della preview (controlli deterministici PDF): conservati sull'email importata. */
+    review_warnings?: unknown;
   };
   try { body = (await request.json()) as typeof body; }
   catch { return NextResponse.json({ ok: false, error: "Body JSON non valido." }, { status: 400 }); }
@@ -693,6 +696,9 @@ export async function POST(request: NextRequest) {
     subject: `Import Claude AI: ${filename}`,
     received_at: new Date().toISOString(),
     review_status: "ready_operational",
+    // Stessa chiave dell'import IMAP: l'avviso visto in preview resta tracciato
+    // (e visibile nel dettaglio Inbox) anche dopo il salvataggio.
+    review_warnings: normalizeReviewWarnings(body.review_warnings),
     attachments: [{ filename, mime_type: "application/pdf", has_content: false }],
     pdf_parser: { key: `claude_${agency}`, mode: "dedicated", score: 0.95, selection_confidence: "high", selection_reason: `Claude AI — agenzia ${agency} — verificato operatore` },
     pdf_import: {
