@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { type SupabaseClient } from "@supabase/supabase-js";
@@ -151,6 +152,23 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
         });
         if (!message || !message.source) continue;
 
+        // Identity is the received message, never the agency practice number:
+        // a new message may legitimately revise the same booking.
+        const messageFingerprint = createHash("sha256").update(message.source).digest("hex");
+        const { data: alreadyImported, error: identityError } = await auth.admin
+          .from("inbound_emails")
+          .select("id")
+          .eq("tenant_id", auth.membership.tenant_id)
+          .eq("parsed_json->>message_fingerprint", messageFingerprint)
+          .limit(1)
+          .maybeSingle();
+        if (identityError) throw new Error(`Verifica email già acquisita fallita: ${identityError.message}`);
+        if (alreadyImported?.id) {
+          duplicateWarnings += 1;
+          if (config.markSeen) await client.messageFlagsAdd(uid, ["\\Seen"]);
+          continue;
+        }
+
         const parsed = await simpleParser(message.source);
         const sender = normalizeSender(parsed.from) || config.user;
         const subject = normalizeText(parsed.subject) || "Email con PDF";
@@ -219,21 +237,20 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
 
           // ── Controlla duplicati (numero_pratica nelle inbound_emails) ────
           const practiceNumber = claudeResult?.form.numero_pratica || null;
+          let previousEmailId: string | null = null;
           if (practiceNumber) {
-            const { data: existingEmail } = await auth.admin
+            const { data: existingEmail, error: practiceError } = await auth.admin
               .from("inbound_emails")
               .select("id")
               .eq("tenant_id", auth.membership.tenant_id)
               .ilike("extracted_text", `%${practiceNumber}%`)
               .limit(1)
               .maybeSingle();
+            if (practiceError) throw new Error(`Ricerca pratica esistente fallita: ${practiceError.message}`);
             if (existingEmail?.id) {
+              previousEmailId = existingEmail.id;
               duplicateWarnings += 1;
-              console.log(`[email-import] Duplicato pratica ${practiceNumber} — skip`);
-              if (config.markSeen) {
-                await client.messageFlagsAdd(uid, ["\\Seen"]);
-              }
-              continue;
+              console.log(`[email-import] Nuova comunicazione pratica ${practiceNumber} — revisione richiesta`);
             }
           }
 
@@ -264,14 +281,21 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
           // ── Salva inbound_email con dati Claude ───────────────────────────
           const parsedJson = {
             source: "imap-claude",
+            message_fingerprint: messageFingerprint,
+            message_id: parsed.messageId || null,
+            previous_inbound_email_id: previousEmailId,
+            practice_revision: Boolean(previousEmailId),
             from_email: sender,
             subject,
             received_at: new Date().toISOString(),
             review_status: "needs_operator_review",
-            duplicate_alert: duplicateServiceAlert,
+            duplicate_alert: duplicateServiceAlert || Boolean(previousEmailId),
             // Avvisi dei controlli deterministici sul testo PDF (pax/treno
             // ritorno Aleste): l'email resta comunque needs_operator_review.
-            review_warnings: claudeResult?.reviewWarnings ?? [],
+            review_warnings: [
+              ...(previousEmailId ? [`Nuova comunicazione per la pratica ${practiceNumber} già acquisita. Confronta i dati con la prenotazione esistente prima di confermare; non creare un doppione.`] : []),
+              ...(claudeResult?.reviewWarnings ?? [])
+            ],
             aleste_multi_stop: alesteMultiStop ? { rows: alesteBusRows, pairing_valid: Boolean(alestePairs), hotel: alesteMultiStopHotel(alesteBusRows) } : null,
             attachments: [{ filename: firstPdfFilename, mime_type: "application/pdf", has_content: true }],
             claude_extracted: claudeResult
@@ -285,7 +309,7 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
             linked_service_id: null
           };
 
-          const { data: inboundData } = await auth.admin
+          const { data: inboundData, error: saveError } = await auth.admin
             .from("inbound_emails")
             .insert({
               tenant_id: auth.membership.tenant_id,
@@ -313,7 +337,7 @@ export async function runEmailOperationalImport(auth: OperationalImportAuth): Pr
               await updateAiUsageImportId(aiUsageLogId, inboundData.id);
             }
           } else {
-            console.error(`[email-import] Errore salvataggio inbound_email`);
+            throw new Error(`Salvataggio email fallito: ${saveError?.message ?? "ID non restituito"}`);
           }
         }
 
