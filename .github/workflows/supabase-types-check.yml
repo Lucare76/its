@@ -50,3 +50,18 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+
+      - name: Generate types for review on mismatch
+        if: failure() && env.HAS_SUPABASE_CONFIG == 'true'
+        run: node scripts/supabase-gen-types.mjs
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+
+      - name: Upload generated types for review
+        if: failure() && env.HAS_SUPABASE_CONFIG == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-generated-types
+          path: lib/supabase/types.ts
+          retention-days: 1
