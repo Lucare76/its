@@ -18,26 +18,36 @@ on:
 
 jobs:
   check-types:
-    if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' && secrets.SUPABASE_PROJECT_ID != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      HAS_SUPABASE_CONFIG: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' && secrets.SUPABASE_PROJECT_ID != '' }}
 
     steps:
+      - name: Report missing Supabase configuration
+        if: env.HAS_SUPABASE_CONFIG != 'true'
+        run: echo 'Supabase types check skipped - repository secrets are not configured.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout
+        if: env.HAS_SUPABASE_CONFIG == 'true'
         uses: actions/checkout@v4
 
       - name: Setup Node
+        if: env.HAS_SUPABASE_CONFIG == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Setup Supabase CLI
+        if: env.HAS_SUPABASE_CONFIG == 'true'
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
       - name: Verify generated Supabase types
+        if: env.HAS_SUPABASE_CONFIG == 'true'
         run: node scripts/supabase-gen-types.mjs --check
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+
