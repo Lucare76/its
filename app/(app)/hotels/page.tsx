@@ -83,6 +83,7 @@ type GeoCorrectionDraft = {
   startedFromGenericCoords: boolean;
   autoLookupDone: boolean;
   suggestionLabel: string | null;
+  lookupError: string | null;
 };
 
 const PAGE_SIZE = 20;
@@ -946,7 +947,8 @@ export default function HotelsPage() {
       notes: hotel.geo_notes ?? "",
       startedFromGenericCoords: useFallback,
       autoLookupDone: !useFallback,
-      suggestionLabel: null
+      suggestionLabel: null,
+      lookupError: null
     });
     setMessage("");
     setError("");
@@ -955,6 +957,7 @@ export default function HotelsPage() {
   const searchGeoCorrectionAddress = useCallback(async (options?: { automatic?: boolean }) => {
     if (!geoCorrection) return;
     const lookupVersion = ++geoLookupVersion.current;
+    setGeoCorrection((current) => current ? { ...current, lookupError: null } : current);
 
     // Se la query sembra coordinate o un URL Google Maps, usale direttamente
     const parsed = parseCoordinatesFromText(geoCorrection.query);
@@ -997,7 +1000,7 @@ export default function HotelsPage() {
       const lat = Number(first?.lat);
       const lng = Number(first?.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null } : current);
+        setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null, lookupError: current.startedFromGenericCoords ? "Nessuna posizione precisa trovata. Il pin mostra solo il centro della zona: spostalo sull'hotel oppure incolla le coordinate da Google Maps." : "Nessuna nuova posizione trovata. Ho mantenuto le coordinate precedenti." } : current);
         if (!options?.automatic) setError("Nessun risultato trovato sulla mappa. Puoi spostare il pin manualmente e salvare.");
         return;
       }
@@ -1012,7 +1015,7 @@ export default function HotelsPage() {
       } : current);
     } catch (searchError) {
       if (lookupVersion !== geoLookupVersion.current) return;
-      setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null } : current);
+      setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null, lookupError: searchError instanceof Error ? searchError.message : "Ricerca indirizzo non riuscita." } : current);
       if (!options?.automatic) setError(searchError instanceof Error ? searchError.message : "Ricerca indirizzo non riuscita.");
     } finally {
       if (lookupVersion === geoLookupVersion.current) setGeoSearching(false);
@@ -1026,6 +1029,10 @@ export default function HotelsPage() {
 
   const saveGeoCorrection = async () => {
     if (!tenantId || !supabase || !geoCorrection) return;
+    if (geoCorrection.startedFromGenericCoords) {
+      setError("Il pin è ancora al centro della zona. Cerca la posizione reale o spostalo sull'hotel prima di salvare.");
+      return;
+    }
     cancelGeoLookup();
     setGeoCorrection((current) => current ? { ...current, autoLookupDone: true } : current);
     const lat = Number(geoCorrection.lat.replace(",", "."));
@@ -1070,7 +1077,7 @@ export default function HotelsPage() {
 
   const updateGeoCorrectionPin = useCallback((coords: { lat: number; lng: number }) => {
     cancelGeoLookup();
-    setGeoCorrection((current) => current ? { ...current, lat: coords.lat.toFixed(7), lng: coords.lng.toFixed(7), autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null } : current);
+    setGeoCorrection((current) => current ? { ...current, lat: coords.lat.toFixed(7), lng: coords.lng.toFixed(7), autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null, lookupError: null } : current);
   }, [cancelGeoLookup]);
 
   const saveEdit = async (hotelId: string) => {
@@ -1911,10 +1918,13 @@ export default function HotelsPage() {
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                     <p><b>Coordinate attuali:</b> {formatCoord(geoCorrection.hotel.lat)} / {formatCoord(geoCorrection.hotel.lng)}</p>
                     <p className="mt-1"><b>Stato:</b> {evaluateHotelGeo(geoCorrection.hotel).label}</p>
-                    {geoCorrection.startedFromGenericCoords ? (
+                    {geoCorrection.startedFromGenericCoords && !geoCorrection.autoLookupDone ? (
                       <p className="mt-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700">
-                        Coordinate salvate generiche: sto cercando automaticamente l&apos;hotel sulla mappa. Conferma solo se il pin cade sul punto giusto.
+                        Posizione hotel non verificata: avvio la ricerca. Il pin iniziale indica soltanto il centro della zona.
                       </p>
+                    ) : null}
+                    {geoCorrection.lookupError ? (
+                      <p role="alert" className="mt-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700">{geoCorrection.lookupError}</p>
                     ) : null}
                     {geoSearching ? (
                       <p className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700">
@@ -1952,7 +1962,7 @@ export default function HotelsPage() {
                       Latitudine
                       <input
                         value={geoCorrection.lat}
-                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, lat: event.target.value, autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null }); }}
+                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, lat: event.target.value, autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null, lookupError: null }); }}
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       />
                     </label>
@@ -1960,7 +1970,7 @@ export default function HotelsPage() {
                       Longitudine
                       <input
                         value={geoCorrection.lng}
-                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, lng: event.target.value, autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null }); }}
+                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, lng: event.target.value, autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null, lookupError: null }); }}
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       />
                     </label>
@@ -2011,7 +2021,7 @@ export default function HotelsPage() {
               <button
                 type="button"
                 onClick={() => void saveGeoCorrection()}
-                disabled={saving}
+                disabled={saving || geoCorrection.startedFromGenericCoords}
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 {saving ? "Salvataggio..." : "Salva e verifica"}

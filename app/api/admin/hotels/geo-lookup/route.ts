@@ -41,6 +41,14 @@ const knownHotelFallbacks: Array<{
   placeId: string;
 }> = [
   {
+    // GeoCoordinates published by https://hotelcapizzo.it/contatti/ (JSON-LD).
+    match: /\bhotel\s+capizzo\b|\bcapizzo\s+hotel\b/i,
+    lat: 40.7233964,
+    lng: 13.8633225,
+    label: "Hotel Capizzo, Via Provinciale Panza 257, Forio (posizione dal sito ufficiale)",
+    placeId: "known:hotel-capizzo-forio"
+  },
+  {
     match: /villa\s+franca|(?:provinciale\s+lacco.*\b211\b.*forio)|(?:forio.*provinciale\s+lacco.*\b211\b)|(?:forio\s*-\s*lacco.*\b211\b)/i,
     lat: 40.747013,
     lng: 13.872981,
@@ -110,6 +118,8 @@ function buildQueries(rawQuery: string, hotel?: HotelLookupRow | null) {
 
   return uniqueQueries([
     baseQuery,
+    hotelName && city ? `${hotelName}, ${city}` : null,
+    hotelName || null,
     hotelName ? `${hotelName}, Isola d'Ischia, Campania, Italia` : null,
     streetNumber && city ? `${streetNumber}, ${city}, Campania, Italia` : null,
     hotelName && address && city ? `${hotelName}, ${address}, ${city}, Campania, Italia` : null,
@@ -147,13 +157,14 @@ async function searchNominatim(query: string) {
   url.searchParams.set("bounded", "1");
 
   const response = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(8000),
     headers: {
       "Accept-Language": "it",
       "User-Agent": "IschiaTransfer/1.0 (info@campanialimousine.com)"
     }
   });
 
-  if (!response.ok) return null;
+  if (!response.ok) throw new Error(`Geocoding provider HTTP ${response.status}`);
   return (await response.json()) as NominatimResult[];
 }
 
@@ -179,9 +190,20 @@ export async function GET(request: NextRequest) {
   }
 
   const queries = buildQueries(q, hotel);
+  const fallbackResults = knownFallbackResults(q, hotel);
+  // Verified hotel coordinates do not need repeated external requests.
+  if (fallbackResults.length > 0) {
+    return NextResponse.json({ ok: true, results: fallbackResults, queries });
+  }
   const collected: Array<NominatimResult & { query: string }> = [];
-  for (const query of queries) {
-    const data = await searchNominatim(query);
+  for (const [index, query] of queries.entries()) {
+    if (index > 0) await new Promise((resolve) => setTimeout(resolve, 1100));
+    let data: NominatimResult[] | null;
+    try {
+      data = await searchNominatim(query);
+    } catch {
+      return NextResponse.json({ ok: false, error: "Servizio di ricerca mappa temporaneamente non disponibile. Le coordinate non sono state modificate: riprova tra poco o incolla quelle da Google Maps." }, { status: 503 });
+    }
     if (!data) continue;
     collected.push(...data.map((item) => ({ ...item, query })));
     if (collected.some((item) => {
@@ -191,7 +213,6 @@ export async function GET(request: NextRequest) {
     })) break;
   }
 
-  const fallbackResults = knownFallbackResults(q, hotel);
   if (collected.length === 0) {
     return NextResponse.json({ ok: true, results: fallbackResults, queries });
   }
