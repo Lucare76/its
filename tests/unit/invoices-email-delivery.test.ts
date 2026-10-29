@@ -25,7 +25,7 @@ import { POST } from "@/app/api/invoices/route";
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TEST_EMAIL = "luca_renna@hotmail.com";
 
-function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: string } | null = null) {
+function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: string } | null = null, invoiceEmail?: string) {
   const insert = vi.fn();
   const update = vi.fn();
   const filters: Array<[string, unknown]> = [];
@@ -38,7 +38,7 @@ function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: st
           const query = {
             select: () => query,
             eq: () => query,
-            maybeSingle: async () => ({ data: { id: "agency-1", booking_email: email }, error: null }),
+            maybeSingle: async () => ({ data: { id: "agency-1", booking_email: email, invoice_email: invoiceEmail }, error: null }),
           };
           return query;
         }
@@ -147,6 +147,13 @@ describe("Primo invio estratto conto: HTML, Excel e stato di invio", () => {
     expect((await response.json()).ok).toBe(false);
     expect(fake.insert).not.toHaveBeenCalled();
     expect(mocks.resendFetch).not.toHaveBeenCalled();
+  });
+
+  it("rispetta l'indirizzo dedicato agli estratti conto anche quando quello prenotazioni è diverso", async () => {
+    authorize(fakeAdmin("prenotazioni@example.com", null, TEST_EMAIL));
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(mocks.resendFetch.mock.calls[0][1].to).toEqual([TEST_EMAIL]);
   });
 
   it("senza destinatario segnala l'errore prima di creare o inviare", async () => {
