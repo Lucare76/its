@@ -1,3 +1,4 @@
+import { invoiceBusStops } from "@/lib/server/invoice-bus-stops";
 import { buildInvoiceServiceDescription, type InvoiceServiceContext } from "@/lib/invoice-service-label";
 /**
  * GET  /api/invoices  — lista estratti conto del tenant
@@ -177,6 +178,8 @@ export async function POST(request: NextRequest) {
   const { data: services, error: servicesError } = await serviceQuery;
   if (servicesError) return NextResponse.json({ ok: false, error: servicesError.message }, { status: 500 });
 
+  const stopNames = await invoiceBusStops(admin, tenantId, services ?? []);
+
   const items: InvoiceLineItem[] = ((services ?? []) as ServiceRow[]).map((s) => {
     // Priorita': numero pratica dell'AGENZIA se presente (estratto dal loro
     // PDF, tag [practice:XXX] in notes — e' quello che riconoscono loro).
@@ -193,7 +196,7 @@ export async function POST(request: NextRequest) {
       cliente_nome: clienteName,
       data_servizio: s.date ?? period_from,
       tipo_servizio: tipoServizio,
-      descrizione_servizio: buildInvoiceServiceDescription(s),
+      descrizione_servizio: buildInvoiceServiceDescription({ ...s, bus_stop_name: stopNames.get(s.id) }),
       pax: s.pax ?? null,
       // Prezzo concordato con l'agenzia (inserito/modificabile su ogni
       // pratica) ha priorita': e' l'importo che l'agenzia deve, non il

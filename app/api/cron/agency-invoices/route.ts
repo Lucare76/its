@@ -1,3 +1,4 @@
+import { invoiceBusStops } from "@/lib/server/invoice-bus-stops";
 import { buildInvoiceServiceDescription, type InvoiceServiceContext } from "@/lib/invoice-service-label";
 /**
  * GET / POST /api/cron/agency-invoices
@@ -109,6 +110,10 @@ export async function POST(request: NextRequest) {
 
       if ((services ?? []).length === 0) { skipped++; continue; }
 
+      let stopNames: Map<string, string>;
+      try { stopNames = await invoiceBusStops(admin, tenantId, services ?? []); }
+      catch { failed++; continue; }
+
       type SvcRow = InvoiceServiceContext & { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; agency_quoted_price_cents: number | null; practice_number: string | null; pax: number | null; };
       const items: InvoiceLineItem[] = (services ?? []).map((s: SvcRow) => {
         // Stessa priorita' di app/api/invoices/route.ts: numero pratica
@@ -122,7 +127,7 @@ export async function POST(request: NextRequest) {
           cliente_nome: clienteName,
           data_servizio: s.date ?? periodFrom,
           tipo_servizio: s.booking_service_kind ?? s.service_type ?? "transfer",
-          descrizione_servizio: buildInvoiceServiceDescription(s),
+          descrizione_servizio: buildInvoiceServiceDescription({ ...s, bus_stop_name: stopNames.get(s.id) }),
           pax: s.pax ?? null,
           // Stessa priorita' di app/api/invoices/route.ts: prezzo concordato
           // con l'agenzia prima del costo interno.

@@ -9,6 +9,7 @@ export type InvoiceServiceContext = {
   include_ferry_tickets?: boolean | null;
   ferry_details?: unknown;
   bus_city_origin?: string | null;
+  bus_stop_name?: string | null;
 };
 
 const PORT_KINDS = new Set(["transfer_port_hotel", "transfer_hotel_port"]);
@@ -32,7 +33,7 @@ export function buildInvoiceServiceDescription(service: InvoiceServiceContext): 
   const kind = service.booking_service_kind || service.service_type || "transfer";
   const label = kindLabel(kind);
   if (kind === "bus_city_hotel" || kind === "bus_tour") {
-    const city = service.bus_city_origin?.trim();
+    const city = service.bus_stop_name?.trim();
     return city ? `${label} ${city}` : label;
   }
   // An explicit booking formula is authoritative, including its mainland port.
@@ -53,12 +54,12 @@ export function buildInvoiceServiceDescription(service: InvoiceServiceContext): 
   const carrierLabel = [...carriers].sort().join(" / ");
   // Imported port transfers may use the generic kind. Tickets + one known
   // carrier identify the package; never infer it from an amount or notes.
-  if (PORT_KINDS.has(kind) && service.include_ferry_tickets === true && carriers.size === 1
+  if (PORT_KINDS.has(kind) && carriers.size === 1
     && (carriers.has("SNAV") || carriers.has("MEDMAR"))) {
     return `Formula ${carrierLabel}`;
   }
   const carrierSuffix = carrierLabel ? ` · ${carrierLabel}` : "";
-  return `${label}${carrierSuffix}${PORT_KINDS.has(kind) ? " (formula non specificata)" : ""}`;
+  return `${label}${carrierSuffix}`;
 }
 
 /** The saved description is a snapshot: viewing/resending never re-reads live prices or bookings. */
