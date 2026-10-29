@@ -46,7 +46,7 @@ const SOSANDRA_HOTEL_ALIASES: Array<{ canonical: string; aliases: string[] }> = 
   },
   {
     canonical: "Hotel Terme Colella",
-    aliases: ["Hotel Terme Colella", "Colella"]
+    aliases: ["Hotel Terme Colella", "Colella", "AV Terme Colella", "AV Club Terme Colella", "AV Club Colella"]
   },
   {
     canonical: "San Valentino Terme",

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { isWithinIschiaBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
+import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 
 export const runtime = "nodejs";
 
@@ -97,7 +98,7 @@ function cityFromZone(zone: string | null | undefined) {
 
 function buildQueries(rawQuery: string, hotel?: HotelLookupRow | null) {
   const address = normalizeAddressForSearch(hotel?.address);
-  const hotelName = compact(hotel?.name);
+  const hotelName = compact(canonicalizeKnownHotelName(hotel?.name));
   const zoneCity = cityFromZone(hotel?.zone);
   const storedCity = compact(hotel?.city);
   const city = storedCity && !(storedCity.toLowerCase() === "ischia" && zoneCity && zoneCity.toLowerCase() !== "ischia")
@@ -109,6 +110,7 @@ function buildQueries(rawQuery: string, hotel?: HotelLookupRow | null) {
 
   return uniqueQueries([
     baseQuery,
+    hotelName ? `${hotelName}, Isola d'Ischia, Campania, Italia` : null,
     streetNumber && city ? `${streetNumber}, ${city}, Campania, Italia` : null,
     hotelName && address && city ? `${hotelName}, ${address}, ${city}, Campania, Italia` : null,
     address && city ? `${address}, ${city}, Campania, Italia` : null,
@@ -200,7 +202,8 @@ export async function GET(request: NextRequest) {
     .map((item) => {
       const lat = Number(item.lat);
       const lng = Number(item.lon);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !isWithinIschiaBounds(lat, lng)) return null;
+      // A municipality/island centre is not a usable hotel position.
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !isWithinIschiaBounds(lat, lng) || precisionScore(item) < 70) return null;
       return {
         lat,
         lng,
