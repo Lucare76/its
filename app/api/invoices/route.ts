@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "agency_name, period_from, period_to obbligatori." }, { status: 400 });
   }
 
-  // Recupera agenzia — email priorità: booking > contact > invoice
+  // L'indirizzo dedicato agli estratti conto ha priorità, come nel reinvio.
   const { data: agencyRow } = await admin
     .from("agencies")
     .select("id, name, booking_email, contact_email, invoice_email, booking_emails, contact_emails, email")
@@ -139,13 +139,20 @@ export async function POST(request: NextRequest) {
 
   const agency = agencyRow as AgencyRow | null;
   const invoiceEmail: string | null =
+    agency?.invoice_email ??
     agency?.booking_email ??
     (Array.isArray(agency?.booking_emails) && (agency?.booking_emails?.length ?? 0) > 0 ? agency!.booking_emails![0] : null) ??
     agency?.contact_email ??
     (Array.isArray(agency?.contact_emails) && (agency?.contact_emails?.length ?? 0) > 0 ? agency!.contact_emails![0] : null) ??
-    agency?.invoice_email ??
     agency?.email ??
     null;
+
+  if (send && !invoiceEmail) {
+    return NextResponse.json({ ok: false, error: "Nessuna email configurata per questa agenzia." }, { status: 400 });
+  }
+  if (send && !process.env.RESEND_API_KEY) {
+    return NextResponse.json({ ok: false, error: "Servizio di invio email non configurato." }, { status: 500 });
+  }
 
   // Risolve i billing_party_name che corrispondono all'agenzia (matching bidirezionale)
   const billingNames = await resolveBillingNames(admin, tenantId, agency_name);
@@ -267,7 +274,7 @@ export async function POST(request: NextRequest) {
     });
     const xlsxFilename = `estratto_conto_${agency_name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}_${period_from}_${period_to}.xlsx`;
 
-    await resendFetch(process.env.RESEND_API_KEY!, {
+    const response = await resendFetch(process.env.RESEND_API_KEY!, {
       from: `Ischia Transfer Service <${fromEmail}>`,
       to: [invoiceEmail],
       subject: `Estratto conto ${periodLabel} — ${agency_name}`,
@@ -275,10 +282,26 @@ export async function POST(request: NextRequest) {
       attachments: [{ filename: xlsxFilename, content: xlsxBuffer.toString("base64") }]
     });
 
-    await admin
+    if (!response.ok) {
+      return NextResponse.json({
+        ok: false,
+        invoice_id: invoiceId,
+        error: "Invio email non riuscito. L'estratto conto è salvato in bozza: puoi riprovare con Re-invia."
+      }, { status: 502 });
+    }
+
+    const { error: updateError } = await admin
       .from("agency_invoices")
       .update({ status: "sent", sent_at: new Date().toISOString() })
-      .eq("id", invoiceId);
+      .eq("id", invoiceId)
+      .eq("tenant_id", tenantId);
+    if (updateError) {
+      return NextResponse.json({
+        ok: false,
+        invoice_id: invoiceId,
+        error: "Email accettata dal servizio di invio, ma stato dell'estratto conto non aggiornato. Verifica prima di reinviare."
+      }, { status: 500 });
+    }
   }
 
   return NextResponse.json({ ok: true, invoice_id: invoiceId, items_count: items.length, total_cents: totalCents, html });

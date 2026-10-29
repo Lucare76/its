@@ -22,6 +22,8 @@ export interface SendEmailOptions {
   bcc?: string | string[];
   /** Reply-To esplicito (sovrascrive EMAIL_REPLY_TO da env) */
   replyTo?: string;
+  /** Allegati Resend con contenuto codificato in base64. */
+  attachments?: Array<{ filename: string; content: string }>;
 }
 
 export interface SendEmailResult {
@@ -107,6 +109,7 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
   if (replyTo) payload.reply_to = replyTo;
   if (opts.cc && normalize(opts.cc).length > 0) payload.cc = normalize(opts.cc);
   if (bcc.length > 0) payload.bcc = bcc;
+  if (opts.attachments?.length) payload.attachments = opts.attachments;
 
   try {
     const res = await resendFetch(apiKey, payload);
