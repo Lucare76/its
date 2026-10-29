@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "agency_name, period_from, period_to obbligatori." }, { status: 400 });
   }
 
-  // Recupera agenzia — email priorità: booking > contact > invoice
+  // L'indirizzo dedicato agli estratti conto ha priorità, come nel reinvio.
   const { data: agencyRow } = await admin
     .from("agencies")
     .select("id, name, booking_email, contact_email, invoice_email, booking_emails, contact_emails, email")
@@ -139,11 +139,11 @@ export async function POST(request: NextRequest) {
 
   const agency = agencyRow as AgencyRow | null;
   const invoiceEmail: string | null =
+    agency?.invoice_email ??
     agency?.booking_email ??
     (Array.isArray(agency?.booking_emails) && (agency?.booking_emails?.length ?? 0) > 0 ? agency!.booking_emails![0] : null) ??
     agency?.contact_email ??
     (Array.isArray(agency?.contact_emails) && (agency?.contact_emails?.length ?? 0) > 0 ? agency!.contact_emails![0] : null) ??
-    agency?.invoice_email ??
     agency?.email ??
     null;
 
