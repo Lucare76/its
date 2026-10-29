@@ -219,6 +219,12 @@ export default function AgencyNewBookingPage() {
   const [role, setRole] = useState<AgencyRole | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [hotels, setHotels] = useState<HotelOption[]>([]);
+  const [hotelSearchOpen, setHotelSearchOpen] = useState(false);
+  const [hotelSearch, setHotelSearch] = useState("");
+  const normalizeHotelSearch = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("it").trim();
+  const hotelSearchResults = hotels.filter((hotel) =>
+    normalizeHotelSearch(`${hotel.name} ${hotel.zone ?? ""}`).includes(normalizeHotelSearch(hotelSearch))
+  );
   const [agencies, setAgencies] = useState<AgencyOption[]>([]);
   const [form, setForm] = useState({
     customer_first_name: "",
@@ -1023,25 +1029,53 @@ export default function AgencyNewBookingPage() {
             </div>
           ) : (
             <>
-              <select
-                className="input-saas mt-1"
-                value={form.hotel_id}
-                onChange={(event) => {
-                  const nextHotelId = event.target.value;
-                  setForm((prev) => ({ ...prev, hotel_id: nextHotelId }));
-                  setBusReturnTime(null);
-                  setBusReturnTimeLoading(
-                    form.booking_service_kind === "bus_city_hotel" && Boolean(selectedBusStop) && Boolean(nextHotelId)
-                  );
-                }}
-              >
-                {hotels.map((hotel) => (
-                  <option key={hotel.id} value={hotel.id}>
-                    {hotel.name}
-                    {hotel.zone ? ` - ${hotel.zone}` : ""}
-                  </option>
-                ))}
-              </select>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="input-saas min-w-0 flex-1" aria-live="polite">
+                  {hotels.find((hotel) => hotel.id === form.hotel_id)?.name ?? "Seleziona un hotel"}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0"
+                  aria-expanded={hotelSearchOpen}
+                  aria-controls="agency-hotel-search"
+                  onClick={() => { setHotelSearch(""); setHotelSearchOpen((open) => !open); }}
+                >
+                  {hotelSearchOpen ? "Chiudi ricerca" : "Cerca hotel"}
+                </button>
+              </div>
+              {hotelSearchOpen ? (
+                <div id="agency-hotel-search" className="mt-2 rounded-xl border border-slate-200 bg-white p-3"
+                  onKeyDown={(event) => { if (event.key === "Escape") setHotelSearchOpen(false); }}>
+                  <label className="block text-xs font-medium" htmlFor="agency-hotel-query">Cerca per nome o zona</label>
+                  <input
+                    id="agency-hotel-query"
+                    type="search"
+                    autoFocus
+                    className="input-saas mt-1"
+                    placeholder="Scrivi il nome dell'hotel..."
+                    value={hotelSearch}
+                    onChange={(event) => setHotelSearch(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
+                  />
+                  <p className="mt-2 text-xs text-slate-500" role="status">{hotelSearchResults.length ? `${hotelSearchResults.length} hotel trovati` : "Nessun hotel trovato. Prova un altro nome oppure usa + Nuovo hotel."}</p>
+                  <ul className="mt-1 max-h-60 overflow-y-auto" aria-label="Hotel trovati">
+                    {hotelSearchResults.map((hotel) => (
+                      <li key={hotel.id}>
+                        <button type="button" className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50 focus-visible:bg-blue-50"
+                          aria-pressed={form.hotel_id === hotel.id}
+                          onClick={() => {
+                            setForm((prev) => ({ ...prev, hotel_id: hotel.id }));
+                            setBusReturnTime(null);
+                            setBusReturnTimeLoading(form.booking_service_kind === "bus_city_hotel" && Boolean(selectedBusStop));
+                            setHotelSearchOpen(false);
+                          }}>
+                          {hotel.name}{hotel.zone ? ` - ${hotel.zone}` : ""}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {fieldErrors.hotel_id ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.hotel_id}</span> : null}
             </>
           )}
