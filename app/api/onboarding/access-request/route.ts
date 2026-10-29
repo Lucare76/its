@@ -1,3 +1,4 @@
+import { notifyAccessRequestAdmins } from "@/lib/server/access-request-admin-notify";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -112,6 +113,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertErr?.message ?? "Errore creazione richiesta." }, { status: 500 });
   }
 
+  const adminNotification = await notifyAccessRequestAdmins(admin, { requestId: newRequest.id, tenantId, fullName: full_name.trim(), email: user.email ?? "" });
+
   // Append-only trail: a reopen overwrites review_notes/reviewed_by/reviewed_at
   // on the same row above, so the prior rejection reason is captured here
   // before it becomes unrecoverable — see the analogous log in
@@ -127,11 +130,12 @@ export async function POST(request: NextRequest) {
         ? {
             tenant_id: tenantId,
             request_id: existingRequest.id,
+            admin_notification: adminNotification,
             previous_review_notes: existingRequest.review_notes ?? null,
             previous_reviewed_by_user_id: existingRequest.reviewed_by_user_id ?? null,
             previous_reviewed_at: existingRequest.reviewed_at ?? null
           }
-        : { tenant_id: tenantId, request_id: newRequest.id, full_name: full_name.trim(), requested_role: requested_role ?? null }
+        : { admin_notification: adminNotification, tenant_id: tenantId, request_id: newRequest.id, full_name: full_name.trim(), requested_role: requested_role ?? null }
     })
     .then(() => undefined, () => undefined);
 

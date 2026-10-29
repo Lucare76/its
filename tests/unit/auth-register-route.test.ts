@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
+  notifyAdmins: vi.fn(),
   createAdminClient: vi.fn(),
   adminGetUserByEmail: vi.fn(),
   checkRateLimit: vi.fn(),
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   sendAccessRequestReceivedEmail: vi.fn(),
   verifyTurnstileToken: vi.fn()
 }));
+
+vi.mock("@/lib/server/access-request-admin-notify", () => ({ notifyAccessRequestAdmins: mocks.notifyAdmins }));
 
 vi.mock("@/lib/server/whatsapp", () => ({
   createAdminClient: mocks.createAdminClient
@@ -126,6 +129,7 @@ function makeAdmin() {
 
 describe("POST /api/auth/register", () => {
   beforeEach(() => {
+    mocks.notifyAdmins.mockResolvedValue({ in_app: 2, email_sent: 2, errors: [] });
     vi.clearAllMocks();
     mocks.createAdminClient.mockReturnValue(makeAdmin());
     mocks.checkRateLimit.mockResolvedValue({ allowed: true, remaining: 4, resetAt: new Date() });
@@ -151,6 +155,7 @@ describe("POST /api/auth/register", () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(mocks.createUser).toHaveBeenCalledWith({
       email: "mario@example.com",
       password: "password123",
@@ -180,6 +185,7 @@ describe("POST /api/auth/register", () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(body.ok).toBe(true);
     expect(body.request_id).toBe("request-1");
   });
@@ -191,6 +197,7 @@ describe("POST /api/auth/register", () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(body.ok).toBe(true);
     expect(body.request_id).toBe("request-1");
   });
@@ -240,6 +247,7 @@ describe("POST /api/auth/register", () => {
     const body = await response.json();
 
     expect(response.status).toBe(409);
+    expect(mocks.notifyAdmins).not.toHaveBeenCalled();
     expect(mocks.deleteUser).toHaveBeenCalledWith("new-user-1");
     expect(body.error).toBe("Esiste gia una richiesta in attesa per questa email.");
   });
@@ -254,6 +262,7 @@ describe("POST /api/auth/register", () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(body.request_id).toBe("request-1");
   });
 
@@ -331,6 +340,7 @@ describe("POST /api/auth/register", () => {
   it("Turnstile: a valid token lets registration proceed exactly as before", async () => {
     const response = await POST(makeRequest());
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(mocks.verifyTurnstileToken).toHaveBeenCalledWith({ token: "valid-turnstile-token", remoteIp: "127.0.0.1" });
     expect(mocks.createUser).toHaveBeenCalled();
   });

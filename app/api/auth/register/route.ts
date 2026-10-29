@@ -1,3 +1,4 @@
+import { notifyAccessRequestAdmins } from "@/lib/server/access-request-admin-notify";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/server/whatsapp";
 import { tenantAccessRequestCreateSchema } from "@/lib/validation";
@@ -235,6 +236,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: requestInsert.error?.message ?? "Richiesta accesso non registrata." }, { status: 500 });
   }
 
+  const adminNotification = await notifyAccessRequestAdmins(admin, { requestId: requestInsert.data.id, fullName, email, agencyName });
+
   // Append-only trail of the reopen: the persist above already overwrote
   // review_notes/reviewed_by/reviewed_at on the same row, so this is the only
   // place ITS can later answer "was this reopened, and what was the prior
@@ -290,6 +293,7 @@ export async function POST(request: NextRequest) {
         full_name: fullName,
         agency_name: agencyName,
         reopened: Boolean(reopenRequestId),
+        admin_notification: adminNotification,
         received_email_status: receivedEmailStatus,
         received_email_error: receivedEmailError
       }
