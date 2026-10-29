@@ -139,9 +139,9 @@ export const agencyBookingCreateSchema = z
     customer_email: z.string().email().max(160).optional().or(z.literal("")),
     pax: z.number().int().min(1).max(16),
     infant_count: z.number().int().min(0).max(16).default(0),
-    medmar_infant_count: z.number().int().min(0).max(16).default(0),
-    medmar_child_count: z.number().int().min(0).max(16).default(0),
-    medmar_adult_count: z.number().int().min(0).max(16).default(0),
+    medmar_infant_count: z.number().int().min(0).max(16).optional(),
+    medmar_child_count: z.number().int().min(0).max(16).optional(),
+    medmar_adult_count: z.number().int().min(0).max(16).optional(),
     pet_count: z.number().int().min(0).max(10).default(0),
     pet_notes: z.string().max(240).optional().or(z.literal("")),
     hotel_id: z.string().uuid().optional().or(z.literal("")),
@@ -166,6 +166,13 @@ export const agencyBookingCreateSchema = z
     hotel_dest_id: z.string().uuid().optional().or(z.literal(""))
   })
   .superRefine((value, ctx) => {
+    if (value.booking_service_kind === "formula_medmar_napoli" || value.booking_service_kind === "formula_medmar_pozzuoli") {
+      const counts = [value.medmar_infant_count, value.medmar_child_count, value.medmar_adult_count];
+      if (counts.some(count => count !== undefined) &&
+        (counts.some(count => count === undefined) || counts.reduce<number>((sum, count) => sum + (count ?? 0), 0) !== value.pax)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["pax"], message: "Il totale passeggeri deve coincidere con bambini 0–3, bambini 4–11 e adulti dai 12 anni." });
+      }
+    }
     const phoneOptionalKinds = new Set(["excursion", "navetta", "shuttle_hotel"]);
     if (!phoneOptionalKinds.has(value.booking_service_kind) && (!value.customer_phone || value.customer_phone.trim().length < 6)) {
       ctx.addIssue({
