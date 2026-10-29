@@ -1,5 +1,7 @@
 "use client";
 
+import { formatInvoiceServiceDescription } from "@/lib/invoice-service-label";
+
 import { useEffect, useMemo, useState } from "react";
 
 type InvoiceLineItem = {
@@ -7,7 +9,7 @@ type InvoiceLineItem = {
   numero_pratica: string;
   cliente_nome: string;
   data_servizio: string;
-  tipo_servizio: string;
+  tipo_servizio: string; descrizione_servizio?: string;
   importo_cents: number;
 };
 
@@ -210,7 +212,7 @@ export default function EstrattoContoPubblicoPage() {
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <p style={{ fontWeight: 700, fontSize: 14, color: "#1e293b", margin: 0 }}>{item.cliente_nome}</p>
                   <p style={{ fontSize: 12, color: "#64748b", margin: "2px 0 0" }}>
-                    {formatDate(item.data_servizio)} · {item.tipo_servizio} · pratica {item.numero_pratica}
+                    {formatDate(item.data_servizio)} · {formatInvoiceServiceDescription(item)} · pratica {item.numero_pratica}
                   </p>
                   {badge && (
                     <span style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 600, color: badge.color, background: badge.bg, borderRadius: 999, padding: "2px 8px" }}>

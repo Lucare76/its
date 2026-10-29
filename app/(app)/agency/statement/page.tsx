@@ -1,5 +1,7 @@
 "use client";
 
+import { formatInvoiceServiceDescription } from "@/lib/invoice-service-label";
+
 import { useEffect, useState } from "react";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -9,7 +11,7 @@ type InvoiceLineItem = {
   numero_pratica: string;
   cliente_nome: string;
   data_servizio: string;
-  tipo_servizio: string;
+  tipo_servizio: string; descrizione_servizio?: string;
   importo_cents: number;
 };
 
@@ -236,7 +238,7 @@ export default function AgencyStatementPage() {
                       <div key={item.service_id} className={`rounded-xl border p-3 flex items-start justify-between gap-3 flex-wrap ${editing ? "border-amber-300 bg-amber-50" : "border-slate-100 bg-slate-50"}`}>
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-semibold text-slate-800">{item.cliente_nome}</p>
-                          <p className="text-xs text-slate-500">{fmtDate(item.data_servizio)} · {item.tipo_servizio} · pratica {item.numero_pratica}</p>
+                          <p className="text-xs text-slate-500">{fmtDate(item.data_servizio)} · {formatInvoiceServiceDescription(item)} · pratica {item.numero_pratica}</p>
                           {dispute && (
                             <div className="mt-1 flex items-center gap-2">
                               <DisputeBadge status={dispute.status} />

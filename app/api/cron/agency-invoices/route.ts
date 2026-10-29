@@ -1,3 +1,4 @@
+import { buildInvoiceServiceDescription, type InvoiceServiceContext } from "@/lib/invoice-service-label";
 /**
  * GET / POST /api/cron/agency-invoices
  *
@@ -97,7 +98,7 @@ export async function POST(request: NextRequest) {
       // Recupera servizi
       const { data: services, error: servicesError } = await admin
         .from("services")
-        .select("id, date, time, customer_name, customer_first_name, customer_last_name, booking_service_kind, service_type, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number")
+        .select("id, date, time, customer_name, customer_first_name, customer_last_name, booking_service_kind, service_type, vessel, transport_code, include_ferry_tickets, ferry_details, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number")
         .eq("tenant_id", tenantId)
         .eq("is_draft", false)
         .ilike("billing_party_name", `%${agency.name}%`)
@@ -108,7 +109,7 @@ export async function POST(request: NextRequest) {
 
       if ((services ?? []).length === 0) { skipped++; continue; }
 
-      type SvcRow = { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; agency_quoted_price_cents: number | null; practice_number: string | null; };
+      type SvcRow = InvoiceServiceContext & { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; agency_quoted_price_cents: number | null; practice_number: string | null; };
       const items: InvoiceLineItem[] = (services ?? []).map((s: SvcRow) => {
         // Stessa priorita' di app/api/invoices/route.ts: numero pratica
         // dell'agenzia (dal loro PDF) se presente, altrimenti il numero
@@ -121,6 +122,7 @@ export async function POST(request: NextRequest) {
           cliente_nome: clienteName,
           data_servizio: s.date ?? periodFrom,
           tipo_servizio: s.booking_service_kind ?? s.service_type ?? "transfer",
+          descrizione_servizio: buildInvoiceServiceDescription(s),
           // Stessa priorita' di app/api/invoices/route.ts: prezzo concordato
           // con l'agenzia prima del costo interno.
           importo_cents: s.agency_quoted_price_cents ?? s.source_total_amount_cents ?? 0

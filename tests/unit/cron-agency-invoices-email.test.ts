@@ -15,7 +15,7 @@ vi.mock("@/lib/server/agency-action-token", () => ({ generateAgencyActionToken: 
 import { GET, POST } from "@/app/api/cron/agency-invoices/route";
 
 const TENANT = "tenant-test";
-function setup(insertError = false, updateError = false) {
+function setup(insertError = false, updateError = false, serviceFields: Record<string, unknown> = {}) {
   const invoice = { status: "draft" };
   const inserts: Array<Record<string, unknown>> = [];
   const filters: Array<[string, unknown]> = [];
@@ -35,7 +35,7 @@ function setup(insertError = false, updateError = false) {
           if (values && !updateError) Object.assign(invoice, values);
           const data = table === "tenants" ? [{ id: TENANT }]
             : table === "agencies" ? [{ id: "agency-test", name: "AGENZIA TEST", invoice_email: "luca_renna@hotmail.com", invoice_cadence: "weekly", invoice_send_day: 4 }]
-              : table === "services" ? [{ id: "service-test", date: "2026-10-25", customer_name: "CLIENTE TEST", notes: "[practice:TEST-001]", agency_quoted_price_cents: 6600, source_total_amount_cents: 9999 }]
+              : table === "services" ? [{ id: "service-test", date: "2026-10-25", customer_name: "CLIENTE TEST", notes: "[practice:TEST-001]", agency_quoted_price_cents: 6600, source_total_amount_cents: 9999, ...serviceFields }]
                 : null;
           return Promise.resolve({ data, error: values && updateError ? { message: "Update failed" } : null }).then(resolve);
         },
@@ -87,6 +87,16 @@ describe("Estratti conto automatici: GET autenticato, Excel e conferma invio", (
     expect(rows[2][4]).toBe(66);
     expect(fake.invoice.status).toBe("sent");
     expect(fake.filters).toContainEqual(["tenant_id", TENANT]);
+  });
+
+  it("anche il cron salva la formula importata e la include nell'Excel", async () => {
+    const fake = setup(false, false, { booking_service_kind: "transfer_port_hotel", include_ferry_tickets: true, ferry_details: { carrier_company: "MEDMAR" } });
+    expect((await GET(request())).status).toBe(200);
+    expect((fake.inserts[0].invoice_data as Record<string, unknown>[])[0]).toMatchObject({ tipo_servizio: "transfer_port_hotel", descrizione_servizio: "Formula MEDMAR", importo_cents: 6600 });
+    const attachment = mocks.sendEmail.mock.calls[0][0].attachments[0];
+    const book = XLSX.read(Buffer.from(attachment.content, "base64"), { type: "buffer" });
+    const rows = XLSX.utils.sheet_to_json(book.Sheets["Estratto conto"], { header: 1 }) as unknown[][];
+    expect(rows[1].slice(3)).toEqual(["Formula MEDMAR", 66]);
   });
 
   it.each([{ ok: false, error: "Provider rejected" }, { ok: true, skipped: true }])("invio fallito o saltato lascia la bozza", async (result) => {

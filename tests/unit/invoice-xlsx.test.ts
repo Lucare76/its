@@ -36,8 +36,8 @@ describe("buildInvoiceXlsx", () => {
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as unknown[][];
 
     expect(rows[0]).toEqual(["Numero pratica", "Cliente", "Data servizio", "Tipo servizio", "Importo EUR"]);
-    expect(rows[1]).toEqual(["AG1", "GERARDO D'ADDIO", "18/08/2026", "formula_medmar_napoli", 66]);
-    expect(rows[2]).toEqual(["AG2", "LUCIANO SENESE", "23/08/2026", "formula_medmar_pozzuoli", 60]);
+    expect(rows[1]).toEqual(["AG1", "GERARDO D'ADDIO", "18/08/2026", "Formula MEDMAR Napoli", 66]);
+    expect(rows[2]).toEqual(["AG2", "LUCIANO SENESE", "23/08/2026", "Formula MEDMAR Pozzuoli", 60]);
     // Riga totale: ultima colonna deve riflettere totalCents, non la somma
     // "ricalcolata" delle righe — cosi' se in futuro le due divergono lo
     // scarto e' visibile qui, non solo nell'email.

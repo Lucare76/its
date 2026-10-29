@@ -5,6 +5,8 @@
  */
 
 import * as XLSX from "xlsx";
+import { emailHtml, emailButton } from "@/lib/server/email-layout";
+import { escapeInvoiceServiceDescription, formatInvoiceServiceDescription } from "@/lib/invoice-service-label";
 import { buildServiceListEmailHtml, buildServiceListPlainText } from "@/lib/server/service-list-email";
 
 export type InvoiceLineItem = {
@@ -13,6 +15,7 @@ export type InvoiceLineItem = {
   cliente_nome: string;
   data_servizio: string;
   tipo_servizio: string;
+  descrizione_servizio?: string;
   importo_cents: number;
 };
 
@@ -40,7 +43,6 @@ function formatCents(cents: number): string {
 export function generateInvoiceHtml(data: InvoiceData): string {
   // Usa emailHtml() come tutti gli altri template — layout table-based inline,
   // compatibile con Gmail desktop e mobile senza dipendere da <style> in <head>.
-  const { emailHtml, emailButton } = require("@/lib/server/email-layout") as typeof import("@/lib/server/email-layout");
 
   const rows = data.items.map((item, i) => {
     const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
@@ -48,7 +50,7 @@ export function generateInvoiceHtml(data: InvoiceData): string {
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;background:${bg};white-space:nowrap;">${item.numero_pratica || "—"}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;background:${bg};">${item.cliente_nome}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${bg};white-space:nowrap;">${formatDate(item.data_servizio)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${bg};">${item.tipo_servizio}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${bg};">${escapeInvoiceServiceDescription(item)}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;background:${bg};white-space:nowrap;">${formatCents(item.importo_cents)}</td>
     </tr>`;
   }).join("");
@@ -131,7 +133,7 @@ export function generateInvoicePrintHtml(data: InvoiceData): string {
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:12px;color:#64748b">${item.numero_pratica || "—"}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;text-transform:uppercase">${item.cliente_nome}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}</td>
-      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${item.tipo_servizio}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${escapeInvoiceServiceDescription(item)}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(item.importo_cents)}</td>
     </tr>`;
   }).join("");
@@ -272,7 +274,7 @@ export function buildInvoiceXlsx(data: InvoiceData): Buffer {
     item.numero_pratica,
     item.cliente_nome,
     formatDate(item.data_servizio),
-    item.tipo_servizio,
+    formatInvoiceServiceDescription(item),
     Number((item.importo_cents / 100).toFixed(2)),
   ]);
   const totalRow = ["", "", "", "Totale", Number((data.totalCents / 100).toFixed(2))];
