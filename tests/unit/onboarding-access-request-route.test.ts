@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
+  notifyAdmins: vi.fn(),
   getUser: vi.fn(),
   membershipMaybeSingle: vi.fn(),
   tenantsLimit: vi.fn(),
@@ -9,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   insertSingle: vi.fn(),
   updateSingle: vi.fn()
 }));
+
+vi.mock("@/lib/server/access-request-admin-notify", () => ({ notifyAccessRequestAdmins: mocks.notifyAdmins }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: () => ({
@@ -83,6 +86,7 @@ function makeRequest(body: Record<string, unknown>) {
 
 describe("POST /api/onboarding/access-request", () => {
   beforeEach(() => {
+    mocks.notifyAdmins.mockResolvedValue({ in_app: 2, email_sent: 2, errors: [] });
     vi.clearAllMocks();
     mocks.getUser.mockResolvedValue({
       data: { user: { id: "user-1", email: "user@example.com" } },
@@ -106,6 +110,7 @@ describe("POST /api/onboarding/access-request", () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(body.request.status).toBe("pending");
   });
 
@@ -116,6 +121,7 @@ describe("POST /api/onboarding/access-request", () => {
     const body = await response.json();
 
     expect(response.status).toBe(409);
+    expect(mocks.notifyAdmins).not.toHaveBeenCalled();
     expect(body.error).toMatch(/gi[àa] una richiesta accesso/i);
   });
 
@@ -126,6 +132,7 @@ describe("POST /api/onboarding/access-request", () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
     expect(body.request.status).toBe("pending");
   });
 });
