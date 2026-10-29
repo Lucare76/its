@@ -227,6 +227,9 @@ export default function AgencyNewBookingPage() {
     customer_email: defaultConfirmationEmail,
     pax: "2",
     infant_count: "0",
+    medmar_infant_count: "0",
+    medmar_child_count: "0",
+    medmar_adult_count: "2",
     pet_count: "0",
     pet_notes: "",
     hotel_id: "",
@@ -535,8 +538,11 @@ export default function AgencyNewBookingPage() {
       ...form,
       arrival_time: resolvedArrivalTime,
       departure_time: resolvedDepartureTime,
-      pax: Number(form.pax || "0"),
-      infant_count: Number(form.infant_count || "0"),
+      pax: isMedmarKind ? Number(form.medmar_infant_count || "0") + Number(form.medmar_child_count || "0") + Number(form.medmar_adult_count || "0") : Number(form.pax || "0"),
+      medmar_infant_count: isMedmarKind ? Number(form.medmar_infant_count || "0") : undefined,
+      medmar_child_count: isMedmarKind ? Number(form.medmar_child_count || "0") : undefined,
+      medmar_adult_count: isMedmarKind ? Number(form.medmar_adult_count || "0") : undefined,
+      infant_count: isMedmarKind ? 0 : Number(form.infant_count || "0"),
       pet_count: Number(form.pet_count || "0"),
       pet_notes: form.pet_notes.trim(),
       notes: form.notes.trim(),
@@ -554,7 +560,7 @@ export default function AgencyNewBookingPage() {
       }
     }
     return base;
-  }, [form, resolvedArrivalTime, resolvedDepartureTime, isTransferKindWithTripLeg, tripLeg]);
+  }, [form, resolvedArrivalTime, resolvedDepartureTime, isTransferKindWithTripLeg, tripLeg, isMedmarKind]);
   const parsedPreview = useMemo(() => agencyBookingCreateSchema.safeParse(normalizedPayload), [normalizedPayload]);
   const isFormValid = parsedPreview.success && hasHotels && hasAgenciesIfAdmin;
 
@@ -679,6 +685,9 @@ export default function AgencyNewBookingPage() {
       customer_email: defaultConfirmationEmail,
       pax: "2",
       infant_count: "0",
+    medmar_infant_count: "0",
+    medmar_child_count: "0",
+    medmar_adult_count: "2",
       pet_count: "0",
       pet_notes: "",
       hotel_id: firstHotelId,
@@ -905,6 +914,21 @@ export default function AgencyNewBookingPage() {
           />
           {fieldErrors.customer_phone ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.customer_phone}</span> : null}
         </label>
+        {isMedmarKind ? <>
+          {([
+            ["medmar_infant_count", "Bambini 0–3 anni"],
+            ["medmar_child_count", "Bambini 4–11 anni"],
+            ["medmar_adult_count", "Adulti dai 12 anni"],
+          ] as const).map(([field, label]) => <label key={field} className="text-sm">
+            {label}
+            <input type="number" min={0} max={16} step={1} className="input-saas mt-1" value={form[field]}
+              onChange={event => setForm(prev => ({ ...prev, [field]: event.target.value }))} />
+            {fieldErrors[field] ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors[field]}</span> : null}
+          </label>)}
+          <div className="text-sm" aria-live="polite">Totale passeggeri: <strong>{normalizedPayload.pax}</strong>
+            {fieldErrors.pax ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.pax}</span> : null}
+          </div>
+        </> : <>
         <label className="text-sm">
           Pax prezzo pieno (2+ anni)*
           <input
@@ -931,6 +955,7 @@ export default function AgencyNewBookingPage() {
           <span className="mt-1 block text-xs text-slate-500">Quota fissa EUR 2,50 cad.</span>
           {fieldErrors.infant_count ? <span className="mt-1 block text-xs text-rose-700">{fieldErrors.infant_count}</span> : null}
         </label>
+        </>}
         <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
           <label className="text-sm">
             Animali piccola taglia
@@ -1356,12 +1381,12 @@ export default function AgencyNewBookingPage() {
             {isSnavKind
               ? (form.customer_last_name || "Nome completo")
               : `${form.customer_first_name || "Nome"} ${form.customer_last_name || "Cognome"}`}{" "}
-            | {serviceKindLabel} | Pax {form.pax || "0"}
+            | {serviceKindLabel} | Pax {normalizedPayload.pax}
           </p>
-          {Number(form.infant_count || "0") > 0 || Number(form.pet_count || "0") > 0 ? (
+          {(!isMedmarKind && Number(form.infant_count || "0") > 0) || Number(form.pet_count || "0") > 0 ? (
             <p>
-              {Number(form.infant_count || "0") > 0 ? `Infant ${form.infant_count} (EUR 2,50 cad.)` : null}
-              {Number(form.infant_count || "0") > 0 && Number(form.pet_count || "0") > 0 ? " | " : ""}
+              {!isMedmarKind && Number(form.infant_count || "0") > 0 ? `Infant ${form.infant_count} (EUR 2,50 cad.)` : null}
+              {!isMedmarKind && Number(form.infant_count || "0") > 0 && Number(form.pet_count || "0") > 0 ? " | " : ""}
               {Number(form.pet_count || "0") > 0 ? `Animali ${form.pet_count} max 10 kg, biglietto cliente` : null}
             </p>
           ) : null}
