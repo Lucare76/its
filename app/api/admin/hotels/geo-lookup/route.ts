@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { isWithinIschiaBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
 import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
+import { searchHotelPhoton } from "@/lib/server/hotel-photon-lookup";
 
 export const runtime = "nodejs";
 
@@ -196,13 +197,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, results: fallbackResults, queries });
   }
   const collected: Array<NominatimResult & { query: string }> = [];
+  let primaryFailed = false;
   for (const [index, query] of queries.entries()) {
     if (index > 0) await new Promise((resolve) => setTimeout(resolve, 1100));
     let data: NominatimResult[] | null;
     try {
       data = await searchNominatim(query);
     } catch {
-      return NextResponse.json({ ok: false, error: "Servizio di ricerca mappa temporaneamente non disponibile. Le coordinate non sono state modificate: riprova tra poco o incolla quelle da Google Maps." }, { status: 503 });
+      primaryFailed = true;
+      break;
     }
     if (!data) continue;
     collected.push(...data.map((item) => ({ ...item, query })));
@@ -211,10 +214,6 @@ export async function GET(request: NextRequest) {
       const lng = Number(item.lon);
       return Number.isFinite(lat) && Number.isFinite(lng) && isWithinIschiaBounds(lat, lng) && precisionScore(item) >= 70;
     })) break;
-  }
-
-  if (collected.length === 0) {
-    return NextResponse.json({ ok: true, results: fallbackResults, queries });
   }
 
   const results = [
@@ -240,5 +239,12 @@ export async function GET(request: NextRequest) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 
-  return NextResponse.json({ ok: true, results, queries });
+  if (results.length > 0) return NextResponse.json({ ok: true, results, queries });
+  try {
+    const alternative = await searchHotelPhoton({ query: q, name: canonicalizeKnownHotelName(hotel?.name), address: normalizeAddressForSearch(hotel?.address), city: hotel?.city || cityFromZone(hotel?.zone) });
+    return NextResponse.json({ ok: true, results: alternative, queries });
+  } catch {
+    if (primaryFailed) return NextResponse.json({ ok: false, error: "Servizi di ricerca mappa temporaneamente non disponibili. Le coordinate non sono state modificate: riprova tra poco o incolla quelle da Google Maps." }, { status: 503 });
+    return NextResponse.json({ ok: true, results: [], queries });
+  }
 }

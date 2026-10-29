@@ -46,7 +46,7 @@ describe("Capizzo and failed searches", () => {
     const response = await GET(request());
     expect(response.status).toBe(503);
     expect((await response.json()).ok).toBe(false);
-    expect(provider).toHaveBeenCalledTimes(1);
+    expect(provider).toHaveBeenCalledTimes(2);
   });
   it("tries the short hotel name when a full address does not match", async () => {
     provider.mockImplementation(async (url: string) => ({ ok: true, json: async () => new URL(url).searchParams.get("q") === "Hotel Terme Colella" ? [{ lat: "40.73539", lon: "13.86833", display_name: "Colella Forio", class: "tourism", type: "hotel" }] : [] }));
