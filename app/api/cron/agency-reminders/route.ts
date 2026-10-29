@@ -1,5 +1,5 @@
 /**
- * POST /api/cron/agency-reminders
+ * GET / POST /api/cron/agency-reminders
  *
  * Invia riepilogo servizi alle agenzie:
  * - 48h prima per tutti i giorni
@@ -45,10 +45,11 @@ export async function POST(request: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
   const date48h = addDays(today, 2);
   const date24h = addDays(today, 1);
-  const isSunday48h = isSunday(date48h);
+  const sundayExtra = isSunday(date24h);
 
   // Recupera tutti i tenant
-  const { data: tenants } = await admin.from("tenants").select("id");
+  const { data: tenants, error: tenantsError } = await admin.from("tenants").select("id");
+  if (tenantsError) return NextResponse.json({ ok: false, error: "Impossibile leggere i tenant." }, { status: 500 });
   let sent = 0;
   let errors = 0;
 
@@ -56,14 +57,16 @@ export async function POST(request: NextRequest) {
     const tenantId = tenant.id as string;
 
     // Recupera agenzie con reminder abilitato
-    const { data: agencies } = await admin
+    const { data: agencies, error: agenciesError } = await admin
       .from("agencies")
       .select("id, name, invoice_email, contact_email, booking_email, invoice_enabled")
       .eq("tenant_id", tenantId)
       .eq("active", true);
+    if (agenciesError) { errors++; continue; }
 
     // Recupera hotel per nome
-    const { data: hotels } = await admin.from("hotels").select("id, name").eq("tenant_id", tenantId).limit(500);
+    const { data: hotels, error: hotelsError } = await admin.from("hotels").select("id, name").eq("tenant_id", tenantId).limit(500);
+    if (hotelsError) { errors++; continue; }
     const hotelsById = new Map((hotels ?? []).map((h: { id: string; name: string }) => [h.id, h.name]));
 
     for (const agency of agencies ?? []) {
@@ -73,7 +76,7 @@ export async function POST(request: NextRequest) {
       const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
 
       // Servizi nelle prossime 48h
-      const { data: services48h } = await admin
+      const { data: services48h, error: services48hError } = await admin
         .from("services")
         .select("id, customer_name, date, time, direction, hotel_id, pax")
         .eq("tenant_id", tenantId)
@@ -81,6 +84,7 @@ export async function POST(request: NextRequest) {
         .ilike("billing_party_name", `%${agency.name}%`)
         .eq("date", date48h)
         .order("time");
+      if (services48hError) { errors++; continue; }
 
       if ((services48h ?? []).length > 0) {
         const cancelTokens48: Record<string, string> = {};
@@ -98,7 +102,7 @@ export async function POST(request: NextRequest) {
           };
         });
         try {
-          await sendEmail({
+          const result = await sendEmail({
             to: email,
             subject: `Riepilogo servizi ${date48h.split("-").reverse().join("/")} — ${agency.name}`,
             html: buildServiceListEmailHtml({
@@ -110,13 +114,14 @@ export async function POST(request: NextRequest) {
               appBaseUrl,
             }),
           });
-          sent++;
+          if (result.ok && !result.skipped) sent++;
+          else errors++;
         } catch { errors++; }
       }
 
       // Extra 24h per domenica
-      if (isSunday48h) {
-        const { data: services24h } = await admin
+      if (sundayExtra) {
+        const { data: services24h, error: services24hError } = await admin
           .from("services")
           .select("id, customer_name, date, time, direction, hotel_id, pax")
           .eq("tenant_id", tenantId)
@@ -124,6 +129,7 @@ export async function POST(request: NextRequest) {
           .ilike("billing_party_name", `%${agency.name}%`)
           .eq("date", date24h)
           .order("time");
+        if (services24hError) { errors++; continue; }
 
         if ((services24h ?? []).length > 0) {
           const cancelTokens24: Record<string, string> = {};
@@ -141,7 +147,7 @@ export async function POST(request: NextRequest) {
             };
           });
           try {
-            await sendEmail({
+            const result = await sendEmail({
               to: email,
               subject: `Riepilogo domenica ${date24h.split("-").reverse().join("/")} — ${agency.name}`,
               html: buildServiceListEmailHtml({
@@ -153,12 +159,17 @@ export async function POST(request: NextRequest) {
                 appBaseUrl,
               }),
             });
-            sent++;
+            if (result.ok && !result.skipped) sent++;
+            else errors++;
           } catch { errors++; }
         }
       }
     }
   }
 
-  return NextResponse.json({ ok: true, sent, errors, date48h, date24h, sunday_extra: isSunday48h });
+  return NextResponse.json({ ok: errors === 0, sent, errors, date48h, date24h, sunday_extra: sundayExtra }, { status: errors > 0 ? 500 : 200 });
+}
+
+export async function GET(request: NextRequest) {
+  return POST(request);
 }

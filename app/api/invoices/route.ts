@@ -1,3 +1,4 @@
+import { buildInvoiceServiceDescription, type InvoiceServiceContext } from "@/lib/invoice-service-label";
 /**
  * GET  /api/invoices  — lista estratti conto del tenant
  * POST /api/invoices  — genera + salva (e opzionalmente invia) un estratto conto
@@ -27,7 +28,7 @@ type InvoiceRow = {
   id: string;
 };
 
-type ServiceRow = {
+type ServiceRow = InvoiceServiceContext & {
   id: string;
   date: string | null;
   time: string | null;
@@ -159,7 +160,7 @@ export async function POST(request: NextRequest) {
 
   let serviceQuery = admin
     .from("services")
-    .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number, pax")
+    .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, vessel, transport_code, include_ferry_tickets, ferry_details, bus_city_origin, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number, pax")
     .eq("tenant_id", tenantId)
     .eq("is_draft", false)
     .gte("date", period_from)
@@ -192,6 +193,8 @@ export async function POST(request: NextRequest) {
       cliente_nome: clienteName,
       data_servizio: s.date ?? period_from,
       tipo_servizio: tipoServizio,
+      descrizione_servizio: buildInvoiceServiceDescription(s),
+      pax: s.pax ?? null,
       // Prezzo concordato con l'agenzia (inserito/modificabile su ogni
       // pratica) ha priorita': e' l'importo che l'agenzia deve, non il
       // costo interno. source_total_amount_cents resta come fallback per

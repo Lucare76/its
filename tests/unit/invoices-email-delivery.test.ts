@@ -25,7 +25,7 @@ import { POST } from "@/app/api/invoices/route";
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TEST_EMAIL = "luca_renna@hotmail.com";
 
-function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: string } | null = null, invoiceEmail?: string) {
+function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: string } | null = null, invoiceEmail?: string, serviceFields: Record<string, unknown> = {}) {
   const insert = vi.fn();
   const update = vi.fn();
   const filters: Array<[string, unknown]> = [];
@@ -52,7 +52,7 @@ function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: st
               data: namesOnly ? [] : [{
                 id: "service-1", date: "2026-10-10", customer_name: "CLIENTE DI PROVA",
                 notes: "[practice:TEST-001]", agency_quoted_price_cents: 6600,
-                source_total_amount_cents: 9999, booking_service_kind: "transfer",
+                source_total_amount_cents: 9999, booking_service_kind: "transfer", pax: 2, ...serviceFields,
               }], error: null,
             }).then(resolve),
           };
@@ -128,7 +128,7 @@ describe("Primo invio estratto conto: HTML, Excel e stato di invio", () => {
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets["Estratto conto"], { header: 1 });
     expect(rows).toEqual([
       ["Numero pratica", "Cliente", "Data servizio", "Tipo servizio", "Importo EUR"],
-      ["TEST-001", "CLIENTE DI PROVA", "10/10/2026", "transfer", 66],
+      ["TEST-001", "CLIENTE DI PROVA", "10/10/2026", "Transfer - 2 pax", 66],
       ["", "", "", "Totale", 66],
     ]);
     const htmlData = mocks.generateInvoiceHtml.mock.calls[0][0];
@@ -136,6 +136,24 @@ describe("Primo invio estratto conto: HTML, Excel e stato di invio", () => {
     expect(htmlData.totalCents).toBe(6600);
     expect(fake.invoice.status).toBe("sent");
     expect(fake.filters).toContainEqual(["tenant_id", TENANT]);
+  });
+
+  it.each([
+    [{ booking_service_kind: "formula_medmar_pozzuoli" }, "Formula MEDMAR Pozzuoli"],
+    [{ booking_service_kind: "bus_city_hotel", bus_city_origin: "Milano" }, "Transfer Bus Milano"],
+    [{ booking_service_kind: "transfer_port_hotel", transport_code: "SNAV", include_ferry_tickets: true }, "Formula SNAV"],
+    [{ booking_service_kind: "transfer_port_hotel", transport_code: "MEDMAR" }, "Transfer Porto / Hotel · MEDMAR (formula non specificata)"],
+  ])("salva la descrizione della pratica e la riporta nell'Excel (%s)", async (fields, label) => {
+    const fake = fakeAdmin(TEST_EMAIL, null, undefined, fields);
+    authorize(fake);
+    expect((await POST(request())).status).toBe(200);
+    const saved = fake.insert.mock.calls[0][0].invoice_data[0];
+    expect(saved).toMatchObject({ tipo_servizio: fields.booking_service_kind, descrizione_servizio: label, pax: 2, importo_cents: 6600 });
+    expect(mocks.generateInvoiceHtml.mock.calls[0][0].items[0]).toEqual(saved);
+    const attachment = mocks.resendFetch.mock.calls[0][1].attachments[0];
+    const book = XLSX.read(Buffer.from(attachment.content, "base64"), { type: "buffer" });
+    const rows = XLSX.utils.sheet_to_json(book.Sheets["Estratto conto"], { header: 1 }) as unknown[][];
+    expect(rows[1].slice(3)).toEqual([`${label} - 2 pax`, 66]);
   });
 
   it("senza configurazione di invio non crea una bozza dichiarando successo", async () => {

@@ -1,5 +1,7 @@
 ﻿"use client";
 
+import { formatInvoiceServiceDescription, escapeInvoiceServiceDescription } from "@/lib/invoice-service-label";
+
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { DateInput } from "@/components/ui";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
@@ -31,7 +33,7 @@ type InvoiceRow = {
   sent_at: string | null;
   paid_at: string | null;
   payment_note: string | null;
-  invoice_data: Array<{ numero_pratica: string; cliente_nome: string; data_servizio: string; tipo_servizio: string; importo_cents: number }>;
+  invoice_data: Array<{ numero_pratica: string; cliente_nome: string; data_servizio: string; tipo_servizio: string; descrizione_servizio?: string; pax?: number | null; importo_cents: number }>;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -262,7 +264,7 @@ export default function EstrattoContoPage() {
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:12px;color:#64748b">${item.numero_pratica || "—"}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;text-transform:uppercase">${item.cliente_nome}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}</td>
-      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${item.tipo_servizio}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${escapeInvoiceServiceDescription(item)}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(item.importo_cents)}</td>
     </tr>`).join("")}
     <tr style="background:#f0f6ff">
@@ -511,7 +513,7 @@ export default function EstrattoContoPage() {
                                   <td className="py-1">{item.numero_pratica}</td>
                                   <td className="py-1 uppercase">{item.cliente_nome}</td>
                                   <td className="py-1">{formatDate(item.data_servizio)}</td>
-                                  <td className="py-1">{item.tipo_servizio}</td>
+                                  <td className="py-1">{formatInvoiceServiceDescription(item)}</td>
                                   <td className="py-1 text-right">{formatCents(item.importo_cents)}</td>
                                 </tr>
                               ))}

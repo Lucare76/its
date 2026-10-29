@@ -1,3 +1,4 @@
+import { buildInvoiceServiceDescription, type InvoiceServiceContext } from "@/lib/invoice-service-label";
 /**
  * GET / POST /api/cron/agency-invoices
  *
@@ -14,15 +15,10 @@ import { generateInvoiceHtml, buildInvoiceXlsx, type InvoiceLineItem } from "@/l
 import { sendEmail } from "@/lib/server/send-email";
 import { getConfiguredAppUrl } from "@/lib/app-url";
 import { generateAgencyActionToken } from "@/lib/server/agency-action-token";
+import { previousAgencyInvoicePeriod, scheduledAgencyInvoiceId } from "@/lib/server/agency-email-schedule";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
-
-function subtractDays(iso: string, n: number): string {
-  const d = new Date(`${iso}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - n);
-  return d.toISOString().slice(0, 10);
-}
 
 function shouldSendToday(cadence: string, sendDay: number, today: Date): boolean {
   const dow = today.getDay(); // 0=Dom, 1=Lun...
@@ -56,7 +52,8 @@ export async function POST(request: NextRequest) {
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
 
-  const { data: tenants } = await admin.from("tenants").select("id");
+  const { data: tenants, error: tenantsError } = await admin.from("tenants").select("id");
+  if (tenantsError) return NextResponse.json({ ok: false, error: "Impossibile leggere i tenant." }, { status: 500 });
   let sent = 0;
   let skipped = 0;
   let failed = 0;
@@ -64,12 +61,13 @@ export async function POST(request: NextRequest) {
   for (const tenant of tenants ?? []) {
     const tenantId = tenant.id as string;
 
-    const { data: agencies } = await admin
+    const { data: agencies, error: agenciesError } = await admin
       .from("agencies")
       .select("id, name, invoice_email, contact_email, booking_email, invoice_enabled, invoice_cadence, invoice_send_day")
       .eq("tenant_id", tenantId)
       .eq("active", true)
       .eq("invoice_enabled", true);
+    if (agenciesError) { failed++; continue; }
 
     for (const agency of agencies ?? []) {
       const email = agency.invoice_email ?? agency.contact_email ?? agency.booking_email;
@@ -81,24 +79,37 @@ export async function POST(request: NextRequest) {
       if (!shouldSendToday(cadence, sendDay, today)) { skipped++; continue; }
 
       // Calcola periodo
-      let periodDays = cadence === "monthly" ? 30 : cadence === "biweekly" ? 14 : 7;
-      const periodFrom = subtractDays(todayIso, periodDays);
-      const periodTo = subtractDays(todayIso, 1);
+      const { periodFrom, periodTo } = previousAgencyInvoicePeriod(cadence, todayIso);
+
+      // Un documento già presente (anche una bozza manuale) va verificato o
+      // reinviato dall'operatore, senza generare un secondo estratto automatico.
+      const { data: existing, error: existingError } = await admin
+        .from("agency_invoices")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("agency_id", agency.id)
+        .eq("period_from", periodFrom)
+        .eq("period_to", periodTo)
+        .limit(1)
+        .maybeSingle();
+      if (existingError) { failed++; continue; }
+      if (existing) { skipped++; continue; }
 
       // Recupera servizi
-      const { data: services } = await admin
+      const { data: services, error: servicesError } = await admin
         .from("services")
-        .select("id, date, time, customer_name, customer_first_name, customer_last_name, booking_service_kind, service_type, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number")
+        .select("id, date, time, customer_name, customer_first_name, customer_last_name, booking_service_kind, service_type, vessel, transport_code, include_ferry_tickets, ferry_details, bus_city_origin, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number, pax")
         .eq("tenant_id", tenantId)
         .eq("is_draft", false)
         .ilike("billing_party_name", `%${agency.name}%`)
         .gte("date", periodFrom)
         .lte("date", periodTo)
         .order("date");
+      if (servicesError) { failed++; continue; }
 
       if ((services ?? []).length === 0) { skipped++; continue; }
 
-      type SvcRow = { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; agency_quoted_price_cents: number | null; practice_number: string | null; };
+      type SvcRow = InvoiceServiceContext & { id: string; date: string | null; time: string | null; customer_name: string | null; customer_first_name: string | null; customer_last_name: string | null; booking_service_kind: string | null; service_type: string | null; notes: string | null; source_total_amount_cents: number | null; agency_quoted_price_cents: number | null; practice_number: string | null; pax: number | null; };
       const items: InvoiceLineItem[] = (services ?? []).map((s: SvcRow) => {
         // Stessa priorita' di app/api/invoices/route.ts: numero pratica
         // dell'agenzia (dal loro PDF) se presente, altrimenti il numero
@@ -111,6 +122,8 @@ export async function POST(request: NextRequest) {
           cliente_nome: clienteName,
           data_servizio: s.date ?? periodFrom,
           tipo_servizio: s.booking_service_kind ?? s.service_type ?? "transfer",
+          descrizione_servizio: buildInvoiceServiceDescription(s),
+          pax: s.pax ?? null,
           // Stessa priorita' di app/api/invoices/route.ts: prezzo concordato
           // con l'agenzia prima del costo interno.
           importo_cents: s.agency_quoted_price_cents ?? s.source_total_amount_cents ?? 0
@@ -124,6 +137,7 @@ export async function POST(request: NextRequest) {
       const { data: invoice, error: insertError } = await admin
         .from("agency_invoices")
         .insert({
+          id: scheduledAgencyInvoiceId(tenantId, agency.id, periodFrom, periodTo),
           tenant_id: tenantId,
           agency_id: agency.id,
           agency_name: agency.name,
@@ -138,6 +152,9 @@ export async function POST(request: NextRequest) {
         .select("id")
         .single();
 
+      // Due esecuzioni possono superare insieme la lettura precedente:
+      // soltanto una vince l'inserimento sulla stessa PK deterministica.
+      if (insertError?.code === "23505") { skipped++; continue; }
       if (insertError || !invoice?.id) { failed++; continue; }
       const invoiceId = invoice.id;
 
@@ -192,7 +209,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: failed === 0, sent, skipped, failed, date: todayIso });
+  return NextResponse.json({ ok: failed === 0, sent, skipped, failed, date: todayIso }, { status: failed > 0 ? 500 : 200 });
 }
 
 // Vercel Cron richiama le route con GET. La stessa autenticazione resta obbligatoria.
