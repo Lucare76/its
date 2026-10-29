@@ -8,9 +8,9 @@ describe("Descrizione servizio estratti conto", () => {
     ["formula_snav", "Formula SNAV"],
     ["formula_medmar_napoli", "Formula MEDMAR Napoli"],
     ["formula_medmar_pozzuoli", "Formula MEDMAR Pozzuoli"],
-    ["transfer_train_hotel", "Transfer Stazione / Hotel"],
-    ["transfer_station_hotel", "Transfer Stazione / Hotel"],
-    ["transfer_airport_hotel", "Transfer Aeroporto / Hotel"],
+    ["transfer_train_hotel", "Transfer Stazione"],
+    ["transfer_station_hotel", "Transfer Stazione"],
+    ["transfer_airport_hotel", "Transfer Aeroporto"],
     ["bus_city_hotel", "Bus"],
   ])("traduce %s senza perdere la formula", (kind, label) => {
     expect(buildInvoiceServiceDescription({ booking_service_kind: kind })).toBe(label);
@@ -42,7 +42,7 @@ describe("Descrizione servizio estratti conto", () => {
 
   it("un transfer stazione con nave non diventa una formula porto", () => {
     expect(buildInvoiceServiceDescription({ booking_service_kind: "transfer_train_hotel", vessel: "MEDMAR", include_ferry_tickets: true }))
-      .toBe("Transfer Stazione / Hotel · MEDMAR");
+      .toBe("Transfer Stazione · MEDMAR");
   });
 
   it.each([null, [], "SNAV", { arbitrary_note: "MEDMAR" }])("ignora dati nave mancanti o non pertinenti (%s)", (details) => {

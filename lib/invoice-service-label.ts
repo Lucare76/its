@@ -17,8 +17,8 @@ function kindLabel(kind: string): string {
     case "transfer_port_hotel": return "Transfer Porto / Hotel";
     case "transfer_hotel_port": return "Transfer Hotel / Porto";
     case "transfer_train_hotel":
-    case "transfer_station_hotel": return "Transfer Stazione / Hotel";
-    case "transfer_airport_hotel": return "Transfer Aeroporto / Hotel";
+    case "transfer_station_hotel": return "Transfer Stazione";
+    case "transfer_airport_hotel": return "Transfer Aeroporto";
     case "transfer": return "Transfer";
     case "bus_tour": return "Bus";
     default:
