@@ -148,15 +148,19 @@ export async function POST(request: NextRequest) {
   const items = (invoice.invoice_data ?? []) as InvoiceLineItem[];
   const itemById = new Map(items.map((i) => [i.service_id, i]));
   for (const c of body.corrections) {
-    if (!itemById.has(c.service_id)) {
+    const item = itemById.get(c.service_id);
+    if (!item) {
       return NextResponse.json({ error: "Una delle pratiche non appartiene a questo estratto conto." }, { status: 403 });
+    }
+    if (!Number.isSafeInteger(item.importo_cents) || item.importo_cents < 0) {
+      return NextResponse.json({ error: "L'importo originale di una riga dell'estratto conto non è valido." }, { status: 422 });
     }
   }
 
   const serviceIds = body.corrections.map((c) => c.service_id);
   const { data: services, error: servicesErr } = await admin
     .from("services")
-    .select("id, agency_id, agency_quoted_price_cents, date, customer_name, customer_first_name, customer_last_name")
+    .select("id, agency_id, date, customer_name, customer_first_name, customer_last_name")
     .in("id", serviceIds)
     .eq("tenant_id", payload.tid);
   if (servicesErr) return NextResponse.json({ error: servicesErr.message }, { status: 500 });
@@ -167,19 +171,17 @@ export async function POST(request: NextRequest) {
     if (!svc || svc.agency_id !== payload.aid) {
       return NextResponse.json({ error: "Prenotazione non trovata." }, { status: 404 });
     }
-    if (svc.agency_quoted_price_cents == null) {
-      return NextResponse.json({ error: "Una pratica non ha un prezzo concordato da contestare." }, { status: 422 });
-    }
   }
 
   const insertRows = body.corrections.map((c) => {
-    const svc = serviceById.get(c.service_id)!;
     return {
       tenant_id: payload.tid,
       agency_id: payload.aid,
       agency_invoice_id: invoice.id,
       service_id: c.service_id,
-      original_price_cents: svc.agency_quoted_price_cents as number,
+      // Si contesta l'importo inviato nell'estratto, anche se proviene dal PDF
+      // o se il prezzo corrente del servizio è stato modificato nel frattempo.
+      original_price_cents: itemById.get(c.service_id)!.importo_cents,
       proposed_price_cents: c.proposed_price_cents,
       agency_note: c.note?.trim() || null,
       status: "pending",
@@ -216,7 +218,7 @@ export async function POST(request: NextRequest) {
       return {
         customerName,
         serviceDate: svc.date ?? null,
-        originalPriceCents: svc.agency_quoted_price_cents as number,
+        originalPriceCents: itemById.get(c.service_id)!.importo_cents,
         proposedPriceCents: c.proposed_price_cents,
         agencyNote: c.note?.trim() || null,
       };
