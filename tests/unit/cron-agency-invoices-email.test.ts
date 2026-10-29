@@ -24,7 +24,9 @@ function setup(insertError = false, updateError = false) {
     from(table: string) {
       let values: Record<string, unknown> | undefined;
       const query = {
-        select: () => query, eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
+        select: () => query, limit: () => query,
+        maybeSingle: async () => ({ data: null, error: null }),
+        eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
         ilike: () => query, gte: () => query, lte: () => query, order: () => query,
         insert: (row: Record<string, unknown>) => { inserts.push(row); return query; },
         update: (row: Record<string, unknown>) => { update(row); values = row; return query; },
