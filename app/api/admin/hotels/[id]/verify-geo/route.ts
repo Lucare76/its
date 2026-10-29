@@ -82,6 +82,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   if (updateError) {
     return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 });
   }
+  if (!updated || updated.id !== id || updated.lat == null || updated.lng == null ||
+      !Number.isFinite(Number(updated.lat)) || !Number.isFinite(Number(updated.lng)) || Math.abs(Number(updated.lat) - parsed.data.lat) > 0.0000001 ||
+      Math.abs(Number(updated.lng) - parsed.data.lng) > 0.0000001) {
+    return NextResponse.json({ ok: false, error: "Posizione non salvata: nessun aggiornamento confermato. Riprova." }, { status: 409 });
+  }
 
   return NextResponse.json({ ok: true, hotel: updated });
 }

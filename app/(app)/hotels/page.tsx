@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { HotelGeoBadge } from "@/components/hotel-geo-badge";
 import { evaluateHotelGeo, HOTEL_ZONES, hotelGeoQuality, inferZoneFromText, isIncompleteHotelAddress, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
@@ -275,6 +275,11 @@ export default function HotelsPage() {
   const [listFilter, setListFilter] = useState<HotelListFilter>("corrections");
   const [geoCorrection, setGeoCorrection] = useState<GeoCorrectionDraft | null>(null);
   const [geoSearching, setGeoSearching] = useState(false);
+  const geoLookupVersion = useRef(0);
+  const cancelGeoLookup = useCallback(() => {
+    geoLookupVersion.current += 1;
+    setGeoSearching(false);
+  }, []);
   const [createDraft, setCreateDraft] = useState<HotelEditDraft>({
     name: "", address: "", city: "Ischia", zone: "Ischia Porto", lat: "", lng: "", small_vehicle_only: false, small_vehicle_max_pax: "", is_active: true, email: "", phone: "", contact_name: ""
   });
@@ -927,6 +932,7 @@ export default function HotelsPage() {
   };
 
   const openGeoCorrection = (hotel: HotelListItem) => {
+    cancelGeoLookup();
     const geoEvaluation = evaluateHotelGeo(hotel);
     const fallbackZone = inferZoneFromText(`${hotel.zone ?? ""} ${hotel.city ?? ""} ${hotel.address ?? ""}`) ?? "Ischia Porto";
     const fallback = zoneCentroids[fallbackZone as keyof typeof zoneCentroids];
@@ -948,6 +954,7 @@ export default function HotelsPage() {
 
   const searchGeoCorrectionAddress = useCallback(async (options?: { automatic?: boolean }) => {
     if (!geoCorrection) return;
+    const lookupVersion = ++geoLookupVersion.current;
 
     // Se la query sembra coordinate o un URL Google Maps, usale direttamente
     const parsed = parseCoordinatesFromText(geoCorrection.query);
@@ -967,6 +974,7 @@ export default function HotelsPage() {
     setError("");
     try {
       const { data: sessionData } = await supabase!.auth.getSession();
+      if (lookupVersion !== geoLookupVersion.current) return;
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("Sessione non valida. Rifai login.");
 
@@ -982,6 +990,7 @@ export default function HotelsPage() {
         error?: string;
         results?: Array<{ lat: number; lng: number; label: string }>;
       } | null;
+      if (lookupVersion !== geoLookupVersion.current) return;
       if (!response.ok || !payload?.ok) throw new Error(payload?.error ?? "Ricerca indirizzo non riuscita.");
 
       const first = payload.results?.[0];
@@ -1002,10 +1011,11 @@ export default function HotelsPage() {
         suggestionLabel: first?.label ?? "Posizione suggerita dalla mappa"
       } : current);
     } catch (searchError) {
+      if (lookupVersion !== geoLookupVersion.current) return;
       setGeoCorrection((current) => current ? { ...current, autoLookupDone: true, suggestionLabel: null } : current);
       if (!options?.automatic) setError(searchError instanceof Error ? searchError.message : "Ricerca indirizzo non riuscita.");
     } finally {
-      setGeoSearching(false);
+      if (lookupVersion === geoLookupVersion.current) setGeoSearching(false);
     }
   }, [geoCorrection]);
 
@@ -1016,9 +1026,11 @@ export default function HotelsPage() {
 
   const saveGeoCorrection = async () => {
     if (!tenantId || !supabase || !geoCorrection) return;
+    cancelGeoLookup();
+    setGeoCorrection((current) => current ? { ...current, autoLookupDone: true } : current);
     const lat = Number(geoCorrection.lat.replace(",", "."));
     const lng = Number(geoCorrection.lng.replace(",", "."));
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    if (!geoCorrection.lat.trim() || !geoCorrection.lng.trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) {
       setError("Coordinate non valide.");
       return;
     }
@@ -1040,8 +1052,12 @@ export default function HotelsPage() {
           geo_notes: geoCorrection.notes
         })
       });
-      const payload = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { ok?: boolean; error?: string; hotel?: Partial<HotelListItem> } | null;
       if (!response.ok || !payload?.ok) throw new Error(payload?.error ?? "Salvataggio geo non riuscito.");
+      if (payload.hotel?.id !== geoCorrection.hotel.id || payload.hotel.lat == null || payload.hotel.lng == null ||
+          Math.abs(payload.hotel.lat - lat) > 0.0000001 || Math.abs(payload.hotel.lng - lng) > 0.0000001) {
+        throw new Error("Il server non ha confermato le coordinate. La posizione non risulta salvata: riprova.");
+      }
       setGeoCorrection(null);
       setMessage("Posizione hotel verificata.");
       await Promise.all([loadHotels(tenantId, search, 0, false), loadMergeContext(tenantId)]);
@@ -1053,8 +1069,9 @@ export default function HotelsPage() {
   };
 
   const updateGeoCorrectionPin = useCallback((coords: { lat: number; lng: number }) => {
-    setGeoCorrection((current) => current ? { ...current, lat: coords.lat.toFixed(7), lng: coords.lng.toFixed(7) } : current);
-  }, []);
+    cancelGeoLookup();
+    setGeoCorrection((current) => current ? { ...current, lat: coords.lat.toFixed(7), lng: coords.lng.toFixed(7), autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null } : current);
+  }, [cancelGeoLookup]);
 
   const saveEdit = async (hotelId: string) => {
     if (!tenantId || !supabase || !editDraft) return;
@@ -1134,15 +1151,21 @@ export default function HotelsPage() {
       return;
     }
 
-    const { error: updateError } = await supabase
+    const { data: savedHotel, error: updateError } = await supabase
       .from("hotels")
       .update(payload)
       .eq("id", hotelId)
-      .eq("tenant_id", tenantId);
+      .eq("tenant_id", tenantId)
+      .select("id,lat,lng")
+      .maybeSingle();
 
     setSaving(false);
     if (updateError) {
       setError(updateError.message);
+      return;
+    }
+    if (!savedHotel || savedHotel.id !== hotelId || savedHotel.lat !== parsedLat || savedHotel.lng !== parsedLng) {
+      setError("Il server non ha confermato il salvataggio dell'hotel. Riprova prima di chiudere la scheda.");
       return;
     }
 
@@ -1874,7 +1897,7 @@ export default function HotelsPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setGeoCorrection(null)}
+                  onClick={() => { cancelGeoLookup(); setGeoCorrection(null); }}
                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
                 >
                   Chiudi
@@ -1909,7 +1932,7 @@ export default function HotelsPage() {
                     <div className="mt-1 flex gap-2">
                       <input
                         value={geoCorrection.query}
-                        onChange={(event) => setGeoCorrection({ ...geoCorrection, query: event.target.value })}
+                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, query: event.target.value, autoLookupDone: true }); }}
                         className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="Nome hotel, via, comune — o incolla coordinate da Google Maps"
                       />
@@ -1929,7 +1952,7 @@ export default function HotelsPage() {
                       Latitudine
                       <input
                         value={geoCorrection.lat}
-                        onChange={(event) => setGeoCorrection({ ...geoCorrection, lat: event.target.value })}
+                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, lat: event.target.value, autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null }); }}
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       />
                     </label>
@@ -1937,7 +1960,7 @@ export default function HotelsPage() {
                       Longitudine
                       <input
                         value={geoCorrection.lng}
-                        onChange={(event) => setGeoCorrection({ ...geoCorrection, lng: event.target.value })}
+                        onChange={(event) => { cancelGeoLookup(); setGeoCorrection({ ...geoCorrection, lng: event.target.value, autoLookupDone: true, startedFromGenericCoords: false, suggestionLabel: null }); }}
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       />
                     </label>
@@ -1980,7 +2003,7 @@ export default function HotelsPage() {
             <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
               <button
                 type="button"
-                onClick={() => setGeoCorrection(null)}
+                onClick={() => { cancelGeoLookup(); setGeoCorrection(null); }}
                 className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white"
               >
                 Annulla
