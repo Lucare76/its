@@ -9,13 +9,13 @@ describe("Descrizione servizio estratti conto", () => {
     ["transfer_airport_hotel", "Transfer Aeroporto"],
     ["formula_snav", "Formula SNAV"],
     ["formula_medmar_pozzuoli", "Formula MEDMAR Pozzuoli"],
-    ["transfer_port_hotel", "Transfer Porto / Hotel (formula non specificata)"],
+    ["transfer_port_hotel", "Transfer Porto / Hotel"],
   ])("mostra i pax anche per %s", (kind, label) => {
     expect(formatInvoiceServiceDescription({ tipo_servizio: kind, pax: 2 })).toBe(`${label} - 2 pax`);
   });
 
   it("bus: città salvata nella descrizione e pax della singola riga", () => {
-    const description = buildInvoiceServiceDescription({ booking_service_kind: "bus_city_hotel", bus_city_origin: " Milano ", vessel: "MEDMAR" });
+    const description = buildInvoiceServiceDescription({ booking_service_kind: "bus_city_hotel", bus_stop_name: " Milano ", vessel: "MEDMAR" });
     expect(formatInvoiceServiceDescription({ tipo_servizio: "bus_city_hotel", descrizione_servizio: description, pax: 2 })).toBe("Transfer Bus Milano - 2 pax");
     expect(formatInvoiceServiceDescription({ tipo_servizio: "bus_city_hotel", descrizione_servizio: description, pax: 1 })).toBe("Transfer Bus Milano - 1 pax");
   });
@@ -48,12 +48,12 @@ describe("Descrizione servizio estratti conto", () => {
 
   it.each([false, null, undefined])("la sola compagnia non prova l'acquisto della formula (%s)", (tickets) => {
     expect(buildInvoiceServiceDescription({ booking_service_kind: "transfer_port_hotel", vessel: "SNAV", include_ferry_tickets: tickets }))
-      .toBe("Transfer Porto / Hotel · SNAV (formula non specificata)");
+      .toBe("Formula SNAV");
   });
 
   it("non attribuisce la formula se le compagnie sono discordanti", () => {
     expect(buildInvoiceServiceDescription({ booking_service_kind: "transfer_port_hotel", vessel: "SNAV", transport_code: "MEDMAR", include_ferry_tickets: true }))
-      .toBe("Transfer Porto / Hotel · MEDMAR / SNAV (formula non specificata)");
+      .toBe("Transfer Porto / Hotel · MEDMAR / SNAV");
   });
 
   it("una formula esplicita prevale sui riferimenti operativi discordanti", () => {
@@ -67,18 +67,18 @@ describe("Descrizione servizio estratti conto", () => {
 
   it.each([null, [], "SNAV", { arbitrary_note: "MEDMAR" }])("ignora dati nave mancanti o non pertinenti (%s)", (details) => {
     expect(buildInvoiceServiceDescription({ booking_service_kind: "transfer_port_hotel", ferry_details: details, include_ferry_tickets: true }))
-      .toBe("Transfer Porto / Hotel (formula non specificata)");
+      .toBe("Transfer Porto / Hotel");
   });
 
   it("non legge importi o note libere per indovinare la formula", () => {
     const service = { booking_service_kind: "transfer_port_hotel", notes: "Formula SNAV oppure MEDMAR", source_total_amount_cents: 6600 };
-    expect(buildInvoiceServiceDescription(service)).toBe("Transfer Porto / Hotel (formula non specificata)");
+    expect(buildInvoiceServiceDescription(service)).toBe("Transfer Porto / Hotel");
   });
 
   it("mantiene la descrizione salvata e rende leggibili gli estratti precedenti", () => {
     expect(formatInvoiceServiceDescription({ tipo_servizio: "transfer_port_hotel", descrizione_servizio: "Formula MEDMAR" })).toBe("Formula MEDMAR");
     expect(formatInvoiceServiceDescription({ tipo_servizio: "formula_snav" })).toBe("Formula SNAV");
-    expect(formatInvoiceServiceDescription({ tipo_servizio: "transfer_port_hotel" })).toBe("Transfer Porto / Hotel (formula non specificata)");
+    expect(formatInvoiceServiceDescription({ tipo_servizio: "transfer_port_hotel" })).toBe("Transfer Porto / Hotel");
   });
 
   it("email, stampa e vero Excel mostrano le stesse formule con importi invariati", () => {
