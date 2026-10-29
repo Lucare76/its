@@ -36,7 +36,7 @@ function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: st
       from(table: string) {
         if (table === "tenant_bus_allocations" || table === "tenant_bus_line_stops") {
           const q = { select: () => q, eq: () => q, in: () => q,
-            then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: table === "tenant_bus_allocations" ? [{ service_id: "service-1", stop_id: "stop-1", direction: "arrival" }] : [{ id: "stop-1", stop_name: "Milano" }], error: null }).then(resolve) };
+            then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: table === "tenant_bus_allocations" ? (serviceFields.legacy ? [] : [{ service_id: "service-1", stop_id: "stop-1", direction: "arrival" }]) : [{ id: "stop-1", stop_name: serviceFields.legacy ? "TERNI" : "Milano", city: "TERNI", pickup_note: "Terminal Bus ATC" }], error: null }).then(resolve) };
           return q;
         }
         if (table === "agencies") {
@@ -146,6 +146,7 @@ describe("Primo invio estratto conto: HTML, Excel e stato di invio", () => {
   it.each([
     [{ booking_service_kind: "formula_medmar_pozzuoli" }, "Formula MEDMAR Pozzuoli"],
     [{ booking_service_kind: "bus_city_hotel", bus_city_origin: "Terminal Bus ATC", meeting_point: "Punto di carico" }, "Transfer Bus Milano"],
+    [{ booking_service_kind: "bus_city_hotel", meeting_point: "TERMINAL BUS ATC TERNI", legacy: true }, "Transfer Bus TERNI"],
     [{ booking_service_kind: "transfer_port_hotel", transport_code: "SNAV", include_ferry_tickets: true }, "Formula SNAV"],
     [{ booking_service_kind: "transfer_port_hotel", transport_code: "MEDMAR" }, "Formula MEDMAR"],
   ])("salva la descrizione della pratica e la riporta nell'Excel (%s)", async (fields, label) => {

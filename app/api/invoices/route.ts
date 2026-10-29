@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
 
   let serviceQuery = admin
     .from("services")
-    .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, vessel, transport_code, include_ferry_tickets, ferry_details, bus_city_origin, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number, pax")
+    .select("id, date, time, customer_name, customer_first_name, customer_last_name, billing_party_name, booking_service_kind, service_type, vessel, meeting_point, transport_code, include_ferry_tickets, ferry_details, bus_city_origin, notes, source_total_amount_cents, agency_quoted_price_cents, practice_number, pax")
     .eq("tenant_id", tenantId)
     .eq("is_draft", false)
     .gte("date", period_from)
