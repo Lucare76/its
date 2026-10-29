@@ -1,5 +1,5 @@
 /**
- * POST /api/cron/agency-invoices
+ * GET / POST /api/cron/agency-invoices
  *
  * Genera e invia automaticamente gli estratti conto alle agenzie
  * in base alla cadenza configurata (weekly / biweekly / monthly).
@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { generateInvoiceHtml, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
+import { generateInvoiceHtml, buildInvoiceXlsx, type InvoiceLineItem } from "@/lib/server/invoice-pdf";
 import { sendEmail } from "@/lib/server/send-email";
 import { getConfiguredAppUrl } from "@/lib/app-url";
 import { generateAgencyActionToken } from "@/lib/server/agency-action-token";
@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
   const { data: tenants } = await admin.from("tenants").select("id");
   let sent = 0;
   let skipped = 0;
+  let failed = 0;
 
   for (const tenant of tenants ?? []) {
     const tenantId = tenant.id as string;
@@ -120,7 +121,7 @@ export async function POST(request: NextRequest) {
       const createdAt = new Date().toISOString();
 
       // Salva fattura
-      const { data: invoice } = await admin
+      const { data: invoice, error: insertError } = await admin
         .from("agency_invoices")
         .insert({
           tenant_id: tenantId,
@@ -128,17 +129,17 @@ export async function POST(request: NextRequest) {
           agency_name: agency.name,
           period_from: periodFrom,
           period_to: periodTo,
-          status: "sent",
+          status: "draft",
           total_cents: totalCents,
           services_count: items.length,
           invoice_data: items,
-          created_at: createdAt,
-          sent_at: createdAt
+          created_at: createdAt
         })
         .select("id")
         .single();
 
-      const invoiceId = invoice?.id ?? "N/D";
+      if (insertError || !invoice?.id) { failed++; continue; }
+      const invoiceId = invoice.id;
 
       // Link con token (funziona senza login, valido anche per agenzie
       // senza account nell'area agenzia) quando l'insert e' andato a buon
@@ -152,7 +153,7 @@ export async function POST(request: NextRequest) {
           reviewUrl = `${cronAppUrl}/agency-estratto-conto?token=${encodeURIComponent(token)}`;
         } catch { /* fallback gia' impostato sopra */ }
       }
-      const html = generateInvoiceHtml({
+      const invoiceData = {
         agencyName: agency.name,
         agencyEmail: email,
         periodFrom,
@@ -162,7 +163,10 @@ export async function POST(request: NextRequest) {
         items,
         totalCents,
         reviewUrl
-      });
+      };
+      const html = generateInvoiceHtml(invoiceData);
+      const xlsxBuffer = buildInvoiceXlsx(invoiceData);
+      const xlsxFilename = `estratto_conto_${String(agency.name).replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase()}_${periodFrom}_${periodTo}.xlsx`;
 
       const months = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
       const [fy, fm] = periodFrom.split("-");
@@ -170,15 +174,28 @@ export async function POST(request: NextRequest) {
       const periodLabel = fm === tm ? `${months[Number(fm)-1]} ${fy}` : `${months[Number(fm)-1]}-${months[Number(tm)-1]} ${fy}`;
 
       try {
-        await sendEmail({
+        const result = await sendEmail({
           to: email,
           subject: `Estratto conto ${periodLabel} — ${agency.name}`,
           html,
+          attachments: [{ filename: xlsxFilename, content: xlsxBuffer.toString("base64") }],
         });
+        if (!result.ok || result.skipped) { failed++; continue; }
+        const { error: updateError } = await admin
+          .from("agency_invoices")
+          .update({ status: "sent", sent_at: new Date().toISOString() })
+          .eq("id", invoiceId)
+          .eq("tenant_id", tenantId);
+        if (updateError) { failed++; continue; }
         sent++;
-      } catch { skipped++; }
+      } catch { failed++; }
     }
   }
 
-  return NextResponse.json({ ok: true, sent, skipped, date: todayIso });
+  return NextResponse.json({ ok: failed === 0, sent, skipped, failed, date: todayIso });
+}
+
+// Vercel Cron richiama le route con GET. La stessa autenticazione resta obbligatoria.
+export async function GET(request: NextRequest) {
+  return POST(request);
 }
