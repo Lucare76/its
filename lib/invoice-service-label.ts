@@ -5,6 +5,7 @@ export type InvoiceServiceContext = {
   booking_service_kind?: string | null;
   service_type?: string | null;
   vessel?: string | null;
+  meeting_point?: string | null;
   transport_code?: string | null;
   include_ferry_tickets?: boolean | null;
   ferry_details?: unknown;
