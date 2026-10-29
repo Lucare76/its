@@ -15,7 +15,7 @@ export type InvoiceLineItem = {
   cliente_nome: string;
   data_servizio: string;
   tipo_servizio: string;
-  descrizione_servizio?: string;
+  descrizione_servizio?: string; pax?: number | null;
   importo_cents: number;
 };
 

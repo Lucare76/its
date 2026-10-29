@@ -8,6 +8,7 @@ export type InvoiceServiceContext = {
   transport_code?: string | null;
   include_ferry_tickets?: boolean | null;
   ferry_details?: unknown;
+  bus_city_origin?: string | null;
 };
 
 const PORT_KINDS = new Set(["transfer_port_hotel", "transfer_hotel_port"]);
@@ -20,7 +21,8 @@ function kindLabel(kind: string): string {
     case "transfer_station_hotel": return "Transfer Stazione";
     case "transfer_airport_hotel": return "Transfer Aeroporto";
     case "transfer": return "Transfer";
-    case "bus_tour": return "Bus";
+    case "bus_city_hotel":
+    case "bus_tour": return "Transfer Bus";
     default:
       return buildServiceLabelShort({ kind: kind as AgencyBookingKind }) || kind || "Servizio non specificato";
   }
@@ -29,6 +31,10 @@ function kindLabel(kind: string): string {
 export function buildInvoiceServiceDescription(service: InvoiceServiceContext): string {
   const kind = service.booking_service_kind || service.service_type || "transfer";
   const label = kindLabel(kind);
+  if (kind === "bus_city_hotel" || kind === "bus_tour") {
+    const city = service.bus_city_origin?.trim();
+    return city ? `${label} ${city}` : label;
+  }
   // An explicit booking formula is authoritative, including its mainland port.
   if (kind.startsWith("formula_")) return label;
 
@@ -56,11 +62,19 @@ export function buildInvoiceServiceDescription(service: InvoiceServiceContext): 
 }
 
 /** The saved description is a snapshot: viewing/resending never re-reads live prices or bookings. */
-export function formatInvoiceServiceDescription(item: { tipo_servizio: string; descrizione_servizio?: string | null }): string {
-  return item.descrizione_servizio?.trim() || buildInvoiceServiceDescription({ booking_service_kind: item.tipo_servizio });
+type InvoiceServiceSnapshot = { tipo_servizio: string; descrizione_servizio?: string | null; pax?: number | null };
+
+export function formatInvoiceServiceDescription(item: InvoiceServiceSnapshot): string {
+  const description = item.descrizione_servizio?.trim() || buildInvoiceServiceDescription({ booking_service_kind: item.tipo_servizio });
+  // Legacy statements did not save pax. New statements save the count (or
+  // null when unavailable), without reconstructing it from current bookings.
+  if (item.pax === undefined) return description;
+  return Number.isSafeInteger(item.pax) && item.pax! > 0
+    ? `${description} - ${item.pax} pax`
+    : `${description} - pax non indicati`;
 }
 
-export function escapeInvoiceServiceDescription(item: { tipo_servizio: string; descrizione_servizio?: string | null }): string {
+export function escapeInvoiceServiceDescription(item: InvoiceServiceSnapshot): string {
   return formatInvoiceServiceDescription(item).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[char]!);

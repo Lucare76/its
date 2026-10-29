@@ -33,7 +33,7 @@ type InvoiceRow = {
   sent_at: string | null;
   paid_at: string | null;
   payment_note: string | null;
-  invoice_data: Array<{ numero_pratica: string; cliente_nome: string; data_servizio: string; tipo_servizio: string; descrizione_servizio?: string; importo_cents: number }>;
+  invoice_data: Array<{ numero_pratica: string; cliente_nome: string; data_servizio: string; tipo_servizio: string; descrizione_servizio?: string; pax?: number | null; importo_cents: number }>;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

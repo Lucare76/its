@@ -5,13 +5,33 @@ import { buildInvoiceXlsx, generateInvoiceHtml, generateInvoicePrintHtml, type I
 
 describe("Descrizione servizio estratti conto", () => {
   it.each([
+    ["transfer_train_hotel", "Transfer Stazione"],
+    ["transfer_airport_hotel", "Transfer Aeroporto"],
+    ["formula_snav", "Formula SNAV"],
+    ["formula_medmar_pozzuoli", "Formula MEDMAR Pozzuoli"],
+    ["transfer_port_hotel", "Transfer Porto / Hotel (formula non specificata)"],
+  ])("mostra i pax anche per %s", (kind, label) => {
+    expect(formatInvoiceServiceDescription({ tipo_servizio: kind, pax: 2 })).toBe(`${label} - 2 pax`);
+  });
+
+  it("bus: città salvata nella descrizione e pax della singola riga", () => {
+    const description = buildInvoiceServiceDescription({ booking_service_kind: "bus_city_hotel", bus_city_origin: " Milano ", vessel: "MEDMAR" });
+    expect(formatInvoiceServiceDescription({ tipo_servizio: "bus_city_hotel", descrizione_servizio: description, pax: 2 })).toBe("Transfer Bus Milano - 2 pax");
+    expect(formatInvoiceServiceDescription({ tipo_servizio: "bus_city_hotel", descrizione_servizio: description, pax: 1 })).toBe("Transfer Bus Milano - 1 pax");
+  });
+
+  it.each([null, 0, -1, 1.5])("non inventa il numero di passeggeri quando è invalido (%s)", (pax) => {
+    expect(formatInvoiceServiceDescription({ tipo_servizio: "transfer_train_hotel", pax })).toBe("Transfer Stazione - pax non indicati");
+  });
+
+  it.each([
     ["formula_snav", "Formula SNAV"],
     ["formula_medmar_napoli", "Formula MEDMAR Napoli"],
     ["formula_medmar_pozzuoli", "Formula MEDMAR Pozzuoli"],
     ["transfer_train_hotel", "Transfer Stazione"],
     ["transfer_station_hotel", "Transfer Stazione"],
     ["transfer_airport_hotel", "Transfer Aeroporto"],
-    ["bus_city_hotel", "Bus"],
+    ["bus_city_hotel", "Transfer Bus"],
   ])("traduce %s senza perdere la formula", (kind, label) => {
     expect(buildInvoiceServiceDescription({ booking_service_kind: kind })).toBe(label);
   });
@@ -65,21 +85,21 @@ describe("Descrizione servizio estratti conto", () => {
     const data: InvoiceData = {
       agencyName: "AGENZIA TEST", periodFrom: "2026-10-01", periodTo: "2026-10-15", invoiceId: "invoice-test", createdAt: "2026-10-29T10:00:00Z",
       items: [
-        { service_id: "a", numero_pratica: "TEST-1", cliente_nome: "CLIENTE TEST", data_servizio: "2026-10-01", tipo_servizio: "transfer_port_hotel", descrizione_servizio: "Formula SNAV", importo_cents: 1400 },
-        { service_id: "b", numero_pratica: "TEST-2", cliente_nome: "CLIENTE TEST", data_servizio: "2026-10-02", tipo_servizio: "formula_medmar_napoli", importo_cents: 6600 },
+        { service_id: "a", numero_pratica: "TEST-1", cliente_nome: "CLIENTE TEST", data_servizio: "2026-10-01", tipo_servizio: "transfer_port_hotel", descrizione_servizio: "Formula SNAV", pax: 2, importo_cents: 1400 },
+        { service_id: "b", numero_pratica: "TEST-2", cliente_nome: "CLIENTE TEST", data_servizio: "2026-10-02", tipo_servizio: "formula_medmar_napoli", pax: 3, importo_cents: 6600 },
       ], totalCents: 8000,
     };
     for (const html of [generateInvoiceHtml(data), generateInvoicePrintHtml(data)]) {
-      expect(html).toContain("Formula SNAV");
-      expect(html).toContain("Formula MEDMAR Napoli");
+      expect(html).toContain("Formula SNAV - 2 pax");
+      expect(html).toContain("Formula MEDMAR Napoli - 3 pax");
       expect(html).not.toContain("transfer_port_hotel");
       expect(html).not.toContain("formula_medmar_napoli");
       expect(html).toContain("80,00");
     }
     const book = XLSX.read(buildInvoiceXlsx(data), { type: "buffer" });
     const rows = XLSX.utils.sheet_to_json(book.Sheets["Estratto conto"], { header: 1 }) as unknown[][];
-    expect(rows[1].slice(3)).toEqual(["Formula SNAV", 14]);
-    expect(rows[2].slice(3)).toEqual(["Formula MEDMAR Napoli", 66]);
+    expect(rows[1].slice(3)).toEqual(["Formula SNAV - 2 pax", 14]);
+    expect(rows[2].slice(3)).toEqual(["Formula MEDMAR Napoli - 3 pax", 66]);
     expect(rows[3][4]).toBe(80);
     // Rendering must not modify the original saved snapshot.
     expect(data.items[0].tipo_servizio).toBe("transfer_port_hotel");

@@ -35,7 +35,7 @@ function setup(insertError = false, updateError = false, serviceFields: Record<s
           if (values && !updateError) Object.assign(invoice, values);
           const data = table === "tenants" ? [{ id: TENANT }]
             : table === "agencies" ? [{ id: "agency-test", name: "AGENZIA TEST", invoice_email: "luca_renna@hotmail.com", invoice_cadence: "weekly", invoice_send_day: 4 }]
-              : table === "services" ? [{ id: "service-test", date: "2026-10-25", customer_name: "CLIENTE TEST", notes: "[practice:TEST-001]", agency_quoted_price_cents: 6600, source_total_amount_cents: 9999, ...serviceFields }]
+              : table === "services" ? [{ id: "service-test", date: "2026-10-25", customer_name: "CLIENTE TEST", notes: "[practice:TEST-001]", agency_quoted_price_cents: 6600, source_total_amount_cents: 9999, pax: 3, ...serviceFields }]
                 : null;
           return Promise.resolve({ data, error: values && updateError ? { message: "Update failed" } : null }).then(resolve);
         },
@@ -92,11 +92,11 @@ describe("Estratti conto automatici: GET autenticato, Excel e conferma invio", (
   it("anche il cron salva la formula importata e la include nell'Excel", async () => {
     const fake = setup(false, false, { booking_service_kind: "transfer_port_hotel", include_ferry_tickets: true, ferry_details: { carrier_company: "MEDMAR" } });
     expect((await GET(request())).status).toBe(200);
-    expect((fake.inserts[0].invoice_data as Record<string, unknown>[])[0]).toMatchObject({ tipo_servizio: "transfer_port_hotel", descrizione_servizio: "Formula MEDMAR", importo_cents: 6600 });
+    expect((fake.inserts[0].invoice_data as Record<string, unknown>[])[0]).toMatchObject({ tipo_servizio: "transfer_port_hotel", descrizione_servizio: "Formula MEDMAR", pax: 3, importo_cents: 6600 });
     const attachment = mocks.sendEmail.mock.calls[0][0].attachments[0];
     const book = XLSX.read(Buffer.from(attachment.content, "base64"), { type: "buffer" });
     const rows = XLSX.utils.sheet_to_json(book.Sheets["Estratto conto"], { header: 1 }) as unknown[][];
-    expect(rows[1].slice(3)).toEqual(["Formula MEDMAR", 66]);
+    expect(rows[1].slice(3)).toEqual(["Formula MEDMAR - 3 pax", 66]);
   });
 
   it.each([{ ok: false, error: "Provider rejected" }, { ok: true, skipped: true }])("invio fallito o saltato lascia la bozza", async (result) => {
