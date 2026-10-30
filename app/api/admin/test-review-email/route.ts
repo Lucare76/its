@@ -1,6 +1,6 @@
 /**
  * POST /api/admin/test-review-email
- * Invia un'email di test del workflow revisione agenzie a rennasday@gmail.com.
+ * Invia un'email di test del workflow revisione agenzie alla casella operativa.
  * Solo admin. Usa dati fittizi per il 10 maggio 2026.
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -11,7 +11,7 @@ import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 export const runtime = "nodejs";
 
 const TEST_DATE  = "2026-05-10";
-const TEST_EMAIL = "rennasday@gmail.com";
+const TEST_EMAIL = process.env.OPS_NOTIFY_EMAIL?.trim() || "info@ischiatransferservice.it";
 const TEST_AGENCY = "Aleste Viaggi (TEST)";
 
 const TEST_SERVICES = [

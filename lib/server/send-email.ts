@@ -63,7 +63,13 @@ export async function resendFetch(apiKey: string, payload: Record<string, unknow
   const testRedirectList = testRedirectRaw
     ? testRedirectRaw.split(/[,;\s]+/).map(e => e.trim()).filter(Boolean)
     : [];
-  let finalPayload = payload;
+  // Luca retired this address from operational copies (including legacy explicit CC/BCC).
+  const filterCopies = (value: unknown) => {
+    const values = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+    const kept = values.filter((entry): entry is string => typeof entry === "string" && !/rennasday@gmail\.com/i.test(entry));
+    return kept.length ? kept : undefined;
+  };
+  let finalPayload: Record<string, unknown> = { ...payload, cc: filterCopies(payload.cc), bcc: filterCopies(payload.bcc) };
   if (testRedirectList.length > 0) {
     finalPayload = {
       ...payload,
