@@ -360,6 +360,7 @@ export async function POST(request: NextRequest) {
       tenant_id: auth.membership.tenant_id,
       agency_id: agencyIdResult.agencyId,
       is_draft: false,
+      approval_status: "pending_operator",
       date: parsed.data.arrival_date,
       time: parsed.data.arrival_time,
       service_type: serviceType,
@@ -563,15 +564,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Segna approval_status — price_mismatch se il prezzo dichiarato differisce dal listino (tolleranza ±0,50€)
-    const hasPriceMismatch =
-      quotedPriceCents != null &&
-      catalogPriceCents != null &&
-      Math.abs(quotedPriceCents - catalogPriceCents) > 50;
-    await auth.admin.from("services")
-      .update({ approval_status: hasPriceMismatch ? "price_mismatch" : "pending_operator" })
-      .eq("id", serviceId).eq("tenant_id", auth.membership.tenant_id);
-
     // Genera token approvazione
     const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://app.ischiatransferservice.it";
     const { data: tokenRow } = await auth.admin
@@ -597,7 +589,9 @@ export async function POST(request: NextRequest) {
 
     // Email agenzia — "in attesa di conferma" per tutti i tipi
     const betaFallbackRecipient = process.env.AGENCY_BOOKING_BETA_RECIPIENT_EMAIL?.trim() || null;
-    const emailRecipient = customerEmail || auth.user.email || betaFallbackRecipient;
+    const emailRecipient = auth.membership.role === "agency"
+      ? auth.user.email || customerEmail || betaFallbackRecipient
+      : customerEmail || auth.user.email || betaFallbackRecipient;
     const agencyDisplayName = agencyRow?.name?.trim() || auth.membership.full_name?.trim() || null;
     // Il saluto usa SEMPRE il nome dell'agenzia, mai il nome del passeggero
     const recipientName = agencyDisplayName;

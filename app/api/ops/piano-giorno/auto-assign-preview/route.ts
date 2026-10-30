@@ -22,6 +22,7 @@ import { todayIsoDate } from "@/lib/utils";
 export const runtime = "nodejs";
 
 const BASE_SERVICE_COLUMNS = [
+  "approval_status",
   "id",
   "date",
   "time",

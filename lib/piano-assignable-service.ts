@@ -21,6 +21,7 @@ export type AssignableHotel = {
 } | null;
 
 export type AssignableService = {
+  approval_status?: string | null;
   id: string;
   time?: string | null;
   time_from?: string | null;
@@ -463,6 +464,10 @@ function makeResolution(
   });
 
   const hardConstraints = [...(partial.hard_constraints ?? [])];
+  if (service.approval_status && service.approval_status !== "confirmed") {
+    hardConstraints.push("agency_approval_required");
+    reviewReasons.push("Richiesta agenzia: necessaria approvazione dell’operatore");
+  }
   if (isNapoliHotel(context?.hotel)) {
     hardConstraints.push("mainland_hotel");
     reviewReasons.push("Hotel a Napoli: gestire con transfer terraferma, escluso dai giri Ischia");
