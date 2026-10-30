@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { DateInput } from "@/components/ui";
 import {
@@ -213,6 +213,11 @@ function getDepartureScheduleOptions(
 
 export default function AgencyNewBookingPage() {
   const [loading, setLoading] = useState(true);
+  const [createdBooking, setCreatedBooking] = useState<{ id: string; service: string } | null>(null);
+  const successRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (createdBooking) successRef.current?.focus();
+  }, [createdBooking]);
   const [message, setMessage] = useState("Compila i campi obbligatori e conferma la prenotazione.");
   const [submitting, setSubmitting] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -627,6 +632,7 @@ export default function AgencyNewBookingPage() {
   ]);
 
   const doSubmit = async () => {
+    setCreatedBooking(null);
     if (!accessToken) {
       setMessage("Sessione non valida. Rifai login.");
       return;
@@ -681,7 +687,8 @@ export default function AgencyNewBookingPage() {
       return;
     }
 
-    setMessage(`Prenotazione creata (${serviceKindLabel}). ID: ${body.id}`);
+    setCreatedBooking({ id: body.id, service: serviceKindLabel });
+    setMessage("Richiesta inviata correttamente. In attesa di conferma ITS.");
 
     // Reset completo del form
     const firstHotelId = hotels[0]?.id ?? "";
@@ -789,6 +796,17 @@ export default function AgencyNewBookingPage() {
         <h1 className="section-title">Nuova prenotazione agenzia</h1>
         <p className="section-subtitle">Inserisci i dati del servizio e controlla il riepilogo prima di confermare.</p>
       </div>
+      {createdBooking ? (
+        <div ref={successRef} tabIndex={-1} role="status" aria-live="polite" className="scroll-mt-6 rounded-2xl border border-emerald-300 bg-emerald-50 p-5 text-emerald-950 outline-none focus:ring-2 focus:ring-emerald-500">
+          <h2 className="text-lg font-bold">✓ Richiesta di prenotazione inviata</h2>
+          <p className="mt-2 text-sm">ITS ha ricevuto la tua richiesta per {createdBooking.service}. La prenotazione è in attesa di conferma da parte dell’operatore.</p>
+          <p className="mt-2 break-all text-xs">Riferimento: {createdBooking.id}</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link href="/agency/bookings" className="btn-primary">Vedi le mie prenotazioni</Link>
+            <button type="button" onClick={() => setCreatedBooking(null)} className="btn-secondary">Inserisci un’altra prenotazione</button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         <Link href="/agency/bookings" className="btn-secondary px-3 py-1.5 text-xs">
           Vai a mie prenotazioni
