@@ -724,9 +724,9 @@ export default function OpsNewBookingPage() {
             </div>
             <div className="grid gap-2">
               {([
-                ["medmar_infant_count", "Infant", "0-4 anni"],
-                ["medmar_child_count", "Bambino", "4-12 anni"],
-                ["medmar_adult_count", "Adulto", "12+ anni"],
+                ["medmar_infant_count", "Infant", "0–3 anni"],
+                ["medmar_child_count", "Bambino", "4–11 anni"],
+                ["medmar_adult_count", "Adulto", "Dai 12 anni"],
               ] as const).map(([field, label, ages]) => (
                 <label key={field} className="flex items-center justify-between gap-3 rounded-2xl border border-indigo-100 bg-white px-3 py-2.5 text-sm shadow-sm">
                   <span className="min-w-0">

@@ -1,3 +1,4 @@
+import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
 import { agencyArrivalLabel, agencyReturnLabel, ferryDepartureLabel } from "@/lib/agency-booking-time-labels";
 import { emailHtml, emailDataTable, fmtDate } from "@/lib/server/email-layout";
 import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
@@ -17,6 +18,7 @@ export interface AgencyBookingEmailInput {
   departureTime: string;
   hotelName: string;
   pax: number;
+  passengerDetails?: unknown;
   notes: string;
   pendingConfirmation?: boolean;
 }
@@ -37,6 +39,7 @@ function buildPlainText(input: AgencyBookingEmailInput) {
     `Servizio: ${input.serviceKindLabel}`,
     `Hotel/Struttura: ${input.hotelName}`,
     `Pax: ${input.pax}`,
+    ...(input.bookingKind?.startsWith("formula_medmar_") ? [medmarPassengerSummary(input.passengerDetails, input.pax)] : []),
     ...(input.ferryDepartureTime ? [`${ferryDepartureLabel(input.bookingKind)}: ${fmtDate(input.arrivalDate)} ${input.ferryDepartureTime}`] : []),
     `${agencyArrivalLabel(input.bookingKind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
     `${agencyReturnLabel(input.bookingKind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
@@ -67,6 +70,7 @@ function buildHtml(input: AgencyBookingEmailInput) {
 
     ${emailDataTable([
       ["👥 Passeggeri", `${input.pax} persone`],
+      ...(input.bookingKind?.startsWith("formula_medmar_") ? [["Composizione", medmarPassengerSummary(input.passengerDetails, input.pax)] as [string, string]] : []),
       ...(input.ferryDepartureTime ? [[ferryDepartureLabel(input.bookingKind), `${fmtDate(input.arrivalDate)} alle ${input.ferryDepartureTime}`] as [string, string]] : []),
       [agencyArrivalLabel(input.bookingKind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
       [agencyReturnLabel(input.bookingKind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],

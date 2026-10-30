@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { DateInput, PageHeader } from "@/components/ui";
@@ -15,6 +16,7 @@ type ServiceRow = {
   phone: string | null;
   phone_e164: string | null;
   pax: number | null;
+  ferry_details?: unknown;
   time: string | null;
   notes: string | null;
   hotel_id: string | null;
@@ -517,6 +519,12 @@ export default function ServiceEditPage() {
             <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="mt-1 input-saas w-full" />
           </label>
 
+          {service?.booking_service_kind?.startsWith("formula_medmar_") && (
+            <div className="sm:col-span-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-950">
+              <p className="font-semibold">Passeggeri Formula MEDMAR — dati salvati</p>
+              <p className="mt-1">{medmarPassengerSummary(service.ferry_details, service.pax ?? 0)}</p>
+            </div>
+          )}
           {/* Pax + Orario */}
           <label className="text-xs font-medium text-slate-600">
             Pax
