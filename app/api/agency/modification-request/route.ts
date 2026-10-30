@@ -104,7 +104,8 @@ export async function POST(req: NextRequest) {
     if (insertErr || !mr) throw new Error(insertErr?.message ?? "Inserimento fallito.");
 
     // Notifica in-app agli admin/operator
-    const { data: members } = await admin
+    let inAppNotification: "sent" | "failed" | "skipped" = "skipped";
+    const { data: members, error: membersError } = await admin
       .from("memberships")
       .select("user_id")
       .eq("tenant_id", tenantId)
@@ -120,14 +121,21 @@ export async function POST(req: NextRequest) {
         link:         `/richieste-modifica`,
         reference_id: mr.id,
       }));
-      await admin.from("notifications").insert(notifications);
+      const { error: notificationError } = await admin.from("notifications").insert(notifications);
+      inAppNotification = notificationError ? "failed" : "sent";
+      if (notificationError) console.error("modification_request_in_app_notification_failed", {tenantId,requestId:mr.id});
+    }
+
+    if (membersError) {
+      inAppNotification = "failed";
+      console.error("modification_request_notification_members_failed", {tenantId,requestId:mr.id});
     }
 
     const emailResult = await sendModificationRequestEmail({ customerName: svc.customer_name, changes, hotelName, requestId: mr.id });
     const emailNotification = emailResult.skipped ? "skipped" : emailResult.ok ? "sent" : "failed";
     if (emailNotification !== "sent") console.error("modification_request_email_failed", {tenantId,requestId:mr.id,status:emailNotification});
 
-    return NextResponse.json({ ok: true, request_id: mr.id, email_notification: emailNotification });
+    return NextResponse.json({ ok: true, request_id: mr.id, email_notification: emailNotification, in_app_notification: inAppNotification });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
   }
