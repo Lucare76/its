@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { agencyModificationOutboundTime } from "@/lib/agency-modification-times";
 import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
-import { agencyArrivalLabel, agencyReturnLabel } from "@/lib/agency-booking-time-labels";
+import { agencyArrivalLabel, agencyReturnLabel, isFerryFormula, ferryDepartureLabel } from "@/lib/agency-booking-time-labels";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { DateInput, EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
@@ -15,6 +16,7 @@ type BookingRow = {
   id: string;
   date: string;
   time: string;
+  outbound_time?: string | null;
   status: string;
   pax: number;
   ferry_details?: unknown;
@@ -137,7 +139,7 @@ function normalizeSearchText(value?: string | null) {
 function toModDraft(row: BookingRow): ModDraft {
   return {
     arrival_date:         row.arrival_date ?? row.date,
-    arrival_time:         (row.arrival_time ?? row.time ?? "").slice(0, 5),
+    arrival_time:         agencyModificationOutboundTime(row),
     departure_date:       row.departure_date ?? "",
     departure_time:       (row.departure_time ?? "").slice(0, 5),
     pax:                  String(row.pax),
@@ -166,6 +168,11 @@ function AgencyBookingsPageInner() {
   // Modifica (richiesta)
   const [isModifying, setIsModifying]   = useState(false);
   const [modDraft, setModDraft]         = useState<ModDraft | null>(null);
+  const [modHotelSearch, setModHotelSearch] = useState<string | null>(null);
+  const [modHotelSearchOpen, setModHotelSearchOpen] = useState(false);
+  const normalizeHotelSearch = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("it").trim();
+  const modHotelResults = hotels.filter(hotel => normalizeHotelSearch(`${hotel.name} ${hotel.zone ?? ""}`).includes(normalizeHotelSearch(modHotelSearch ?? "")));
+  const selectedModHotel = hotels.find(hotel => hotel.id === modDraft?.hotel_id);
   const [modSaving, setModSaving]       = useState(false);
   const [modMessage, setModMessage]     = useState("");
 
@@ -292,6 +299,7 @@ function AgencyBookingsPageInner() {
   }, [bookings]);
 
   const selectedBooking = filtered.find((row) => row.id === selectedBookingId) ?? filtered[0] ?? null;
+  const selectedModHotelLabel = selectedModHotel ? `${selectedModHotel.name}${selectedModHotel.zone ? ` (${selectedModHotel.zone})` : ""}` : selectedBooking?.hotel_name ?? "";
 
   const groupedByMonth = useMemo(() => {
     const groups: { monthKey: string; label: string; rows: BookingRow[] }[] = [];
@@ -336,6 +344,7 @@ function AgencyBookingsPageInner() {
 
   const submitModificationRequest = async () => {
     if (!modDraft || !selectedBooking || !accessToken) return;
+    if (modHotelSearch !== null) { setModMessage("Seleziona un hotel dai suggerimenti oppure mantieni l’hotel attuale."); return; }
     setModSaving(true);
     setModMessage("");
 
@@ -343,7 +352,7 @@ function AgencyBookingsPageInner() {
     const changes: Record<string, unknown> = {};
     const orig = toModDraft(selectedBooking);
     if (modDraft.arrival_date !== orig.arrival_date)               changes.arrival_date         = modDraft.arrival_date;
-    if (modDraft.arrival_time !== orig.arrival_time)               changes.arrival_time         = modDraft.arrival_time || null;
+    if (modDraft.arrival_time !== orig.arrival_time || (isFerryFormula(modDraft.booking_service_kind) && modDraft.booking_service_kind !== orig.booking_service_kind)) changes[isFerryFormula(modDraft.booking_service_kind) ? "ferry_departure_time" : "arrival_time"] = modDraft.arrival_time || null;
     if (modDraft.departure_date !== orig.departure_date)           changes.departure_date       = modDraft.departure_date || null;
     if (modDraft.departure_time !== orig.departure_time)           changes.departure_time       = modDraft.departure_time || null;
     if (modDraft.pax !== orig.pax)                                 changes.pax                  = Number(modDraft.pax);
@@ -578,7 +587,7 @@ function AgencyBookingsPageInner() {
                         onChange={(iso) => setModDraft((d) => d && ({ ...d, arrival_date: iso }))} />
                     </div>
                     <div>
-                      <label className="text-xs text-muted">Ora andata</label>
+                      <label className="text-xs text-muted">{isFerryFormula(modDraft.booking_service_kind) ? ferryDepartureLabel(modDraft.booking_service_kind) : "Ora andata"}</label>
                       <input className="input-saas mt-1" type="time" value={modDraft.arrival_time}
                         onChange={(e) => setModDraft((d) => d && ({ ...d, arrival_time: e.target.value }))} />
                     </div>
@@ -610,14 +619,32 @@ function AgencyBookingsPageInner() {
                       </select>
                     </div>
                     <div className="md:col-span-2">
-                      <label className="text-xs text-muted">Hotel</label>
-                      <select className="input-saas mt-1" value={modDraft.hotel_id}
-                        onChange={(e) => setModDraft((d) => d && ({ ...d, hotel_id: e.target.value }))}>
-                        <option value="">— Invariato —</option>
-                        {hotels.map((h) => (
-                          <option key={h.id} value={h.id}>{h.name}{h.zone ? ` (${h.zone})` : ""}</option>
-                        ))}
-                      </select>
+                      <label htmlFor="modification-hotel-search" className="text-xs text-muted">Hotel</label>
+                      <input id="modification-hotel-search" className="input-saas mt-1 w-full" type="search" autoComplete="off"
+                        placeholder="Scrivi il nome dell’hotel o la zona…"
+                        value={modHotelSearch ?? selectedModHotelLabel}
+                        aria-describedby="modification-hotel-help"
+                        aria-controls="modification-hotel-suggestions"
+                        onFocus={() => setModHotelSearchOpen(true)}
+                        onChange={event => { setModHotelSearch(event.target.value); setModHotelSearchOpen(true); }}
+                        onKeyDown={event => { if (event.key === "Escape") setModHotelSearchOpen(false); }} />
+                      <p id="modification-hotel-help" className="mt-1 text-xs text-muted">Scrivi per cercare e seleziona uno dei suggerimenti.</p>
+                      {modHotelSearchOpen && (
+                        <div id="modification-hotel-suggestions" className="mt-2 rounded-xl border border-slate-200 bg-white p-2">
+                          <p className="px-2 py-1 text-xs text-slate-500" role="status">{modHotelResults.length ? `${modHotelResults.length} hotel trovati` : "Nessun hotel trovato. Prova un altro nome o una zona."}</p>
+                          <ul className="max-h-56 overflow-y-auto" aria-label="Hotel suggeriti">
+                            {modHotelResults.map(hotel => (
+                              <li key={hotel.id}>
+                                <button type="button" className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-800 hover:bg-indigo-50 focus-visible:bg-indigo-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"
+                                  onClick={() => { setModDraft(draft => draft && ({...draft, hotel_id:hotel.id})); setModHotelSearch(null); setModHotelSearchOpen(false); }}>
+                                  {hotel.name}{hotel.zone ? ` (${hotel.zone})` : ""}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {modHotelSearch !== null && <button type="button" className="mt-2 text-xs font-medium text-indigo-700 underline" onClick={() => {setModHotelSearch(null);setModHotelSearchOpen(false);}}>Mantieni l’hotel selezionato</button>}
                     </div>
                     <div className="md:col-span-2">
                       <label className="text-xs text-muted">Note</label>
@@ -801,6 +828,8 @@ function AgencyBookingsPageInner() {
                       type="button"
                       onClick={() => {
                         setModDraft(toModDraft(selectedBooking));
+                        setModHotelSearch(null);
+                        setModHotelSearchOpen(false);
                         setIsModifying(true);
                         setModMessage("");
                         setCancelConfirm(false);

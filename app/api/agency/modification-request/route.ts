@@ -1,3 +1,4 @@
+import { normalizeAgencyModificationTimes } from "@/lib/agency-modification-times";
 /**
  * POST /api/agency/modification-request
  *
@@ -8,8 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizeServiceRoleRequest } from "@/lib/server/pricing-auth";
-import { sendEmail } from "@/lib/server/send-email";
-import { emailHtml } from "@/lib/server/email-layout";
+import { sendModificationRequestEmail } from "@/lib/server/modification-request-email";
 
 export const runtime = "nodejs";
 
@@ -18,6 +18,7 @@ const schema = z.object({
   changes: z.object({
     arrival_date:        z.string().optional(),
     arrival_time:        z.string().optional(),
+    ferry_departure_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
     departure_date:      z.string().optional(),
     departure_time:      z.string().optional(),
     pax:                 z.number().int().min(1).max(100).optional(),
@@ -46,18 +47,21 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Body non valido." }, { status: 400 });
     }
-    const { service_id, changes } = parsed.data;
+    const { service_id } = parsed.data;
+    let changes: Record<string, unknown> = parsed.data.changes;
 
     // Verifica servizio e appartenenza al tenant
     const { data: svc } = await admin
       .from("services")
-      .select("id, status, customer_name, pax, arrival_date, arrival_time, departure_date, departure_time, hotel_id, booking_service_kind, notes, tenant_id")
+      .select("id, status, customer_name, pax, time, outbound_time, arrival_date, arrival_time, departure_date, departure_time, hotel_id, booking_service_kind, notes, tenant_id")
       .eq("id", service_id)
       .eq("tenant_id", tenantId)
       .maybeSingle();
 
     if (!svc) return NextResponse.json({ error: "Servizio non trovato." }, { status: 404 });
     if (svc.status === "cancelled") return NextResponse.json({ error: "Servizio già cancellato." }, { status: 409 });
+    try { changes = normalizeAgencyModificationTimes(changes, svc.booking_service_kind); }
+    catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "Orario non valido."}, {status:400}); }
 
     // Controlla se c'è già una richiesta pendente per questo servizio
     const { data: existing } = await admin
@@ -80,7 +84,7 @@ export async function POST(req: NextRequest) {
     // Recupera nome hotel se richiesto
     let hotelName: string | null = null;
     if (changes.hotel_id) {
-      const { data: hotel } = await admin.from("hotels").select("name").eq("id", changes.hotel_id).maybeSingle();
+      const { data: hotel } = await admin.from("hotels").select("name").eq("id", String(changes.hotel_id)).maybeSingle();
       hotelName = hotel?.name ?? null;
     }
 
@@ -119,49 +123,11 @@ export async function POST(req: NextRequest) {
       await admin.from("notifications").insert(notifications);
     }
 
-    // Email agli admin/operator
-    if (members?.length) {
-      const userIds = members.map((m: { user_id: string }) => m.user_id);
-      const { data: { users } } = await admin.auth.admin.listUsers();
-      const opsEmails = (users ?? [])
-        .filter((u: { id: string }) => userIds.includes(u.id))
-        .map((u: { email?: string }) => u.email)
-        .filter(Boolean) as string[];
+    const emailResult = await sendModificationRequestEmail({ customerName: svc.customer_name, changes, hotelName, requestId: mr.id });
+    const emailNotification = emailResult.skipped ? "skipped" : emailResult.ok ? "sent" : "failed";
+    if (emailNotification !== "sent") console.error("modification_request_email_failed", {tenantId,requestId:mr.id,status:emailNotification});
 
-      if (opsEmails.length) {
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "";
-
-        const changeRows = Object.entries(changes)
-          .map(([k, v]) => {
-            const labels: Record<string, string> = {
-              arrival_date: "Data andata", arrival_time: "Ora andata",
-              departure_date: "Data ritorno", departure_time: "Ora ritorno",
-              pax: "Passeggeri", hotel_id: "Hotel",
-              booking_service_kind: "Tipologia servizio", notes: "Note",
-            };
-            const displayVal = k === "hotel_id" && hotelName ? hotelName : String(v ?? "—");
-            return `<tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">${labels[k] ?? k}</td><td style="padding:8px 12px;">${displayVal}</td></tr>`;
-          })
-          .join("");
-
-        await sendEmail({
-          to: opsEmails,
-          subject: `Richiesta modifica — ${svc.customer_name}`,
-          html: emailHtml(`
-            <h2 style="color:#0f172a;margin-bottom:4px;">Richiesta di modifica prenotazione</h2>
-            <p style="color:#475569;margin-bottom:20px;">
-              Un'agenzia ha richiesto di modificare la prenotazione di <strong>${svc.customer_name}</strong>.
-            </p>
-            <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">${changeRows}</table>
-            <a href="${appUrl}/richieste-modifica" style="display:inline-block;background:#1e293b;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;">
-              Gestisci richiesta →
-            </a>
-          `, { title: "Richiesta modifica" }),
-        });
-      }
-    }
-
-    return NextResponse.json({ ok: true, request_id: mr.id });
+    return NextResponse.json({ ok: true, request_id: mr.id, email_notification: emailNotification });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
   }

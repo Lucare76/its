@@ -1,5 +1,6 @@
 "use client";
 
+import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
 import { needsAgencyApproval, PENDING_AGENCY_APPROVAL_STATUSES } from "@/lib/agency-approval-status";
 
 import { useEffect, useState } from "react";
@@ -14,6 +15,7 @@ type BookingRow = {
   customer_last_name: string | null;
   phone: string | null;
   pax: number;
+  ferry_details?: unknown;
   arrival_date: string | null;
   arrival_time: string | null;
   departure_date: string | null;
@@ -255,7 +257,7 @@ export default function AgencyRequestsPage() {
 
       let q = supabase
         .from("services")
-        .select("id,customer_name,customer_first_name,customer_last_name,phone,pax,arrival_date,arrival_time,departure_date,departure_time,booking_service_kind,approval_status,status,created_at,hotels(name),agencies(name)")
+        .select("id,customer_name,customer_first_name,customer_last_name,phone,pax,ferry_details,arrival_date,arrival_time,departure_date,departure_time,booking_service_kind,approval_status,status,created_at,hotels(name),agencies(name)")
         .eq("tenant_id", session.tenantId)
         .not("approval_status", "is", null)
         .order("created_at", { ascending: false })
@@ -430,6 +432,7 @@ export default function AgencyRequestsPage() {
                       <span className="font-semibold text-slate-800">{customerName}</span>
                       {row.phone && <span className="text-xs text-slate-500">{row.phone}</span>}
                       <span className="text-xs text-slate-400">· {row.pax} pax</span>
+                      {row.booking_service_kind?.startsWith("formula_medmar_") && <span className="text-xs text-slate-600">{medmarPassengerSummary(row.ferry_details, row.pax)}</span>}
                     </div>
                     <div className="text-sm text-slate-600">
                       <span className="font-medium">{kindLabel(row.booking_service_kind)}</span>

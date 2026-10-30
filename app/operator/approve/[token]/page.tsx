@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
+import { agencyArrivalLabel, agencyReturnLabel, ferryDepartureLabel } from "@/lib/agency-booking-time-labels";
 import { useParams, useRouter } from "next/navigation";
 
 type ServiceData = {
@@ -11,6 +13,9 @@ type ServiceData = {
   customer_email: string | null;
   phone: string | null;
   pax: number;
+  passengerDetails?: unknown;
+  booking_service_kind?: string | null;
+  ferry_departure_time?: string | null;
   arrival_date: string;
   arrival_time: string;
   departure_date: string;
@@ -160,13 +165,18 @@ export default function OperatorApproveBookingPage() {
             <div>
               <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Passeggeri</dt>
               <dd className="font-semibold text-slate-800">{service.pax} pax</dd>
+              {service.booking_service_kind?.startsWith("formula_medmar_") && <dd className="mt-1 text-sm leading-relaxed text-slate-700">{medmarPassengerSummary(service.passengerDetails, service.pax)}</dd>}
             </div>
+            {service.ferry_departure_time && <div>
+              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">{ferryDepartureLabel(service.booking_service_kind)}</dt>
+              <dd className="font-semibold text-slate-800">{fmtDate(service.arrival_date)} {service.ferry_departure_time}</dd>
+            </div>}
             <div>
-              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Arrivo</dt>
+              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">{agencyArrivalLabel(service.booking_service_kind)}</dt>
               <dd className="font-semibold text-slate-800">{fmtDate(service.arrival_date)} {service.arrival_time}</dd>
             </div>
             <div>
-              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">Rientro</dt>
+              <dt className="text-xs text-slate-400 font-medium uppercase tracking-wide">{agencyReturnLabel(service.booking_service_kind)}</dt>
               <dd className="font-semibold text-slate-800">{fmtDate(service.departure_date)} {service.departure_time}</dd>
             </div>
             {service.customer_email && (
