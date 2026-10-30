@@ -125,6 +125,7 @@ export default function NotificationsPage() {
         agencyBookingsResult,
         agencyReviewsResult,
         cancellationsResult,
+        modificationsResult,
         vehiclesResult,
         accessRequestsResult
       ] = await Promise.all([
@@ -156,6 +157,10 @@ export default function NotificationsPage() {
             .eq("tenant_id", session.tenantId)
             .in("status", ["pending_review", "pending_agency_approval"])
           : Promise.resolve({ count: 0, error: null }),
+        session.role === "admin" || session.role === "operator"
+          ? supabase.from("modification_requests").select("id", {count:"exact",head:true})
+            .eq("tenant_id", session.tenantId).eq("status", "pending")
+          : Promise.resolve({count:0,error:null}),
         supabase
           .from("vehicles")
           .select("id")
@@ -188,7 +193,15 @@ export default function NotificationsPage() {
         qrReportsCount = count ?? 0;
       }
 
+      if (modificationsResult.error) {
+        setErrorMessage("Impossibile verificare le richieste di modifica. Riprova aggiornando la pagina.");
+      }
       const nextOperationalItems = [
+        {
+          key: "booking-modifications", title: "Richieste modifica prenotazioni",
+          detail: "Cambi hotel, date e altri dati richiesti dalle agenzie da approvare.",
+          count: modificationsResult.count ?? 0, href: "/richieste-modifica", tone: "violet",
+        },
         {
           key: "agency-bookings",
           title: "Richieste prenotazioni agenzie",

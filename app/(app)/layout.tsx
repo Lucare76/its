@@ -1,5 +1,6 @@
 "use client";
 
+import { newPendingModificationIds } from "@/lib/pending-modification-alerts";
 import { needsAgencyApproval, PENDING_AGENCY_APPROVAL_STATUSES } from "@/lib/agency-approval-status";
 
 import Link from "next/link";
@@ -49,6 +50,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
   const notifiedAgencyBookingIds = useRef(new Set<string>());
   const [pendingCancellationsCount, setPendingCancellationsCount] = useState(0);
+  const [pendingModificationsCount, setPendingModificationsCount] = useState(0);
   const [whatsAppUnreadCount, setWhatsAppUnreadCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
   const [slaAlertMessage, setSlaAlertMessage]   = useState<string | null>(null);
@@ -119,6 +121,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     pendingAgencyBookingsCount +
     pendingAgencyReviewCount +
     pendingCancellationsCount +
+    pendingModificationsCount +
     pendingQrReportsCount +
     (authRole === "admin" || authRole === "supervisor" ? pendingAccessRequestCount : 0);
 
@@ -630,6 +633,31 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       if (isActive) setPendingAgencyBookingsCount(count ?? 0);
     };
 
+    let knownPendingModifications: Set<string> | null = null;
+    let refreshingModifications = false;
+    const refreshPendingModifications = async (tenantId: string) => {
+      if (authRole !== "admin" && authRole !== "operator") {
+        if (isActive) setPendingModificationsCount(0);
+        return;
+      }
+      if (refreshingModifications) return;
+      refreshingModifications = true;
+      try {
+        const { data, count, error } = await client.from("modification_requests")
+          .select("id", {count:"exact"}).eq("tenant_id", tenantId).eq("status", "pending")
+          .order("created_at", {ascending:false}).limit(500);
+        if (!isActive || error) return;
+        const ids = new Set((data ?? []).map(row => String(row.id)));
+        if (newPendingModificationIds(knownPendingModifications, ids).length > 0) {
+          setLiveToastMessage("✏️ Nuova richiesta di modifica prenotazione: apri Richieste modifica.");
+          if (inboxSoundEnabled) playInboxSound();
+        }
+        knownPendingModifications = ids;
+        setPendingModificationsCount(count ?? ids.size);
+      } catch { console.error("pending_modification_refresh_failed"); }
+      finally { refreshingModifications = false; }
+    };
+
     const refreshPendingCancellations = async (tenantId: string) => {
       if (authRole !== "admin" && authRole !== "operator") {
         setPendingCancellationsCount(0);
@@ -665,6 +693,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       await refreshQrReportsCount(tenantId);
       await refreshPendingAgencyBookings(tenantId);
       await refreshPendingCancellations(tenantId);
+      await refreshPendingModifications(tenantId);
 
       const channel = client
         .channel(`layout-inbox-${tenantId}`)
@@ -766,6 +795,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         )
         .on(
           "postgres_changes",
+          { event: "*", schema: "public", table: "modification_requests", filter: `tenant_id=eq.${tenantId}` },
+          () => { void refreshPendingModifications(tenantId); }
+        )
+        .on(
+          "postgres_changes",
           { event: "INSERT", schema: "public", table: "cancellation_requests", filter: `tenant_id=eq.${tenantId}` },
           () => {
             setLiveToastMessage("✕ Nuova richiesta di cancellazione ricevuta.");
@@ -797,8 +831,17 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       activeChannel = channel;
     });
 
+    // Reconcile when returning to ITS and periodically while visible, even without a Realtime event.
+    const reconcileModifications = () => { if (document.visibilityState === "visible") void refreshPendingModifications(authTenantId); };
+    const modificationTimer = authRole === "admin" || authRole === "operator" ? window.setInterval(reconcileModifications, 60000) : null;
+    window.addEventListener("focus", reconcileModifications);
+    document.addEventListener("visibilitychange", reconcileModifications);
+
     return () => {
       isActive = false;
+      if (modificationTimer !== null) window.clearInterval(modificationTimer);
+      window.removeEventListener("focus", reconcileModifications);
+      document.removeEventListener("visibilitychange", reconcileModifications);
       if (activeChannel) {
         void client.removeChannel(activeChannel);
       }
@@ -952,6 +995,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 ? inboxPendingCount
                 : item.href === "/whatsapp" && whatsAppUnreadCount > 0
                 ? whatsAppUnreadCount
+                : item.href === "/richieste-modifica" && pendingModificationsCount > 0
+                ? pendingModificationsCount
                 : item.href === "/cancellazioni" && pendingCancellationsCount > 0
                 ? pendingCancellationsCount
                 : 0;
@@ -1007,7 +1052,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
               const groupActive = GESTIONE_GROUP.items.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || gestioneOpen;
-              const groupBadge = pendingCancellationsCount > 0 ? pendingCancellationsCount : 0;
+              const groupBadge = pendingCancellationsCount + pendingModificationsCount;
               return (
                 <div className="mt-2 border-t border-white/10 pt-2">
                   <button
@@ -1048,7 +1093,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                       {GESTIONE_GROUP.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
-                        const itemBadge = item.href === "/cancellazioni" && pendingCancellationsCount > 0 ? pendingCancellationsCount : 0;
+                        const itemBadge = item.href === "/cancellazioni" ? pendingCancellationsCount : item.href === "/richieste-modifica" ? pendingModificationsCount : 0;
                         return (
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
@@ -1648,6 +1693,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   {item.href === "/inbox" && inboxPendingCount > 0 ? ` (${inboxPendingCount > 99 ? "99+" : inboxPendingCount})` : ""}
                   {item.href === "/whatsapp" && whatsAppUnreadCount > 0 ? ` (${whatsAppUnreadCount > 99 ? "99+" : whatsAppUnreadCount})` : ""}
                   {item.href === "/agency-requests" && pendingAgencyBookingsCount > 0 ? ` (${pendingAgencyBookingsCount > 99 ? "99+" : pendingAgencyBookingsCount})` : ""}
+                  {item.href === "/richieste-modifica" && pendingModificationsCount > 0 ? ` (${pendingModificationsCount > 99 ? "99+" : pendingModificationsCount})` : ""}
                 </Link>
               );
             })}
