@@ -6,8 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { sendEmail } from "@/lib/server/send-email";
-import { emailHtml } from "@/lib/server/email-layout";
+import { sendCancellationRequestEmail } from "@/lib/server/cancellation-request-email";
 
 export const runtime = "nodejs";
 
@@ -170,6 +169,8 @@ export async function POST(req: NextRequest) {
       notes: `Richiesta cancellazione: ${cancel_legs === "both" ? "intero servizio" : cancel_legs === "arrival" ? "solo andata" : "solo ritorno"} — da ${role}`,
     });
 
+    let emailNotification: "sent" | "failed" | "skipped" = "skipped";
+
     // Se richiesta da agenzia → notifica in-app a admin/operator
     if (role === "agency") {
       const legLabel = cancel_legs === "both" ? "intero servizio" : cancel_legs === "arrival" ? "solo andata" : "solo ritorno";
@@ -194,46 +195,18 @@ export async function POST(req: NextRequest) {
         await admin.from("notifications").insert(notifications);
       }
 
-      // Email agli admin/operator (recupera email da auth)
-      const { data: opsMembers } = await admin
-        .from("memberships")
-        .select("user_id")
-        .eq("tenant_id", tenantId)
-        .in("role", ["admin", "operator"]);
-
-      if (opsMembers?.length) {
-        const userIds = opsMembers.map((m: { user_id: string }) => m.user_id);
-        const { data: { users } } = await admin.auth.admin.listUsers();
-        const opsEmails = (users ?? [])
-          .filter((u: { id: string }) => userIds.includes(u.id))
-          .map((u: { email?: string }) => u.email)
-          .filter(Boolean) as string[];
-
-        if (opsEmails.length) {
-          const legLabel2 = cancel_legs === "both" ? "intero servizio" : cancel_legs === "arrival" ? "solo andata" : "solo ritorno";
-          const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ?? "";
-          await sendEmail({
-            to: opsEmails,
-            subject: `Richiesta cancellazione — ${svc.customer_name}`,
-            html: emailHtml(`
-              <h2 style="color:#0f172a;margin-bottom:4px;">Richiesta di cancellazione</h2>
-              <p style="color:#475569;margin-bottom:20px;">
-                Un'agenzia ha richiesto la cancellazione di un servizio e attende la tua decisione sulla penale.
-              </p>
-              <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                <tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Cliente</td><td style="padding:8px 12px;">${svc.customer_name}</td></tr>
-                <tr><td style="padding:8px 12px;background:#f1f5f9;font-weight:600;">Tratta</td><td style="padding:8px 12px;">${legLabel2}</td></tr>
-              </table>
-              <a href="${appUrl}/cancellazioni" style="display:inline-block;background:#1e293b;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;">
-                Gestisci richiesta →
-              </a>
-            `, { title: "Richiesta cancellazione" }),
-          });
-        }
+      const emailResult = await sendCancellationRequestEmail({
+        customerName: svc.customer_name,
+        cancelLegs: cancel_legs,
+        requestId: createdReq.id,
+      });
+      emailNotification = emailResult.skipped ? "skipped" : emailResult.ok ? "sent" : "failed";
+      if (emailNotification !== "sent") {
+        console.error("cancellation_request_email_failed", { tenantId, requestId: createdReq.id, status: emailNotification });
       }
     }
 
-    return NextResponse.json({ ok: true, request_id: createdReq.id });
+    return NextResponse.json({ ok: true, request_id: createdReq.id, email_notification: emailNotification });
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Errore" }, { status: 500 });
   }
