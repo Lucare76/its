@@ -773,6 +773,7 @@ function buildShuttlePairDrafts(services: ServiceRow[], hotelMap: Map<string, Ho
 // ─── Tipi interni ─────────────────────────────────────────────────────────────
 
 type ServiceRow = {
+  approval_status?: string | null;
   id: string; time: string; direction: "arrival" | "departure";
   vessel: string | null; hotel_id: string | null; pax: number;
   status: string; meeting_point: string | null; pickup_hotel: string | null;
@@ -1032,7 +1033,7 @@ export async function POST(request: NextRequest) {
            hotelLimitsRes, driverAvailRes, vehicleAvailRes, vehicleBlocksRes, availabilityConfirmRes, commitments] =
       await Promise.all([
         auth.admin.from("services")
-          .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel, customer_name, booking_service_kind, service_type_code, arrival_time, orario_barca, porto_bruno, barca_compagnia, ferry_details")
+          .select("id, time, direction, vessel, hotel_id, pax, status, approval_status, meeting_point, pickup_hotel, customer_name, booking_service_kind, service_type_code, arrival_time, orario_barca, porto_bruno, barca_compagnia, ferry_details")
           .eq("tenant_id", tenantId).eq("date", date)
           .neq("status", "cancelled").neq("is_draft", true),
         auth.admin.from("hotels").select("id, name, address, city, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
@@ -1252,7 +1253,7 @@ export async function POST(request: NextRequest) {
 
     // Scarta i servizi privi di dati operativi minimi (nessun orario, nessun pax, nessuna location)
     const incompleteServices = candidateServices.filter(
-      (s) => isNapoliHotel(s.hotel_id ? hotelMap.get(s.hotel_id) : null) || !serviceOperationalTime(s) || !s.pax || s.pax <= 0 || (!s.hotel_id && !s.meeting_point)
+      (s) => (Boolean(s.approval_status) && s.approval_status !== "confirmed") || isNapoliHotel(s.hotel_id ? hotelMap.get(s.hotel_id) : null) || !serviceOperationalTime(s) || !s.pax || s.pax <= 0 || (!s.hotel_id && !s.meeting_point)
     );
     const incompleteIds = new Set(incompleteServices.map((s) => s.id));
     const toAssign = candidateServices.filter((s) => !incompleteIds.has(s.id));
@@ -1266,7 +1267,7 @@ export async function POST(request: NextRequest) {
     if (!toAssign.length) {
       return NextResponse.json({
         ok: true, assigned: 0, trips: 0, skipped: incompleteServices.length,
-        report: [`Nessun servizio assegnabile: ${incompleteServices.length} servizi con dati incompleti o hotel sulla terraferma.`],
+        report: [`Nessun servizio assegnabile: ${incompleteServices.length} servizi con dati incompleti, approvazione agenzia in attesa o hotel sulla terraferma.`],
       });
     }
 
@@ -2312,7 +2313,7 @@ export async function POST(request: NextRequest) {
     const report: string[] = [
       `${assignedCount} servizi assegnati in ${tripsCreated} giri.`,
       ...hotelShiftResult.warnings,
-      ...(incompleteServices.length > 0 ? [`${incompleteServices.length} servizi esclusi per dati incompleti o hotel sulla terraferma.`] : []),
+      ...(incompleteServices.length > 0 ? [`${incompleteServices.length} servizi esclusi per dati incompleti, approvazione agenzia in attesa o hotel sulla terraferma.`] : []),
       ...(unassignedCount > 0 ? [`${unassignedCount} servizi non assegnati.`] : []),
       ...(geoBlockedServices.length > 0
         ? [`${geoBlockedServices.length} servizi hanno hotel con geolocalizzazione dubbia: ${geoBlockedHotels.slice(0, 6).join(", ")}${geoBlockedHotels.length > 6 ? "..." : ""}.`]

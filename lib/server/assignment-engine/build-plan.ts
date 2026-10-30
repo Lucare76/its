@@ -40,6 +40,7 @@ import { rankCandidatesForService, type RankableDriver, type RankableVehicle } f
 import { suggestOperationalFix, type UnresolvedServiceInput } from "@/lib/server/assignment-engine/suggest-fix";
 
 const BASE_SERVICE_COLUMNS = [
+  "approval_status",
   "id", "date", "time", "time_from", "time_to", "direction", "customer_name", "pax", "hotel_id",
   "vessel", "notes", "status", "meeting_point", "place_type", "pickup_hotel", "booking_service_kind",
   "service_type", "phone",

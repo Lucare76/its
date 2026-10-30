@@ -1,5 +1,7 @@
 "use client";
 
+import { needsAgencyApproval, PENDING_AGENCY_APPROVAL_STATUSES } from "@/lib/agency-approval-status";
+
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
@@ -45,6 +47,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingAgencyReviewCount, setPendingAgencyReviewCount] = useState(0);
   const [pendingQrReportsCount,    setPendingQrReportsCount]    = useState(0);
   const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
+  const notifiedAgencyBookingIds = useRef(new Set<string>());
   const [pendingCancellationsCount, setPendingCancellationsCount] = useState(0);
   const [whatsAppUnreadCount, setWhatsAppUnreadCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
@@ -614,7 +617,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     };
 
     const refreshPendingAgencyBookings = async (tenantId: string) => {
-      if (authRole !== "admin" && authRole !== "operator") {
+      if (authRole !== "admin" && authRole !== "operator" && authRole !== "supervisor") {
         setPendingAgencyBookingsCount(0);
         return;
       }
@@ -622,7 +625,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         .from("services")
         .select("id", { count: "exact", head: true })
         .eq("tenant_id", tenantId)
-        .eq("approval_status", "pending_operator");
+        .in("approval_status", PENDING_AGENCY_APPROVAL_STATUSES)
+        .neq("status", "cancelled");
       if (isActive) setPendingAgencyBookingsCount(count ?? 0);
     };
 
@@ -733,7 +737,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           { event: "INSERT", schema: "public", table: "services", filter: `tenant_id=eq.${tenantId}` },
           (payload) => {
             const approvalStatus = typeof payload.new?.approval_status === "string" ? payload.new.approval_status : null;
-            if (approvalStatus === "pending_operator") {
+            if (needsAgencyApproval(approvalStatus)) {
+              if (typeof payload.new?.id === "string") notifiedAgencyBookingIds.current.add(payload.new.id);
               const customerName = typeof payload.new?.customer_name === "string" ? payload.new.customer_name : null;
               setLiveToastMessage(`🏨 Nuova prenotazione agenzia${customerName ? ` — ${customerName}` : ""} in attesa di approvazione.`);
               if (inboxSoundEnabled) playInboxSound();
@@ -747,7 +752,16 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           (payload) => {
             const newStatus = typeof payload.new?.approval_status === "string" ? payload.new.approval_status : null;
             const oldStatus = typeof payload.old?.approval_status === "string" ? payload.old.approval_status : null;
-            if (newStatus !== oldStatus) void refreshPendingAgencyBookings(tenantId);
+            if (newStatus !== oldStatus) {
+              void refreshPendingAgencyBookings(tenantId);
+              const id = typeof payload.new?.id === "string" ? payload.new.id : null;
+              if (needsAgencyApproval(newStatus) && id && !notifiedAgencyBookingIds.current.has(id)) {
+                notifiedAgencyBookingIds.current.add(id);
+                const name = typeof payload.new?.customer_name === "string" ? payload.new.customer_name : null;
+                setLiveToastMessage(`🏨 Nuova prenotazione agenzia${name ? ` — ${name}` : ""} da verificare.`);
+                if (inboxSoundEnabled) playInboxSound();
+              }
+            }
           }
         )
         .on(
@@ -1401,6 +1415,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                                   {item.href === "/settings/users" && pendingAccessRequestCount > 0 ? (
                                     <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                                       {pendingAccessRequestCount > 99 ? "99+" : pendingAccessRequestCount}
+                                    </span>
+                                  ) : null}
+                                  {item.href === "/agency-requests" && pendingAgencyBookingsCount > 0 ? (
+                                    <span className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                      {pendingAgencyBookingsCount > 99 ? "99+" : pendingAgencyBookingsCount}
                                     </span>
                                   ) : null}
                                   {item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0 ? (

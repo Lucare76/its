@@ -1,5 +1,7 @@
 "use client";
 
+import { needsAgencyApproval, PENDING_AGENCY_APPROVAL_STATUSES } from "@/lib/agency-approval-status";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
@@ -231,7 +233,7 @@ export default function AgencyRequestsPage() {
         setLoading(false);
         return;
       }
-      if (session.role !== "admin" && session.role !== "operator") {
+      if (session.role !== "admin" && session.role !== "operator" && session.role !== "supervisor") {
         setError("Accesso non autorizzato.");
         setLoading(false);
         return;
@@ -240,6 +242,16 @@ export default function AgencyRequestsPage() {
       const { data: sd } = await supabase.auth.getSession();
       const tk = sd.session?.access_token ?? null;
       if (tk) setAccessToken(tk);
+      const reconciliation = await fetch("/api/ops/agency-requests/reconcile", {
+        method: "POST", headers: { Authorization: `Bearer ${tk ?? ""}` }
+      });
+      const reconciled = await reconciliation.json().catch(() => null);
+      if (!reconciliation.ok || !reconciled?.ok) {
+        setError(reconciled?.error ?? "Impossibile verificare le richieste agenzia.");
+        setLoading(false);
+        return;
+      }
+
 
       let q = supabase
         .from("services")
@@ -250,29 +262,14 @@ export default function AgencyRequestsPage() {
         .limit(200);
 
       if (filter === "pending") {
-        q = q.eq("approval_status", "pending_operator");
+        q = q.in("approval_status", PENDING_AGENCY_APPROVAL_STATUSES).neq("status", "cancelled");
       }
 
       const { data, error: err } = await q;
       if (!active) return;
       if (err) { setError(err.message); setLoading(false); return; }
 
-      // Per ogni servizio, cerca il token di approvazione attivo
-      const serviceIds = (data ?? []).map((r) => r.id);
-      let tokenMap: Record<string, string> = {};
-      if (serviceIds.length > 0) {
-        const { data: tokens } = await supabase
-          .from("booking_approval_tokens")
-          .select("service_id, token")
-          .in("service_id", serviceIds)
-          .is("used_at", null)
-          .order("created_at", { ascending: false });
-        for (const t of tokens ?? []) {
-          if (t.service_id && t.token && !tokenMap[t.service_id]) {
-            tokenMap[t.service_id] = t.token;
-          }
-        }
-      }
+      const tokenMap: Record<string, string> = reconciled.tokens ?? {};
 
       setRows(
         (data ?? []).map((r) => ({
@@ -288,7 +285,7 @@ export default function AgencyRequestsPage() {
     return () => { active = false; };
   }, [filter]);
 
-  const pending        = rows.filter((r) => r.approval_status === "pending_operator");
+  const pending        = rows.filter((r) => needsAgencyApproval(r.approval_status) && r.status !== "cancelled");
   const confirmed      = rows.filter((r) => r.approval_status === "confirmed");
   const rejected       = rows.filter((r) => r.approval_status === "rejected");
   const changesReq     = rows.filter((r) => r.approval_status === "agency_changes_requested");
@@ -406,7 +403,7 @@ export default function AgencyRequestsPage() {
             const customerName = row.customer_first_name && row.customer_last_name
               ? `${row.customer_first_name} ${row.customer_last_name}`
               : row.customer_name;
-            const isPending    = row.approval_status === "pending_operator";
+            const isPending    = needsAgencyApproval(row.approval_status);
             const isConfirmed  = row.approval_status === "confirmed";
             const isCancelled  = row.status === "cancelled";
             const showCancelPanel = cancelDraft?.serviceId === row.id;
@@ -420,6 +417,7 @@ export default function AgencyRequestsPage() {
                   {/* Status indicator */}
                   <div className="shrink-0 pt-0.5 flex flex-wrap gap-1.5">
                     {isPending && <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 px-2.5 py-1 text-xs font-semibold text-amber-800">Attesa</span>}
+                    {row.approval_status === "price_mismatch" && !isCancelled && <span className="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-800">Prezzo da verificare</span>}
                     {isConfirmed && !isCancelled && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2.5 py-1 text-xs font-semibold text-emerald-800">Confermata</span>}
                     {row.approval_status === "rejected" && <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-800">Rifiutata</span>}
                     {row.approval_status === "agency_changes_requested" && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 border border-violet-300 px-2.5 py-1 text-xs font-semibold text-violet-800">✏️ Modifica richiesta</span>}
