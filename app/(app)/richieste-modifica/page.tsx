@@ -34,7 +34,9 @@ type ModRequest = {
 
 const fieldLabels: Record<string, string> = {
   arrival_date:         "Data andata",
-  arrival_time:         "Ora andata",
+  arrival_time:         "Arrivo a destinazione / stimato a Ischia",
+  time: "Partenza nave dalla terraferma",
+  outbound_time: "Partenza nave dalla terraferma",
   departure_date:       "Data ritorno",
   departure_time:       "Ora ritorno",
   pax:                  "Passeggeri",

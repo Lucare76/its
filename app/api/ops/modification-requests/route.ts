@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     const { data, error } = await admin
       .from("modification_requests")
       .select(`
-        id, status, changes, original_values, operator_notes, created_at, updated_at,
+        id, status, requested_by_user_id, changes, original_values, operator_notes, created_at, updated_at,
         resolved_at,
         services(
           id, customer_name, pax, date, booking_service_kind,

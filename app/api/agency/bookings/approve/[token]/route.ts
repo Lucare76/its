@@ -1,3 +1,4 @@
+import { isFerryFormula } from "@/lib/agency-booking-time-labels";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
@@ -164,7 +165,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         customer_email: service.customer_email ?? service.email_confirmation_to ?? null,
         phone: service.phone ?? null,
         pax: service.pax,
-      passengerDetails: service.ferry_details,
+        passengerDetails: service.ferry_details,
+        ferry_departure_time: isFerryFormula(service.booking_service_kind) ? service.time : null,
         arrival_date: service.arrival_date ?? service.date,
         arrival_time: service.arrival_time ?? service.time,
         departure_date: service.departure_date ?? service.date,
