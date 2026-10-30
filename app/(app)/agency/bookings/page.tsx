@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
 import { agencyArrivalLabel, agencyReturnLabel } from "@/lib/agency-booking-time-labels";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
@@ -16,6 +17,7 @@ type BookingRow = {
   time: string;
   status: string;
   pax: number;
+  ferry_details?: unknown;
   customer_name: string;
   customer_first_name: string | null;
   customer_last_name: string | null;
@@ -693,12 +695,13 @@ function AgencyBookingsPageInner() {
                     { label: "Hotel",     value: selectedBooking.hotel_name },
                     { label: "Zona",      value: selectedBooking.hotel_zone ?? "—" },
                     { label: "Pax",       value: String(selectedBooking.pax) },
+                    ...(selectedBooking.booking_service_kind?.startsWith("formula_medmar_") ? [{label: "Composizione", value: medmarPassengerSummary(selectedBooking.ferry_details, selectedBooking.pax)}] : []),
                     { label: "Operativo", value: serviceOperationalDetail(selectedBooking) || "—" },
                     { label: "Creata il", value: selectedBooking.created_at ? formatIsoDateTimeShort(selectedBooking.created_at) : "—" },
                   ].map(({ label, value }) => (
                     <div key={label} className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
                       <span className="text-slate-400 font-medium shrink-0">{label}</span>
-                      <span className="text-slate-800 text-right truncate">{value}</span>
+                      <span className="text-slate-800 text-right break-words min-w-0">{value}</span>
                     </div>
                   ))}
                   {selectedBooking.agency_quoted_price_cents != null && (

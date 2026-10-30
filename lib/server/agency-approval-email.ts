@@ -1,3 +1,4 @@
+import { medmarPassengerSummary } from "@/lib/medmar-passenger-summary";
 import { agencyArrivalLabel, agencyReturnLabel, ferryDepartureLabel } from "@/lib/agency-booking-time-labels";
 import { emailHtml, emailDataTable, emailButton, fmtDate } from "@/lib/server/email-layout";
 import { buildServiceLabel, buildServiceLabelShort, type ServiceLabelContext } from "@/lib/service-label";
@@ -36,6 +37,7 @@ export interface OperatorNotifyInput {
   departureTime: string;
   hotelName: string;
   pax: number;
+  passengerDetails?: unknown;
   notes: string;
   approvalUrl: string;
   ferryDepartureTime?: string | null;
@@ -69,6 +71,7 @@ export async function sendOperatorNotifyEmail(input: OperatorNotifyInput): Promi
         [agencyArrivalLabel(input.serviceCtx.kind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
         [agencyReturnLabel(input.serviceCtx.kind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
         ["👥 Passeggeri", `${input.pax} persone`],
+      ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [["Composizione", medmarPassengerSummary(input.passengerDetails, input.pax)] as [string, string]] : []),
         ["📞 Telefono", input.customerPhone],
         ["✉️ Email cliente", input.customerEmail ?? "—"],
         ["📝 Note", input.notes || "—"],
@@ -106,6 +109,7 @@ export async function sendOperatorNotifyEmail(input: OperatorNotifyInput): Promi
     `${agencyArrivalLabel(input.serviceCtx.kind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
     `${agencyReturnLabel(input.serviceCtx.kind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     `Passeggeri: ${input.pax}`,
+    ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [medmarPassengerSummary(input.passengerDetails, input.pax)] : []),
     `Note: ${input.notes || "—"}`,
     ``,
     `Gestisci: ${input.approvalUrl}`,
@@ -126,6 +130,7 @@ export interface OperatorDuplicateNotifyInput {
   serviceCtx: ServiceLabelContext;
   arrivalDate: string;
   pax: number;
+  passengerDetails?: unknown;
 }
 
 function buildDuplicateEmailHtml(input: OperatorDuplicateNotifyInput, forOperator: boolean): string {
@@ -153,6 +158,7 @@ function buildDuplicateEmailHtml(input: OperatorDuplicateNotifyInput, forOperato
     ${emailDataTable([
       ["📅 Data arrivo", fmtDate(input.arrivalDate)],
       ["👥 Passeggeri", `${input.pax} persone`],
+      ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [["Composizione", medmarPassengerSummary(input.passengerDetails, input.pax)] as [string, string]] : []),
       ["🔖 ID prenotazione esistente", input.existingServiceId],
     ])}
 
@@ -211,6 +217,7 @@ export interface AgencyConfirmedInput {
   departureTime: string;
   hotelName: string;
   pax: number;
+  passengerDetails?: unknown;
   notes: string;
   priceCents: number;
   operatorNotes: string | null;
@@ -241,6 +248,7 @@ export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Pro
       [agencyArrivalLabel(input.serviceCtx.kind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
       [agencyReturnLabel(input.serviceCtx.kind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
       ["👥 Passeggeri", `${input.pax} persone`],
+      ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [["Composizione", medmarPassengerSummary(input.passengerDetails, input.pax)] as [string, string]] : []),
       ["📝 Note", input.notes || "—"],
       ["💰 Prezzo", `<strong style="font-size:16px;">${priceFormatted}</strong>`],
     ])}
@@ -259,6 +267,7 @@ export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Pro
     `${agencyArrivalLabel(input.serviceCtx.kind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
     `${agencyReturnLabel(input.serviceCtx.kind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     `Passeggeri: ${input.pax}`,
+    ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [medmarPassengerSummary(input.passengerDetails, input.pax)] : []),
     operatorNotes ? `Note operative: ${operatorNotes}` : null,
     `Prezzo: ${priceFormatted}`,
     input.confirmUrl ? `\nConferma ricezione: ${input.confirmUrl}` : null,
@@ -283,6 +292,7 @@ export interface AgencyRejectedInput {
   departureTime: string;
   hotelName: string;
   pax: number;
+  passengerDetails?: unknown;
   notes: string;
   operatorNotes: string | null;
 }
@@ -340,6 +350,7 @@ export interface AgencyPriceCorrectionInput {
   departureTime: string;
   hotelName: string;
   pax: number;
+  passengerDetails?: unknown;
   quotedPriceCents: number;
   correctedPriceCents: number;
   operatorNotes: string | null;
@@ -377,6 +388,7 @@ export async function sendAgencyPriceCorrectionEmail(input: AgencyPriceCorrectio
       [agencyReturnLabel(input.serviceCtx.kind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
       ["🏨 Hotel", input.hotelName],
       ["👥 Passeggeri", `${input.pax} persone`],
+      ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [["Composizione", medmarPassengerSummary(input.passengerDetails, input.pax)] as [string, string]] : []),
     ])}
 
     <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;margin:20px 0;overflow:hidden;">
@@ -413,6 +425,7 @@ export async function sendAgencyPriceCorrectionEmail(input: AgencyPriceCorrectio
     `${agencyArrivalLabel(input.serviceCtx.kind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
     `${agencyReturnLabel(input.serviceCtx.kind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     `Passeggeri: ${input.pax}`,
+    ...(input.serviceCtx.kind?.startsWith("formula_medmar_") ? [medmarPassengerSummary(input.passengerDetails, input.pax)] : []),
     ``,
     `Prezzo da voi indicato: ${quotedFormatted}`,
     `Prezzo corretto (listino): ${correctedFormatted} (differenza: ${diffFormatted})`,

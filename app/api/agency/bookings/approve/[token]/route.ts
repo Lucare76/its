@@ -31,6 +31,7 @@ type ServiceRow = {
   customer_email: string | null;
   phone: string | null;
   pax: number;
+  ferry_details?: unknown;
   date: string;
   time: string;
   arrival_date: string | null;
@@ -137,7 +138,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
     const { data: service } = await admin
       .from("services")
-      .select("id,tenant_id,customer_name,customer_first_name,customer_last_name,customer_email,phone,pax,date,time,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,excursion_details,notes,booking_service_kind,agency_id,approval_status,email_confirmation_to,hotels(name)")
+      .select("id,tenant_id,customer_name,customer_first_name,customer_last_name,customer_email,phone,pax,ferry_details,date,time,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,excursion_details,notes,booking_service_kind,agency_id,approval_status,email_confirmation_to,hotels(name)")
       .eq("tenant_id", tokenRow.tenant_id)
       .eq("id", tokenRow.service_id)
       .maybeSingle() as { data: ServiceRow | null };
@@ -163,6 +164,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         customer_email: service.customer_email ?? service.email_confirmation_to ?? null,
         phone: service.phone ?? null,
         pax: service.pax,
+      passengerDetails: service.ferry_details,
         arrival_date: service.arrival_date ?? service.date,
         arrival_time: service.arrival_time ?? service.time,
         departure_date: service.departure_date ?? service.date,
@@ -212,7 +214,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const { data: service } = await admin
       .from("services")
-      .select("id,tenant_id,customer_name,customer_first_name,customer_last_name,customer_email,phone,pax,date,time,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,excursion_details,notes,booking_service_kind,agency_id,approval_status,email_confirmation_to,hotels(name)")
+      .select("id,tenant_id,customer_name,customer_first_name,customer_last_name,customer_email,phone,pax,ferry_details,date,time,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,excursion_details,notes,booking_service_kind,agency_id,approval_status,email_confirmation_to,hotels(name)")
       .eq("tenant_id", tokenRow.tenant_id)
       .eq("id", tokenRow.service_id)
       .maybeSingle() as { data: ServiceRow | null };
@@ -261,6 +263,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       departureTime: service.departure_time ?? service.time,
       hotelName,
       pax: service.pax,
+      passengerDetails: service.ferry_details,
       notes: service.notes ?? "",
       operatorNotes: notes ?? null
     };

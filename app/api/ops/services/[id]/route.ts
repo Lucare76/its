@@ -134,7 +134,7 @@ export async function GET(
     const [serviceRes, hotelsRes, agenciesRes, schedulesRes, changeLogsRes] = await Promise.all([
       auth.admin
         .from("services")
-        .select("id, customer_name, phone, pax, date, time, notes, hotel_id, agency_id, billing_party_name, agency_quoted_price_cents, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by, outbound_time, return_time, vessel, train_arrival_number, train_arrival_time, train_departure_number, train_departure_time, status, is_draft, pickup_hotel, pickup_alert, bus_city_origin, practice_number")
+        .select("id, customer_name, phone, pax, ferry_details, date, time, notes, hotel_id, agency_id, billing_party_name, agency_quoted_price_cents, place_type, meeting_point, arrival_date, arrival_time, departure_date, departure_time, orario_barca, pickup_time, linked_service_id, transport_code, direction, booking_service_kind, service_type_code, internal_notes, internal_notes_updated_at, internal_notes_updated_by, outbound_time, return_time, vessel, train_arrival_number, train_arrival_time, train_departure_number, train_departure_time, status, is_draft, pickup_hotel, pickup_alert, bus_city_origin, practice_number")
         .eq("id", serviceId)
         .eq("tenant_id", tenantId)
         .maybeSingle(),

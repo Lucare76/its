@@ -234,7 +234,7 @@ export async function GET(request: NextRequest) {
     let query = auth.admin
       .from("services")
       .select(
-        "id,date,time,status,pax,customer_name,customer_first_name,customer_last_name,service_type,vessel,booking_service_kind,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,include_ferry_tickets,email_confirmation_status,email_confirmation_sent_at,email_confirmation_to,approval_status,notes,created_at,agency_quoted_price_cents,agency_payment_status,hotel_id,phone,hotels(name,zone)"
+        "id,date,time,status,pax,ferry_details,customer_name,customer_first_name,customer_last_name,service_type,vessel,booking_service_kind,arrival_date,arrival_time,departure_date,departure_time,transport_code,bus_city_origin,include_ferry_tickets,email_confirmation_status,email_confirmation_sent_at,email_confirmation_to,approval_status,notes,created_at,agency_quoted_price_cents,agency_payment_status,hotel_id,phone,hotels(name,zone)"
       )
       .eq("tenant_id", auth.membership.tenant_id)
       .order("date", { ascending: false })
@@ -526,6 +526,10 @@ export async function POST(request: NextRequest) {
 
     let insertAttempt = await auth.admin.from("services").insert(extendedInsert).select("id").single();
     if (insertAttempt.error || !insertAttempt.data?.id) {
+      // Do not silently drop structured passenger ages through the legacy fallback.
+      if (bookingKind.startsWith("formula_medmar_") && parsed.data.medmar_adult_count !== undefined) {
+        return NextResponse.json({ error: "Impossibile salvare la composizione passeggeri Medmar. Prenotazione non creata: riprova o contatta ITS." }, { status: 503 });
+      }
       insertAttempt = await auth.admin.from("services").insert(insertPayloadBase).select("id").single();
     }
     if (insertAttempt.error || !insertAttempt.data?.id) {
@@ -609,6 +613,7 @@ export async function POST(request: NextRequest) {
       hotelName: hotelData.name,
       pax: parsed.data.pax,
       notes,
+      passengerDetails: extendedInsert.ferry_details,
       pendingConfirmation: true
     });
 
@@ -628,6 +633,7 @@ export async function POST(request: NextRequest) {
       pax: parsed.data.pax,
       notes,
       ferryDepartureTime: computeIschiaArrivalTime(bookingKind, parsed.data.arrival_time) ? parsed.data.arrival_time : null,
+      passengerDetails: extendedInsert.ferry_details,
       approvalUrl,
       quotedPriceCents,
       catalogPriceCents
