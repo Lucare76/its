@@ -11,7 +11,7 @@ import {
 } from "@/lib/ferry-schedule-options";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
-import { agencyBookingCreateSchema } from "@/lib/validation";
+import { agencyBookingCreateSchema, requiresAgencyBookingNotes } from "@/lib/validation";
 import { getPickupRuleByRange, normalizeZonaIschia } from "@/lib/departure-pickup-rules";
 
 type BookingKind = z.infer<typeof agencyBookingCreateSchema>["booking_service_kind"];
@@ -456,6 +456,7 @@ export default function AgencyNewBookingPage() {
   };
 
   const selectedKind = form.booking_service_kind;
+  const notesRequired = requiresAgencyBookingNotes(selectedKind);
   const isSnavKind = selectedKind === "formula_snav";
   const isMedmarKind = selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli";
   const snavArrivalOptions = useMemo(
@@ -596,7 +597,7 @@ export default function AgencyNewBookingPage() {
     if (!form.customer_phone.trim()) warnings.push("Inserisci un telefono cliente.");
     if (Number(form.pet_count || "0") > 0 && !form.pet_notes.trim()) warnings.push("Indica tipo/taglia animale nelle note animali.");
     if (!form.hotel_id) warnings.push("Seleziona la struttura.");
-    if (!form.notes.trim()) warnings.push("Aggiungi una nota operativa.");
+    if (notesRequired && !form.notes.trim()) warnings.push("Aggiungi una nota operativa per il solo transfer porto / hotel.");
     if (isTransportCodeRequired && !form.transport_code.trim()) warnings.push(`${contextLabels.transportCodeLabel.replace("*", "")} mancante.`);
     if (isTransportCodeRequired && contextLabels.transportCodeReturnLabel && (!isTransferKindWithTripLeg || tripLeg === "round_trip") && !form.transport_code_return.trim()) warnings.push(`${contextLabels.transportCodeReturnLabel.replace("*", "")} mancante.`);
     if (isBusOriginRequired && !form.bus_city_origin.trim()) warnings.push("Citta di partenza bus mancante.");
@@ -616,6 +617,7 @@ export default function AgencyNewBookingPage() {
     form.pet_notes,
     form.transport_code,
     form.transport_code_return,
+    notesRequired,
     isBusOriginRequired,
     isExcursionTitleRequired,
     isSnavKind,
@@ -782,10 +784,10 @@ export default function AgencyNewBookingPage() {
   }
 
   return (
-    <section className="mx-auto max-w-5xl page-section">
-      <div className="section-head">
+    <section className="page-section mx-auto w-full min-w-0 max-w-5xl">
+      <div className="flex min-w-0 flex-col gap-2">
         <h1 className="section-title">Nuova prenotazione agenzia</h1>
-        <p className="section-subtitle">Modulo reale con persistenza Supabase e conferma email opzionale.</p>
+        <p className="section-subtitle">Inserisci i dati del servizio e controlla il riepilogo prima di confermare.</p>
       </div>
       <div className="flex flex-wrap gap-2">
         <Link href="/agency/bookings" className="btn-secondary px-3 py-1.5 text-xs">
@@ -818,7 +820,7 @@ export default function AgencyNewBookingPage() {
         </article>
       ) : null}
 
-      <div className="card grid gap-3 p-4 md:grid-cols-2 md:p-5">
+      <div className="card grid min-w-0 items-start gap-x-4 gap-y-5 p-4 md:grid-cols-2 md:p-6">
         <label className="text-sm md:col-span-2">
           Tipo servizio*
           <select
@@ -1082,8 +1084,8 @@ export default function AgencyNewBookingPage() {
         </div>
         {/* Arrivo: data + ora sulla stessa riga */}
         {(!isTransferKindWithTripLeg || tripLeg !== "return_only") ? (
-        <div className="md:col-span-2 grid grid-cols-2 gap-3">
-          <label className="text-sm">
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 sm:grid-cols-2 md:col-span-2">
+          <label className="flex min-w-0 flex-col text-sm">
             {contextLabels.arrivalDateLabel}
             <DateInput
               className="input-saas mt-1"
@@ -1118,7 +1120,7 @@ export default function AgencyNewBookingPage() {
               <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
             ) : null}
           </label>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col text-sm">
             {contextLabels.arrivalTimeLabel}
             {(isSnavKind || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli") ? (
               <select
@@ -1144,8 +1146,8 @@ export default function AgencyNewBookingPage() {
 
         {/* Ritorno: data + ora sulla stessa riga */}
         {(!isTransferKindWithTripLeg || tripLeg !== "outbound_only") ? (
-        <div className="md:col-span-2 grid grid-cols-2 gap-3">
-          <label className="text-sm">
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 sm:grid-cols-2 md:col-span-2">
+          <label className="flex min-w-0 flex-col text-sm">
             {contextLabels.departureDateLabel}
             <DateInput
               className={`input-saas mt-1${selectedKind === "bus_city_hotel" && form.departure_date && !isSunday(form.departure_date) ? " border-amber-400" : ""}`}
@@ -1169,7 +1171,7 @@ export default function AgencyNewBookingPage() {
               <span className="mt-1 block text-xs text-amber-600">Le linee bus operano solo la domenica.</span>
             ) : null}
           </label>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col text-sm">
             {contextLabels.departureTimeLabel}
             {(isSnavKind || selectedKind === "formula_medmar_napoli" || selectedKind === "formula_medmar_pozzuoli") ? (
               <select
@@ -1399,8 +1401,10 @@ export default function AgencyNewBookingPage() {
         </label>
 
         <label className="text-sm md:col-span-2">
-          Note*
+          {notesRequired ? "Note*" : "Note (facoltative)"}
           <textarea
+            required={notesRequired}
+            aria-required={notesRequired}
             rows={4}
             className="input-saas mt-1 min-h-[104px]"
             value={form.notes}

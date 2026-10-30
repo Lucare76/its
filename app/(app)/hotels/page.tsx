@@ -1768,7 +1768,7 @@ export default function HotelsPage() {
                     }
                     return (
                       <article key={hotel.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(190px,1.45fr)_minmax(0,1.35fr)_minmax(160px,0.7fr)_minmax(0,0.85fr)_minmax(180px,0.7fr)_minmax(128px,0.45fr)]">
+                        <div className="grid min-w-0 items-start gap-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,0.85fr)_minmax(0,1fr)_8rem]">
                           <div className="min-w-0 space-y-1">
                             <p className="break-words text-sm font-extrabold uppercase leading-5 tracking-[0.02em] text-slate-900">{hotel.name}</p>
                             <div className="flex flex-wrap gap-2 text-xs text-slate-500">
@@ -1793,7 +1793,7 @@ export default function HotelsPage() {
                             </div>
                           </div>
 
-                          <div className="space-y-2">
+                          <div className="min-w-0 space-y-2">
                             {hotel.small_vehicle_only ? (
                               <div className="space-y-1">
                                 <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
@@ -1829,7 +1829,7 @@ export default function HotelsPage() {
                           </div>
 
                           <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex flex-col items-start gap-2">
                               {hotel.is_active ? (
                                 <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">Attivo</span>
                               ) : (
@@ -1844,20 +1844,20 @@ export default function HotelsPage() {
                             {hasWeakAddress && geoIssues.length === 0 ? <div className="text-xs text-amber-700">Indirizzo incompleto</div> : null}
                           </div>
 
-                          <div>
+                          <div className="sm:col-span-2 xl:col-span-1">
                             {canManageHotels ? (
-                              <div className="flex flex-wrap gap-1.5 xl:flex-col">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:grid-cols-1">
                                   <button
                                     type="button"
                                     onClick={() => startEdit(hotel)}
-                                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                                    className="rounded-lg border border-slate-300 min-h-9 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                                   >
                                     Modifica
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => openGeoCorrection(hotel)}
-                                    className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
+                                    className="rounded-lg border border-sky-200 bg-sky-50 min-h-9 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-100"
                                   >
                                     Correggi geo
                                   </button>
@@ -1865,7 +1865,7 @@ export default function HotelsPage() {
                                     type="button"
                                     onClick={() => void deleteHotel(hotel.id, hotel.name)}
                                     disabled={saving}
-                                    className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                                    className="rounded-lg border border-rose-200 min-h-9 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                                   >
                                     Elimina
                                   </button>

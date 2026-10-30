@@ -131,6 +131,10 @@ export const serviceCreateSchema = z.object({
   }
 });
 
+export function requiresAgencyBookingNotes(kind: string) {
+  return kind === "transfer_port_hotel";
+}
+
 export const agencyBookingCreateSchema = z
   .object({
     customer_first_name: z.string().max(80).optional().or(z.literal("")),
@@ -157,7 +161,7 @@ export const agencyBookingCreateSchema = z
     ferry_outbound_code: z.string().max(80).optional().or(z.literal("")),
     ferry_return_code: z.string().max(80).optional().or(z.literal("")),
     excursion_title: z.string().max(160).optional().or(z.literal("")),
-    notes: z.string().max(2000),
+    notes: z.string().max(2000).default(""),
     agency_id: z.string().uuid().optional().or(z.literal("")),
     agency_quoted_price_cents: z.number().int().min(0).max(9999900).optional().nullable(),
     trip_leg: z.enum(["outbound_only", "return_only", "round_trip"]).optional(),
@@ -166,6 +170,9 @@ export const agencyBookingCreateSchema = z
     hotel_dest_id: z.string().uuid().optional().or(z.literal(""))
   })
   .superRefine((value, ctx) => {
+    if (requiresAgencyBookingNotes(value.booking_service_kind) && !value.notes.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["notes"], message: "Inserisci una nota operativa per il solo transfer porto / hotel." });
+    }
     if (value.booking_service_kind === "formula_medmar_napoli" || value.booking_service_kind === "formula_medmar_pozzuoli") {
       const counts = [value.medmar_infant_count, value.medmar_child_count, value.medmar_adult_count];
       if (counts.some(count => count !== undefined) &&
