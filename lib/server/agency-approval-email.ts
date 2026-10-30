@@ -1,3 +1,4 @@
+import { agencyArrivalLabel, agencyReturnLabel, ferryDepartureLabel } from "@/lib/agency-booking-time-labels";
 import { emailHtml, emailDataTable, emailButton, fmtDate } from "@/lib/server/email-layout";
 import { buildServiceLabel, buildServiceLabelShort, type ServiceLabelContext } from "@/lib/service-label";
 import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
@@ -37,6 +38,7 @@ export interface OperatorNotifyInput {
   pax: number;
   notes: string;
   approvalUrl: string;
+  ferryDepartureTime?: string | null;
   quotedPriceCents?: number | null;
   catalogPriceCents?: number | null;
 }
@@ -53,18 +55,19 @@ export async function sendOperatorNotifyEmail(input: OperatorNotifyInput): Promi
     <p style="font-size:17px;margin-bottom:4px;">Nuova prenotazione da confermare</p>
     <p style="color:#475569;margin-bottom:24px;">Una richiesta è arrivata dall'area agenzia e attende la tua conferma.</p>
 
-    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;margin-bottom:24px;">
+    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" bgcolor="#f1f5f9" style="background-color:#f1f5f9;border-radius:14px;margin-bottom:24px;">
       <tr><td class="service-box" style="padding:20px 24px;">
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio richiesto</div>
-        <div class="service-title" style="font-size:20px;font-weight:800;color:#ffffff;line-height:1.3;">${serviceLabel}</div>
-        <div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:6px;">👤 ${input.customerName} · ${agency}</div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#475569;margin-bottom:6px;">Servizio richiesto</div>
+        <div class="service-title" style="font-size:20px;font-weight:800;color:#0f2744;line-height:1.3;">${serviceLabel}</div>
+        <div style="font-size:14px;color:#475569;margin-top:6px;">👤 ${input.customerName} · ${agency}</div>
       </td></tr>
     </table>
 
     ${(() => {
       const rows: [string, string][] = [
-        ["📅 Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
-        ["📅 Rientro", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
+        ...(input.ferryDepartureTime ? [[ferryDepartureLabel(input.serviceCtx.kind), `${fmtDate(input.arrivalDate)} alle ${input.ferryDepartureTime}`] as [string, string]] : []),
+        [agencyArrivalLabel(input.serviceCtx.kind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
+        [agencyReturnLabel(input.serviceCtx.kind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
         ["👥 Passeggeri", `${input.pax} persone`],
         ["📞 Telefono", input.customerPhone],
         ["✉️ Email cliente", input.customerEmail ?? "—"],
@@ -99,8 +102,9 @@ export async function sendOperatorNotifyEmail(input: OperatorNotifyInput): Promi
     `Servizio: ${serviceLabel}`,
     `Cliente: ${input.customerName} (${agency})`,
     `Telefono: ${input.customerPhone}`,
-    `Arrivo: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
-    `Rientro: ${fmtDate(input.departureDate)} ${input.departureTime}`,
+    ...(input.ferryDepartureTime ? [`${ferryDepartureLabel(input.serviceCtx.kind)}: ${input.ferryDepartureTime}`] : []),
+    `${agencyArrivalLabel(input.serviceCtx.kind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
+    `${agencyReturnLabel(input.serviceCtx.kind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     `Passeggeri: ${input.pax}`,
     `Note: ${input.notes || "—"}`,
     ``,
@@ -226,16 +230,16 @@ export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Pro
     <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${greeting}</strong>,</p>
     <p style="color:#475569;margin-bottom:24px;">La prenotazione è stata <strong style="color:#16a34a;">confermata</strong>.</p>
 
-    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;margin-bottom:24px;">
+    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" bgcolor="#f1f5f9" style="background-color:#f1f5f9;border-radius:14px;margin-bottom:24px;">
       <tr><td class="service-box" style="padding:20px 24px;">
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio confermato</div>
-        <div class="service-title" style="font-size:20px;font-weight:800;color:#ffffff;line-height:1.3;">${serviceLabel}</div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#475569;margin-bottom:6px;">Servizio confermato</div>
+        <div class="service-title" style="font-size:20px;font-weight:800;color:#0f2744;line-height:1.3;">${serviceLabel}</div>
       </td></tr>
     </table>
 
     ${emailDataTable([
-      ["📅 Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
-      ["📅 Rientro", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
+      [agencyArrivalLabel(input.serviceCtx.kind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
+      [agencyReturnLabel(input.serviceCtx.kind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
       ["👥 Passeggeri", `${input.pax} persone`],
       ["📝 Note", input.notes || "—"],
       ["💰 Prezzo", `<strong style="font-size:16px;">${priceFormatted}</strong>`],
@@ -252,8 +256,8 @@ export async function sendAgencyConfirmedEmail(input: AgencyConfirmedInput): Pro
     `Ciao ${greeting},`,
     `La prenotazione è stata CONFERMATA.`,
     `Servizio: ${serviceLabel}`,
-    `Arrivo: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
-    `Rientro: ${fmtDate(input.departureDate)} ${input.departureTime}`,
+    `${agencyArrivalLabel(input.serviceCtx.kind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
+    `${agencyReturnLabel(input.serviceCtx.kind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     `Passeggeri: ${input.pax}`,
     operatorNotes ? `Note operative: ${operatorNotes}` : null,
     `Prezzo: ${priceFormatted}`,
@@ -360,17 +364,17 @@ export async function sendAgencyPriceCorrectionEmail(input: AgencyPriceCorrectio
       Il prezzo è stato corretto come indicato di seguito — la prenotazione procede regolarmente con il prezzo aggiornato.
     </p>
 
-    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;margin-bottom:24px;">
+    <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" bgcolor="#f1f5f9" style="background-color:#f1f5f9;border-radius:14px;margin-bottom:24px;">
       <tr><td class="service-box" style="padding:20px 24px;">
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio prenotato</div>
-        <div class="service-title" style="font-size:20px;font-weight:800;color:#ffffff;line-height:1.3;">${serviceLabel}</div>
-        <div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:6px;">👤 ${input.customerName}</div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#475569;margin-bottom:6px;">Servizio prenotato</div>
+        <div class="service-title" style="font-size:20px;font-weight:800;color:#0f2744;line-height:1.3;">${serviceLabel}</div>
+        <div style="font-size:14px;color:#475569;margin-top:6px;">👤 ${input.customerName}</div>
       </td></tr>
     </table>
 
     ${emailDataTable([
-      ["📅 Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
-      ["📅 Rientro", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
+      [agencyArrivalLabel(input.serviceCtx.kind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
+      [agencyReturnLabel(input.serviceCtx.kind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
       ["🏨 Hotel", input.hotelName],
       ["👥 Passeggeri", `${input.pax} persone`],
     ])}
@@ -406,8 +410,8 @@ export async function sendAgencyPriceCorrectionEmail(input: AgencyPriceCorrectio
     `Servizio: ${serviceLabel}`,
     `Cliente: ${input.customerName}`,
     `Hotel: ${input.hotelName}`,
-    `Arrivo: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
-    `Rientro: ${fmtDate(input.departureDate)} ${input.departureTime}`,
+    `${agencyArrivalLabel(input.serviceCtx.kind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
+    `${agencyReturnLabel(input.serviceCtx.kind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     `Passeggeri: ${input.pax}`,
     ``,
     `Prezzo da voi indicato: ${quotedFormatted}`,

@@ -1,3 +1,4 @@
+import { agencyArrivalLabel, agencyReturnLabel, ferryDepartureLabel } from "@/lib/agency-booking-time-labels";
 import { emailHtml, emailDataTable, fmtDate } from "@/lib/server/email-layout";
 import { sendEmail as sendEmailUtil } from "@/lib/server/send-email";
 
@@ -8,6 +9,8 @@ export interface AgencyBookingEmailInput {
   customerName: string;
   recipientName?: string | null;
   serviceKindLabel: string;
+  bookingKind?: string | null;
+  ferryDepartureTime?: string | null;
   arrivalDate: string;
   arrivalTime: string;
   departureDate: string;
@@ -28,13 +31,15 @@ function buildPlainText(input: AgencyBookingEmailInput) {
   const lines = [
     `Ciao ${greeting},`,
     "",
-    "abbiamo ricevuto la tua prenotazione Ischia Transfer.",
+    input.pendingConfirmation ? "Richiesta ricevuta, in attesa di conferma dell’operatore." : "La tua prenotazione è stata ricevuta con successo.",
+    `Cliente: ${input.customerName}`,
     "",
     `Servizio: ${input.serviceKindLabel}`,
     `Hotel/Struttura: ${input.hotelName}`,
     `Pax: ${input.pax}`,
-    `Arrivo: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
-    `Partenza: ${fmtDate(input.departureDate)} ${input.departureTime}`,
+    ...(input.ferryDepartureTime ? [`${ferryDepartureLabel(input.bookingKind)}: ${fmtDate(input.arrivalDate)} ${input.ferryDepartureTime}`] : []),
+    `${agencyArrivalLabel(input.bookingKind)}: ${fmtDate(input.arrivalDate)} ${input.arrivalTime}`,
+    `${agencyReturnLabel(input.bookingKind)}: ${fmtDate(input.departureDate)} ${input.departureTime}`,
     "",
     `Note: ${input.notes || "-"}`,
     "",
@@ -54,23 +59,22 @@ function buildHtml(input: AgencyBookingEmailInput) {
     <p style="font-size:17px;margin-bottom:6px;">Ciao <strong>${greeting}</strong>,</p>
     ${statusLine}
 
-    <table class="service-box" cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%" style="background:linear-gradient(135deg,#0f2744,#1e3a5f);border-radius:14px;margin-bottom:24px;">
-      <tr><td class="service-box" style="padding:20px 24px;">
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Servizio prenotato</div>
-        <div class="service-title" style="font-size:20px;font-weight:800;color:#ffffff;line-height:1.3;">${input.serviceKindLabel}</div>
-        <div style="font-size:14px;color:rgba(255,255,255,0.7);margin-top:6px;">📍 ${input.hotelName}</div>
-      </td></tr>
-    </table>
+    ${emailDataTable([
+      ["Cliente", input.customerName],
+      ["Servizio", input.serviceKindLabel],
+      ["Hotel / Struttura", input.hotelName],
+    ])}
 
     ${emailDataTable([
       ["👥 Passeggeri", `${input.pax} persone`],
-      ["✈️ Arrivo", `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
-      ["🏠 Partenza", `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
+      ...(input.ferryDepartureTime ? [[ferryDepartureLabel(input.bookingKind), `${fmtDate(input.arrivalDate)} alle ${input.ferryDepartureTime}`] as [string, string]] : []),
+      [agencyArrivalLabel(input.bookingKind), `${fmtDate(input.arrivalDate)} alle ${input.arrivalTime}`],
+      [agencyReturnLabel(input.bookingKind), `${fmtDate(input.departureDate)} alle ${input.departureTime}`],
       ["📝 Note", notes],
     ])}
 
     <p style="color:#475569;margin-top:20px;">Il nostro team ti contatterà per eventuali dettagli operativi. Grazie per aver scelto Ischia Transfer Service!</p>
-  `, { title: "Conferma prenotazione — Ischia Transfer", preheader: `Prenotazione confermata — ${input.hotelName}, ${fmtDate(input.arrivalDate)}` });
+  `, { title: input.pendingConfirmation ? "Richiesta ricevuta — Ischia Transfer" : "Riepilogo prenotazione — Ischia Transfer", preheader: `${input.pendingConfirmation ? "In attesa di conferma" : "Prenotazione ricevuta"} — ${input.hotelName}, ${fmtDate(input.arrivalDate)}` });
 }
 
 export async function sendAgencyBookingConfirmationEmail(input: AgencyBookingEmailInput): Promise<AgencyBookingEmailResult> {
@@ -78,7 +82,7 @@ export async function sendAgencyBookingConfirmationEmail(input: AgencyBookingEma
     return { status: "skipped", error: "Destinatario email non disponibile." };
   }
 
-  const subject = `Conferma prenotazione Ischia Transfer - ${fmtDate(input.arrivalDate)}`;
+  const subject = `${input.pendingConfirmation ? "Richiesta ricevuta" : "Riepilogo prenotazione"} Ischia Transfer - ${fmtDate(input.arrivalDate)}`;
   const result = await sendEmailUtil({
     to: input.to,
     subject,

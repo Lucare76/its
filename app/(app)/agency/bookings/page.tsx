@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { agencyArrivalLabel, agencyReturnLabel } from "@/lib/agency-booking-time-labels";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { DateInput, EmptyState, FilterBar, PageHeader, SectionCard } from "@/components/ui";
@@ -536,8 +537,8 @@ function AgencyBookingsPageInner() {
                                 </div>
                               </div>
                               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
-                                <span>Arrivo: {formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</span>
-                                {row.departure_date && <span>Rientro: {formatDateTime(row.departure_date, row.departure_time)}</span>}
+                                <span>{agencyArrivalLabel(row.booking_service_kind)}: {formatDateTime(row.arrival_date ?? row.date, row.arrival_time ?? row.time)}</span>
+                                {row.departure_date && <span>{agencyReturnLabel(row.booking_service_kind)}: {formatDateTime(row.departure_date, row.departure_time)}</span>}
                                 {row.agency_quoted_price_cents != null && (
                                   <span className={`ml-auto font-semibold ${row.agency_payment_status === "paid" ? "text-emerald-600" : "text-slate-600"}`}>
                                     €{(row.agency_quoted_price_cents / 100).toFixed(2).replace(".", ",")}
@@ -659,6 +660,11 @@ function AgencyBookingsPageInner() {
                   <WhatsAppButton phone={selectedBooking.phone} name={bookingCustomerLabel(selectedBooking)} tenantId={tenantId} />
                 </div>
 
+                {latestMod?.status === "pending" && (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-800">
+                    Modifica richiesta, in attesa di valutazione dell’operatore. I dati qui sotto restano quelli attuali fino all’approvazione.
+                  </div>
+                )}
                 {/* Esito ultima modifica */}
                 {latestMod && latestMod.status !== "pending" && (
                   <div className={`rounded-xl border px-3 py-2.5 text-sm ${latestMod.status === "approved" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
@@ -669,13 +675,13 @@ function AgencyBookingsPageInner() {
 
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Arrivo</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{agencyArrivalLabel(selectedBooking.booking_service_kind)}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-800">
                       {formatDateTime(selectedBooking.arrival_date ?? selectedBooking.date, selectedBooking.arrival_time ?? selectedBooking.time)}
                     </p>
                   </div>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Rientro</p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{agencyReturnLabel(selectedBooking.booking_service_kind)}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-800">
                       {selectedBooking.departure_date ? formatDateTime(selectedBooking.departure_date, selectedBooking.departure_time) : "—"}
                     </p>
