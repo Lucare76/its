@@ -8,6 +8,19 @@ export const HOTEL_ZONES = [
   "Serrara Fontana"
 ] as const;
 
+export const HOTEL_OPERATIONAL_ZONES = [...HOTEL_ZONES, "Napoli"] as const;
+export const NAPOLI_REFERENCE = { lat: 40.8522, lng: 14.2681 };
+export function isNapoliHotel(input?: { city?: string | null; zone?: string | null } | null) {
+  return [input?.city, input?.zone].some(value => /^(napoli|naples)$/i.test(String(value ?? "").trim()));
+}
+export function hotelSearchBounds(input?: { city?: string | null; zone?: string | null } | null) {
+  return isNapoliHotel(input) ? "14.14,40.78,14.36,40.94" : "13.82,40.67,13.99,40.77";
+}
+export function isWithinHotelBounds(lat: number | null | undefined, lng: number | null | undefined, input?: { city?: string | null; zone?: string | null } | null) {
+  if (!isNapoliHotel(input)) return isWithinIschiaBounds(lat, lng);
+  return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng) && lat >= 40.78 && lat <= 40.94 && lng >= 14.14 && lng <= 14.36;
+}
+
 export type HotelZone = (typeof HOTEL_ZONES)[number];
 
 export const zoneCentroids: Record<HotelZone, { lat: number; lng: number }> = {
@@ -70,6 +83,7 @@ export const ISCHIA_BOUNDS = {
 export type HotelGeoIssue =
   | "missing_coordinates"
   | "outside_ischia"
+  | "outside_operational_area"
   | "default_centroid"
   | "zone_coordinate_mismatch"
   | "incomplete_address";
@@ -150,6 +164,7 @@ export function isDefaultZoneCentroid(lat?: number | null, lng?: number | null) 
 
 export function hotelGeoQuality(input: {
   address?: string | null;
+  city?: string | null;
   zone?: string | null;
   lat?: number | null;
   lng?: number | null;
@@ -170,9 +185,9 @@ export function hotelGeoQuality(input: {
 
   if (missing) {
     issues.push("missing_coordinates");
-  } else if (!isWithinIschiaBounds(input.lat, input.lng)) {
-    issues.push("outside_ischia");
-  } else {
+  } else if (!isWithinHotelBounds(input.lat, input.lng, input)) {
+    issues.push(isNapoliHotel(input) ? "outside_operational_area" : "outside_ischia");
+  } else if (!isNapoliHotel(input)) {
     const point = { lat: input.lat!, lng: input.lng! };
     inferredZone = inferZoneFromCoords(point.lat, point.lng);
 
@@ -196,11 +211,13 @@ export function hotelGeoQuality(input: {
   const blockingIssues = new Set<HotelGeoIssue>([
     "missing_coordinates",
     "outside_ischia",
+    "outside_operational_area",
     "default_centroid",
     "zone_coordinate_mismatch"
   ]);
-  const routeUsable = !issues.some((issue) => blockingIssues.has(issue));
-  const confidence = routeUsable && issues.length === 0 ? "ok" : routeUsable ? "warning" : "blocked";
+  const coordinatesUsable = !issues.some((issue) => blockingIssues.has(issue));
+  const routeUsable = coordinatesUsable && !isNapoliHotel(input);
+  const confidence = coordinatesUsable && issues.length === 0 ? "ok" : coordinatesUsable ? "warning" : "blocked";
 
   return { issues, confidence, routeUsable, inferredZone, distanceFromZoneKm };
 }
@@ -242,6 +259,7 @@ function formatDateTime(value?: string | null) {
 
 export function evaluateHotelGeo(input: {
   address?: string | null;
+  city?: string | null;
   zone?: string | null;
   lat?: number | null;
   lng?: number | null;
@@ -260,6 +278,7 @@ export function evaluateHotelGeo(input: {
   const storedStatus = normalizeGeoStatus(input.geo_status);
   const missing = quality.issues.includes("missing_coordinates");
   const outsideIschia = quality.issues.includes("outside_ischia");
+  const outsideArea = outsideIschia || quality.issues.includes("outside_operational_area");
   const generic =
     quality.issues.includes("default_centroid") ||
     quality.issues.includes("zone_coordinate_mismatch") ||
@@ -275,7 +294,7 @@ export function evaluateHotelGeo(input: {
     Boolean(input.geo_verified_at);
 
   let status: HotelGeoStatus;
-  if (missing || outsideIschia) {
+  if (missing || outsideArea) {
     status = missing ? "missing" : "generic";
   } else if (manuallyVerified || trustedGeocoderVerified) {
     status = "verified";
@@ -289,7 +308,7 @@ export function evaluateHotelGeo(input: {
     status = "generic";
   }
 
-  if (outsideIschia && status === "verified") {
+  if (outsideArea && status === "verified") {
     status = "generic";
   }
 
@@ -301,7 +320,7 @@ export function evaluateHotelGeo(input: {
     input.geo_verified_by ? `Verificato da: ${input.geo_verified_by}` : null,
     input.formatted_address ? `Indirizzo: ${input.formatted_address}` : null,
     input.geo_notes ? `Note: ${input.geo_notes}` : null,
-    outsideIschia ? "Alert: coordinate fuori Ischia" : null
+    outsideArea ? `Alert: coordinate fuori ${isNapoliHotel(input) ? "Napoli" : "Ischia"}` : null
   ].filter((line): line is string => Boolean(line));
 
   return {
@@ -310,9 +329,9 @@ export function evaluateHotelGeo(input: {
     source,
     accuracy,
     label: copy.label,
-    helper: outsideIschia ? "coordinate fuori Ischia" : copy.helper,
+    helper: outsideArea ? `coordinate fuori ${isNapoliHotel(input) ? "Napoli" : "Ischia"}` : copy.helper,
     tooltipLines,
-    canBeVerified: !missing && !outsideIschia,
+    canBeVerified: !missing && !outsideArea,
     outsideIschia
   };
 }

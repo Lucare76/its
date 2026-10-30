@@ -761,3 +761,10 @@ describe("resolveAssignableService", () => {
     }
   });
 });
+
+it("keeps Napoli hotels out of island assignment despite a stale island zone", () => {
+  const resolution = resolveAssignableService({ id: "napoli", direction: "arrival", time: "12:00", pax: 2, hotel_id: "ramada", booking_service_kind: "transfer_port_hotel", meeting_point: "Ischia Porto" }, { hotel: { name: "Ramada", city: "Napoli", zone: "Ischia Porto", lat: 40.849, lng: 14.276 } });
+  expect(resolution.assignable).toBe(false);
+  expect(resolution.hard_constraints).toContain("mainland_hotel");
+  expect(resolution.review_reasons.join(" ")).toContain("terraferma");
+});

@@ -20,7 +20,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
+import { isNapoliHotel, hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { loadVehicleCommitmentsForDate } from "@/lib/server/vehicle-commitments";
 import {
@@ -786,6 +786,7 @@ type ServiceRow = {
   ferry_details: Record<string, unknown> | null;
 };
 type HotelRow = {
+  city?: string | null;
   id: string;
   name: string | null;
   address: string | null;
@@ -1034,7 +1035,7 @@ export async function POST(request: NextRequest) {
           .select("id, time, direction, vessel, hotel_id, pax, status, meeting_point, pickup_hotel, customer_name, booking_service_kind, service_type_code, arrival_time, orario_barca, porto_bruno, barca_compagnia, ferry_details")
           .eq("tenant_id", tenantId).eq("date", date)
           .neq("status", "cancelled").neq("is_draft", true),
-        auth.admin.from("hotels").select("id, name, address, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
+        auth.admin.from("hotels").select("id, name, address, city, zone, lat, lng, geo_status, geo_source, geo_accuracy, geo_verified_at").eq("tenant_id", tenantId),
         auth.admin.from("vehicles")
           .select("id, label, capacity")
           .eq("tenant_id", tenantId).eq("active", true)
@@ -1170,15 +1171,19 @@ export async function POST(request: NextRequest) {
         .filter((assignment) => assignment.service_id && allDayServiceIds.has(assignment.service_id))
         .map((assignment) => [assignment.service_id!, assignment])
     );
+    const mainlandServiceIds = new Set(allServices.filter(service => isNapoliHotel(service.hotel_id ? hotelMap.get(service.hotel_id) : null)).map(service => service.id));
+    const mainlandGroupIds = new Set((assignmentsRes.data ?? []).filter(assignment => mainlandServiceIds.has(assignment.service_id as string) && assignment.group_id).map(assignment => assignment.group_id as string));
+    // Keep mainland groups intact, including any mixed groups requiring operator review.
     const lockedAssignments = (assignmentsRes.data ?? [])
-      .filter((a) => a.locked_by_operator === true && allDayServiceIds.has(a.service_id as string));
-    const lockedServiceIds = new Set(lockedAssignments.map((a) => a.service_id as string));
+      .filter(assignment => allDayServiceIds.has(assignment.service_id as string) &&
+        (assignment.locked_by_operator === true || (assignment.group_id && mainlandGroupIds.has(assignment.group_id as string))));
+    const lockedServiceIds = new Set(lockedAssignments.map(assignment => assignment.service_id as string));
     const lockedGroupIds = new Set(
-      lockedAssignments
-        .map((a) => a.group_id as string | null)
+      lockedAssignments.map(assignment => assignment.group_id as string | null)
         .filter((groupId): groupId is string => Boolean(groupId))
     );
-    const existingGroups = (groupsRes.data ?? []).map((g) => g.id as string);
+    const existingGroups = (groupsRes.data ?? []).map(group => group.id as string);
+    const regeneratableGroups = existingGroups.filter(id => !mainlandGroupIds.has(id));
     const activeGroupDriverByUserId = new Map(
       (groupsRes.data ?? []).map((group) => [group.id as string, (group.driver_user_id as string | null) ?? null])
     );
@@ -1208,12 +1213,12 @@ export async function POST(request: NextRequest) {
 
     const now = new Date().toISOString();
 
-    if (mode === "regenerate_all" && existingGroups.length > 0) {
-      const unlockedGroupIds = existingGroups.filter((groupId) => !lockedGroupIds.has(groupId));
+    if (mode === "regenerate_all" && regeneratableGroups.length > 0) {
+      const unlockedGroupIds = regeneratableGroups.filter((groupId) => !lockedGroupIds.has(groupId));
       const unlockedServiceIds = (assignmentsRes.data ?? [])
         .filter((a) =>
           a.group_id &&
-          existingGroups.includes(a.group_id as string) &&
+          regeneratableGroups.includes(a.group_id as string) &&
           a.locked_by_operator !== true &&
           allDayServiceIds.has(a.service_id as string)
         )
@@ -1222,7 +1227,7 @@ export async function POST(request: NextRequest) {
         auth.admin
           .from("assignments")
           .delete()
-          .in("group_id", existingGroups)
+          .in("group_id", regeneratableGroups)
           .eq("tenant_id", tenantId)
           .or("locked_by_operator.is.null,locked_by_operator.eq.false"),
         unlockedGroupIds.length > 0
@@ -1247,7 +1252,7 @@ export async function POST(request: NextRequest) {
 
     // Scarta i servizi privi di dati operativi minimi (nessun orario, nessun pax, nessuna location)
     const incompleteServices = candidateServices.filter(
-      (s) => !serviceOperationalTime(s) || !s.pax || s.pax <= 0 || (!s.hotel_id && !s.meeting_point)
+      (s) => isNapoliHotel(s.hotel_id ? hotelMap.get(s.hotel_id) : null) || !serviceOperationalTime(s) || !s.pax || s.pax <= 0 || (!s.hotel_id && !s.meeting_point)
     );
     const incompleteIds = new Set(incompleteServices.map((s) => s.id));
     const toAssign = candidateServices.filter((s) => !incompleteIds.has(s.id));
@@ -1261,7 +1266,7 @@ export async function POST(request: NextRequest) {
     if (!toAssign.length) {
       return NextResponse.json({
         ok: true, assigned: 0, trips: 0, skipped: incompleteServices.length,
-        report: [`Nessun servizio assegnabile: ${incompleteServices.length} servizi con dati incompleti (orario, pax o location mancanti).`],
+        report: [`Nessun servizio assegnabile: ${incompleteServices.length} servizi con dati incompleti o hotel sulla terraferma.`],
       });
     }
 
@@ -2307,7 +2312,7 @@ export async function POST(request: NextRequest) {
     const report: string[] = [
       `${assignedCount} servizi assegnati in ${tripsCreated} giri.`,
       ...hotelShiftResult.warnings,
-      ...(incompleteServices.length > 0 ? [`${incompleteServices.length} servizi esclusi per dati incompleti (orario/pax/location mancanti).`] : []),
+      ...(incompleteServices.length > 0 ? [`${incompleteServices.length} servizi esclusi per dati incompleti o hotel sulla terraferma.`] : []),
       ...(unassignedCount > 0 ? [`${unassignedCount} servizi non assegnati.`] : []),
       ...(geoBlockedServices.length > 0
         ? [`${geoBlockedServices.length} servizi hanno hotel con geolocalizzazione dubbia: ${geoBlockedHotels.slice(0, 6).join(", ")}${geoBlockedHotels.length > 6 ? "..." : ""}.`]

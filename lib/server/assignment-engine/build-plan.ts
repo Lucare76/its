@@ -121,7 +121,7 @@ export async function buildAndPersistAssignmentPlan(
     vehicleAvailabilityResult,
     availabilityConfirmationResult,
   ] = await Promise.all([
-    admin.from("hotels").select("id, name, zone, lat, lng").eq("tenant_id", args.tenantId),
+    admin.from("hotels").select("id, name, city, zone, lat, lng").eq("tenant_id", args.tenantId),
     admin.from("trip_groups").select("id, status").eq("tenant_id", args.tenantId).eq("date", args.date).eq("status", "active").limit(3000),
     serviceIds.length > 0
       ? admin

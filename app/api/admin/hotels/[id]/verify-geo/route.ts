@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { evaluateHotelGeo, inferZoneFromCoords, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
+import { evaluateHotelGeo, inferZoneFromCoords, isNapoliHotel, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 
 export const runtime = "nodejs";
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
   const tenantId = auth.membership.tenant_id;
   const { data: hotel, error: fetchError } = await admin
     .from("hotels")
-    .select("id,name,address,zone,lat,lng")
+    .select("id,name,address,city,zone,lat,lng")
     .eq("id", id)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     return NextResponse.json({ ok: false, error: "Hotel non trovato." }, { status: 404 });
   }
 
-  const zone = inferZoneFromCoords(parsed.data.lat, parsed.data.lng);
+  const zone = isNapoliHotel(hotel) ? "Napoli" : inferZoneFromCoords(parsed.data.lat, parsed.data.lng);
   const formattedAddress = parsed.data.formatted_address?.trim() || hotel.address;
   const evaluation = evaluateHotelGeo({
     address: formattedAddress,
@@ -53,8 +53,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     formatted_address: formattedAddress
   });
 
-  if (evaluation.outsideIschia) {
-    return NextResponse.json({ ok: false, error: "Coordinate fuori Ischia: correggi il pin prima di verificare." }, { status: 400 });
+  if (!evaluation.canBeVerified) {
+    return NextResponse.json({ ok: false, error: `Coordinate fuori ${isNapoliHotel(hotel) ? "Napoli" : "Ischia"}: correggi il pin prima di verificare.` }, { status: 400 });
   }
 
   const now = new Date().toISOString();
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
       lat: parsed.data.lat,
       lng: parsed.data.lng,
       zone,
-      city: ZONE_TO_CITY[zone],
+      city: zone === "Napoli" ? "Napoli" : ZONE_TO_CITY[zone],
       geo_status: "verified",
       geo_source: "manual",
       geo_accuracy: "rooftop",

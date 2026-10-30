@@ -27,6 +27,7 @@ export type AutoAssignPreviewTripGroup = {
 };
 
 export type AutoAssignPreviewHotel = {
+  city?: string | null;
   id: string;
   name?: string | null;
   zone?: string | null;

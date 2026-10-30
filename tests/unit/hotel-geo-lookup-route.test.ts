@@ -55,3 +55,12 @@ describe("Capizzo and failed searches", () => {
     expect(body.results[0].label).toBe("Colella Forio");
   });
 });
+
+it("searches Napoli for a stored mainland hotel despite a stale Ischia zone", async () => {
+  const builder = { select: () => builder, eq: () => builder, maybeSingle: async () => ({ data: { name: "Ramada Naples", address: "Via Galileo Ferraris 40", city: "Napoli", zone: "Ischia Porto" } }) };
+  mocks.authorize.mockResolvedValue({ admin: { from: () => builder }, membership: { tenant_id: "tenant-a" } });
+  provider.mockResolvedValue({ ok: true, json: async () => [{ lat: "40.849", lon: "14.276", display_name: "Ramada Napoli", class: "tourism", type: "hotel" }] });
+  const response = await GET(new NextRequest("https://its.test/api/admin/hotels/geo-lookup?q=Ramada%20Napoli&hotel_id=ramada"));
+  expect((await response.json()).results).toHaveLength(1);
+  expect(new URL(provider.mock.calls[0][0]).searchParams.get("viewbox")).toBe("14.14,40.78,14.36,40.94");
+});

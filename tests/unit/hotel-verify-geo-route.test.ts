@@ -83,3 +83,21 @@ describe("hotel manual position persistence", () => {
     expect(rows[0].lat).toBe(40.7418);
   });
 });
+
+describe("Napoli verification", () => {
+  it("saves mainland coordinates, normalizes a stale island zone, and survives reload", async () => {
+    Object.assign(rows[0], { city: "Napoli", zone: "Ischia Porto", address: "Piazza Principe Umberto I 23, Napoli" });
+    const point = { lat: 40.853, lng: 14.269 };
+    expect((await save(point)).status).toBe(200);
+    expect(rows[0]).toMatchObject({ ...point, zone: "Napoli", city: "Napoli", geo_status: "verified" });
+    const geo = evaluateHotelGeo(rows[0]);
+    expect(geo.status).toBe("verified");
+    expect(geo.routeUsable).toBe(false);
+    expect(geo.confidence).toBe("ok");
+  });
+  it("rejects an island pin for a Napoli hotel", async () => {
+    Object.assign(rows[0], { city: "Napoli" });
+    expect((await save(coords)).status).toBe(400);
+    expect(rows[0].lat).toBe(40.7418);
+  });
+});

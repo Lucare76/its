@@ -145,7 +145,7 @@ async function handlePreview(request: NextRequest) {
     ] = await Promise.all([
       auth.admin
         .from("hotels")
-        .select("id, name, zone, lat, lng")
+        .select("id, name, city, zone, lat, lng")
         .eq("tenant_id", tenantId),
       auth.admin
         .from("trip_groups")

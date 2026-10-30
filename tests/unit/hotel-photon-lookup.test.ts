@@ -31,3 +31,17 @@ describe("alternative hotel geolocation", () => {
     expect(results[0].label).not.toContain("posizione della via");
   });
 });
+
+it("matches an exact hotel name when the map uses a different street", async () => {
+  provider([{ ...street, properties: { name: "Hotel Internazionale", street: "Via Spalatriello", city: "Barano", countrycode: "IT", osm_key: "tourism", osm_value: "hotel" }, geometry: { type: "Point", coordinates: [13.9310739, 40.7249464] } }]);
+  const results = await searchHotelPhoton({ query: "Albergo Internazionale Via Acquedotto 33 Fiaiano", name: "Albergo Internazionale", address: "Via Acquedotto 33", city: "Barano" });
+  expect(results).toHaveLength(1);
+  expect(results[0].score).toBe(100);
+});
+it("uses Napoli bounds and accepts mainland hotels only in that scope", async () => {
+  const fetch = provider([{ ...street, properties: { name: "Ramada", city: "Napoli", countrycode: "IT", osm_key: "tourism", osm_value: "hotel" }, geometry: { type: "Point", coordinates: [14.276, 40.849] } }]);
+  const results = await searchHotelPhoton({ query: "Ramada Napoli", name: "Ramada", city: "Napoli" });
+  expect(results).toHaveLength(1);
+  expect(new URL(fetch.mock.calls[0][0]).searchParams.get("bbox")).toBe("14.14,40.78,14.36,40.94");
+  expect(await searchHotelPhoton({ query: "Ramada", name: "Ramada" })).toEqual([]);
+});
