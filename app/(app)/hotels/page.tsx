@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import { HotelGeoBadge } from "@/components/hotel-geo-badge";
-import { evaluateHotelGeo, HOTEL_ZONES, hotelGeoQuality, inferZoneFromText, isIncompleteHotelAddress, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
+import { evaluateHotelGeo, HOTEL_OPERATIONAL_ZONES, isNapoliHotel, NAPOLI_REFERENCE, hotelGeoQuality, inferZoneFromText, isIncompleteHotelAddress, isMissingCoordinates, zoneCentroids } from "@/lib/hotel-geocoding";
 import type { HotelGeoAccuracy, HotelGeoSource, HotelGeoStatus } from "@/lib/types";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 
@@ -119,7 +119,7 @@ function toEditDraft(hotel: HotelListItem): HotelEditDraft {
     name: hotel.name,
     address: hotel.address,
     city: hotel.city ?? "Ischia",
-    zone: hotel.zone ?? "Ischia Porto",
+    zone: isNapoliHotel(hotel) ? "Napoli" : hotel.zone ?? "Ischia Porto",
     lat: hotel.lat == null ? "" : String(hotel.lat),
     lng: hotel.lng == null ? "" : String(hotel.lng),
     small_vehicle_only: hotel.small_vehicle_only ?? false,
@@ -424,6 +424,7 @@ export default function HotelsPage() {
     const base = listFilter === "all" ? items : allHotelsForMerge;
     return base.filter((hotel) => {
       if (!matchesHotelSearch(hotel, search)) return false;
+      if (listFilter !== "all" && listFilter !== "inactive" && !hotel.is_active) return false;
       const geo = evaluateHotelGeo(hotel);
       if (listFilter === "corrections") return geo.status === "generic" || geo.status === "approximate" || geo.status === "missing";
       if (listFilter === "verified") return geo.status === "verified";
@@ -445,7 +446,8 @@ export default function HotelsPage() {
     return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [filteredItems]);
 
-  const metricsHotels = allHotelsForMerge.length > 0 ? allHotelsForMerge : items;
+  const metricsHotels = (allHotelsForMerge.length > 0 ? allHotelsForMerge : items).filter(hotel => hotel.is_active);
+  const dataMissingCount = metricsHotels.filter(hotel => isMissingCoordinates(hotel.lat, hotel.lng) || isIncompleteHotelAddress(hotel.address)).length;
   const missingCoordsCount = metricsHotels.filter((hotel) => isMissingCoordinates(hotel.lat, hotel.lng)).length;
   const incompleteAddressCount = metricsHotels.filter((hotel) => isIncompleteHotelAddress(hotel.address)).length;
   const smallVehicleOnlyCount = metricsHotels.filter((hotel) => hotel.small_vehicle_only).length;
@@ -473,6 +475,7 @@ export default function HotelsPage() {
   const geoIssueLabels: Record<string, string> = {
     missing_coordinates: "coordinate mancanti",
     outside_ischia: "fuori isola",
+    outside_operational_area: "coordinate fuori Napoli",
     default_centroid: "coordinate generiche",
     zone_coordinate_mismatch: "zona non coerente",
     incomplete_address: "indirizzo incompleto"
@@ -936,7 +939,7 @@ export default function HotelsPage() {
     cancelGeoLookup();
     const geoEvaluation = evaluateHotelGeo(hotel);
     const fallbackZone = inferZoneFromText(`${hotel.zone ?? ""} ${hotel.city ?? ""} ${hotel.address ?? ""}`) ?? "Ischia Porto";
-    const fallback = zoneCentroids[fallbackZone as keyof typeof zoneCentroids];
+    const fallback = isNapoliHotel(hotel) ? NAPOLI_REFERENCE : zoneCentroids[fallbackZone as keyof typeof zoneCentroids];
     const useFallback = geoEvaluation.status === "missing" || geoEvaluation.status === "generic";
     setGeoCorrection({
       hotel,
@@ -1102,18 +1105,18 @@ export default function HotelsPage() {
 
     const sameCoord = (left: number | null, right: number | null) => left === right || (left == null && right == null);
     const coordsChanged = !sameCoord(parsedLat, currentHotel?.lat ?? null) || !sameCoord(parsedLng, currentHotel?.lng ?? null);
-    const preserveVerifiedGeo = Boolean(currentHotel?.geo_status === "verified" && !coordsChanged);
+    const preserveVerifiedGeo = Boolean(currentHotel?.geo_status === "verified" && !coordsChanged && isNapoliHotel(currentHotel) === isNapoliHotel(editDraft));
 
     const payload = {
       name: editDraft.name.trim(),
       normalized_name: editDraft.name.trim().toLowerCase().replace(/\s+/g, " "),
       address: editDraft.address.trim(),
       city: editDraft.city.trim() || "Ischia",
-      zone: editDraft.zone.trim() || "Ischia Porto",
+      zone: isNapoliHotel(editDraft) ? "Napoli" : editDraft.zone.trim() || "Ischia Porto",
       lat: parsedLat,
       lng: parsedLng,
-      small_vehicle_only: editDraft.small_vehicle_only,
-      small_vehicle_max_pax: editDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
+      small_vehicle_only: !isNapoliHotel(editDraft) && editDraft.small_vehicle_only,
+      small_vehicle_max_pax: !isNapoliHotel(editDraft) && editDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
       is_active: editDraft.is_active,
       email: editDraft.email.trim() || null,
       phone: editDraft.phone.trim() || null,
@@ -1132,7 +1135,8 @@ export default function HotelsPage() {
         const nextGeoAccuracy: HotelGeoAccuracy = parsedLat == null || parsedLng == null ? "unknown" : "street";
         const evaluation = evaluateHotelGeo({
           address: editDraft.address.trim(),
-          zone: editDraft.zone.trim() || "Ischia Porto",
+          city: editDraft.city,
+          zone: isNapoliHotel(editDraft) ? "Napoli" : editDraft.zone.trim() || "Ischia Porto",
           lat: parsedLat,
           lng: parsedLng,
           geo_status: currentHotel?.geo_status ?? "approximate",
@@ -1190,7 +1194,7 @@ export default function HotelsPage() {
     const parsedLat = parseOptionalCoord(createDraft.lat);
     const parsedLng = parseOptionalCoord(createDraft.lng);
     const parsedSmallVehicleMaxPax = createDraft.small_vehicle_max_pax ? Number(createDraft.small_vehicle_max_pax) : null;
-    const zone = createDraft.zone || "Ischia Porto";
+    const zone = isNapoliHotel(createDraft) ? "Napoli" : createDraft.zone || "Ischia Porto";
     if (parsedLat === "invalid" || parsedLng === "invalid") {
       setSaving(false);
       setError("Coordinate non valide. Puoi lasciarle vuote e farle calcolare dal geocoding.");
@@ -1210,8 +1214,8 @@ export default function HotelsPage() {
       zone,
       lat: parsedLat,
       lng: parsedLng,
-      small_vehicle_only: createDraft.small_vehicle_only,
-      small_vehicle_max_pax: createDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
+      small_vehicle_only: !isNapoliHotel(createDraft) && createDraft.small_vehicle_only,
+      small_vehicle_max_pax: !isNapoliHotel(createDraft) && createDraft.small_vehicle_only ? parsedSmallVehicleMaxPax : null,
       is_active: createDraft.is_active,
       email: createDraft.email.trim() || null,
       phone: createDraft.phone.trim() || null,
@@ -1221,6 +1225,7 @@ export default function HotelsPage() {
         const nextGeoAccuracy: HotelGeoAccuracy = parsedLat == null || parsedLng == null ? "unknown" : "street";
         const evaluation = evaluateHotelGeo({
           address: createDraft.address.trim() || "Ischia",
+          city: createDraft.city,
           zone,
           lat: parsedLat,
           lng: parsedLng,
@@ -1283,8 +1288,8 @@ export default function HotelsPage() {
             onClick={() => setListFilter("data_missing")}
             className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-amber-300 ${listFilter === "data_missing" ? "ring-2 ring-amber-400" : ""}`}
           >
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Dati da completare</p>
-            <p className="mt-2 text-3xl font-semibold text-amber-900">{missingCoordsCount + incompleteAddressCount}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Dati da completare · attivi</p>
+            <p className="mt-2 text-3xl font-semibold text-amber-900">{dataMissingCount}</p>
             <p className="mt-1 text-sm text-amber-800">{geoMissingCount} senza coordinate, {incompleteAddressCount} con indirizzo da completare.</p>
           </button>
           <button
@@ -1292,7 +1297,7 @@ export default function HotelsPage() {
             onClick={() => setListFilter("corrections")}
             className={`rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3 text-left transition hover:ring-2 hover:ring-rose-300 ${listFilter === "corrections" ? "ring-2 ring-rose-400" : ""}`}
           >
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">Geo da correggere</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">Geo da correggere · attivi</p>
             <p className="mt-2 text-3xl font-semibold text-rose-900">{geoToFixCount}</p>
             <p className="mt-1 text-sm text-rose-800">{geoWarningCount} approssimativi, {geoVerifiedCount} già verificati.</p>
           </button>
@@ -1439,8 +1444,8 @@ export default function HotelsPage() {
                     </label>
                     <label className="space-y-1">
                       <span className="text-xs font-medium text-slate-600">Zona</span>
-                      <select value={createDraft.zone} onChange={(e) => setCreateDraft({ ...createDraft, zone: e.target.value })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                        {HOTEL_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+                      <select value={isNapoliHotel(createDraft) ? "Napoli" : createDraft.zone} onChange={(e) => setCreateDraft({ ...createDraft, zone: e.target.value, city: e.target.value === "Napoli" ? "Napoli" : createDraft.city === "Napoli" ? "Ischia" : createDraft.city })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                        {HOTEL_OPERATIONAL_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
                       </select>
                     </label>
                     <label className="space-y-1">
@@ -1486,7 +1491,7 @@ export default function HotelsPage() {
                 </div>
               ) : null}
                   <p className="text-xs text-slate-500">
-                    Zone supportate: {HOTEL_ZONES.join(", ")}. Inserisci indirizzo e zona; lascia vuote le coordinate. Dopo il caricamento indirizzi usa geocoding per calcolare lat/lng reali.
+                    Zone supportate: {HOTEL_OPERATIONAL_ZONES.join(", ")}. Inserisci indirizzo e zona; lascia vuote le coordinate. Dopo il caricamento indirizzi usa geocoding per calcolare lat/lng reali.
                   </p>
                   <div className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
                     <select
@@ -1652,11 +1657,11 @@ export default function HotelsPage() {
                                       <label className="block text-xs font-semibold text-slate-600">
                                         Zona operativa
                                         <select
-                                          value={editDraft.zone}
-                                          onChange={(event) => setEditDraft({ ...editDraft, zone: event.target.value })}
+                                          value={isNapoliHotel(editDraft) ? "Napoli" : editDraft.zone}
+                                          onChange={(event) => setEditDraft({ ...editDraft, zone: event.target.value, city: event.target.value === "Napoli" ? "Napoli" : editDraft.city === "Napoli" ? "Ischia" : editDraft.city })}
                                           className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                                         >
-                                          {HOTEL_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+                                          {HOTEL_OPERATIONAL_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
                                         </select>
                                       </label>
                                     </div>
@@ -1684,10 +1689,11 @@ export default function HotelsPage() {
 
                                   <div className="space-y-3">
                                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                                      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Assegnazione Ischia</span>
+                                      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">{isNapoliHotel(editDraft) ? "Transfer Napoli · escluso dai giri Ischia" : "Assegnazione Ischia"}</span>
                                       <div className="mt-2 flex flex-wrap items-center gap-3">
                                         <button
                                           type="button"
+                                          disabled={isNapoliHotel(editDraft)}
                                           onClick={() => setEditDraft({ ...editDraft, small_vehicle_only: !editDraft.small_vehicle_only, small_vehicle_max_pax: editDraft.small_vehicle_only ? "" : editDraft.small_vehicle_max_pax })}
                                           className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${editDraft.small_vehicle_only ? "border-indigo-300 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600"}`}
                                         >
@@ -1696,7 +1702,7 @@ export default function HotelsPage() {
                                         <input
                                           value={editDraft.small_vehicle_max_pax}
                                           onChange={(event) => setEditDraft({ ...editDraft, small_vehicle_max_pax: event.target.value })}
-                                          disabled={!editDraft.small_vehicle_only}
+                                          disabled={isNapoliHotel(editDraft) || !editDraft.small_vehicle_only}
                                           placeholder="Max posti"
                                           className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
                                         />
@@ -2001,8 +2007,8 @@ export default function HotelsPage() {
 
                 <div className="space-y-3">
                   <GeoCorrectionMap
-                    lat={Number(geoCorrection.lat.replace(",", ".")) || zoneCentroids["Ischia Porto"].lat}
-                    lng={Number(geoCorrection.lng.replace(",", ".")) || zoneCentroids["Ischia Porto"].lng}
+                    lat={Number(geoCorrection.lat.replace(",", ".")) || (isNapoliHotel(geoCorrection.hotel) ? NAPOLI_REFERENCE.lat : zoneCentroids["Ischia Porto"].lat)}
+                    lng={Number(geoCorrection.lng.replace(",", ".")) || (isNapoliHotel(geoCorrection.hotel) ? NAPOLI_REFERENCE.lng : zoneCentroids["Ischia Porto"].lng)}
                     onChange={updateGeoCorrectionPin}
                   />
                   <p className="text-xs text-slate-500">Trascina il pin sul punto reale di arrivo mezzo. Il salvataggio manuale imposta la geo come verificata.</p>

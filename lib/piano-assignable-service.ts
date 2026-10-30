@@ -1,3 +1,4 @@
+import { isNapoliHotel } from "@/lib/hotel-geocoding";
 import { effectiveDisembarkTime } from "@/lib/piano-arrival-time";
 
 export type AssignableMacroCategory = "NAVETTA" | "ARRIVO" | "PARTENZA" | "ESCURSIONE" | "DA_VERIFICARE";
@@ -12,6 +13,7 @@ export type AssignablePlaceType =
   | "unknown";
 
 export type AssignableHotel = {
+  city?: string | null;
   name?: string | null;
   zone?: string | null;
   lat?: number | null;
@@ -461,6 +463,10 @@ function makeResolution(
   });
 
   const hardConstraints = [...(partial.hard_constraints ?? [])];
+  if (isNapoliHotel(context?.hotel)) {
+    hardConstraints.push("mainland_hotel");
+    reviewReasons.push("Hotel a Napoli: gestire con transfer terraferma, escluso dai giri Ischia");
+  }
   if (context?.is_locked_assignment) {
     hardConstraints.push("locked_assignment");
     reviewReasons.push("Assignment manuale locked");

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isWithinIschiaBounds } from "@/lib/hotel-geocoding";
+import { isWithinHotelBounds, isNapoliHotel, hotelSearchBounds, NAPOLI_REFERENCE } from "@/lib/hotel-geocoding";
 
 const featureSchema = z.object({
   geometry: z.object({ type: z.literal("Point"), coordinates: z.tuple([z.number().finite(), z.number().finite()]) }),
@@ -12,7 +12,7 @@ const featureSchema = z.object({
 
 function words(value: string) {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9]+/)
-    .filter((word) => word.length >= 3 && !["via", "piazza", "strada", "hotel", "pensione", "terme", "villa", "forio", "ischia", "italia"].includes(word));
+    .filter((word) => word.length >= 3 && !["via", "piazza", "strada", "hotel", "albergo", "htl", "pensione", "terme", "villa", "forio", "ischia", "italia"].includes(word));
 }
 
 export async function searchHotelPhoton(input: { query: string; name?: string | null; address?: string | null; city?: string | null }) {
@@ -23,9 +23,9 @@ export async function searchHotelPhoton(input: { query: string; name?: string | 
     const url = new URL("/api/", process.env.PHOTON_GEOCODING_URL || "https://photon.komoot.io");
     url.searchParams.set("q", query);
     url.searchParams.set("limit", "5");
-    url.searchParams.set("bbox", "13.82,40.67,13.99,40.77");
-    url.searchParams.set("lat", "40.73");
-    url.searchParams.set("lon", "13.9");
+    url.searchParams.set("bbox", hotelSearchBounds(input));
+    url.searchParams.set("lat", isNapoliHotel(input) ? String(NAPOLI_REFERENCE.lat) : "40.73");
+    url.searchParams.set("lon", isNapoliHotel(input) ? String(NAPOLI_REFERENCE.lng) : "13.9");
     const response = await fetch(url.toString(), { signal: AbortSignal.timeout(8000), next: { revalidate: 86400 }, headers: { "User-Agent": "IschiaTransfer/1.0 (info@campanialimousine.com)" } });
     if (!response.ok) throw new Error("Ricerca alternativa non disponibile");
     const payload: unknown = await response.json();
@@ -36,12 +36,15 @@ export async function searchHotelPhoton(input: { query: string; name?: string | 
       if (!parsed.success) return [];
       const { properties: p, geometry } = parsed.data;
       const [lng, lat] = geometry.coordinates;
-      if (!isWithinIschiaBounds(lat, lng) || (p.countrycode && p.countrycode.toUpperCase() !== "IT")) return [];
+      if (!isWithinHotelBounds(lat, lng, input) || (p.countrycode && p.countrycode.toUpperCase() !== "IT")) return [];
       const precise = p.type === "house" || p.osm_key === "building" || (p.osm_key === "tourism" && ["hotel", "guest_house", "hostel", "apartment", "resort"].includes(p.osm_value ?? ""));
       const street = p.type === "street" || p.osm_key === "highway";
       if (!precise && !street) return [];
       const candidateWords = words([p.name, p.street].filter(Boolean).join(" "));
-      if (!candidateWords.length || candidateWords.filter((word) => wanted.has(word)).length / candidateWords.length < 0.6) return [];
+      const nameWords = words(p.name ?? "");
+      const hotelWords = new Set(words(input.name ?? ""));
+      const exactHotelName = precise && nameWords.length > 0 && hotelWords.size > 0 && nameWords.every(word => hotelWords.has(word)) && [...hotelWords].every(word => nameWords.includes(word));
+      if (!exactHotelName && (!candidateWords.length || candidateWords.filter((word) => wanted.has(word)).length / candidateWords.length < 0.6)) return [];
       const label = [...new Set([p.name, [p.street, p.housenumber].filter(Boolean).join(" "), p.city].filter(Boolean))].join(", ");
       return [{ lat, lng, label: street && !precise ? `${label} (posizione della via: verifica il civico e l'ingresso)` : label, place_id: p.osm_id ? `photon:${p.osm_type ?? ""}:${p.osm_id}` : null, score: precise ? 100 : 70, query }];
     });

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { isWithinIschiaBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
+import { isWithinHotelBounds, isNapoliHotel, hotelSearchBounds, ZONE_TO_CITY } from "@/lib/hotel-geocoding";
 import { canonicalizeKnownHotelName } from "@/lib/server/hotel-aliases";
 import { searchHotelPhoton } from "@/lib/server/hotel-photon-lookup";
 
@@ -146,7 +146,7 @@ function knownFallbackResults(rawQuery: string, hotel?: HotelLookupRow | null): 
     }));
 }
 
-async function searchNominatim(query: string) {
+async function searchNominatim(query: string, hotel: HotelLookupRow | null) {
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
@@ -154,7 +154,7 @@ async function searchNominatim(query: string) {
   url.searchParams.set("countrycodes", "it");
   url.searchParams.set("addressdetails", "1");
   url.searchParams.set("namedetails", "1");
-  url.searchParams.set("viewbox", "13.82,40.67,13.99,40.77");
+  url.searchParams.set("viewbox", hotelSearchBounds(hotel));
   url.searchParams.set("bounded", "1");
 
   const response = await fetch(url.toString(), {
@@ -190,8 +190,9 @@ export async function GET(request: NextRequest) {
     hotel = (data as HotelLookupRow | null) ?? null;
   }
 
-  const queries = buildQueries(q, hotel);
-  const fallbackResults = knownFallbackResults(q, hotel);
+  const napoli = isNapoliHotel(hotel);
+  const queries = buildQueries(q, hotel).filter(query => !napoli || !/ischia/i.test(query));
+  const fallbackResults = napoli ? [] : knownFallbackResults(q, hotel);
   // Verified hotel coordinates do not need repeated external requests.
   if (fallbackResults.length > 0) {
     return NextResponse.json({ ok: true, results: fallbackResults, queries });
@@ -202,7 +203,7 @@ export async function GET(request: NextRequest) {
     if (index > 0) await new Promise((resolve) => setTimeout(resolve, 1100));
     let data: NominatimResult[] | null;
     try {
-      data = await searchNominatim(query);
+      data = await searchNominatim(query, hotel);
     } catch {
       primaryFailed = true;
       break;
@@ -212,7 +213,7 @@ export async function GET(request: NextRequest) {
     if (collected.some((item) => {
       const lat = Number(item.lat);
       const lng = Number(item.lon);
-      return Number.isFinite(lat) && Number.isFinite(lng) && isWithinIschiaBounds(lat, lng) && precisionScore(item) >= 70;
+      return Number.isFinite(lat) && Number.isFinite(lng) && isWithinHotelBounds(lat, lng, hotel) && precisionScore(item) >= 70;
     })) break;
   }
 
@@ -223,7 +224,7 @@ export async function GET(request: NextRequest) {
       const lat = Number(item.lat);
       const lng = Number(item.lon);
       // A municipality/island centre is not a usable hotel position.
-      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !isWithinIschiaBounds(lat, lng) || precisionScore(item) < 70) return null;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !isWithinHotelBounds(lat, lng, hotel) || precisionScore(item) < 70) return null;
       return {
         lat,
         lng,
@@ -241,7 +242,7 @@ export async function GET(request: NextRequest) {
 
   if (results.length > 0) return NextResponse.json({ ok: true, results, queries });
   try {
-    const alternative = await searchHotelPhoton({ query: q, name: canonicalizeKnownHotelName(hotel?.name), address: normalizeAddressForSearch(hotel?.address), city: hotel?.city || cityFromZone(hotel?.zone) });
+    const alternative = await searchHotelPhoton({ query: q, name: canonicalizeKnownHotelName(hotel?.name), address: normalizeAddressForSearch(hotel?.address), city: napoli ? "Napoli" : hotel?.city || cityFromZone(hotel?.zone) });
     return NextResponse.json({ ok: true, results: alternative, queries });
   } catch {
     if (primaryFailed) return NextResponse.json({ ok: false, error: "Servizi di ricerca mappa temporaneamente non disponibili. Le coordinate non sono state modificate: riprova tra poco o incolla quelle da Google Maps." }, { status: 503 });
