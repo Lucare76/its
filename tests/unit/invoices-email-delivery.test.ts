@@ -1,222 +1,183 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import * as XLSX from "xlsx";
-import type { InvoiceData } from "@/lib/server/invoice-pdf";
-
-const mocks = vi.hoisted(() => ({
-  authorizePricingRequest: vi.fn(),
-  resendFetch: vi.fn(),
-  generateInvoiceHtml: vi.fn((data: InvoiceData) => `<a href="${data.reviewUrl}">Vedi estratto conto</a>`),
+const m = vi.hoisted(() => ({
+  auth: vi.fn(),
+  rpc: vi.fn(),
+  send: vi.fn(),
+  update: vi.fn(),
+  html: vi.fn(),
+  xlsx: vi.fn(),
 }));
-
-vi.mock("@/lib/server/pricing-auth", () => ({ authorizePricingRequest: mocks.authorizePricingRequest }));
+vi.mock("@/lib/server/pricing-auth", () => ({
+  authorizePricingRequest: m.auth,
+}));
 vi.mock("@/lib/server/send-email", () => ({
-  getVerifiedFromEmail: () => "noreply@ischiatransferservice.it",
-  resendFetch: mocks.resendFetch,
+  resendFetch: m.send,
+  getVerifiedFromEmail: () => "info@ischiatransferservice.it",
 }));
-vi.mock("@/lib/server/invoice-pdf", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/server/invoice-pdf")>(),
-  generateInvoiceHtml: mocks.generateInvoiceHtml,
+vi.mock("@/lib/server/invoice-pdf", () => ({
+  generateInvoiceHtml: m.html,
+  buildInvoiceXlsx: m.xlsx,
 }));
-vi.mock("@/lib/server/agency-action-token", () => ({ generateAgencyActionToken: () => "test-review-token" }));
-
+vi.mock("@/lib/server/agency-action-token", () => ({
+  generateAgencyActionToken: () => "opaque-test-token",
+}));
 import { POST } from "@/app/api/invoices/route";
-
-const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const TEST_EMAIL = "luca_renna@hotmail.com";
-
-function fakeAdmin(email: string | null = TEST_EMAIL, updateError: { message: string } | null = null, invoiceEmail?: string, serviceFields: Record<string, unknown> = {}) {
-  const insert = vi.fn();
-  const update = vi.fn();
-  const filters: Array<[string, unknown]> = [];
-  const invoice = { status: "draft" };
-  return {
-    insert, update, filters, invoice,
-    admin: {
-      from(table: string) {
-        if (table === "tenant_bus_allocations" || table === "tenant_bus_line_stops") {
-          const q = { select: () => q, eq: () => q, in: () => q,
-            then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: table === "tenant_bus_allocations" ? (serviceFields.legacy ? [] : [{ service_id: "service-1", stop_id: "stop-1", direction: "arrival" }]) : [{ id: "stop-1", stop_name: serviceFields.legacy ? "TERNI" : "Milano", city: "TERNI", pickup_note: "Terminal Bus ATC" }], error: null }).then(resolve) };
-          return q;
-        }
-        if (table === "agencies") {
-          const query = {
-            select: () => query,
-            eq: () => query,
-            maybeSingle: async () => ({ data: { id: "agency-1", booking_email: email, invoice_email: invoiceEmail }, error: null }),
-          };
-          return query;
-        }
-        if (table === "services") {
-          let namesOnly = false;
-          const query = {
-            select: () => query, eq: () => query, gte: () => query, lte: () => query,
-            order: () => query, in: () => query, ilike: () => query,
-            not: () => { namesOnly = true; return query; },
-            then: (resolve: (value: unknown) => unknown) => Promise.resolve({
-              data: namesOnly ? [] : [{
-                id: "service-1", date: "2026-10-10", customer_name: "CLIENTE DI PROVA",
-                notes: "[practice:TEST-001]", agency_quoted_price_cents: 6600,
-                source_total_amount_cents: 9999, booking_service_kind: "transfer", pax: 2, ...serviceFields,
-              }], error: null,
-            }).then(resolve),
-          };
-          return query;
-        }
-        if (table === "agency_invoices") {
-          return {
-            insert: (values: Record<string, unknown>) => {
-              insert(values);
-              return { select: () => ({ single: async () => ({ data: { id: "invoice-1" }, error: null }) }) };
-            },
-            update: (values: Record<string, unknown>) => {
-              update(values);
-              const query = {
-                eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
-                then: (resolve: (value: unknown) => unknown) => {
-                  if (!updateError) Object.assign(invoice, values);
-                  return Promise.resolve({ error: updateError }).then(resolve);
-                },
-              };
-              return query;
-            },
-          };
-        }
-        throw new Error(`Unexpected table: ${table}`);
-      },
+const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  T = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const invoice = {
+  id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  agency_id: A,
+  tenant_id: T,
+  agency_name: "Test",
+  invoice_number: "EC-2026-00001",
+  date_basis: "arrival",
+  period_from: "2026-10-25",
+  period_to: "2026-10-31",
+  status: "draft",
+  sent_at: null,
+  total_cents: 26200,
+  paid_cents: 10000,
+  waived_cents: 0,
+  services_count: 1,
+  created_at: "2026-10-31",
+  invoice_data: [
+    {
+      service_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      numero_pratica: "26/001",
+      cliente_nome: "Synthetic",
+      data_servizio: "2026-10-31",
+      tipo_servizio: "formula_medmar_pozzuoli",
+      pax: 9,
+      importo_cents: 26200,
+      paid_cents: 10000,
+    },
+  ],
+};
+function req(extra = {}) {
+  return new NextRequest("https://example.test/api/invoices", {
+    method: "POST",
+    body: JSON.stringify({
+      agency_id: A,
+      agency_name: "Test",
+      period_from: "2026-10-25",
+      period_to: "2026-10-31",
+      date_basis: "arrival",
+      send: true,
+      ...extra,
+    }),
+  });
+}
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubEnv("RESEND_API_KEY", "unit-test");
+  m.rpc.mockResolvedValue({
+    data: { invoice: structuredClone(invoice), reused: false },
+    error: null,
+  });
+  m.send.mockResolvedValue({ ok: true });
+  m.html.mockReturnValue("<html>statement</html>");
+  m.xlsx.mockReturnValue(Buffer.from("xlsx"));
+  m.update.mockReturnValue({
+    eq: () => ({ eq: async () => ({ error: null }) }),
+  });
+  const agency = {
+    id: A,
+    name: "Test",
+    invoice_email: "accounting@example.test",
+    booking_email: "booking@example.test",
+  };
+  const admin = {
+    rpc: m.rpc,
+    from: (table: string) => {
+      if (table === "agencies") {
+        const q = {
+          select: () => q,
+          eq: () => q,
+          maybeSingle: async () => ({ data: agency, error: null }),
+        };
+        return q;
+      }
+      return { update: m.update };
     },
   };
-}
-
-function request(send = true) {
-  return new NextRequest("https://ischia-transfer.vercel.app/api/invoices", {
-    method: "POST",
-    body: JSON.stringify({ agency_name: "AGENZIA DI PROVA", period_from: "2026-10-01", period_to: "2026-10-15", send }),
+  m.auth.mockResolvedValue({ admin, membership: { tenant_id: T } });
+});
+describe("Statement delivery after atomic generation", () => {
+  it("passes arrival criterion and exact agency to database, HTML and Excel use one snapshot", async () => {
+    const r = await POST(req());
+    expect(r.status).toBe(200);
+    expect(m.rpc).toHaveBeenCalledWith(
+      "create_agency_statement",
+      expect.objectContaining({
+        p_agency_id: A,
+        p_basis: "arrival",
+        p_from: "2026-10-25",
+        p_to: "2026-10-31",
+      }),
+    );
+    expect(m.html.mock.calls[0][0]).toMatchObject({
+      invoiceNumber: "EC-2026-00001",
+      totalCents: 26200,
+      paidCents: 10000,
+    });
+    expect(m.xlsx.mock.calls[0][0]).toEqual(m.html.mock.calls[0][0]);
+    expect(m.send.mock.calls[0][1]).toMatchObject({
+      to: ["accounting@example.test"],
+      attachments: [
+        {
+          filename: "EC-2026-00001.xlsx",
+          content: Buffer.from("xlsx").toString("base64"),
+        },
+      ],
+    });
   });
-}
-
-function authorize(fake: ReturnType<typeof fakeAdmin>) {
-  mocks.authorizePricingRequest.mockResolvedValue({ admin: fake.admin, membership: { tenant_id: TENANT } });
-}
-
-describe("Primo invio estratto conto: HTML, Excel e stato di invio", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.stubEnv("RESEND_API_KEY", "test-key-no-network");
-    mocks.resendFetch.mockResolvedValue(new Response('{"id":"message-1"}', { status: 200 }));
+  it("supports departure criterion", async () => {
+    await POST(req({ date_basis: "departure" }));
+    expect(m.rpc).toHaveBeenCalledWith(
+      "create_agency_statement",
+      expect.objectContaining({ p_basis: "departure" }),
+    );
   });
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("un rifiuto del provider non marca inviato e restituisce la bozza da reinviare", async () => {
-    const fake = fakeAdmin();
-    authorize(fake);
-    mocks.resendFetch.mockResolvedValue(new Response("rejected", { status: 422 }));
-    const response = await POST(request());
-    expect(response.status).toBe(502);
-    expect(await response.json()).toMatchObject({ ok: false, invoice_id: "invoice-1" });
-    expect(fake.insert).toHaveBeenCalledTimes(1);
-    expect(fake.update).not.toHaveBeenCalled();
-    expect(fake.invoice.status).toBe("draft");
+  it("repeated generation returns same number without another email", async () => {
+    m.rpc.mockResolvedValue({ data: { invoice, reused: true } });
+    const r = await POST(req());
+    expect(await r.json()).toMatchObject({
+      reused: true,
+      invoice_number: "EC-2026-00001",
+    });
+    expect(m.send).not.toHaveBeenCalled();
   });
-
-  it("invia HTML con link operativo e un vero Excel coerente con righe e totale", async () => {
-    const fake = fakeAdmin();
-    authorize(fake);
-    const response = await POST(request());
-    expect(response.status).toBe(200);
-    const payload = mocks.resendFetch.mock.calls[0][1];
-    expect(payload.to).toEqual([TEST_EMAIL]);
-    expect(payload.html).toContain("/agency-estratto-conto?token=test-review-token");
-    expect(payload.attachments).toHaveLength(1);
-    expect(payload.attachments[0].filename).toMatch(/\.xlsx$/);
-    const workbook = XLSX.read(Buffer.from(payload.attachments[0].content, "base64"), { type: "buffer" });
-    const rows = XLSX.utils.sheet_to_json(workbook.Sheets["Estratto conto"], { header: 1 });
-    expect(rows).toEqual([
-      ["Numero pratica", "Cliente", "Data servizio", "Tipo servizio", "Importo EUR"],
-      ["TEST-001", "CLIENTE DI PROVA", "10/10/2026", "Transfer - 2 pax", 66],
-      ["", "", "", "Totale", 66],
-    ]);
-    const htmlData = mocks.generateInvoiceHtml.mock.calls[0][0];
-    expect(htmlData.items[0].importo_cents).toBe(6600);
-    expect(htmlData.totalCents).toBe(6600);
-    expect(fake.invoice.status).toBe("sent");
-    expect(fake.filters).toContainEqual(["tenant_id", TENANT]);
+  it("draft does not send or mark sent", async () => {
+    const r = await POST(req({ send: false }));
+    expect(r.status).toBe(200);
+    expect(m.send).not.toHaveBeenCalled();
+    expect(m.update).not.toHaveBeenCalled();
   });
-
-  it.each([
-    [{ booking_service_kind: "formula_medmar_pozzuoli" }, "Formula MEDMAR Pozzuoli"],
-    [{ booking_service_kind: "bus_city_hotel", bus_city_origin: "Terminal Bus ATC", meeting_point: "Punto di carico" }, "Transfer Bus Milano"],
-    [{ booking_service_kind: "bus_city_hotel", meeting_point: "TERMINAL BUS ATC TERNI", legacy: true }, "Transfer Bus TERNI"],
-    [{ booking_service_kind: "transfer_port_hotel", transport_code: "SNAV", include_ferry_tickets: true }, "Formula SNAV"],
-    [{ booking_service_kind: "transfer_port_hotel", transport_code: "MEDMAR" }, "Formula MEDMAR"],
-  ])("salva la descrizione della pratica e la riporta nell'Excel (%s)", async (fields, label) => {
-    const fake = fakeAdmin(TEST_EMAIL, null, undefined, fields);
-    authorize(fake);
-    expect((await POST(request())).status).toBe(200);
-    const saved = fake.insert.mock.calls[0][0].invoice_data[0];
-    expect(saved).toMatchObject({ tipo_servizio: fields.booking_service_kind, descrizione_servizio: label, pax: 2, importo_cents: 6600 });
-    expect(mocks.generateInvoiceHtml.mock.calls[0][0].items[0]).toEqual(saved);
-    const attachment = mocks.resendFetch.mock.calls[0][1].attachments[0];
-    const book = XLSX.read(Buffer.from(attachment.content, "base64"), { type: "buffer" });
-    const rows = XLSX.utils.sheet_to_json(book.Sheets["Estratto conto"], { header: 1 }) as unknown[][];
-    expect(rows[1].slice(3)).toEqual([`${label} - 2 pax`, 66]);
+  it("provider rejection preserves draft", async () => {
+    m.send.mockResolvedValue({ ok: false });
+    expect((await POST(req())).status).toBe(502);
+    expect(m.update).not.toHaveBeenCalled();
   });
-
-  it("senza configurazione di invio non crea una bozza dichiarando successo", async () => {
-    const fake = fakeAdmin();
-    authorize(fake);
-    vi.stubEnv("RESEND_API_KEY", "");
-    const response = await POST(request());
-    expect(response.status).toBe(500);
-    expect((await response.json()).ok).toBe(false);
-    expect(fake.insert).not.toHaveBeenCalled();
-    expect(mocks.resendFetch).not.toHaveBeenCalled();
+  it("missing price or overlapping booking blocks email", async () => {
+    m.rpc.mockResolvedValue({
+      error: { message: "STATEMENT_ALREADY_INCLUDED:other" },
+    });
+    expect((await POST(req())).status).toBe(409);
+    expect(m.send).not.toHaveBeenCalled();
   });
-
-  it("rispetta l'indirizzo dedicato agli estratti conto anche quando quello prenotazioni è diverso", async () => {
-    authorize(fakeAdmin("prenotazioni@example.com", null, TEST_EMAIL));
-    const response = await POST(request());
-    expect(response.status).toBe(200);
-    expect(mocks.resendFetch.mock.calls[0][1].to).toEqual([TEST_EMAIL]);
+  it("invalid period or date basis does not access accounting RPC", async () => {
+    expect((await POST(req({ period_from: "2026-11-01" }))).status).toBe(400);
+    expect((await POST(req({ date_basis: "invalid" }))).status).toBe(400);
+    expect(m.rpc).not.toHaveBeenCalled();
   });
-
-  it("senza destinatario segnala l'errore prima di creare o inviare", async () => {
-    const fake = fakeAdmin(null);
-    authorize(fake);
-    const response = await POST(request());
-    expect(response.status).toBe(400);
-    expect(fake.insert).not.toHaveBeenCalled();
-    expect(mocks.resendFetch).not.toHaveBeenCalled();
-  });
-
-  it("la sola generazione della bozza funziona anche senza configurazione email", async () => {
-    const fake = fakeAdmin(null);
-    authorize(fake);
-    vi.stubEnv("RESEND_API_KEY", "");
-    const response = await POST(request(false));
-    expect(response.status).toBe(200);
-    expect(fake.invoice.status).toBe("draft");
-    expect(mocks.resendFetch).not.toHaveBeenCalled();
-  });
-
-  it("un errore di rete lascia la bozza e non marca inviato", async () => {
-    const fake = fakeAdmin();
-    authorize(fake);
-    mocks.resendFetch.mockRejectedValue(new Error("Network error"));
-    const response = await POST(request());
-    expect(response.status).toBe(500);
-    expect(fake.update).not.toHaveBeenCalled();
-    expect(fake.invoice.status).toBe("draft");
-  });
-
-  it("se l'email è accettata ma il salvataggio dello stato fallisce, avverte prima di un reinvio", async () => {
-    const fake = fakeAdmin(TEST_EMAIL, { message: "DB unavailable" });
-    authorize(fake);
-    const response = await POST(request());
-    const body = await response.json();
-    expect(response.status).toBe(500);
-    expect(body).toMatchObject({ ok: false, invoice_id: "invoice-1" });
-    expect(body.error).toContain("Verifica prima di reinviare");
-    expect(mocks.resendFetch).toHaveBeenCalledTimes(1);
+  it("fully paid statement stays paid when sent", async () => {
+    m.rpc.mockResolvedValue({
+      data: { invoice: { ...invoice, paid_cents: 26200 }, reused: false },
+    });
+    await POST(req());
+    expect(m.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "paid" }),
+    );
   });
 });

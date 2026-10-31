@@ -1,0 +1,12 @@
+import {beforeEach,expect,it,vi} from 'vitest';import {NextRequest,NextResponse} from 'next/server';
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn()}));vi.mock('@/lib/server/pricing-auth',()=>({authorizePricingRequest:m.auth}));
+import {POST} from '@/app/api/invoices/[id]/mark-paid/route';
+const I='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',K='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const req=(body:unknown)=>new NextRequest('https://example.test/api/pay',{method:'POST',body:JSON.stringify(body)});
+const valid={idempotency_key:K,paid_on:'2026-10-31',method:'Bonifico'};
+beforeEach(()=>{vi.clearAllMocks();m.auth.mockResolvedValue({admin:{rpc:m.rpc},user:{id:'operator'},membership:{tenant_id:'tenant'}});m.rpc.mockResolvedValue({data:{replayed:false},error:null});});
+it('settles residual through one atomic RPC, scoped to tenant and operator',async()=>{expect((await POST(req(valid),{params:Promise.resolve({id:I})})).status).toBe(200);expect(m.rpc).toHaveBeenCalledWith('pay_agency_statement',expect.objectContaining({p_tenant_id:'tenant',p_invoice_id:I,p_key:K,p_amount:null,p_user_id:'operator'}));});
+it('partial payment passes exact integer cents',async()=>{await POST(req({...valid,amount_cents:10000}),{params:Promise.resolve({id:I})});expect(m.rpc).toHaveBeenCalledWith('pay_agency_statement',expect.objectContaining({p_amount:10000}));});
+it('cannot record fractional or negative payments or omit idempotency key',async()=>{for(const body of [{...valid,amount_cents:-1},{...valid,amount_cents:1.5},{paid_on:'2026-10-31',method:'Bonifico'}])expect((await POST(req(body),{params:Promise.resolve({id:I})})).status).toBe(400);expect(m.rpc).not.toHaveBeenCalled();});
+it('overpayment is a conflict with no false success',async()=>{m.rpc.mockResolvedValue({error:{message:'STATEMENT_PAYMENT_EXCEEDS_BALANCE'}});expect((await POST(req({...valid,amount_cents:50000}),{params:Promise.resolve({id:I})})).status).toBe(409);});
+it('agency or unauthenticated caller cannot mark paid',async()=>{m.auth.mockResolvedValue(NextResponse.json({error:'Non autorizzato.'},{status:403}));expect((await POST(req(valid),{params:Promise.resolve({id:I})})).status).toBe(403);expect(m.rpc).not.toHaveBeenCalled();});

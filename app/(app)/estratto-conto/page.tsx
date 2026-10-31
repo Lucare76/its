@@ -1,10 +1,13 @@
-﻿"use client";
+"use client";
 
-import { formatInvoiceServiceDescription, escapeInvoiceServiceDescription } from "@/lib/invoice-service-label";
+import {
+  formatInvoiceServiceDescription,
+  escapeInvoiceServiceDescription,
+} from "@/lib/invoice-service-label";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { DateInput } from "@/components/ui";
-import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
+import { hasSupabaseEnv, supabase, getToken } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 
 // ─── Tipi ────────────────────────────────────────────────────────────────────
@@ -23,6 +26,10 @@ type AgencyRow = {
 
 type InvoiceRow = {
   id: string;
+  invoice_number: string;
+  date_basis: string;
+  paid_cents: number;
+  waived_cents: number;
   agency_name: string;
   period_from: string;
   period_to: string;
@@ -33,7 +40,15 @@ type InvoiceRow = {
   sent_at: string | null;
   paid_at: string | null;
   payment_note: string | null;
-  invoice_data: Array<{ numero_pratica: string; cliente_nome: string; data_servizio: string; tipo_servizio: string; descrizione_servizio?: string; pax?: number | null; importo_cents: number }>;
+  invoice_data: Array<{
+    numero_pratica: string;
+    cliente_nome: string;
+    data_servizio: string;
+    tipo_servizio: string;
+    descrizione_servizio?: string;
+    pax?: number | null;
+    importo_cents: number;
+  }>;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -45,18 +60,18 @@ function formatDate(iso: string) {
 }
 
 function formatCents(cents: number) {
-  return (cents / 100).toLocaleString("it-IT", { minimumFractionDigits: 2 }) + " €";
+  return (
+    (cents / 100).toLocaleString("it-IT", { minimumFractionDigits: 2 }) + " €"
+  );
 }
 
 const CADENCE_LABELS: Record<string, string> = {
   weekly: "Settimanale",
   biweekly: "Bisettimanale",
-  monthly: "Mensile"
+  monthly: "Mensile",
 };
 
 const DAY_LABELS = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
-
-
 
 // ─── Componente ─────────────────────────────────────────────────────────────
 
@@ -70,16 +85,22 @@ export default function EstrattoContoPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   // Filtri
-  const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "sent" | "paid">("all");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "draft" | "sent" | "paid"
+  >("all");
   const [agencyFilter, setAgencyFilter] = useState<string>("all");
 
   // Generazione manuale
   const [genAgency, setGenAgency] = useState<string>("");
   const [genFrom, setGenFrom] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 7);
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
     return d.toISOString().slice(0, 10);
   });
-  const [genTo, setGenTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [genTo, setGenTo] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  const [genBasis, setGenBasis] = useState<"arrival" | "departure">("arrival");
   const [genSend, setGenSend] = useState(false);
   const [generating, setGenerating] = useState(false);
 
@@ -93,6 +114,23 @@ export default function EstrattoContoPage() {
 
   // Mark paid
   const [payingId, setPayingId] = useState<string | null>(null);
+  const [payDate, setPayDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  const [payMethod, setPayMethod] = useState("Bonifico");
+  const [payAmount, setPayAmount] = useState("");
+  const [payKey, setPayKey] = useState(() => crypto.randomUUID());
+  const [paymentReports, setPaymentReports] = useState<
+    Array<{
+      id: string;
+      invoice_id: string;
+      amount_cents: number;
+      paid_on: string;
+      method: string;
+      note: string | null;
+      agency_invoices: { invoice_number: string; agency_name: string };
+    }>
+  >([]);
   const [payNote, setPayNote] = useState("");
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -100,11 +138,17 @@ export default function EstrattoContoPage() {
 
   const loadData = async (tok: string) => {
     const [agRes, invRes] = await Promise.all([
-      fetch("/api/pricing/bootstrap", { headers: { Authorization: `Bearer ${tok}` } }),
-      fetch("/api/invoices", { headers: { Authorization: `Bearer ${tok}` } })
+      fetch("/api/pricing/bootstrap", {
+        headers: { Authorization: `Bearer ${tok}` },
+      }),
+      fetch("/api/invoices", { headers: { Authorization: `Bearer ${tok}` } }),
     ]);
-    const agBody = (await agRes.json().catch(() => null)) as { agencies?: AgencyRow[] } | null;
-    const invBody = (await invRes.json().catch(() => null)) as { invoices?: InvoiceRow[] } | null;
+    const agBody = (await agRes.json().catch(() => null)) as {
+      agencies?: AgencyRow[];
+    } | null;
+    const invBody = (await invRes.json().catch(() => null)) as {
+      invoices?: InvoiceRow[];
+    } | null;
     setAgencies(agBody?.agencies ?? []);
     setInvoices(invBody?.invoices ?? []);
   };
@@ -113,19 +157,33 @@ export default function EstrattoContoPage() {
     let active = true;
     const boot = async () => {
       const session = await getClientSessionContext();
-      if (!hasSupabaseEnv || !supabase || !session.userId || !session.tenantId) {
-        if (active) { setError("Login richiesto."); setLoading(false); }
+      if (
+        !hasSupabaseEnv ||
+        !supabase ||
+        !session.userId ||
+        !session.tenantId
+      ) {
+        if (active) {
+          setError("Login richiesto.");
+          setLoading(false);
+        }
         return;
       }
       setTenantId(session.tenantId);
       const tok = await getToken();
-      if (!tok) { setError("Sessione non valida."); setLoading(false); return; }
+      if (!tok) {
+        setError("Sessione non valida.");
+        setLoading(false);
+        return;
+      }
       setToken(tok);
       await loadData(tok);
       if (active) setLoading(false);
     };
     void boot();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   const agencyNames = useMemo(() => {
@@ -135,36 +193,71 @@ export default function EstrattoContoPage() {
       if (!name) continue;
       const key = name.toLowerCase();
       const existing = seen.get(key);
-      if (!existing || (existing === existing.toUpperCase() && name !== name.toUpperCase())) {
+      if (
+        !existing ||
+        (existing === existing.toUpperCase() && name !== name.toUpperCase())
+      ) {
         seen.set(key, name);
       }
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "it"));
   }, [invoices]);
 
-  const filteredInvoices = useMemo(() => invoices.filter((inv) => {
-    const statusOk = statusFilter === "all" || inv.status === statusFilter;
-    const agencyOk = agencyFilter === "all" || inv.agency_name?.trim().toLowerCase() === agencyFilter.toLowerCase();
-    return statusOk && agencyOk;
-  }), [invoices, statusFilter, agencyFilter]);
+  const filteredInvoices = useMemo(
+    () =>
+      invoices.filter((inv) => {
+        const statusOk = statusFilter === "all" || inv.status === statusFilter;
+        const agencyOk =
+          agencyFilter === "all" ||
+          inv.agency_name?.trim().toLowerCase() === agencyFilter.toLowerCase();
+        return statusOk && agencyOk;
+      }),
+    [invoices, statusFilter, agencyFilter],
+  );
 
   const generateInvoice = async () => {
     if (!token || !genAgency) return;
-    setGenerating(true); setMessage(null);
+    setGenerating(true);
+    setMessage(null);
     try {
       const res = await fetch("/api/invoices", {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-        body: JSON.stringify({ agency_name: genAgency, period_from: genFrom, period_to: genTo, send: genSend })
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          agency_name: genAgency,
+          agency_id: agencies.find((a) => a.name === genAgency)?.id,
+          date_basis: genBasis,
+          period_from: genFrom,
+          period_to: genTo,
+          send: genSend,
+        }),
       });
-      const body = (await res.json()) as { ok?: boolean; html?: string; items_count?: number; total_cents?: number; error?: string };
-      if (!res.ok || !body.ok) { setMessage(`Errore: ${body.error}`); }
-      else {
-        setMessage(`Estratto conto generato: ${body.items_count} pratiche, totale ${formatCents(body.total_cents ?? 0)}${genSend ? " — inviato via email" : ""}`);
+      const body = (await res.json()) as {
+        ok?: boolean;
+        html?: string;
+        items_count?: number;
+        total_cents?: number;
+        error?: string;
+        reused?: boolean;
+        invoice_number?: string;
+      };
+      if (!res.ok || !body.ok) {
+        setMessage(`Errore: ${body.error}`);
+      } else {
+        setMessage(
+          body.reused
+            ? `Estratto ${body.invoice_number} già esistente: nessun duplicato e nessun nuovo invio.`
+            : `Estratto conto generato: ${body.items_count} pratiche, totale ${formatCents(body.total_cents ?? 0)}${genSend ? " — inviato via email" : ""}`,
+        );
         if (body.html) setPreviewHtml(body.html);
         await loadData(token);
       }
-    } finally { setGenerating(false); }
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const resendInvoice = async (invoiceId: string) => {
@@ -174,7 +267,11 @@ export default function EstrattoContoPage() {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
     });
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; sent_to?: string; error?: string } | null;
+    const body = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      sent_to?: string;
+      error?: string;
+    } | null;
     setResendingId(null);
     if (body?.ok) {
       setMessage(`Email inviata a ${body.sent_to ?? "agenzia"}`);
@@ -191,7 +288,11 @@ export default function EstrattoContoPage() {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
     });
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; sent_to?: string; error?: string } | null;
+    const body = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      sent_to?: string;
+      error?: string;
+    } | null;
     setRemindingId(null);
     if (body?.ok) {
       setMessage(`Sollecito inviato a ${body.sent_to ?? "agenzia"}`);
@@ -207,7 +308,10 @@ export default function EstrattoContoPage() {
       method: "DELETE",
       headers: { authorization: `Bearer ${token}` },
     });
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const body = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+    } | null;
     setDeletingId(null);
     if (body?.ok) {
       setMessage("Bozza eliminata.");
@@ -237,7 +341,7 @@ export default function EstrattoContoPage() {
   </div>
   <div style="text-align:right">
     <div style="font-size:14px;font-weight:700;color:#0f172a">${formatDate(inv.period_from)} — ${formatDate(inv.period_to)}</div>
-    <div style="font-size:11px;color:#94a3b8;margin-top:4px">Emesso il ${formatDate(inv.created_at.slice(0,10))}</div>
+    <div style="font-size:11px;color:#94a3b8;margin-top:4px">Emesso il ${formatDate(inv.created_at.slice(0, 10))}</div>
   </div>
 </div>
 <div style="display:flex;gap:16px;margin-bottom:24px">
@@ -259,21 +363,25 @@ export default function EstrattoContoPage() {
     <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.65);border:1px solid #1e293b">Importo</th>
   </tr></thead>
   <tbody>
-    ${(inv.invoice_data ?? []).map((item, i) => `
+    ${(inv.invoice_data ?? [])
+      .map(
+        (item, i) => `
     <tr style="background:${i % 2 === 0 ? "#fff" : "#f8fafc"}">
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:12px;color:#64748b">${item.numero_pratica || "—"}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;text-transform:uppercase">${item.cliente_nome}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${escapeInvoiceServiceDescription(item)}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(item.importo_cents)}</td>
-    </tr>`).join("")}
+    </tr>`,
+      )
+      .join("")}
     <tr style="background:#f0f6ff">
-      <td colspan="4" style="padding:12px;border:1px solid #e2e8f0;font-size:13px;font-weight:800;color:#0f2744;text-transform:uppercase">Totale complessivo</td>
-      <td style="padding:12px;border:1px solid #e2e8f0;font-size:16px;font-weight:900;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(inv.total_cents)}</td>
+      <td colspan="4" style="padding:12px;border:1px solid #e2e8f0;font-size:13px;font-weight:800;color:#0f2744;text-transform:uppercase">Totale servizi</td>
+      <td style="padding:12px;border:1px solid #e2e8f0;font-size:16px;font-weight:900;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(inv.total_cents)}<div className="text-xs font-normal">Pagato {formatCents(inv.paid_cents??0)} · Abbuoni {formatCents(inv.waived_cents??0)}<br/>Residuo {formatCents(Math.max(0,inv.total_cents-(inv.paid_cents??0)-(inv.waived_cents??0)))}</div></td>
     </tr>
   </tbody>
 </table>
-<div style="margin-top:24px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center;line-height:1.8">
+<p>Pagato: ${formatCents(inv.paid_cents ?? 0)} · Abbuoni: ${formatCents(inv.waived_cents ?? 0)} · Residuo: ${formatCents(Math.max(0, inv.total_cents - (inv.paid_cents ?? 0) - (inv.waived_cents ?? 0)))}</p><div style="margin-top:24px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center;line-height:1.8">
   <strong style="color:#475569">Ischia Transfer Service S.r.l.</strong><br/>
   Via Cilento 14/C, 80077 Ischia (NA) · P.IVA IT 05931311210
 </div>
@@ -282,19 +390,73 @@ export default function EstrattoContoPage() {
 </div>
 </body></html>`;
     const w = window.open("", "_blank");
-    if (w) { w.document.write(printHtml); w.document.close(); w.focus(); }
+    if (w) {
+      w.document.write(printHtml);
+      w.document.close();
+      w.focus();
+    }
   };
 
+  const loadPaymentReports = async (tk: string) => {
+    const r = await fetch("/api/ops/invoice-payments", {
+      headers: { Authorization: `Bearer ${tk}` },
+    });
+    const b = await r.json();
+    if (r.ok) setPaymentReports(b.reports ?? []);
+    else setError(b.error ?? "Impossibile leggere i pagamenti da verificare.");
+  };
+  useEffect(() => {
+    if (token) void loadPaymentReports(token);
+  }, [token]);
+  const resolvePayment = async (id: string, action: "verify" | "reject") => {
+    if (!token) return;
+    const r = await fetch("/api/ops/invoice-payments", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ report_id: id, action }),
+    });
+    const b = await r.json();
+    if (!r.ok) {
+      setError(b.error ?? "Operazione non completata.");
+      return;
+    }
+    await loadPaymentReports(token);
+    await loadData(token);
+  };
   const markPaid = async (invoiceId: string) => {
     if (!token) return;
     const res = await fetch(`/api/invoices/${invoiceId}/mark-paid`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ payment_note: payNote })
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        payment_note: payNote,
+        idempotency_key: payKey,
+        paid_on: payDate,
+        method: payMethod,
+        ...(payAmount.trim()
+          ? {
+              amount_cents: Math.round(
+                Number(payAmount.replace(",", ".")) * 100,
+              ),
+            }
+          : {}),
+      }),
     });
     if (res.ok) {
-      setPayingId(null); setPayNote("");
+      setPayingId(null);
+      setPayNote("");
+      setPayAmount("");
+      setPayKey(crypto.randomUUID());
       await loadData(token);
+    } else {
+      const b = await res.json();
+      setError(b.error ?? "Pagamento non registrato.");
     }
   };
 
@@ -303,25 +465,36 @@ export default function EstrattoContoPage() {
     setSavingAgency(true);
     const res = await fetch(`/api/agencies/${editingAgency.id}`, {
       method: "PATCH",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({
         invoice_email: editingAgency.invoice_email,
         invoice_cadence: editingAgency.invoice_cadence,
         invoice_send_day: editingAgency.invoice_send_day,
-        invoice_enabled: editingAgency.invoice_enabled
-      })
+        invoice_enabled: editingAgency.invoice_enabled,
+      }),
     });
     setSavingAgency(false);
-    if (res.ok) { setEditingAgency(null); await loadData(token); }
+    if (res.ok) {
+      setEditingAgency(null);
+      await loadData(token);
+    }
   };
 
   const statusBadge = (status: string) => {
-    if (status === "paid") return "rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700";
-    if (status === "sent") return "rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700";
+    if (status === "paid")
+      return "rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700";
+    if (status === "sent")
+      return "rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700";
     return "rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600";
   };
 
-  if (loading) return <div className="card p-4 text-sm text-slate-500">Caricamento...</div>;
+  if (loading)
+    return (
+      <div className="card p-4 text-sm text-slate-500">Caricamento...</div>
+    );
 
   return (
     <section className="space-y-6">
@@ -330,58 +503,119 @@ export default function EstrattoContoPage() {
 
       {/* Configurazione agenzie */}
       <div className="card p-5 space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">Configurazione invio automatico</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
+          Configurazione invio automatico
+        </h2>
         <div className="grid gap-2 xl:grid-cols-2">
-          {agencies.filter((a) => a.active !== false).map((agency) => (
-            <div key={agency.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 gap-3">
-              <div>
-                <p className="text-sm font-semibold text-slate-800">{agency.name}</p>
-                <p className="text-xs text-slate-500">
-                  {agency.invoice_enabled
-                    ? `${CADENCE_LABELS[agency.invoice_cadence] ?? agency.invoice_cadence} · ${DAY_LABELS[agency.invoice_send_day]} · ${agency.invoice_email ?? agency.contact_email ?? "no email"}`
-                    : "Invio automatico disabilitato"}
-                </p>
+          {agencies
+            .filter((a) => a.active !== false)
+            .map((agency) => (
+              <div
+                key={agency.id}
+                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 gap-3"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {agency.name}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {agency.invoice_enabled
+                      ? `${CADENCE_LABELS[agency.invoice_cadence] ?? agency.invoice_cadence} · ${DAY_LABELS[agency.invoice_send_day]} · ${agency.invoice_email ?? agency.contact_email ?? "no email"}`
+                      : "Invio automatico disabilitato"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={
+                      agency.invoice_enabled
+                        ? "rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700"
+                        : "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500"
+                    }
+                  >
+                    {agency.invoice_enabled ? "ON" : "OFF"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingAgency({ ...agency })}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    Configura
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className={agency.invoice_enabled ? "rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700" : "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500"}>
-                  {agency.invoice_enabled ? "ON" : "OFF"}
-                </span>
-                <button type="button" onClick={() => setEditingAgency({ ...agency })}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50">
-                  Configura
-                </button>
-              </div>
-            </div>
-          ))}
+            ))}
         </div>
       </div>
 
       {/* Genera manualmente */}
       <div className="card p-5 space-y-4">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">Genera estratto conto manuale</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
+          Genera estratto conto manuale
+        </h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="text-xs font-medium text-slate-600">
             Agenzia *
-            <select value={genAgency} onChange={(e) => setGenAgency(e.target.value)} className="mt-1 input-saas w-full">
+            <select
+              value={genAgency}
+              onChange={(e) => setGenAgency(e.target.value)}
+              className="mt-1 input-saas w-full"
+            >
               <option value="">— seleziona —</option>
-              {agencies.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
+              {agencies.map((a) => (
+                <option key={a.id} value={a.name}>
+                  {a.name}
+                </option>
+              ))}
             </select>
           </label>
           <label className="text-xs font-medium text-slate-600">
             Dal
-            <DateInput value={genFrom} onChange={(iso) => setGenFrom(iso)} className="mt-1 input-saas w-full" />
+            <DateInput
+              value={genFrom}
+              onChange={(iso) => setGenFrom(iso)}
+              className="mt-1 input-saas w-full"
+            />
           </label>
           <label className="text-xs font-medium text-slate-600">
             Al
-            <DateInput value={genTo} onChange={(iso) => setGenTo(iso)} className="mt-1 input-saas w-full" />
+            <DateInput
+              value={genTo}
+              onChange={(iso) => setGenTo(iso)}
+              className="mt-1 input-saas w-full"
+            />
+          </label>
+          <label className="text-xs font-medium text-slate-600">
+            Seleziona per
+            <select
+              className="mt-1 input-saas w-full"
+              value={genBasis}
+              onChange={(e) =>
+                setGenBasis(e.target.value as "arrival" | "departure")
+              }
+            >
+              <option value="arrival">Data arrivo</option>
+              <option value="departure">Data partenza</option>
+            </select>
+            <span className="block mt-1 text-slate-500">
+              Include l’intera pratica, anche se il rientro è fuori periodo.
+            </span>
           </label>
           <div className="flex flex-col justify-end gap-2">
             <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-              <input type="checkbox" checked={genSend} onChange={(e) => setGenSend(e.target.checked)} className="rounded" />
+              <input
+                type="checkbox"
+                checked={genSend}
+                onChange={(e) => setGenSend(e.target.checked)}
+                className="rounded"
+              />
               Invia email automaticamente
             </label>
-            <button type="button" onClick={() => void generateInvoice()} disabled={generating || !genAgency}
-              className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+            <button
+              type="button"
+              onClick={() => void generateInvoice()}
+              disabled={generating || !genAgency}
+              className="btn-primary px-4 py-2 text-sm disabled:opacity-50"
+            >
               {generating ? "Generazione..." : "Genera"}
             </button>
           </div>
@@ -390,13 +624,24 @@ export default function EstrattoContoPage() {
         {previewHtml && (
           <div className="space-y-2">
             <div className="flex gap-2">
-              <button type="button" onClick={() => {
-                const w = window.open("", "_blank");
-                if (w) { w.document.write(previewHtml); w.document.close(); }
-              }} className="btn-secondary px-4 py-2 text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  const w = window.open("", "_blank");
+                  if (w) {
+                    w.document.write(previewHtml);
+                    w.document.close();
+                  }
+                }}
+                className="btn-secondary px-4 py-2 text-sm"
+              >
                 Apri anteprima / Stampa PDF
               </button>
-              <button type="button" onClick={() => setPreviewHtml(null)} className="btn-secondary px-4 py-2 text-sm">
+              <button
+                type="button"
+                onClick={() => setPreviewHtml(null)}
+                className="btn-secondary px-4 py-2 text-sm"
+              >
                 Chiudi anteprima
               </button>
             </div>
@@ -407,17 +652,33 @@ export default function EstrattoContoPage() {
       {/* Lista estratti conto */}
       <div className="card p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">Estratti conto</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
+            Estratti conto
+          </h2>
           <div className="ml-auto flex flex-wrap gap-2">
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="input-saas text-xs">
+            <select
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as typeof statusFilter)
+              }
+              className="input-saas text-xs"
+            >
               <option value="all">Tutti gli stati</option>
               <option value="draft">Bozza</option>
               <option value="sent">Inviato</option>
               <option value="paid">Pagato</option>
             </select>
-            <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="input-saas text-xs">
+            <select
+              value={agencyFilter}
+              onChange={(e) => setAgencyFilter(e.target.value)}
+              className="input-saas text-xs"
+            >
               <option value="all">Tutte le agenzie</option>
-              {agencyNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              {agencyNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -443,50 +704,129 @@ export default function EstrattoContoPage() {
                 {filteredInvoices.map((inv) => (
                   <Fragment key={inv.id}>
                     <tr className="border-t border-slate-100 hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium">{inv.agency_name}</td>
-                      <td className="px-3 py-2 text-xs">{formatDate(inv.period_from)} — {formatDate(inv.period_to)}</td>
+                      <td className="px-3 py-2 font-medium">
+                        {inv.agency_name}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {inv.invoice_number}
+                        <br />
+                        {formatDate(inv.period_from)} —{" "}
+                        {formatDate(inv.period_to)}
+                        <br />
+                        <span className="text-slate-500">
+                          {inv.date_basis === "departure"
+                            ? "Per partenza"
+                            : inv.date_basis === "arrival"
+                              ? "Per arrivo"
+                              : "Storico"}
+                        </span>
+                      </td>
                       <td className="px-3 py-2">{inv.services_count}</td>
-                      <td className="px-3 py-2 font-semibold">{formatCents(inv.total_cents)}</td>
-                      <td className="px-3 py-2"><span className={statusBadge(inv.status)}>{inv.status === "paid" ? "Pagato" : inv.status === "sent" ? "Inviato" : "Bozza"}</span></td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{inv.sent_at ? formatDate(inv.sent_at.slice(0, 10)) : "—"}</td>
+                      <td className="px-3 py-2 font-semibold">
+                        {formatCents(inv.total_cents)}
+                        <div className="text-xs font-normal">
+                          Pagato {formatCents(inv.paid_cents ?? 0)} · Abbuoni{" "}
+                          {formatCents(inv.waived_cents ?? 0)}
+                          <br />
+                          Residuo{" "}
+                          {formatCents(
+                            Math.max(
+                              0,
+                              inv.total_cents -
+                                (inv.paid_cents ?? 0) -
+                                (inv.waived_cents ?? 0),
+                            ),
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={statusBadge(inv.status)}>
+                          {inv.status === "paid"
+                            ? "Pagato"
+                            : inv.status === "sent"
+                              ? "Inviato"
+                              : "Bozza"}
+                        </span>
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-500">
-                        {inv.paid_at ? <span className="text-emerald-600 font-medium">{formatDate(inv.paid_at.slice(0, 10))}</span> : "—"}
-                        {inv.payment_note && <span className="ml-1 text-slate-400">({inv.payment_note})</span>}
+                        {inv.sent_at
+                          ? formatDate(inv.sent_at.slice(0, 10))
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">
+                        {inv.paid_at ? (
+                          <span className="text-emerald-600 font-medium">
+                            {formatDate(inv.paid_at.slice(0, 10))}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                        {inv.payment_note && (
+                          <span className="ml-1 text-slate-400">
+                            ({inv.payment_note})
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex gap-1.5 flex-wrap">
-                          <button type="button" onClick={() => openPrint(inv)}
-                            className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => openPrint(inv)}
+                            className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100"
+                          >
                             🖨️ Stampa
                           </button>
-                          <button type="button" onClick={() => setPreviewInvoice(previewInvoice?.id === inv.id ? null : inv)}
-                            className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewInvoice(
+                                previewInvoice?.id === inv.id ? null : inv,
+                              )
+                            }
+                            className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100"
+                          >
                             Dettaglio
                           </button>
                           {inv.status !== "paid" && (
-                            <button type="button" onClick={() => void resendInvoice(inv.id)}
+                            <button
+                              type="button"
+                              onClick={() => void resendInvoice(inv.id)}
                               disabled={resendingId === inv.id}
-                              className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+                              className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                            >
                               {resendingId === inv.id ? "..." : "📧 Re-invia"}
                             </button>
                           )}
                           {inv.status === "sent" && (
-                            <button type="button" onClick={() => void remindInvoice(inv.id)}
+                            <button
+                              type="button"
+                              onClick={() => void remindInvoice(inv.id)}
                               disabled={remindingId === inv.id}
-                              className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50">
+                              className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                            >
                               {remindingId === inv.id ? "..." : "🔔 Sollecito"}
                             </button>
                           )}
                           {inv.status !== "paid" && (
-                            <button type="button" onClick={() => { setPayingId(inv.id); setPayNote(""); }}
-                              className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100">
-                              Segna pagato
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPayingId(inv.id);
+                                setPayKey(crypto.randomUUID());setPayAmount("");
+                                setPayNote("");
+                              }}
+                              className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Registra incasso
                             </button>
                           )}
                           {inv.status === "draft" && (
-                            <button type="button" onClick={() => void deleteInvoice(inv.id)}
+                            <button
+                              type="button"
+                              onClick={() => void deleteInvoice(inv.id)}
                               disabled={deletingId === inv.id}
-                              className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-600 hover:bg-rose-100 disabled:opacity-50">
+                              className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                            >
                               {deletingId === inv.id ? "..." : "🗑️ Elimina"}
                             </button>
                           )}
@@ -500,21 +840,44 @@ export default function EstrattoContoPage() {
                           <table className="w-full text-xs border-collapse">
                             <thead>
                               <tr className="text-slate-500 border-b border-slate-200">
-                                <th className="py-1 text-left font-semibold">N. Pratica</th>
-                                <th className="py-1 text-left font-semibold">Cliente</th>
-                                <th className="py-1 text-left font-semibold">Data</th>
-                                <th className="py-1 text-left font-semibold">Servizio</th>
-                                <th className="py-1 text-right font-semibold">Importo</th>
+                                <th className="py-1 text-left font-semibold">
+                                  N. Pratica
+                                </th>
+                                <th className="py-1 text-left font-semibold">
+                                  Cliente
+                                </th>
+                                <th className="py-1 text-left font-semibold">
+                                  Data
+                                </th>
+                                <th className="py-1 text-left font-semibold">
+                                  Servizio
+                                </th>
+                                <th className="py-1 text-right font-semibold">
+                                  Importo
+                                </th>
                               </tr>
                             </thead>
                             <tbody>
                               {(inv.invoice_data ?? []).map((item, i) => (
-                                <tr key={i} className="border-b border-slate-100">
-                                  <td className="py-1">{item.numero_pratica}</td>
-                                  <td className="py-1 uppercase">{item.cliente_nome}</td>
-                                  <td className="py-1">{formatDate(item.data_servizio)}</td>
-                                  <td className="py-1">{formatInvoiceServiceDescription(item)}</td>
-                                  <td className="py-1 text-right">{formatCents(item.importo_cents)}</td>
+                                <tr
+                                  key={i}
+                                  className="border-b border-slate-100"
+                                >
+                                  <td className="py-1">
+                                    {item.numero_pratica}
+                                  </td>
+                                  <td className="py-1 uppercase">
+                                    {item.cliente_nome}
+                                  </td>
+                                  <td className="py-1">
+                                    {formatDate(item.data_servizio)}
+                                  </td>
+                                  <td className="py-1">
+                                    {formatInvoiceServiceDescription(item)}
+                                  </td>
+                                  <td className="py-1 text-right">
+                                    {formatCents(item.importo_cents)}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
@@ -530,19 +893,102 @@ export default function EstrattoContoPage() {
         )}
       </div>
 
+      {paymentReports.length > 0 && (
+        <div className="card p-5 space-y-3">
+          <h2 className="font-bold">
+            Pagamenti dichiarati dalle agenzie — da verificare (
+            {paymentReports.length})
+          </h2>
+          {paymentReports.map((r) => (
+            <div key={r.id} className="rounded-lg border p-3">
+              <p>
+                {r.agency_invoices?.invoice_number} ·{" "}
+                {r.agency_invoices?.agency_name} · {formatCents(r.amount_cents)}{" "}
+                · {formatDate(r.paid_on)} · {r.method}
+              </p>
+              <p className="text-sm text-slate-500">{r.note}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  className="btn-primary"
+                  type="button"
+                  onClick={() => void resolvePayment(r.id, "verify")}
+                >
+                  Conferma incasso verificato
+                </button>
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={() => void resolvePayment(r.id, "reject")}
+                >
+                  Rifiuta segnalazione
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {/* Modal mark paid */}
       {payingId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl space-y-4">
-            <h2 className="text-base font-semibold">Segna come pagato</h2>
+            <h2 className="text-base font-semibold">
+              Registra incasso verificato
+            </h2>
+            <label className="block text-sm">
+              Importo incassato (€)
+              <input
+                className="input-saas w-full"
+                inputMode="decimal"
+                value={payAmount}
+                onChange={(e) => setPayAmount(e.target.value)}
+                placeholder="Lascia vuoto per saldare il residuo"
+              />
+            </label>
+            <label className="block text-sm">
+              Data incasso
+              <input
+                type="date"
+                className="input-saas w-full"
+                value={payDate}
+                onChange={(e) => setPayDate(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              Modalità
+              <select
+                className="input-saas w-full"
+                value={payMethod}
+                onChange={(e) => setPayMethod(e.target.value)}
+              >
+                {["Bonifico", "Contanti", "Carta", "Altro"].map((m) => (
+                  <option key={m}>{m}</option>
+                ))}
+              </select>
+            </label>
             <label className="text-xs font-medium text-slate-600">
               Note pagamento (opzionale)
-              <input value={payNote} onChange={(e) => setPayNote(e.target.value)}
-                placeholder="Es. Bonifico del 15/04" className="mt-1 input-saas w-full" />
+              <input
+                value={payNote}
+                onChange={(e) => setPayNote(e.target.value)}
+                placeholder="Es. Bonifico del 15/04"
+                className="mt-1 input-saas w-full"
+              />
             </label>
             <div className="flex gap-2 justify-end">
-              <button type="button" onClick={() => setPayingId(null)} className="btn-secondary px-4 py-2 text-sm">Annulla</button>
-              <button type="button" onClick={() => void markPaid(payingId)} className="btn-primary px-5 py-2 text-sm">Conferma</button>
+              <button
+                type="button"
+                onClick={() => setPayingId(null)}
+                className="btn-secondary px-4 py-2 text-sm"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={() => void markPaid(payingId)}
+                className="btn-primary px-5 py-2 text-sm"
+              >
+                Conferma
+              </button>
             </div>
           </div>
         </div>
@@ -553,19 +999,44 @@ export default function EstrattoContoPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold">Configura estratto conto — {editingAgency.name}</h2>
-              <button type="button" onClick={() => setEditingAgency(null)} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
+              <h2 className="text-base font-semibold">
+                Configura estratto conto — {editingAgency.name}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setEditingAgency(null)}
+                className="text-slate-400 hover:text-slate-600 text-xl"
+              >
+                ×
+              </button>
             </div>
             <div className="space-y-3">
               <label className="text-xs font-medium text-slate-600">
                 Email per estratto conto
-                <input value={editingAgency.invoice_email ?? ""} onChange={(e) => setEditingAgency({ ...editingAgency, invoice_email: e.target.value || null })}
-                  className="mt-1 input-saas w-full" placeholder="email@agenzia.it" />
+                <input
+                  value={editingAgency.invoice_email ?? ""}
+                  onChange={(e) =>
+                    setEditingAgency({
+                      ...editingAgency,
+                      invoice_email: e.target.value || null,
+                    })
+                  }
+                  className="mt-1 input-saas w-full"
+                  placeholder="email@agenzia.it"
+                />
               </label>
               <label className="text-xs font-medium text-slate-600">
                 Cadenza invio
-                <select value={editingAgency.invoice_cadence} onChange={(e) => setEditingAgency({ ...editingAgency, invoice_cadence: e.target.value })}
-                  className="mt-1 input-saas w-full">
+                <select
+                  value={editingAgency.invoice_cadence}
+                  onChange={(e) =>
+                    setEditingAgency({
+                      ...editingAgency,
+                      invoice_cadence: e.target.value,
+                    })
+                  }
+                  className="mt-1 input-saas w-full"
+                >
                   <option value="weekly">Settimanale</option>
                   <option value="biweekly">Bisettimanale</option>
                   <option value="monthly">Mensile</option>
@@ -574,20 +1045,53 @@ export default function EstrattoContoPage() {
               {editingAgency.invoice_cadence !== "monthly" && (
                 <label className="text-xs font-medium text-slate-600">
                   Giorno di invio
-                  <select value={editingAgency.invoice_send_day} onChange={(e) => setEditingAgency({ ...editingAgency, invoice_send_day: Number(e.target.value) })}
-                    className="mt-1 input-saas w-full">
-                    {DAY_LABELS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                  <select
+                    value={editingAgency.invoice_send_day}
+                    onChange={(e) =>
+                      setEditingAgency({
+                        ...editingAgency,
+                        invoice_send_day: Number(e.target.value),
+                      })
+                    }
+                    className="mt-1 input-saas w-full"
+                  >
+                    {DAY_LABELS.map((d, i) => (
+                      <option key={i} value={i}>
+                        {d}
+                      </option>
+                    ))}
                   </select>
                 </label>
               )}
               <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                <input type="checkbox" checked={editingAgency.invoice_enabled} onChange={(e) => setEditingAgency({ ...editingAgency, invoice_enabled: e.target.checked })} className="rounded" />
+                <input
+                  type="checkbox"
+                  checked={editingAgency.invoice_enabled}
+                  onChange={(e) =>
+                    setEditingAgency({
+                      ...editingAgency,
+                      invoice_enabled: e.target.checked,
+                    })
+                  }
+                  className="rounded"
+                />
                 Abilita invio automatico estratto conto
               </label>
             </div>
             <div className="flex gap-2 justify-end">
-              <button type="button" onClick={() => setEditingAgency(null)} className="btn-secondary px-4 py-2 text-sm">Annulla</button>
-              <button type="button" onClick={() => void saveAgencySettings()} disabled={savingAgency} className="btn-primary px-5 py-2 text-sm disabled:opacity-50">
+              <button
+                type="button"
+                onClick={() => setEditingAgency(null)}
+                className="btn-secondary px-4 py-2 text-sm"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveAgencySettings()}
+                disabled={savingAgency}
+                className="btn-primary px-5 py-2 text-sm disabled:opacity-50"
+              >
                 {savingAgency ? "Salvataggio..." : "Salva"}
               </button>
             </div>

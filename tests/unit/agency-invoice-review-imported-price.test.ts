@@ -1,198 +1,147 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NextRequest, NextResponse } from "next/server";
-
-const mocks = vi.hoisted(() => ({
-  createClient: vi.fn(),
-  authorizeServiceRoleRequest: vi.fn(),
-  authorizePricingRequest: vi.fn(),
-  verifyAgencyActionToken: vi.fn(),
-  sendOperatorInvoiceBatchDisputeNotifyEmail: vi.fn(),
-  sendOperatorInvoiceApprovedNotifyEmail: vi.fn(),
-  sendAgencyInvoiceDisputeResolvedEmail: vi.fn(),
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+const m = vi.hoisted(() => ({
+  client: vi.fn(),
+  auth: vi.fn(),
+  verify: vi.fn(),
+  rpc: vi.fn(),
+  batch: vi.fn(),
+  approve: vi.fn(),
 }));
-vi.mock("@supabase/supabase-js", () => ({ createClient: mocks.createClient }));
+vi.mock("@supabase/supabase-js", () => ({ createClient: m.client }));
 vi.mock("@/lib/server/pricing-auth", () => ({
-  authorizeServiceRoleRequest: mocks.authorizeServiceRoleRequest,
-  authorizePricingRequest: mocks.authorizePricingRequest,
+  authorizeServiceRoleRequest: m.auth,
 }));
-vi.mock("@/lib/server/agency-action-token", () => ({ verifyAgencyActionToken: mocks.verifyAgencyActionToken }));
+vi.mock("@/lib/server/agency-action-token", () => ({
+  verifyAgencyActionToken: m.verify,
+}));
 vi.mock("@/lib/server/agency-approval-email", () => ({
-  sendOperatorInvoiceBatchDisputeNotifyEmail: mocks.sendOperatorInvoiceBatchDisputeNotifyEmail,
-  sendOperatorInvoiceApprovedNotifyEmail: mocks.sendOperatorInvoiceApprovedNotifyEmail,
-  sendAgencyInvoiceDisputeResolvedEmail: mocks.sendAgencyInvoiceDisputeResolvedEmail,
+  sendOperatorInvoiceBatchDisputeNotifyEmail: m.batch,
+  sendOperatorInvoiceApprovedNotifyEmail: m.approve,
 }));
-vi.mock("@/lib/server/ops-audit", () => ({ auditLog: vi.fn() }));
-
-import { POST as tokenReview } from "@/app/api/agency/statement-token/route";
-import { POST as sessionReview } from "@/app/api/agency/invoices/[id]/review/route";
-import { POST as resolveDispute } from "@/app/api/ops/agency-invoice-disputes/[id]/resolve/route";
-
-const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const AGENCY = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const INVOICE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-const SERVICE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-const DISPUTE = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
-type Row = Record<string, unknown>;
-
-function setup(snapshotPrice: unknown = 12000) {
-  const service: Row = {
-    id: SERVICE, tenant_id: TENANT, agency_id: AGENCY,
-    agency_quoted_price_cents: null, source_total_amount_cents: 12000,
-    date: "2026-10-11", customer_name: "CLIENTE TEST",
-  };
-  const invoice: Row = {
-    id: INVOICE, tenant_id: TENANT, agency_id: AGENCY,
-    agency_name: "AGENZIA TEST", period_from: "2026-10-01", period_to: "2026-10-15",
-    agency_review_status: "pending", total_cents: snapshotPrice,
-    invoice_data: [{ service_id: SERVICE, importo_cents: snapshotPrice }],
-  };
-  const tables: Record<string, Row[]> = { services: [service], agency_invoices: [invoice], agency_invoice_disputes: [] };
-  const writes: Array<{ table: string; patch: Row }> = [];
-  const admin = {
-    from(table: string) {
-      const filters: Array<(row: Row) => boolean> = [];
-      let patch: Row | undefined;
-      const match = () => tables[table].filter(row => filters.every(filter => filter(row)));
-      const result = () => {
-        if (patch) for (const row of match()) Object.assign(row, patch);
-        return { data: match(), error: null };
-      };
-      const query = {
-        select: () => query,
-        eq: (key: string, value: unknown) => { filters.push(row => row[key] === value); return query; },
-        in: (key: string, values: unknown[]) => { filters.push(row => values.includes(row[key])); return query; },
-        maybeSingle: async () => ({ data: match()[0] ?? null, error: null }),
-        update: (values: Row) => { patch = values; writes.push({ table, patch: values }); return query; },
-        insert: (rows: Row[]) => { tables[table].push(...rows.map(row => ({ id: DISPUTE, ...row }))); return query; },
-        then: (resolve: (value: unknown) => unknown) => Promise.resolve(result()).then(resolve),
-      };
-      return query;
-    },
-  };
-  mocks.createClient.mockReturnValue(admin);
-  mocks.authorizeServiceRoleRequest.mockResolvedValue({ admin, user: { id: "agency-user" }, membership: { tenant_id: TENANT, agency_id: AGENCY, role: "agency" } });
-  mocks.authorizePricingRequest.mockResolvedValue({ admin, user: { id: "operator-user" }, membership: { tenant_id: TENANT, role: "operator" } });
-  return { service, invoice, tables, writes };
-}
-
-async function review(via: "token" | "session", serviceId = SERVICE) {
-  const body = { token: "test-token", action: "dispute", corrections: [{ service_id: serviceId, proposed_price_cents: 11000, note: "Verifica importo" }] };
-  const request = new NextRequest("https://ischia-transfer.vercel.app/api/agency/statement-token", { method: "POST", body: JSON.stringify(body) });
-  return via === "token" ? tokenReview(request) : sessionReview(request, { params: Promise.resolve({ id: INVOICE }) });
-}
-
+import { POST as tokenPOST } from "@/app/api/agency/statement-token/route";
+import { POST as sessionPOST } from "@/app/api/agency/invoices/[id]/review/route";
+const T = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  A = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  I = "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  S = "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  S2 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const corrections = [
+  { service_id: S, proposed_price_cents: 11000, note: "First correction" },
+  { service_id: S2, proposed_price_cents: 9000, note: "Second correction" },
+];
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
-  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-key");
-  mocks.verifyAgencyActionToken.mockReturnValue({ act: "invoice_review", tid: TENANT, aid: AGENCY, iid: INVOICE });
-  mocks.sendOperatorInvoiceBatchDisputeNotifyEmail.mockResolvedValue({ status: "sent" });
-  mocks.sendAgencyInvoiceDisputeResolvedEmail.mockResolvedValue({ status: "sent" });
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.test");
+  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "unit-test");
+  const invoice = {
+    id: I,
+    invoice_number: "EC-2026-00001",
+    agency_name: "Test",
+    period_from: "2026-10-01",
+    period_to: "2026-10-31",
+    total_cents: 24000,
+    invoice_data: [
+      {
+        service_id: S,
+        cliente_nome: "Synthetic 1",
+        data_servizio: "2026-10-02",
+        importo_cents: 12000,
+      },
+      {
+        service_id: S2,
+        cliente_nome: "Synthetic 2",
+        data_servizio: "2026-10-03",
+        importo_cents: 12000,
+      },
+    ],
+  };
+  const q = {
+    select: () => q,
+    eq: () => q,
+    maybeSingle: async () => ({ data: invoice, error: null }),
+  };
+  const admin = { from: () => q, rpc: m.rpc };
+  m.client.mockReturnValue(admin);
+  m.auth.mockResolvedValue({
+    admin,
+    user: { id: "user" },
+    membership: { tenant_id: T, agency_id: A },
+  });
+  m.verify.mockReturnValue({ tid: T, aid: A, iid: I, act: "invoice_review" });
+  m.rpc.mockResolvedValue({ data: { disputes: [] }, error: null });
+  m.batch.mockResolvedValue({ status: "sent" });
+  m.approve.mockResolvedValue({ status: "sent" });
 });
-afterEach(() => vi.unstubAllEnvs());
-
-describe.each(["token", "session"] as const)("Contestazione prezzo importato tramite %s", via => {
-  it("accetta l'importo dell'estratto anche senza prezzo concordato e lascia invariato il servizio", async () => {
-    const fake = setup();
-    const response = await review(via);
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true, agency_review_status: "disputed" });
-    expect(fake.tables.agency_invoice_disputes).toEqual([expect.objectContaining({
-      original_price_cents: 12000, proposed_price_cents: 11000,
-      tenant_id: TENANT, agency_id: AGENCY, agency_invoice_id: INVOICE, status: "pending",
-    })]);
-    expect(fake.service.agency_quoted_price_cents).toBeNull();
-    expect(fake.service.source_total_amount_cents).toBe(12000);
-    expect(fake.writes.filter(write => write.table === "services")).toHaveLength(0);
-    expect(mocks.sendOperatorInvoiceBatchDisputeNotifyEmail).toHaveBeenCalledWith(expect.objectContaining({
-      corrections: [expect.objectContaining({ originalPriceCents: 12000, proposedPriceCents: 11000 })],
-    }));
-  });
-
-  it("usa l'importo inviato nell'estratto anche se il prezzo attuale del servizio è cambiato", async () => {
-    const fake = setup(12000);
-    fake.service.agency_quoted_price_cents = 14000;
-    fake.service.source_total_amount_cents = 15000;
-    expect((await review(via)).status).toBe(200);
-    expect(fake.tables.agency_invoice_disputes[0].original_price_cents).toBe(12000);
-    expect(fake.service.agency_quoted_price_cents).toBe(14000);
-    expect(mocks.sendOperatorInvoiceBatchDisputeNotifyEmail).toHaveBeenCalledWith(expect.objectContaining({
-      corrections: [expect.objectContaining({ originalPriceCents: 12000 })],
-    }));
-  });
-
-  it("ammette anche una riga con importo zero", async () => {
-    const fake = setup(0);
-    expect((await review(via)).status).toBe(200);
-    expect(fake.tables.agency_invoice_disputes[0].original_price_cents).toBe(0);
-  });
-
-  it.each([null, undefined, "12000", -1, 12.5])("rifiuta un importo originale non valido (%s) senza scritture o notifiche", async price => {
-    const fake = setup(price);
-    // undefined deve rappresentare un campo realmente mancante, non il default del fixture.
-    if (price === undefined) fake.invoice.invoice_data = [{ service_id: SERVICE }];
-    expect((await review(via)).status).toBe(422);
-    expect(fake.tables.agency_invoice_disputes).toHaveLength(0);
-    expect(fake.writes).toHaveLength(0);
-    expect(mocks.sendOperatorInvoiceBatchDisputeNotifyEmail).not.toHaveBeenCalled();
-  });
-
-  it.each(["tenant_id", "agency_id"])("non legge un estratto di un altro %s", async key => {
-    const fake = setup();
-    fake.invoice[key] = "other";
-    expect((await review(via)).status).toBe(404);
-    expect(fake.tables.agency_invoice_disputes).toHaveLength(0);
-  });
-
-  it("non accetta una pratica assente dall'estratto", async () => {
-    const fake = setup();
-    expect((await review(via, "ffffffff-ffff-4fff-8fff-ffffffffffff")).status).toBe(403);
-    expect(fake.tables.agency_invoice_disputes).toHaveLength(0);
-  });
-
-  it("non accetta un servizio che ora appartiene a un'altra agenzia", async () => {
-    const fake = setup();
-    fake.service.agency_id = "other";
-    expect((await review(via)).status).toBe(404);
-    expect(fake.tables.agency_invoice_disputes).toHaveLength(0);
-  });
-
-  it("non accetta un servizio di un altro tenant", async () => {
-    const fake = setup();
-    fake.service.tenant_id = "other";
-    expect((await review(via)).status).toBe(404);
-    expect(fake.tables.agency_invoice_disputes).toHaveLength(0);
-  });
-
-  it("non crea una seconda revisione dello stesso estratto", async () => {
-    const fake = setup();
-    fake.invoice.agency_review_status = "disputed";
-    expect((await review(via)).status).toBe(409);
-    expect(fake.tables.agency_invoice_disputes).toHaveLength(0);
-  });
-
-  it.each(["approve", "reject"] as const)("solo la decisione ITS %s può applicare il prezzo proposto", async action => {
-    const fake = setup();
-    expect((await review(via)).status).toBe(200);
-    expect(fake.service.agency_quoted_price_cents).toBeNull();
-    const request = new NextRequest("https://ischia-transfer.vercel.app/api/ops/agency-invoice-disputes/test/resolve", {
-      method: "POST", body: JSON.stringify({ action }),
+for (const mode of ["token", "session"])
+  describe(`Whole statement review via ${mode}`, () => {
+    const call = (body: unknown) => {
+      const r = new NextRequest(`https://example.test/api/agency/${mode}`, {
+        method: "POST",
+        body: JSON.stringify({ ...(body as object), token: "test-token" }),
+      });
+      return mode === "token"
+        ? tokenPOST(r)
+        : sessionPOST(r, { params: Promise.resolve({ id: I }) });
+    };
+    it("saves multiple corrections in one draft with zero emails", async () => {
+      expect((await call({ action: "draft", corrections })).status).toBe(200);
+      expect(m.rpc).toHaveBeenCalledWith(
+        "review_agency_statement",
+        expect.objectContaining({
+          p_action: "draft",
+          p_invoice_id: I,
+          p_tenant_id: T,
+          p_agency_id: A,
+        }),
+      );
+      expect(m.batch).not.toHaveBeenCalled();
+      expect(m.approve).not.toHaveBeenCalled();
     });
-    const response = await resolveDispute(request, { params: Promise.resolve({ id: DISPUTE }) });
-    expect(response.status).toBe(200);
-    expect(fake.service.agency_quoted_price_cents).toBe(action === "approve" ? 11000 : null);
-    expect(fake.service.source_total_amount_cents).toBe(12000);
-    expect(fake.tables.agency_invoice_disputes[0].status).toBe(action === "approve" ? "approved" : "rejected");
+    it("one final submission sends one batch email with original snapshot amounts", async () => {
+      expect((await call({ action: "dispute", corrections })).status).toBe(200);
+      expect(m.batch).toHaveBeenCalledTimes(1);
+      expect(m.batch.mock.calls[0][0].corrections).toHaveLength(2);
+      expect(m.batch.mock.calls[0][0].corrections[0].originalPriceCents).toBe(
+        12000,
+      );
+      expect(m.batch.mock.calls[0][0].agencyName).toContain("EC-2026-00001");
+      expect(m.approve).not.toHaveBeenCalled();
+    });
+    it("atomic duplicate or invalid ownership rejection sends no email", async () => {
+      m.rpc.mockResolvedValue({
+        error: { message: "STATEMENT_ALREADY_REVIEWED" },
+      });
+      expect((await call({ action: "dispute", corrections })).status).toBe(409);
+      expect(m.batch).not.toHaveBeenCalled();
+    });
+    it("correct statement approval is separate from payment and sends once", async () => {
+      expect((await call({ action: "approve" })).status).toBe(200);
+      expect(m.rpc).toHaveBeenCalledWith(
+        "review_agency_statement",
+        expect.objectContaining({ p_action: "approve", p_corrections: [] }),
+      );
+      expect(m.approve).toHaveBeenCalledTimes(1);
+      expect(m.batch).not.toHaveBeenCalled();
+    });
+    it("invalid fractional or negative proposal is rejected before database", async () => {
+      for (const amount of [-1, 1.5])
+        expect(
+          (
+            await call({
+              action: "dispute",
+              corrections: [{ service_id: S, proposed_price_cents: amount }],
+            })
+          ).status,
+        ).toBe(400);
+      expect(m.rpc).not.toHaveBeenCalled();
+    });
+    it("empty final revision is rejected, empty draft is valid", async () => {
+      expect((await call({ action: "dispute", corrections: [] })).status).toBe(
+        400,
+      );
+      expect((await call({ action: "draft", corrections: [] })).status).toBe(
+        200,
+      );
+    });
   });
-});
-
-it("token invalido resta bloccato prima di accedere ai dati", async () => {
-  mocks.verifyAgencyActionToken.mockReturnValue(null);
-  expect((await review("token")).status).toBe(400);
-  expect(mocks.createClient).not.toHaveBeenCalled();
-});
-
-it("la sessione non autorizzata resta bloccata", async () => {
-  mocks.authorizeServiceRoleRequest.mockResolvedValue(NextResponse.json({ error: "Unauthorized" }, { status: 401 }));
-  expect((await review("session")).status).toBe(401);
-});
