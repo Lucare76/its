@@ -17,8 +17,22 @@ function sampleData(): InvoiceData {
     invoiceId: "11111111-1111-4111-8111-111111111111",
     createdAt: "2026-08-24T10:00:00.000Z",
     items: [
-      { service_id: "svc-1", numero_pratica: "AG1", cliente_nome: "GERARDO D'ADDIO", data_servizio: "2026-08-18", tipo_servizio: "formula_medmar_napoli", importo_cents: 6600 },
-      { service_id: "svc-2", numero_pratica: "AG2", cliente_nome: "LUCIANO SENESE", data_servizio: "2026-08-23", tipo_servizio: "formula_medmar_pozzuoli", importo_cents: 6000 },
+      {
+        service_id: "svc-1",
+        numero_pratica: "AG1",
+        cliente_nome: "GERARDO D'ADDIO",
+        data_servizio: "2026-08-18",
+        tipo_servizio: "formula_medmar_napoli",
+        importo_cents: 6600,
+      },
+      {
+        service_id: "svc-2",
+        numero_pratica: "AG2",
+        cliente_nome: "LUCIANO SENESE",
+        data_servizio: "2026-08-23",
+        tipo_servizio: "formula_medmar_pozzuoli",
+        importo_cents: 6000,
+      },
     ],
     totalCents: 12600,
   };
@@ -35,9 +49,27 @@ describe("buildInvoiceXlsx", () => {
     const sheet = workbook.Sheets["Estratto conto"];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as unknown[][];
 
-    expect(rows[0]).toEqual(["Numero pratica", "Cliente", "Data servizio", "Tipo servizio", "Importo EUR"]);
-    expect(rows[1]).toEqual(["AG1", "GERARDO D'ADDIO", "18/08/2026", "Formula MEDMAR Napoli", 66]);
-    expect(rows[2]).toEqual(["AG2", "LUCIANO SENESE", "23/08/2026", "Formula MEDMAR Pozzuoli", 60]);
+    expect(rows[0]).toEqual([
+      "Numero pratica",
+      "Cliente",
+      "Data servizio",
+      "Tipo servizio",
+      "Importo EUR",
+    ]);
+    expect(rows[1]).toEqual([
+      "AG1",
+      "GERARDO D'ADDIO",
+      "18/08/2026",
+      "Formula MEDMAR Napoli",
+      66,
+    ]);
+    expect(rows[2]).toEqual([
+      "AG2",
+      "LUCIANO SENESE",
+      "23/08/2026",
+      "Formula MEDMAR Pozzuoli",
+      60,
+    ]);
     // Riga totale: ultima colonna deve riflettere totalCents, non la somma
     // "ricalcolata" delle righe — cosi' se in futuro le due divergono lo
     // scarto e' visibile qui, non solo nell'email.
@@ -56,4 +88,26 @@ describe("buildInvoiceXlsx", () => {
     expect(rows).toHaveLength(2);
     expect(rows[1][4]).toBe(0);
   });
+});
+
+it("Excel carries statement number, selection criterion, both dates and verified residual", () => {
+  const data = sampleData();
+  data.invoiceNumber = "EC-2026-00017";
+  data.dateBasis = "arrival";
+  data.paidCents = 1000;
+  data.waivedCents = 0;
+  data.items[0].arrival_date = "2026-10-31";
+  data.items[0].departure_date = "2026-11-14";
+  data.items[0].paid_cents = 1000;
+  const book = XLSX.read(buildInvoiceXlsx(data), { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(
+    book.Sheets["Saldi e date"],
+    { header: 1 },
+  );
+  expect(rows[0]).toEqual(["Estratto", "EC-2026-00017"]);
+  expect(rows[1]).toEqual(["Criterio", "Data arrivo"]);
+  expect(rows[7]).toEqual(["Residuo EUR", (data.totalCents - 1000) / 100]);
+  expect(rows[10]).toEqual(
+    expect.arrayContaining(["2026-10-31", "2026-11-14"]),
+  );
 });

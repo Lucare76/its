@@ -126,6 +126,8 @@ export default function NotificationsPage() {
         agencyReviewsResult,
         cancellationsResult,
         modificationsResult,
+        statementPaymentsResult,
+        statementRevisionsResult,
         vehiclesResult,
         accessRequestsResult
       ] = await Promise.all([
@@ -161,6 +163,12 @@ export default function NotificationsPage() {
           ? supabase.from("modification_requests").select("id", {count:"exact",head:true})
             .eq("tenant_id", session.tenantId).eq("status", "pending")
           : Promise.resolve({count:0,error:null}),
+        session.role === 'admin' || session.role === 'operator'
+          ? supabase.from('agency_statement_payment_reports').select('id',{count:'exact',head:true}).eq('tenant_id',session.tenantId).eq('status','pending')
+          : Promise.resolve({count:0,error:null}),
+        session.role === 'admin' || session.role === 'operator'
+          ? supabase.from('agency_invoice_disputes').select('agency_invoice_id').eq('tenant_id',session.tenantId).eq('status','pending')
+          : Promise.resolve({data:[],error:null}),
         supabase
           .from("vehicles")
           .select("id")
@@ -196,7 +204,10 @@ export default function NotificationsPage() {
       if (modificationsResult.error) {
         setErrorMessage("Impossibile verificare le richieste di modifica. Riprova aggiornando la pagina.");
       }
+      if(statementPaymentsResult.error||statementRevisionsResult.error)setErrorMessage('Impossibile verificare gli avvisi degli estratti conto. Aggiorna la pagina.');
       const nextOperationalItems = [
+        {key:'statement-payments',title:'Pagamenti agenzie da verificare',detail:'Pagamenti dichiarati dalle agenzie: verifica l’incasso prima di confermare.',count:statementPaymentsResult.count??0,href:'/estratto-conto',tone:'amber'},
+        {key:'statement-revisions',title:'Revisioni estratti conto',detail:'Correzioni inviate dalle agenzie da esaminare.',count:new Set((statementRevisionsResult.data??[]).map(r=>r.agency_invoice_id)).size,href:'/agency-statement',tone:'violet'},
         {
           key: "booking-modifications", title: "Richieste modifica prenotazioni",
           detail: "Cambi hotel, date e altri dati richiesti dalle agenzie da approvare.",

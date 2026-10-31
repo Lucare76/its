@@ -50,6 +50,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const [pendingAgencyBookingsCount, setPendingAgencyBookingsCount] = useState(0);
   const notifiedAgencyBookingIds = useRef(new Set<string>());
   const [pendingCancellationsCount, setPendingCancellationsCount] = useState(0);
+  const [pendingStatementPayments,setPendingStatementPayments]=useState(0);
+  const [pendingStatementRevisions,setPendingStatementRevisions]=useState(0);
   const [pendingModificationsCount, setPendingModificationsCount] = useState(0);
   const [whatsAppUnreadCount, setWhatsAppUnreadCount] = useState(0);
   const [liveToastMessage, setLiveToastMessage] = useState<string | null>(null);
@@ -121,7 +123,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     pendingAgencyBookingsCount +
     pendingAgencyReviewCount +
     pendingCancellationsCount +
-    pendingModificationsCount +
+    pendingModificationsCount + pendingStatementPayments + pendingStatementRevisions +
     pendingQrReportsCount +
     (authRole === "admin" || authRole === "supervisor" ? pendingAccessRequestCount : 0);
 
@@ -643,6 +645,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       if (refreshingModifications) return;
       refreshingModifications = true;
       try {
+        const [payments,revisions]=await Promise.all([
+          client.from('agency_statement_payment_reports').select('id',{count:'exact',head:true}).eq('tenant_id',tenantId).eq('status','pending'),
+          client.from('agency_invoice_disputes').select('agency_invoice_id').eq('tenant_id',tenantId).eq('status','pending')
+        ]);
+        if(isActive){if(!payments.error)setPendingStatementPayments(payments.count??0);if(!revisions.error)setPendingStatementRevisions(new Set((revisions.data??[]).map(r=>r.agency_invoice_id)).size);}
         const { data, count, error } = await client.from("modification_requests")
           .select("id", {count:"exact"}).eq("tenant_id", tenantId).eq("status", "pending")
           .order("created_at", {ascending:false}).limit(500);
@@ -1128,7 +1135,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
               const groupActive = AGENZIE_GROUP.items.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || agenzieOpen;
-              const groupBadge = (pendingAgencyBookingsCount > 0 ? pendingAgencyBookingsCount : 0) + (pendingAgencyReviewCount > 0 ? pendingAgencyReviewCount : 0);
+              const groupBadge = pendingAgencyBookingsCount + pendingAgencyReviewCount + pendingStatementPayments + pendingStatementRevisions;
               return (
                 <div className="mt-0.5">
                   <button
@@ -1171,6 +1178,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                         const isFav = favorites.includes(item.href);
                         const itemBadge = item.href === "/agency-requests" && pendingAgencyBookingsCount > 0
                           ? pendingAgencyBookingsCount
+                          : item.href === "/estratto-conto" ? pendingStatementPayments
+                          : item.href === "/agency-statement" ? pendingStatementRevisions
                           : item.href === "/inbox/agency-reviews" && pendingAgencyReviewCount > 0
                             ? pendingAgencyReviewCount : 0;
                         return (
@@ -1772,4 +1781,3 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     </>
   );
 }
-

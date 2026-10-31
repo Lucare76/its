@@ -6,8 +6,14 @@
 
 import * as XLSX from "xlsx";
 import { emailHtml, emailButton } from "@/lib/server/email-layout";
-import { escapeInvoiceServiceDescription, formatInvoiceServiceDescription } from "@/lib/invoice-service-label";
-import { buildServiceListEmailHtml, buildServiceListPlainText } from "@/lib/server/service-list-email";
+import {
+  escapeInvoiceServiceDescription,
+  formatInvoiceServiceDescription,
+} from "@/lib/invoice-service-label";
+import {
+  buildServiceListEmailHtml,
+  buildServiceListPlainText,
+} from "@/lib/server/service-list-email";
 
 export type InvoiceLineItem = {
   service_id: string;
@@ -15,16 +21,26 @@ export type InvoiceLineItem = {
   cliente_nome: string;
   data_servizio: string;
   tipo_servizio: string;
-  descrizione_servizio?: string; pax?: number | null;
+  descrizione_servizio?: string;
+  pax?: number | null;
   importo_cents: number;
+  penalty_id?: string | null;
+  arrival_date?: string | null;
+  departure_date?: string | null;
+  paid_cents?: number;
+  waived_cents?: number;
 };
 
 export type InvoiceData = {
   agencyName: string;
   agencyEmail?: string | null;
-  periodFrom: string;  // YYYY-MM-DD
-  periodTo: string;    // YYYY-MM-DD
+  periodFrom: string; // YYYY-MM-DD
+  periodTo: string; // YYYY-MM-DD
   invoiceId: string;
+  invoiceNumber?: string;
+  dateBasis?: string;
+  paidCents?: number;
+  waivedCents?: number;
   createdAt: string;
   items: InvoiceLineItem[];
   totalCents: number;
@@ -37,23 +53,30 @@ function formatDate(iso: string): string {
 }
 
 function formatCents(cents: number): string {
-  return (cents / 100).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+  return (
+    (cents / 100).toLocaleString("it-IT", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }) + " €"
+  );
 }
 
 export function generateInvoiceHtml(data: InvoiceData): string {
   // Usa emailHtml() come tutti gli altri template — layout table-based inline,
   // compatibile con Gmail desktop e mobile senza dipendere da <style> in <head>.
 
-  const rows = data.items.map((item, i) => {
-    const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
-    return `<tr>
+  const rows = data.items
+    .map((item, i) => {
+      const bg = i % 2 === 0 ? "#ffffff" : "#f8fafc";
+      return `<tr>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;background:${bg};white-space:nowrap;">${item.numero_pratica || "—"}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;background:${bg};">${item.cliente_nome}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${bg};white-space:nowrap;">${formatDate(item.data_servizio)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${bg};white-space:nowrap;">${formatDate(item.data_servizio)}${item.arrival_date ? `<br/>Arrivo: ${formatDate(item.arrival_date)}` : ""}${item.departure_date ? `<br/>Partenza: ${formatDate(item.departure_date)}` : ""}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;background:${bg};">${escapeInvoiceServiceDescription(item)}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;background:${bg};white-space:nowrap;">${formatCents(item.importo_cents)}</td>
     </tr>`;
-  }).join("");
+    })
+    .join("");
 
   const body = `
     <p style="font-size:17px;margin-bottom:4px;">Ciao <strong>${data.agencyName}</strong>,</p>
@@ -89,6 +112,7 @@ export function generateInvoiceHtml(data: InvoiceData): string {
       </tr>
     </table>
 
+    <p style="color:#334155">Criterio: <strong>${data.dateBasis === "departure" ? "Data partenza" : data.dateBasis === "arrival" ? "Data arrivo" : "Data servizio (storico)"}</strong><br/>Totale servizi: ${formatCents(data.totalCents)} · Pagato: ${formatCents(data.paidCents ?? 0)} · Abbuoni: ${formatCents(data.waivedCents ?? 0)}<br/><strong>Residuo da pagare: ${formatCents(Math.max(0, data.totalCents - (data.paidCents ?? 0) - (data.waivedCents ?? 0)))}</strong></p>
     <!-- Tabella servizi -->
     <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;margin-bottom:20px;">
       <thead>
@@ -109,7 +133,7 @@ export function generateInvoiceHtml(data: InvoiceData): string {
       </tbody>
     </table>
 
-    <p style="font-size:12px;color:#94a3b8;text-align:center;">Rif. <strong style="color:#475569;">${data.invoiceId.slice(0, 8).toUpperCase()}</strong> &nbsp;·&nbsp; Emesso il ${formatDate(data.createdAt.slice(0, 10))}</p>
+    <p style="font-size:12px;color:#94a3b8;text-align:center;">Rif. <strong style="color:#475569;">${data.invoiceNumber || data.invoiceId.slice(0, 8).toUpperCase()}</strong> &nbsp;·&nbsp; Emesso il ${formatDate(data.createdAt.slice(0, 10))}</p>
 
     <p style="font-size:12px;color:#94a3b8;text-align:center;margin-top:16px;">Se un importo ti sembra sbagliato, accedi alla tua area agenzia per segnalarlo: verrà rivisto dal nostro team.</p>
 
@@ -127,16 +151,18 @@ export function generateInvoiceHtml(data: InvoiceData): string {
  * Diverso da generateInvoiceHtml che è ottimizzato per email.
  */
 export function generateInvoicePrintHtml(data: InvoiceData): string {
-  const rows = data.items.map((item, i) => {
-    const bg = i % 2 === 0 ? "#fff" : "#f8fafc";
-    return `<tr style="background:${bg}">
+  const rows = data.items
+    .map((item, i) => {
+      const bg = i % 2 === 0 ? "#fff" : "#f8fafc";
+      return `<tr style="background:${bg}">
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:12px;color:#64748b">${item.numero_pratica || "—"}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;text-transform:uppercase">${item.cliente_nome}</td>
-      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}</td>
+      <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569;white-space:nowrap">${formatDate(item.data_servizio)}${item.arrival_date ? `<br/>Arrivo: ${formatDate(item.arrival_date)}` : ""}${item.departure_date ? `<br/>Partenza: ${formatDate(item.departure_date)}` : ""}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#475569">${escapeInvoiceServiceDescription(item)}</td>
       <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:#0f2744;white-space:nowrap">${formatCents(item.importo_cents)}</td>
     </tr>`;
-  }).join("");
+    })
+    .join("");
 
   return `<!DOCTYPE html>
 <html lang="it">
@@ -166,7 +192,7 @@ export function generateInvoicePrintHtml(data: InvoiceData): string {
     <div style="text-align:right">
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:4px">Periodo</div>
       <div style="font-size:14px;font-weight:700;color:#0f172a">${formatDate(data.periodFrom)} — ${formatDate(data.periodTo)}</div>
-      <div style="margin-top:8px;font-size:11px;color:#94a3b8">Rif. ${data.invoiceId.slice(0, 8).toUpperCase()}</div>
+      <div style="margin-top:8px;font-size:11px;color:#94a3b8">Rif. ${data.invoiceNumber || data.invoiceId.slice(0, 8).toUpperCase()}</div>
       <div style="font-size:11px;color:#94a3b8">Emesso il ${formatDate(data.createdAt.slice(0, 10))}</div>
     </div>
   </div>
@@ -178,7 +204,7 @@ export function generateInvoicePrintHtml(data: InvoiceData): string {
       <div style="font-size:28px;font-weight:900;color:#0e7490">${data.items.length}</div>
     </div>
     <div style="flex:2;background:#0f172a;border-radius:10px;padding:14px 18px;text-align:right">
-      <div style="font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:4px">Totale da pagare</div>
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:4px">Totale servizi</div>
       <div style="font-size:28px;font-weight:900;color:#fff">${formatCents(data.totalCents)}</div>
     </div>
   </div>
@@ -222,8 +248,14 @@ export function generateInvoicePrintHtml(data: InvoiceData): string {
  */
 export function generateReminderEmailHtml(
   agencyName: string,
-  services: Array<{ customer_name: string; date: string; time: string | null; direction: string; hotel?: string }>,
-  hoursAhead: number
+  services: Array<{
+    customer_name: string;
+    date: string;
+    time: string | null;
+    direction: string;
+    hotel?: string;
+  }>,
+  hoursAhead: number,
 ): string {
   const today = new Date().toISOString().slice(0, 10);
   return buildServiceListEmailHtml({
@@ -243,8 +275,14 @@ export function generateReminderEmailHtml(
 
 export function generateReminderPlainText(
   agencyName: string,
-  services: Array<{ customer_name: string; date: string; time: string | null; direction: string; hotel?: string }>,
-  hoursAhead: number
+  services: Array<{
+    customer_name: string;
+    date: string;
+    time: string | null;
+    direction: string;
+    hotel?: string;
+  }>,
+  hoursAhead: number,
 ): string {
   const today = new Date().toISOString().slice(0, 10);
   return buildServiceListPlainText({
@@ -269,7 +307,13 @@ export function generateReminderPlainText(
  * (alcune agenzie lo inoltrano a tool di analisi/AI).
  */
 export function buildInvoiceXlsx(data: InvoiceData): Buffer {
-  const header = ["Numero pratica", "Cliente", "Data servizio", "Tipo servizio", "Importo EUR"];
+  const header = [
+    "Numero pratica",
+    "Cliente",
+    "Data servizio",
+    "Tipo servizio",
+    "Importo EUR",
+  ];
   const rows = data.items.map((item) => [
     item.numero_pratica,
     item.cliente_nome,
@@ -277,13 +321,80 @@ export function buildInvoiceXlsx(data: InvoiceData): Buffer {
     formatInvoiceServiceDescription(item),
     Number((item.importo_cents / 100).toFixed(2)),
   ]);
-  const totalRow = ["", "", "", "Totale", Number((data.totalCents / 100).toFixed(2))];
+  const totalRow = [
+    "",
+    "",
+    "",
+    "Totale",
+    Number((data.totalCents / 100).toFixed(2)),
+  ];
 
   const sheet = XLSX.utils.aoa_to_sheet([header, ...rows, totalRow]);
-  sheet["!cols"] = [{ wch: 22 }, { wch: 28 }, { wch: 14 }, { wch: 24 }, { wch: 14 }];
+  sheet["!cols"] = [
+    { wch: 22 },
+    { wch: 28 },
+    { wch: 14 },
+    { wch: 24 },
+    { wch: 14 },
+  ];
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "Estratto conto");
 
+  const accounting = XLSX.utils.aoa_to_sheet([
+    ["Estratto", data.invoiceNumber || data.invoiceId],
+    [
+      "Criterio",
+      data.dateBasis === "departure"
+        ? "Data partenza"
+        : data.dateBasis === "arrival"
+          ? "Data arrivo"
+          : "Data servizio (storico)",
+    ],
+    ["Dal", data.periodFrom],
+    ["Al", data.periodTo],
+    ["Totale servizi EUR", data.totalCents / 100],
+    ["Pagato EUR", (data.paidCents ?? 0) / 100],
+    ["Abbuoni EUR", (data.waivedCents ?? 0) / 100],
+    [
+      "Residuo EUR",
+      Math.max(
+        0,
+        data.totalCents - (data.paidCents ?? 0) - (data.waivedCents ?? 0),
+      ) / 100,
+    ],
+    [],
+    [
+      "Pratica",
+      "Arrivo",
+      "Partenza",
+      "Totale EUR",
+      "Pagato EUR",
+      "Abbuono EUR",
+      "Residuo EUR",
+    ],
+    ...data.items.map((i) => [
+      i.numero_pratica,
+      i.arrival_date ?? "",
+      i.departure_date ?? "",
+      i.importo_cents / 100,
+      (i.paid_cents ?? 0) / 100,
+      (i.waived_cents ?? 0) / 100,
+      Math.max(
+        0,
+        i.importo_cents - (i.paid_cents ?? 0) - (i.waived_cents ?? 0),
+      ) / 100,
+    ]),
+  ]);
+  accounting["!cols"] = [
+    { wch: 25 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 15 },
+  ];
+  XLSX.utils.book_append_sheet(workbook, accounting, "Saldi e date");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }

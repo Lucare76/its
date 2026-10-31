@@ -12,240 +12,93 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { z } from "zod";
+import { reviewStatement } from "@/lib/server/agency-statement-review";
+import { statementItems } from "@/lib/server/agency-statements";
 import { verifyAgencyActionToken } from "@/lib/server/agency-action-token";
-import { sendOperatorInvoiceBatchDisputeNotifyEmail, sendOperatorInvoiceApprovedNotifyEmail } from "@/lib/server/agency-approval-email";
 import { getRequestAppUrl } from "@/lib/app-url";
-import { auditLog } from "@/lib/server/ops-audit";
 
 export const runtime = "nodejs";
 
 function adminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/^["']|["']$/g, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^["']|["']$/g, "");
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(
+    /^["']|["']$/g,
+    "",
+  );
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(
+    /^["']|["']$/g,
+    "",
+  );
   if (!url || !key) throw new Error("Supabase non configurato.");
   return createClient(url, key, { auth: { persistSession: false } });
 }
-
-type InvoiceLineItem = {
-  service_id: string;
-  numero_pratica: string;
-  cliente_nome: string;
-  data_servizio: string;
-  tipo_servizio: string;
-  importo_cents: number;
-};
 
 export async function GET(request: NextRequest) {
   const token = new URL(request.url).searchParams.get("token") ?? "";
   const payload = verifyAgencyActionToken(token);
   if (!payload || payload.act !== "invoice_review" || !payload.iid) {
-    return NextResponse.json({ error: "Token non valido o scaduto." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Token non valido o scaduto." },
+      { status: 400 },
+    );
   }
 
   const admin = adminClient();
 
   const { data: invoice, error: invErr } = await admin
     .from("agency_invoices")
-    .select("id, agency_name, period_from, period_to, status, total_cents, services_count, invoice_data, sent_at, agency_review_status, agency_reviewed_at")
+    .select(
+      "id, invoice_number, date_basis, paid_cents, waived_cents, review_draft, agency_name, period_from, period_to, status, total_cents, services_count, invoice_data, sent_at, agency_review_status, agency_reviewed_at",
+    )
     .eq("id", payload.iid)
     .eq("tenant_id", payload.tid)
     .eq("agency_id", payload.aid)
     .maybeSingle();
-  if (invErr) return NextResponse.json({ error: invErr.message }, { status: 500 });
-  if (!invoice) return NextResponse.json({ error: "Estratto conto non trovato." }, { status: 404 });
-
-  const items = (invoice.invoice_data ?? []) as InvoiceLineItem[];
-  const serviceIds = items.map((i) => i.service_id);
+  if (invErr)
+    return NextResponse.json({ error: invErr.message }, { status: 500 });
+  if (!invoice)
+    return NextResponse.json(
+      { error: "Estratto conto non trovato." },
+      { status: 404 },
+    );
 
   const { data: disputes, error: dispErr } = await admin
     .from("agency_invoice_disputes")
-    .select("id, service_id, original_price_cents, proposed_price_cents, status, resolution_note, created_at, resolved_at")
+    .select(
+      "id, service_id, original_price_cents, proposed_price_cents, status, resolution_note, created_at, resolved_at",
+    )
     .eq("tenant_id", payload.tid)
     .eq("agency_id", payload.aid)
-    .in("service_id", serviceIds.length > 0 ? serviceIds : ["00000000-0000-0000-0000-000000000000"]);
-  if (dispErr) return NextResponse.json({ error: dispErr.message }, { status: 500 });
+    .eq("agency_invoice_id", payload.iid);
+  if (dispErr)
+    return NextResponse.json({ error: dispErr.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, invoice, disputes: disputes ?? [] });
+  return NextResponse.json({
+    ok: true,
+    invoice: {
+      ...invoice,
+      invoice_data: statementItems(invoice.invoice_data ?? []),
+    },
+    disputes: disputes ?? [],
+  });
 }
 
-const correctionSchema = z.object({
-  service_id: z.string().uuid(),
-  proposed_price_cents: z.number().int().min(0).max(9999900),
-  note: z.string().trim().max(1000).optional(),
-});
-
-const postSchema = z.discriminatedUnion("action", [
-  z.object({ token: z.string().min(1), action: z.literal("approve") }),
-  z.object({ token: z.string().min(1), action: z.literal("dispute"), corrections: z.array(correctionSchema).min(1).max(200) }),
-]);
-
 export async function POST(request: NextRequest) {
-  const parsed = postSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Payload non valido." }, { status: 400 });
-  }
-  const body = parsed.data;
-
-  const payload = verifyAgencyActionToken(body.token);
-  if (!payload || payload.act !== "invoice_review" || !payload.iid) {
-    return NextResponse.json({ error: "Token non valido o scaduto." }, { status: 400 });
-  }
-
-  const admin = adminClient();
-
-  const { data: invoice, error: invErr } = await admin
-    .from("agency_invoices")
-    .select("id, agency_name, period_from, period_to, total_cents, invoice_data, agency_review_status")
-    .eq("id", payload.iid)
-    .eq("tenant_id", payload.tid)
-    .eq("agency_id", payload.aid)
-    .maybeSingle();
-  if (invErr) return NextResponse.json({ error: invErr.message }, { status: 500 });
-  if (!invoice) return NextResponse.json({ error: "Estratto conto non trovato." }, { status: 404 });
-  if (invoice.agency_review_status !== "pending") {
-    return NextResponse.json({ error: "Questo estratto conto è già stato revisionato." }, { status: 409 });
-  }
-
-  const now = new Date().toISOString();
-  const appUrl = getRequestAppUrl(request.headers);
-
-  if (body.action === "approve") {
-    const { error: updateErr } = await admin
-      .from("agency_invoices")
-      .update({ agency_review_status: "approved", agency_reviewed_at: now })
-      .eq("id", invoice.id);
-    if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
-
-    auditLog({
-      event: "agency_invoice_approved",
-      tenantId: payload.tid,
-      role: "agency",
-      outcome: "approved",
-      details: { invoice_id: invoice.id, via: "statement_token" },
-    });
-
-    try {
-      await sendOperatorInvoiceApprovedNotifyEmail({
-        agencyName: invoice.agency_name,
-        periodFrom: invoice.period_from,
-        periodTo: invoice.period_to,
-        totalCents: invoice.total_cents,
-      });
-    } catch (error) {
-      auditLog({
-        event: "agency_invoice_approved_notify_failed",
-        level: "warn",
-        tenantId: payload.tid,
-        details: { invoice_id: invoice.id, error: error instanceof Error ? error.message : "unknown" },
-      });
-    }
-
-    return NextResponse.json({ ok: true, agency_review_status: "approved" });
-  }
-
-  // action === "dispute"
-  const items = (invoice.invoice_data ?? []) as InvoiceLineItem[];
-  const itemById = new Map(items.map((i) => [i.service_id, i]));
-  for (const c of body.corrections) {
-    const item = itemById.get(c.service_id);
-    if (!item) {
-      return NextResponse.json({ error: "Una delle pratiche non appartiene a questo estratto conto." }, { status: 403 });
-    }
-    if (!Number.isSafeInteger(item.importo_cents) || item.importo_cents < 0) {
-      return NextResponse.json({ error: "L'importo originale di una riga dell'estratto conto non è valido." }, { status: 422 });
-    }
-  }
-
-  const serviceIds = body.corrections.map((c) => c.service_id);
-  const { data: services, error: servicesErr } = await admin
-    .from("services")
-    .select("id, agency_id, date, customer_name, customer_first_name, customer_last_name")
-    .in("id", serviceIds)
-    .eq("tenant_id", payload.tid);
-  if (servicesErr) return NextResponse.json({ error: servicesErr.message }, { status: 500 });
-
-  const serviceById = new Map((services ?? []).map((s) => [s.id, s]));
-  for (const c of body.corrections) {
-    const svc = serviceById.get(c.service_id);
-    if (!svc || svc.agency_id !== payload.aid) {
-      return NextResponse.json({ error: "Prenotazione non trovata." }, { status: 404 });
-    }
-  }
-
-  const insertRows = body.corrections.map((c) => {
-    return {
-      tenant_id: payload.tid,
-      agency_id: payload.aid,
-      agency_invoice_id: invoice.id,
-      service_id: c.service_id,
-      // Si contesta l'importo inviato nell'estratto, anche se proviene dal PDF
-      // o se il prezzo corrente del servizio è stato modificato nel frattempo.
-      original_price_cents: itemById.get(c.service_id)!.importo_cents,
-      proposed_price_cents: c.proposed_price_cents,
-      agency_note: c.note?.trim() || null,
-      status: "pending",
-      created_by: null,
-    };
-  });
-
-  const { data: inserted, error: insertErr } = await admin
-    .from("agency_invoice_disputes")
-    .insert(insertRows)
-    .select("id, service_id, original_price_cents, proposed_price_cents");
-  if (insertErr || !inserted) {
-    return NextResponse.json({ error: insertErr?.message ?? "Errore creazione segnalazioni." }, { status: 500 });
-  }
-
-  const { error: updateErr } = await admin
-    .from("agency_invoices")
-    .update({ agency_review_status: "disputed", agency_reviewed_at: now })
-    .eq("id", invoice.id);
-  if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
-
-  auditLog({
-    event: "agency_invoice_dispute_batch_created",
-    tenantId: payload.tid,
-    role: "agency",
-    outcome: "pending",
-    details: { invoice_id: invoice.id, via: "statement_token", count: inserted.length },
-  });
-
-  try {
-    const corrections = body.corrections.map((c) => {
-      const svc = serviceById.get(c.service_id)!;
-      const customerName = [svc.customer_first_name, svc.customer_last_name].filter(Boolean).join(" ") || svc.customer_name || "Cliente";
-      return {
-        customerName,
-        serviceDate: svc.date ?? null,
-        originalPriceCents: itemById.get(c.service_id)!.importo_cents,
-        proposedPriceCents: c.proposed_price_cents,
-        agencyNote: c.note?.trim() || null,
-      };
-    });
-    const emailResult = await sendOperatorInvoiceBatchDisputeNotifyEmail({
-      agencyName: invoice.agency_name,
-      periodFrom: invoice.period_from,
-      periodTo: invoice.period_to,
-      corrections,
-      reviewUrl: `${appUrl}/agency-statement`,
-    });
-    if (emailResult.status === "failed") {
-      auditLog({
-        event: "agency_invoice_dispute_batch_notify_failed",
-        level: "warn",
-        tenantId: payload.tid,
-        details: { invoice_id: invoice.id, error: emailResult.error },
-      });
-    }
-  } catch (error) {
-    auditLog({
-      event: "agency_invoice_dispute_batch_notify_failed",
-      level: "warn",
-      tenantId: payload.tid,
-      details: { invoice_id: invoice.id, error: error instanceof Error ? error.message : "unknown" },
-    });
-  }
-
-  return NextResponse.json({ ok: true, agency_review_status: "disputed", disputes: inserted });
+  const body = await request.json().catch(() => null);
+  const payload = verifyAgencyActionToken(
+    typeof body?.token === "string" ? body.token : "",
+  );
+  if (!payload || payload.act !== "invoice_review" || !payload.iid)
+    return NextResponse.json(
+      { error: "Token non valido o scaduto." },
+      { status: 400 },
+    );
+  return reviewStatement(
+    adminClient(),
+    payload.tid,
+    payload.aid,
+    payload.iid,
+    body,
+    null,
+    getRequestAppUrl(request.headers),
+  );
 }
