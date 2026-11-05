@@ -35,6 +35,9 @@ type ReviewSession = {
 };
 
 const REPORT_LABELS: Record<string, string> = {
+  arrivals_day: "Riepilogo arrivi del giorno",
+  departures_day: "Riepilogo partenze del giorno",
+  arrivals_departures_day: "Riepilogo arrivi e partenze del giorno",
   arrivals_48h:   "Arrivi +48h",
   departures_48h: "Partenze +48h",
   bus_monday:     "Linea bus domenica",
