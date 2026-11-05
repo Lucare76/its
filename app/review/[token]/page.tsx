@@ -271,7 +271,7 @@ export default function AgencyReviewPage() {
                         ["Orario",          s.time],
                         ["Pratica ITS", s.practice_number || "—"],
                         ["Orario pickup", s.pickup_time || "—"],
-                        ["Punto di incontro", s.meeting_point || "—"],
+                        ...(session.report_type === "bus_monday" && s.direction === "arrival" ? [["Punto di incontro", s.meeting_point || "—"]] : []),
                         ["Riferimento mezzo", s.transport_reference || "—"],
                         ["Pax",             String(s.pax)],
                         ["Telefono",        s.phone || "—"],
