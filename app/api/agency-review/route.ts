@@ -24,7 +24,7 @@ const serviceSchema = z.object({
 
 const bodySchema = z.object({
   agency_name: z.string().min(1),
-  report_type: z.enum(["arrivals_48h","departures_48h","bus_monday","reminder_24h","reminder_48h"]),
+  report_type: z.enum(["arrivals_day","departures_day","arrivals_departures_day","arrivals_48h","departures_48h","bus_monday","reminder_24h","reminder_48h"]),
   target_date: z.string(),
   services:    z.array(serviceSchema).min(1),
 });
