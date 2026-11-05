@@ -10,6 +10,10 @@ import { z } from "zod";
 export const runtime = "nodejs";
 
 const serviceSchema = z.object({
+  practice_number: z.string().nullable().optional(),
+  pickup_time: z.string().nullable().optional(),
+  meeting_point: z.string().nullable().optional(),
+  transport_reference: z.string().nullable().optional(),
   service_id:           z.string().optional(),
   date:                 z.string(),
   time:                 z.string(),
