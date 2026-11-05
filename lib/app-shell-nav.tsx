@@ -302,13 +302,12 @@ export const AGENZIE_GROUP: NavMainGroup = {
 export const OPERATIVO_GROUP: NavMainGroup = {
   type: "group",
   key: "operativo",
-  label: "Logistica",
+  label: "Biglietteria",
   icon: "O",
   items: [
     { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
     { href: "/medmar-ar", label: "Medmar A/R", icon: "🎫" },
     { href: "/medmar-fleet", label: "Medmar Flotta", icon: "🚗" },
-    { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
   ]
 };
 
@@ -322,7 +321,6 @@ export const MARIO_BOSS_GROUP: NavMainGroup = {
     { href: "/bus-network", label: "Linea Bus", icon: "B" },
     { href: "/navette-hotel", label: "Navette Hotel", icon: "V" },
     { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
-    { href: "/escursioni", label: "Escursioni", icon: "E" },
     { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true },
     { href: "/preventivi", label: "Preventivi clienti", icon: "Q" }
   ]
@@ -356,6 +354,7 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/fleet-ops/maintenance", label: "Manutenzioni", icon: "🔧" },
       { href: "/fleet-ops/inventory", label: "Ricambi magazzino", icon: "🔩" },
       { href: "/fleet-ops/reports", label: "Report veicoli", icon: "📈" },
+      { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
       { href: "/fleet-ops/drivers", label: "KPI Autisti", icon: "📊" },
       { href: "/fleet-ops/driver-history", label: "Storico assegnazioni", icon: "J" },
       { href: "/fleet-ops/scadenze", label: "Scadenze documenti", icon: "J" },
