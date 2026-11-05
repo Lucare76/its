@@ -20,6 +20,9 @@ export type ServiceLine = {
 };
 
 export type ServiceListEmailType =
+  | "arrivals_day"
+  | "departures_day"
+  | "arrivals_departures_day"
   | "arrivals_48h"
   | "departures_48h"
   | "bus_monday"
@@ -27,6 +30,9 @@ export type ServiceListEmailType =
   | "reminder_48h";
 
 const TYPE_LABELS: Record<ServiceListEmailType, string> = {
+  arrivals_day: "Riepilogo arrivi del giorno",
+  departures_day: "Riepilogo partenze del giorno",
+  arrivals_departures_day: "Riepilogo arrivi e partenze del giorno",
   arrivals_48h:   "Riepilogo arrivi +48h",
   departures_48h: "Riepilogo partenze +48h",
   bus_monday:     "Riepilogo linea bus domenica",
@@ -39,6 +45,7 @@ function isReminder(type: ServiceListEmailType) {
 }
 
 function buildIntro(type: ServiceListEmailType, agencyName: string, targetDate: string) {
+  if (type === "arrivals_day" || type === "departures_day" || type === "arrivals_departures_day") return `Ti inviamo il <strong>${TYPE_LABELS[type].toLowerCase()}</strong> per il <strong>${targetDate}</strong>.`;
   if (type === "bus_monday")     return `Ti inviamo il riepilogo <strong>linea bus di domenica ${targetDate}</strong>.`;
   if (type === "arrivals_48h")   return `Ti inviamo il riepilogo operativo <strong>arrivi +48h</strong> per il <strong>${targetDate}</strong>.`;
   if (type === "departures_48h") return `Ti inviamo il riepilogo operativo <strong>partenze +48h</strong> per il <strong>${targetDate}</strong>.`;
@@ -66,7 +73,7 @@ export function buildServiceListEmailHtml(params: {
 
   const appUrl = appBaseUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
 
-  const rows = [...lines]
+  const renderRows = (items: ServiceLine[]) => [...items]
     .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
     .map((line, i) => {
       const isArr = line.direction === "arrival";
@@ -128,7 +135,13 @@ export function buildServiceListEmailHtml(params: {
           ).join("")}
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      <tbody>${type === "arrivals_departures_day"
+        ? (["arrival", "departure"] as const).map((direction) => {
+          const items = lines.filter((line) => line.direction === direction);
+          const heading = direction === "arrival" ? "Arrivi" : "Partenze";
+          return `<tr><th colspan="7" scope="rowgroup" style="padding:12px;text-align:left;background:#e2e8f0;">${heading} (${items.length})</th></tr>${renderRows(items)}`;
+        }).join("")
+        : renderRows(lines)}</tbody>
     </table>
 
     <div style="margin-top:24px;padding:16px 20px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;">
@@ -190,7 +203,7 @@ export function buildServiceListPlainText(params: {
 }): string {
   const { agencyName, type, targetDate, lines } = params;
   const totalPax = lines.reduce((s, l) => s + l.pax, 0);
-  const rows = [...lines]
+  const renderRows = (items: ServiceLine[]) => [...items]
     .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
     .map((l) => `${l.date} ${l.time} | ${l.direction === "arrival" ? "Arrivo" : "Partenza"} | ${l.customer_name} | ${l.hotel_or_destination ?? "N/D"} | ${l.pax} pax`);
 
@@ -200,7 +213,9 @@ export function buildServiceListPlainText(params: {
     TYPE_LABELS[type],
     `Data: ${targetDate} | Servizi: ${lines.length} | Pax: ${totalPax}`,
     "",
-    ...rows,
+    ...(type === "arrivals_departures_day"
+      ? ["Arrivi", ...renderRows(lines.filter((l) => l.direction === "arrival")), "", "Partenze", ...renderRows(lines.filter((l) => l.direction === "departure"))]
+      : renderRows(lines)),
     "",
     "Messaggio generato automaticamente da Ischia Transfer Service."
   ].join("\n");
