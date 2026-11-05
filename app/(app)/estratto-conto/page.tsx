@@ -755,17 +755,17 @@ export default function EstrattoContoPage() {
                         {inv.payment_note && <div className="max-w-48 break-words text-xs text-slate-500">{inv.payment_note}</div>}
                       </td>
                       <td className="px-3 py-2">
-                        <div className="flex min-w-52 flex-wrap items-start gap-1.5">
+                        <div className="flex justify-end">
+                          <details className="group">
+                            <summary className="cursor-pointer list-none rounded border border-slate-200 px-3 py-1 text-xs font-medium hover:bg-slate-100 [&::-webkit-details-marker]:hidden">Azioni <span aria-hidden="true">▾</span></summary>
+                            <div className="mt-1 grid gap-1.5">
                           <button type="button" aria-expanded={previewInvoice?.id === inv.id}
                             onClick={() => setPreviewInvoice(previewInvoice?.id === inv.id ? null : inv)}
                             className="rounded border border-slate-200 px-2 py-1 text-xs hover:bg-slate-100">
                             Dettaglio
                           </button>
-                          {inv.status === "draft" && sendButton}
-                          {showPayment && payButton}
-                          <details className="group">
-                            <summary aria-label="Altre azioni" className="cursor-pointer list-none rounded border border-slate-200 px-2 py-1 text-xs hover:bg-slate-100 [&::-webkit-details-marker]:hidden">⋯</summary>
-                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              {inv.status === "draft" && sendButton}
+                              {showPayment && payButton}
                               <button type="button" onClick={() => openPrint(inv)}
                                 className="rounded border border-slate-200 px-2 py-1 text-xs hover:bg-slate-100">Stampa</button>
                               {inv.status === "sent" && sendButton}
@@ -779,7 +779,7 @@ export default function EstrattoContoPage() {
                               {inv.status === "draft" && (
                                 <button type="button" onClick={() => void deleteInvoice(inv.id)} disabled={deletingId === inv.id}
                                   className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 disabled:opacity-50">
-                                  {deletingId === inv.id ? "Eliminazione…" : "Elimina"}
+                                  {deletingId === inv.id ? "Eliminazione…" : "Elimina bozza"}
                                 </button>
                               )}
                             </div>
