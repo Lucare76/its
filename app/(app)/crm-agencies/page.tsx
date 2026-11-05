@@ -884,7 +884,7 @@ export default function CrmAgenciesPage() {
       phone: s.phone ?? null,
       practice_number: s.practice_number ?? null,
       pickup_time: direction === "departure" ? s.pickup_time ?? null : null,
-      meeting_point: s.meeting_point ?? null,
+      meeting_point: sendReportType === "bus_monday" && direction === "arrival" ? s.meeting_point ?? null : null,
       transport_reference: (direction === "departure" ? s.train_departure_number : s.train_arrival_number) || s.vessel || null,
       pax: s.pax,
       hotel_or_destination: reportData.hotels.find(h => h.id === s.hotel_id)?.name ?? null,

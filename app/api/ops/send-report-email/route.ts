@@ -59,19 +59,23 @@ export async function POST(request: NextRequest) {
 
   const emailType = body.report_type as ServiceListEmailType;
   const label = REPORT_LABELS[body.report_type] ?? body.report_type;
-  const lines = body.services as ServiceLine[];
+  const lines = (body.services as ServiceLine[]).map((line) => ({
+    ...line,
+    meeting_point: emailType === "bus_monday" && line.direction === "arrival" ? line.meeting_point : null,
+  }));
   const workbook = XLSX.utils.book_new();
   for (const [direction, sheetName] of [["arrival", "Arrivi"], ["departure", "Partenze"]] as const) {
+    const showMeetingPoint = emailType === "bus_monday" && direction === "arrival";
     const rows = lines.filter((line) => line.direction === direction)
       .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`));
     const sheet = XLSX.utils.aoa_to_sheet([
       ["Data", "Ora servizio", "Pratica ITS", "Cliente", "Telefono", "Pax", "Hotel / Destinazione",
-       "Mezzo", "Orario mezzo", "Riferimento mezzo", "Orario pickup", "Punto di incontro"],
+       "Mezzo", "Orario mezzo", "Riferimento mezzo", "Orario pickup", ...(showMeetingPoint ? ["Punto di incontro"] : [])],
       ...rows.map((line) => [line.date, line.time, line.practice_number ?? "", line.customer_name,
         line.phone ?? "", line.pax, line.hotel_or_destination ?? "", line.transport_type ?? "",
-        line.transport_time ?? "", line.transport_reference ?? "", line.pickup_time ?? "", line.meeting_point ?? ""]),
+        line.transport_time ?? "", line.transport_reference ?? "", line.pickup_time ?? "", ...(showMeetingPoint ? [line.meeting_point ?? ""] : [])]),
     ]);
-    sheet["!cols"] = [13, 13, 19, 29, 19, 7, 30, 16, 14, 22, 15, 32].map((wch) => ({ wch }));
+    sheet["!cols"] = [13, 13, 19, 29, 19, 7, 30, 16, 14, 22, 15, ...(showMeetingPoint ? [32] : [])].map((wch) => ({ wch }));
     sheet["!autofilter"] = { ref: sheet["!ref"] ?? "A1:L1" };
     XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
   }
