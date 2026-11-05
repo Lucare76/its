@@ -10,6 +10,10 @@ export type ServiceLine = {
   date: string;
   time: string;
   customer_name: string;
+  practice_number?: string | null;
+  pickup_time?: string | null;
+  meeting_point?: string | null;
+  transport_reference?: string | null;
   phone?: string | null;
   pax: number;
   hotel_or_destination: string | null;
@@ -53,6 +57,22 @@ function buildIntro(type: ServiceListEmailType, agencyName: string, targetDate: 
   return `Di seguito i servizi programmati <strong>nelle prossime 48 ore</strong>.`;
 }
 
+export function operationalDetails(line: ServiceLine) {
+  return [
+    ["Pratica ITS", line.practice_number],
+    ["Telefono", line.phone],
+    ["Mezzo", line.transport_type],
+    ["Orario mezzo", line.transport_time],
+    ["Riferimento mezzo", line.transport_reference],
+    ["Orario pickup", line.pickup_time],
+    ["Punto di incontro", line.meeting_point],
+  ].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
+}
+
+function escapeDetail(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
 export function buildServiceListEmailHtml(params: {
   agencyName: string;
   type: ServiceListEmailType;
@@ -64,8 +84,9 @@ export function buildServiceListEmailHtml(params: {
   cancelTokens?: Record<string, string>;
   /** URL base app per costruire i link (es. https://ischiatransferservice.it) */
   appBaseUrl?: string;
+  includeOperationalDetails?: boolean;
 }): string {
-  const { agencyName, type, targetDate, lines, reviewToken, cancelTokens, appBaseUrl } = params;
+  const { agencyName, type, targetDate, lines, reviewToken, cancelTokens, appBaseUrl, includeOperationalDetails } = params;
   const label = TYPE_LABELS[type];
   const totalPax  = lines.reduce((s, l) => s + l.pax, 0);
   const arrivals  = lines.filter((l) => l.direction === "arrival").length;
@@ -89,7 +110,7 @@ export function buildServiceListEmailHtml(params: {
             ${isArr ? "▼ Arrivo" : "▲ Partenza"}
           </span>
         </td>
-        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.customer_name}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${line.customer_name}${includeOperationalDetails ? operationalDetails(line).map((detail) => `<br><small>${escapeDetail(detail)}</small>`).join("") : ""}</td>
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#475569;">${line.hotel_or_destination ?? "N/D"}</td>
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:center;color:#1e3a5f;">${line.pax}</td>
         <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;text-align:center;">
@@ -200,12 +221,13 @@ export function buildServiceListPlainText(params: {
   type: ServiceListEmailType;
   targetDate: string;
   lines: ServiceLine[];
+  includeOperationalDetails?: boolean;
 }): string {
   const { agencyName, type, targetDate, lines } = params;
   const totalPax = lines.reduce((s, l) => s + l.pax, 0);
   const renderRows = (items: ServiceLine[]) => [...items]
     .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
-    .map((l) => `${l.date} ${l.time} | ${l.direction === "arrival" ? "Arrivo" : "Partenza"} | ${l.customer_name} | ${l.hotel_or_destination ?? "N/D"} | ${l.pax} pax`);
+    .map((l) => `${l.date} ${l.time} | ${l.direction === "arrival" ? "Arrivo" : "Partenza"} | ${l.customer_name} | ${l.hotel_or_destination ?? "N/D"} | ${l.pax} pax${params.includeOperationalDetails ? operationalDetails(l).map((detail) => ` | ${detail}`).join("") : ""}`);
 
   return [
     `Ciao ${agencyName},`,
