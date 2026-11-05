@@ -676,7 +676,7 @@ export default function CrmAgenciesPage() {
   const [sendingReportId, setSendingReportId] = useState<string | null>(null);
   const [sendReportModal, setSendReportModal] = useState<AgencyRow | null>(null);
   const [sendReportDate, setSendReportDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [sendReportType, setSendReportType] = useState<"arrivals_48h" | "departures_48h" | "bus_monday">("arrivals_48h");
+  const [sendReportType, setSendReportType] = useState<"arrivals_day" | "departures_day" | "arrivals_departures_day" | "arrivals_48h" | "departures_48h" | "bus_monday">("arrivals_departures_day");
 
   const [portalInvites, setPortalInvites] = useState<PortalInviteRow[]>([]);
   const [portalMembers, setPortalMembers] = useState<PortalMemberRow[]>([]);
@@ -825,7 +825,7 @@ export default function CrmAgenciesPage() {
   };
 
   const handleSendReport = async () => {
-    if (!sendReportModal) return;
+    if (!sendReportModal || !sendReportDate) return;
     const token = await getToken();
     if (!token) return;
     setSendingReportId(sendReportModal.id);
@@ -833,6 +833,10 @@ export default function CrmAgenciesPage() {
     // Prendi i servizi dell'agenzia per la data target
     const tenantServices = tenantData.services.filter((s) => {
       const matchAgency = (s.billing_party_name ?? "").trim() === sendReportModal.name;
+      if (!matchAgency) return false;
+      if (sendReportType === "arrivals_day") return s.date === sendReportDate && s.direction === "arrival";
+      if (sendReportType === "departures_day") return s.date === sendReportDate && s.direction === "departure";
+      if (sendReportType === "arrivals_departures_day") return s.date === sendReportDate && (s.direction === "arrival" || s.direction === "departure");
       const targetDate = new Date(`${sendReportDate}T12:00:00`);
       const serviceDate = new Date(`${s.date}T12:00:00`);
       if (sendReportType === "arrivals_48h") return matchAgency && s.direction === "arrival" && Math.abs((serviceDate.getTime() - targetDate.getTime()) / 86400000) <= 2;
@@ -1284,6 +1288,7 @@ export default function CrmAgenciesPage() {
                           type="button"
                           className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
                           onClick={() => {
+                            setSendReportType("arrivals_departures_day");
                             setSendReportModal(agency);
                             setSendReportDate(new Date().toISOString().slice(0, 10));
                           }}
@@ -1673,13 +1678,16 @@ export default function CrmAgenciesPage() {
                   onChange={(e) => setSendReportType(e.target.value as typeof sendReportType)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
                 >
+                  <option value="arrivals_departures_day">Arrivi e partenze del giorno</option>
+                  <option value="departures_day">Partenze del giorno</option>
+                  <option value="arrivals_day">Arrivi del giorno</option>
                   <option value="arrivals_48h">Arrivi +48h</option>
                   <option value="departures_48h">Partenze +48h</option>
                   <option value="bus_monday">Linea bus domenica</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Data di riferimento</label>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">{sendReportType.endsWith("_day") ? "Data dei servizi" : "Data di riferimento"}</label>
                 <DateInput
                   value={sendReportDate}
                   onChange={(iso) => setSendReportDate(iso)}
@@ -1696,7 +1704,7 @@ export default function CrmAgenciesPage() {
               </button>
               <button
                 type="button"
-                disabled={!!sendingReportId}
+                disabled={!!sendingReportId || !sendReportDate}
                 onClick={() => void handleSendReport()}
                 className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60"
               >
