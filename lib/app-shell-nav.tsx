@@ -290,8 +290,9 @@ export const AGENZIE_GROUP: NavMainGroup = {
   label: "Agenzie",
   icon: "C",
   items: [
-    { href: "/agency-requests", label: "Richieste prenotazioni agenzie", icon: "🏨" },
-    { href: "/agency-imports/mts-globe", label: "Import MTS Globe / Sun&Sea", icon: "📥" },
+    { href: "/crm-agencies", label: "Anagrafica e riepiloghi", icon: "C", supervisorOnly: true },
+    { href: "/agency-requests", label: "Richieste prenotazione", icon: "🏨" },
+    { href: "/agency-imports/mts-globe", label: "Import MTS / Sun&Sea", icon: "📥" },
     { href: "/estratto-conto", label: "Estratto conto", icon: "€" },
     { href: "/agency-statement", label: "Contestazioni prezzo", icon: "⚠️" },
     { href: "/libro-mastro", label: "Libro mastro", icon: "📒" },
@@ -347,7 +348,6 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     title: "Anagrafica",
     items: [
       { href: "/settings/users", label: "Utenti", icon: "R" },
-      { href: "/crm-agencies", label: "Agenzie", icon: "C" },
       { href: "/hotels", label: "Hotel", icon: "H" },
       { href: "/fleet-ops", label: "Flotta e mezzi", icon: "F" },
       { href: "/fleet-ops/fuel", label: "Rifornimenti", icon: "⛽" },
