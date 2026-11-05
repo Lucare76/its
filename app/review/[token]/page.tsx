@@ -8,6 +8,10 @@ type ServiceSnapshot = {
   date: string;
   time: string;
   customer_name: string;
+  practice_number?: string | null;
+  pickup_time?: string | null;
+  meeting_point?: string | null;
+  transport_reference?: string | null;
   phone?: string | null;
   pax: number;
   hotel_or_destination: string | null;
@@ -265,6 +269,10 @@ export default function AgencyReviewPage() {
                       {[
                         ["Data",            s.date],
                         ["Orario",          s.time],
+                        ["Pratica ITS", s.practice_number || "—"],
+                        ["Orario pickup", s.pickup_time || "—"],
+                        ["Punto di incontro", s.meeting_point || "—"],
+                        ["Riferimento mezzo", s.transport_reference || "—"],
                         ["Pax",             String(s.pax)],
                         ["Telefono",        s.phone || "—"],
                         ["Hotel / Dest.",   s.hotel_or_destination || "—"],
