@@ -501,64 +501,18 @@ export default function EstrattoContoPage() {
       <h1 className="text-2xl font-semibold">Estratto conto agenzie</h1>
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      {/* Configurazione agenzie */}
-      <div className="card p-5 space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
-          Configurazione invio automatico
-        </h2>
-        <div className="grid gap-2 xl:grid-cols-2">
-          {agencies
-            .filter((a) => a.active !== false)
-            .map((agency) => (
-              <div
-                key={agency.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 gap-3"
-              >
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">
-                    {agency.name}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {agency.invoice_enabled
-                      ? `${CADENCE_LABELS[agency.invoice_cadence] ?? agency.invoice_cadence} · ${DAY_LABELS[agency.invoice_send_day]} · ${agency.invoice_email ?? agency.contact_email ?? "no email"}`
-                      : "Invio automatico disabilitato"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={
-                      agency.invoice_enabled
-                        ? "rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700"
-                        : "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500"
-                    }
-                  >
-                    {agency.invoice_enabled ? "ON" : "OFF"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setEditingAgency({ ...agency })}
-                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-                  >
-                    Configura
-                  </button>
-                </div>
-              </div>
-            ))}
-        </div>
-      </div>
-
       {/* Genera manualmente */}
       <div className="card p-5 space-y-4">
         <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
           Genera estratto conto manuale
         </h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="text-xs font-medium text-slate-600">
+        <div className="grid gap-3 items-start sm:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          <label className="grid min-w-0 content-start gap-1 text-xs font-medium text-slate-600">
             Agenzia *
             <select
               value={genAgency}
               onChange={(e) => setGenAgency(e.target.value)}
-              className="mt-1 input-saas w-full"
+              className="input-saas w-full"
             >
               <option value="">— seleziona —</option>
               {agencies.map((a) => (
@@ -568,26 +522,26 @@ export default function EstrattoContoPage() {
               ))}
             </select>
           </label>
-          <label className="text-xs font-medium text-slate-600">
+          <label className="grid min-w-0 content-start gap-1 text-xs font-medium text-slate-600">
             Dal
             <DateInput
               value={genFrom}
               onChange={(iso) => setGenFrom(iso)}
-              className="mt-1 input-saas w-full"
+              className="input-saas w-full"
             />
           </label>
-          <label className="text-xs font-medium text-slate-600">
+          <label className="grid min-w-0 content-start gap-1 text-xs font-medium text-slate-600">
             Al
             <DateInput
               value={genTo}
               onChange={(iso) => setGenTo(iso)}
-              className="mt-1 input-saas w-full"
+              className="input-saas w-full"
             />
           </label>
-          <label className="text-xs font-medium text-slate-600">
+          <label className="grid min-w-0 content-start gap-1 text-xs font-medium text-slate-600">
             Seleziona per
             <select
-              className="mt-1 input-saas w-full"
+              className="input-saas w-full"
               value={genBasis}
               onChange={(e) =>
                 setGenBasis(e.target.value as "arrival" | "departure")
@@ -600,7 +554,7 @@ export default function EstrattoContoPage() {
               Include l’intera pratica, anche se il rientro è fuori periodo.
             </span>
           </label>
-          <div className="flex flex-col justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 border-t border-slate-200 pt-3 sm:col-span-2 xl:col-span-4">
             <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
               <input
                 type="checkbox"
@@ -649,13 +603,59 @@ export default function EstrattoContoPage() {
         )}
       </div>
 
+      {/* Configurazione agenzie */}
+      <details className="card p-5">
+        <summary className="cursor-pointer text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
+          Configurazione invio automatico
+        </summary>
+        <div className="mt-4 grid gap-2 xl:grid-cols-2">
+          {agencies
+            .filter((a) => a.active !== false)
+            .map((agency) => (
+              <div
+                key={agency.id}
+                className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 gap-3"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {agency.name}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {agency.invoice_enabled
+                      ? `${CADENCE_LABELS[agency.invoice_cadence] ?? agency.invoice_cadence} · ${DAY_LABELS[agency.invoice_send_day]} · ${agency.invoice_email ?? agency.contact_email ?? "no email"}`
+                      : "Invio automatico disabilitato"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={
+                      agency.invoice_enabled
+                        ? "rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700"
+                        : "rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500"
+                    }
+                  >
+                    {agency.invoice_enabled ? "ON" : "OFF"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingAgency({ ...agency })}
+                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    Configura
+                  </button>
+                </div>
+              </div>
+            ))}
+        </div>
+      </details>
+
       {/* Lista estratti conto */}
       <div className="card p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-[0.1em] text-slate-500">
             Estratti conto
           </h2>
-          <div className="ml-auto flex flex-wrap gap-2">
+          <div className="grid w-full gap-2 sm:ml-auto sm:w-auto sm:grid-cols-[minmax(8rem,auto)_minmax(12rem,16rem)]">
             <select
               value={statusFilter}
               onChange={(e) =>
@@ -687,7 +687,7 @@ export default function EstrattoContoPage() {
           <p className="text-sm text-slate-500">Nessun estratto conto.</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="min-w-full text-sm">
+            <table className="w-full min-w-[58rem] text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-3 py-2">Agenzia</th>
@@ -768,7 +768,7 @@ export default function EstrattoContoPage() {
                         )}
                       </td>
                       <td className="px-3 py-2">
-                        <div className="flex gap-1.5 flex-wrap">
+                        <div className="flex min-w-48 flex-wrap gap-1.5">
                           <button
                             type="button"
                             onClick={() => openPrint(inv)}
