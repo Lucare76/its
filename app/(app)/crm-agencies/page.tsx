@@ -1,5 +1,7 @@
 "use client";
 
+import { buildOperationalInstances } from "@/lib/operational-service-instances";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, EmptyState, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -830,31 +832,59 @@ export default function CrmAgenciesPage() {
     if (!token) return;
     setSendingReportId(sendReportModal.id);
 
-    // Prendi i servizi dell'agenzia per la data target
-    const tenantServices = tenantData.services.filter((s) => {
-      const matchAgency = (s.billing_party_name ?? "").trim() === sendReportModal.name;
-      if (!matchAgency) return false;
-      if (sendReportType === "arrivals_day") return s.date === sendReportDate && s.direction === "arrival";
-      if (sendReportType === "departures_day") return s.date === sendReportDate && s.direction === "departure";
-      if (sendReportType === "arrivals_departures_day") return s.date === sendReportDate && (s.direction === "arrival" || s.direction === "departure");
-      const targetDate = new Date(`${sendReportDate}T12:00:00`);
-      const serviceDate = new Date(`${s.date}T12:00:00`);
-      if (sendReportType === "arrivals_48h") return matchAgency && s.direction === "arrival" && Math.abs((serviceDate.getTime() - targetDate.getTime()) / 86400000) <= 2;
-      if (sendReportType === "departures_48h") return matchAgency && s.direction === "departure" && Math.abs((serviceDate.getTime() - targetDate.getTime()) / 86400000) <= 2;
-      if (sendReportType === "bus_monday") return matchAgency && s.service_type_code === "bus_line" && s.date === sendReportDate;
-      return false;
-    });
+    const targetDate = new Date(`${sendReportDate}T12:00:00Z`);
+    const dateOffset = (days: number) =>
+      new Date(targetDate.getTime() + days * 86400000).toISOString().slice(0, 10);
+    const scope = new URLSearchParams({ datasets: "services,hotels" });
+    if (sendReportType.endsWith("_48h")) {
+      scope.set("service_scope", "range");
+      scope.set("from", dateOffset(-2));
+      scope.set("to", dateOffset(2));
+    } else {
+      scope.set("service_scope", "date");
+      scope.set("date", sendReportDate);
+    }
 
-    const services = tenantServices.map((s) => ({
-      service_id:           s.id,
-      date:                 s.date,
-      time:                 s.time,
-      customer_name:        s.customer_name,
-      pax:                  s.pax,
-      hotel_or_destination: tenantData.hotels.find(h => h.id === s.hotel_id)?.name ?? null,
-      direction:            s.direction as "arrival" | "departure",
-      transport_type:       s.transport_mode ?? null,
-      transport_time:       s.outbound_time ?? null,
+    let reportData: Pick<typeof tenantData, "services" | "hotels">;
+    try {
+      const response = await fetch(`/api/ops/tenant-data?${scope}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Caricamento servizi fallito");
+      reportData = await response.json();
+    } catch {
+      showToast("Impossibile caricare i servizi del riepilogo. Riprova.", false);
+      setSendingReportId(null);
+      return;
+    }
+
+    const normalizeName = (name: string | null | undefined) => name?.trim().replace(/\s+/g, " ").toLowerCase();
+    const agencyNames = [sendReportModal.name, sendReportModal.billing_name].map(normalizeName).filter(Boolean);
+    const agencyServices = reportData.services.filter((s) =>
+      s.agency_id ? s.agency_id === sendReportModal.id : agencyNames.includes(normalizeName(s.billing_party_name))
+    );
+    const instances = buildOperationalInstances(agencyServices);
+    const services = instances.filter((leg) => {
+      if (sendReportType === "bus_monday") {
+        return leg.service.service_type_code === "bus_line" && leg.date === sendReportDate;
+      }
+      if (sendReportType === "arrivals_departures_day") return leg.date === sendReportDate;
+      const direction = sendReportType.startsWith("arrivals_") ? "arrival" : "departure";
+      if (leg.direction !== direction) return false;
+      if (sendReportType.endsWith("_day")) return leg.date === sendReportDate;
+      const serviceDate = new Date(`${leg.date}T12:00:00Z`);
+      return Math.abs((serviceDate.getTime() - targetDate.getTime()) / 86400000) <= 2;
+    }).map(({ service: s, serviceId, date, time, direction }) => ({
+      service_id: serviceId,
+      date,
+      time,
+      customer_name: s.customer_name,
+      pax: s.pax,
+      hotel_or_destination: reportData.hotels.find(h => h.id === s.hotel_id)?.name ?? null,
+      direction,
+      transport_type: s.transport_mode ?? null,
+      transport_time: (direction === "departure" ? s.return_time : s.outbound_time) ?? null,
     }));
 
     if (services.length === 0) {
