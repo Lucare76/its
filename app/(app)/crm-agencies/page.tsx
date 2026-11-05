@@ -1,5 +1,6 @@
 "use client";
 
+import { isBusLineService } from "@/lib/bus-lot-utils";
 import { buildOperationalInstances } from "@/lib/operational-service-instances";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -866,9 +867,9 @@ export default function CrmAgenciesPage() {
     );
     const instances = buildOperationalInstances(agencyServices);
     const services = instances.filter((leg) => {
-      if (sendReportType === "bus_monday") {
-        return leg.service.service_type_code === "bus_line" && leg.date === sendReportDate;
-      }
+      const isBus = isBusLineService(leg.service);
+      if (sendReportType === "bus_monday") return isBus && leg.date === sendReportDate;
+      if (isBus) return false;
       if (sendReportType === "arrivals_departures_day") return leg.date === sendReportDate;
       const direction = sendReportType.startsWith("arrivals_") ? "arrival" : "departure";
       if (leg.direction !== direction) return false;
