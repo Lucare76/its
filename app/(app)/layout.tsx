@@ -1220,7 +1220,9 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
               const groupActive = OPERATIVO_GROUP.items.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || operativoOpen;
-              const groupBadge = pendingQrReportsCount > 0 ? pendingQrReportsCount : 0;
+              const groupBadge = OPERATIVO_GROUP.items.some((item) => item.href === "/inbox/fleet-reports")
+                ? pendingQrReportsCount
+                : 0;
               return (
                 <div className="mt-0.5">
                   <button
