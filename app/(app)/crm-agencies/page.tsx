@@ -880,6 +880,11 @@ export default function CrmAgenciesPage() {
       date,
       time,
       customer_name: s.customer_name,
+      phone: s.phone ?? null,
+      practice_number: s.practice_number ?? null,
+      pickup_time: direction === "departure" ? s.pickup_time ?? null : null,
+      meeting_point: s.meeting_point ?? null,
+      transport_reference: (direction === "departure" ? s.train_departure_number : s.train_arrival_number) || s.vessel || null,
       pax: s.pax,
       hotel_or_destination: reportData.hotels.find(h => h.id === s.hotel_id)?.name ?? null,
       direction,
@@ -1725,7 +1730,7 @@ export default function CrmAgenciesPage() {
                 />
               </div>
               <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-xs text-slate-500">
-                Verrà inviata un&apos;email a <strong>{sendReportModal.booking_email ?? sendReportModal.contact_email ?? "email non configurata"}</strong> con i servizi trovati e i bottoni ✅ Approva / ✏️ Modifica.
+                Verrà inviata un&apos;email a <strong>{sendReportModal.booking_email ?? sendReportModal.contact_email ?? "email non configurata"}</strong> con il riepilogo, il file Excel allegato e i bottoni ✅ Approva / ✏️ Modifica.
               </div>
             </div>
             <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4">

@@ -3,9 +3,10 @@
  * Invia un riepilogo operativo direttamente a un'agenzia con bottoni Approva/Modifica.
  * Chiamato dal CRM agenzie (invio manuale).
  */
+import * as XLSX from "xlsx";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { buildServiceListEmailHtml, buildServiceListPlainText, type ServiceListEmailType } from "@/lib/server/service-list-email";
+import { buildServiceListEmailHtml, buildServiceListPlainText, type ServiceLine, type ServiceListEmailType } from "@/lib/server/service-list-email";
 import { getVerifiedFromEmail, resendFetch } from "@/lib/server/send-email";
 
 export const runtime = "nodejs";
@@ -58,23 +59,30 @@ export async function POST(request: NextRequest) {
 
   const emailType = body.report_type as ServiceListEmailType;
   const label = REPORT_LABELS[body.report_type] ?? body.report_type;
-  type InputLine = { date: string; time: string; customer_name: string; pax: number; hotel_or_destination?: string | null; direction: "arrival" | "departure"; transport_type?: string | null; transport_time?: string | null };
-  const lines = (body.services as InputLine[]).map((s) => ({
-    date:                s.date,
-    time:                s.time,
-    customer_name:       s.customer_name,
-    pax:                 s.pax,
-    hotel_or_destination: s.hotel_or_destination ?? null,
-    direction:           s.direction,
-    transport_type:      s.transport_type ?? null,
-    transport_time:      s.transport_time ?? null,
-  }));
+  const lines = body.services as ServiceLine[];
+  const workbook = XLSX.utils.book_new();
+  for (const [direction, sheetName] of [["arrival", "Arrivi"], ["departure", "Partenze"]] as const) {
+    const rows = lines.filter((line) => line.direction === direction)
+      .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`));
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ["Data", "Ora servizio", "Pratica ITS", "Cliente", "Telefono", "Pax", "Hotel / Destinazione",
+       "Mezzo", "Orario mezzo", "Riferimento mezzo", "Orario pickup", "Punto di incontro"],
+      ...rows.map((line) => [line.date, line.time, line.practice_number ?? "", line.customer_name,
+        line.phone ?? "", line.pax, line.hotel_or_destination ?? "", line.transport_type ?? "",
+        line.transport_time ?? "", line.transport_reference ?? "", line.pickup_time ?? "", line.meeting_point ?? ""]),
+    ]);
+    sheet["!cols"] = [13, 13, 19, 29, 19, 7, 30, 16, 14, 22, 15, 32].map((wch) => ({ wch }));
+    sheet["!autofilter"] = { ref: sheet["!ref"] ?? "A1:L1" };
+    XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+  }
+  const attachment = XLSX.write(workbook, { bookType: "xlsx", type: "base64" }) as string;
 
   const html = buildServiceListEmailHtml({
     agencyName:  body.agency_name,
     type:        emailType,
     targetDate:  body.target_date,
     lines,
+    includeOperationalDetails: true,
     reviewToken: body.review_token,
   });
   const text = buildServiceListPlainText({
@@ -82,6 +90,7 @@ export async function POST(request: NextRequest) {
     type:       emailType,
     targetDate: body.target_date,
     lines,
+    includeOperationalDetails: true,
   });
 
   const res = await resendFetch(apiKey, {
@@ -90,6 +99,7 @@ export async function POST(request: NextRequest) {
     subject: `${label} — ${body.agency_name} — ${body.target_date}`,
     html,
     text,
+    attachments: [{ filename: `riepilogo-${body.target_date.replace(/[^0-9-]/g, "")}.xlsx`, content: attachment }],
   });
 
   if (!res.ok) {
