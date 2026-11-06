@@ -389,13 +389,13 @@ export default function NavetteHotelPage() {
   }
 
   return (
-    <main className="mx-auto max-w-[1600px] space-y-5 px-4 py-6 text-slate-900 lg:px-6">
+    <main className="mx-auto max-w-[1600px] space-y-4 py-3 text-slate-900">
       <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm print:shadow-none">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Pianificazione</p>
             <h1 className="mt-1 text-3xl font-black tracking-tight">Navette Hotel</h1>
-            <p className="mt-1 truncate text-sm text-slate-500">Vista dedicata alle navette hotel, separate dalle assegnazioni operative standard.</p>
+            <p className="mt-1 text-sm text-slate-500">Vista dedicata alle navette hotel, separate dalle assegnazioni operative standard.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button type="button" onClick={() => setDate(todayIso())} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:border-indigo-200 hover:text-indigo-700">
@@ -412,20 +412,17 @@ export default function NavetteHotelPage() {
         </div>
       </section>
 
-      <section className="grid gap-3 md:grid-cols-4">
+      <section aria-label="Riepilogo navette" className="flex flex-wrap gap-2">
         {[
-          ["Navette", shuttleServices.length, "Servizi hotel del giorno", "bg-indigo-50 text-indigo-700"],
-          ["Servizi", shuttleServices.length, "Navette operative", "bg-emerald-50 text-emerald-700"],
-          ["Hotel", groups.length, "Strutture coinvolte", "bg-sky-50 text-sky-700"],
-          ["Assegnate", assignedServices, `${Math.max(shuttleServices.length - assignedServices, 0)} da completare`, "bg-amber-50 text-amber-700"]
-        ].map(([label, value, caption, tone]) => (
-          <article key={label} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-500">{label}</p>
-              <span className={`rounded-2xl px-3 py-1 text-xs font-bold ${tone}`}>{caption}</span>
-            </div>
-            <p className="mt-3 text-4xl font-black">{value}</p>
-          </article>
+          ["Navette", shuttleServices.length],
+          ["Hotel", groups.length],
+          ["Assegnate", assignedServices],
+          ["Da assegnare", Math.max(shuttleServices.length - assignedServices, 0)],
+        ].map(([label, value]) => (
+          <div key={label} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+            <span className="font-semibold text-slate-600">{label}</span>
+            <strong className="tabular-nums">{value}</strong>
+          </div>
         ))}
       </section>
 
@@ -451,7 +448,7 @@ export default function NavetteHotelPage() {
       {errorMessage ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{errorMessage}</div> : null}
       {availabilityError ? <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{availabilityError} Puoi comunque compilare il mezzo manualmente.</div> : null}
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <section aria-label="Navette per hotel">
         <div className="space-y-4">
           {loading ? (
             <div className="rounded-[28px] border border-slate-200 bg-white p-8 text-center text-slate-500">Carico navette hotel...</div>
@@ -462,14 +459,13 @@ export default function NavetteHotelPage() {
             </div>
           ) : (
             groups.map((group) => (
-              <article key={group.hotelId} className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-                <header className="flex flex-col gap-3 border-b border-slate-100 bg-gradient-to-r from-indigo-50 via-white to-emerald-50 p-5 lg:flex-row lg:items-center lg:justify-between">
+              <article key={group.hotelId} className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                <header className="flex flex-col gap-3 rounded-t-[28px] border-b border-slate-100 bg-gradient-to-r from-indigo-50 via-white to-emerald-50 p-5 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-2xl font-black uppercase tracking-tight">{group.hotelName}</h2>
                       <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-500 shadow-sm">{group.zone}</span>
                     </div>
-                    <p className="mt-1 truncate text-sm text-slate-500">{group.services.length} servizi navetta</p>
                   </div>
                   <span className="w-fit rounded-2xl bg-emerald-100 px-4 py-2 text-sm font-black text-emerald-700">{group.services.length} servizi</span>
                 </header>
@@ -479,46 +475,42 @@ export default function NavetteHotelPage() {
                     const draft = assignmentKey(service.id, drafts, assignment);
                     const assignedDriver = driverOptions.find((member) => member.userId === draft.driverUserId);
                     return (
-                      <div key={service.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[112px_minmax(220px,1.35fr)_96px_minmax(210px,1fr)_minmax(210px,1fr)_112px] lg:items-center">
-                        <div className="rounded-2xl bg-indigo-50 px-3 py-2">
+                      <div key={service.id} className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
+                        <div className="flex-none rounded-xl bg-indigo-50 px-3 py-2">
                           <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">{directionLabel(service)}</p>
                           <p className="mt-0.5 whitespace-nowrap font-mono text-lg font-black leading-none text-indigo-700">{serviceTime(service)}</p>
                         </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-black">{customerName(service)}</p>
-                          <p className="mt-1 truncate text-sm text-slate-500">{service.phone || "Telefono non indicato"}</p>
+                        <div className="min-w-0 flex-[1_1_11rem]">
+                          <p className="break-words text-sm font-black">{customerName(service)}</p>
+                          <p className="mt-1 text-sm text-slate-500">{service.phone || "Telefono non indicato"}</p>
                         </div>
-                        <div className="flex min-h-[58px] flex-col justify-center rounded-2xl bg-slate-50 px-3 py-2 text-center">
-                          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Tipo</p>
-                          <p className="text-xs font-black">Navetta</p>
-                        </div>
-                        <label className="space-y-1 print:hidden">
-                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Autista</span>
-                          <select value={draft.driverUserId} onChange={(event) => selectDriver(service, event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400">
-                            <option value="">— da assegnare —</option>
-                            {driverOptions.map((driver) => (
-                              <option key={driver.profileId || driver.userId} value={driver.userId}>{driver.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="space-y-1 print:hidden">
-                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Mezzo</span>
-                          <input
-                            value={draft.vehicleLabel}
-                            onChange={(event) => updateDraft(service.id, { vehicleLabel: event.target.value })}
-                            list="navette-vehicle-labels"
-                            placeholder="Es. VAN 4"
-                            className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400"
-                          />
-                        </label>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="hidden print:block">
-                            <p className="text-sm font-semibold">{assignedDriver?.name ?? "Autista N/D"}</p>
-                            <p className="text-xs text-slate-500">{draft.vehicleLabel || "Mezzo N/D"}</p>
-                          </div>
+                        <div className="grid min-w-0 flex-[2_1_27rem] grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] items-end gap-2 print:hidden">
+                          <label className="min-w-0 space-y-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Autista</span>
+                            <select value={draft.driverUserId} onChange={(event) => selectDriver(service, event.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400">
+                              <option value="">— da assegnare —</option>
+                              {driverOptions.map((driver) => (
+                                <option key={driver.profileId || driver.userId} value={driver.userId}>{driver.name}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="min-w-0 space-y-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Mezzo</span>
+                            <input
+                              value={draft.vehicleLabel}
+                              onChange={(event) => updateDraft(service.id, { vehicleLabel: event.target.value })}
+                              list="navette-vehicle-labels"
+                              placeholder="Es. VAN 4"
+                              className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-400"
+                            />
+                          </label>
                           <button type="button" onClick={() => void saveAssignment(service)} disabled={savingId === service.id} className="h-11 w-full rounded-2xl bg-indigo-600 px-4 text-sm font-black text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60 print:hidden">
                             {savingId === service.id ? "Salvo..." : "Salva"}
                           </button>
+                        </div>
+                        <div className="hidden print:block">
+                          <p className="text-sm font-semibold">{assignedDriver?.name ?? "Autista N/D"}</p>
+                          <p className="text-xs text-slate-500">{draft.vehicleLabel || "Mezzo N/D"}</p>
                         </div>
                       </div>
                     );
@@ -528,30 +520,6 @@ export default function NavetteHotelPage() {
             ))
           )}
         </div>
-
-        <aside className="space-y-4 print:hidden">
-          <article className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-xl font-black">Controllo navette</h2>
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <span className="font-semibold text-slate-600">Da assegnare</span>
-                <strong className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">{Math.max(shuttleServices.length - assignedServices, 0)}</strong>
-              </div>
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <span className="font-semibold text-slate-600">Hotel coinvolti</span>
-                <strong>{groups.length}</strong>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-600">Servizi navetta</span>
-                <strong>{shuttleServices.length}</strong>
-              </div>
-            </div>
-          </article>
-          <article className="rounded-[28px] border border-blue-100 bg-blue-50 p-5 text-sm text-blue-900">
-            <h2 className="text-lg font-black">Come entra nel piano</h2>
-            <p className="mt-2 leading-6">Questa pagina non crea un flusso separato: assegna autista e mezzo agli stessi servizi navetta. Quindi il riepilogo del Piano del Giorno continua a pescare dai servizi reali.</p>
-          </article>
-        </aside>
       </section>
 
       <datalist id="navette-vehicle-labels">
