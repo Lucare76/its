@@ -21,6 +21,7 @@ const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data non valida (
 const scopeSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("date"), date: isoDateSchema }),
   z.object({ mode: z.literal("range"), from: isoDateSchema, to: isoDateSchema }),
+  z.object({ mode: z.literal("bus_range"), from: isoDateSchema, to: isoDateSchema }),
   z.object({ mode: z.literal("ids"), ids: z.array(z.string().uuid()).min(1).max(500) })
 ]);
 type ServiceScope = z.infer<typeof scopeSchema>;
@@ -57,11 +58,16 @@ async function fetchScopedServices(admin: SupabaseClient, tenantId: string, scop
   const all: Record<string, unknown>[] = [];
   let from = 0;
   while (true) {
-    const { data, error } = await admin
+    const query = admin
       .from("services")
       .select("*")
       .eq("tenant_id", tenantId)
-      .or(orFilter)
+      .or(orFilter);
+    // Match isBusLineService OR isTrueBusTour before pagination.
+    if (scope.mode === "bus_range") {
+      query.or("service_type_code.eq.bus_line,booking_service_kind.eq.bus_city_hotel,service_type.eq.bus_tour");
+    }
+    const { data, error } = await query
       .order("created_at", { ascending: true })
       .order("id", { ascending: true })
       .range(from, from + SERVICE_QUERY_PAGE - 1);
@@ -191,8 +197,8 @@ export async function GET(request: NextRequest) {
     let scopeInput: unknown;
     if (rawScopeMode === "date") {
       scopeInput = { mode: "date", date: params.get("date") ?? "" };
-    } else if (rawScopeMode === "range") {
-      scopeInput = { mode: "range", from: params.get("from") ?? "", to: params.get("to") ?? "" };
+    } else if (rawScopeMode === "range" || rawScopeMode === "bus_range") {
+      scopeInput = { mode: rawScopeMode, from: params.get("from") ?? "", to: params.get("to") ?? "" };
     } else if (rawScopeMode === "ids") {
       scopeInput = {
         mode: "ids",
@@ -209,7 +215,7 @@ export async function GET(request: NextRequest) {
       );
     }
     const scope = scopeParsed.data;
-    if (scope.mode === "range" && scope.from > scope.to) {
+    if ((scope.mode === "range" || scope.mode === "bus_range") && scope.from > scope.to) {
       return NextResponse.json({ ok: false, error: "'from' deve precedere o coincidere con 'to'" }, { status: 400 });
     }
 
