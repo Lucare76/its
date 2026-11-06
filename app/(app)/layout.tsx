@@ -1057,7 +1057,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
             {/* Gestione — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
-              const groupActive = GESTIONE_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const visibleItems = GESTIONE_GROUP.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides));
+              const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || gestioneOpen;
               const groupBadge = pendingCancellationsCount + pendingModificationsCount;
               return (
@@ -1097,7 +1098,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   </button>
                   {!collapsed && isExpanded && (
                     <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
-                      {GESTIONE_GROUP.items.map((item) => {
+                      {visibleItems.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
                         const itemBadge = item.href === "/cancellazioni" ? pendingCancellationsCount : item.href === "/richieste-modifica" ? pendingModificationsCount : 0;
@@ -1298,7 +1299,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
             {/* Mario Boss — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor") && (() => {
-              const groupActive = MARIO_BOSS_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const visibleItems = MARIO_BOSS_GROUP.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides));
+              const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
               return (
                 <div className="mt-0.5">
                   <button
@@ -1326,7 +1328,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   </button>
                   {!collapsed && marioBossOpen && (
                     <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
-                      {MARIO_BOSS_GROUP.items.map((item) => {
+                      {visibleItems.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
                         return (
