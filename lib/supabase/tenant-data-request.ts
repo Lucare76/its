@@ -24,6 +24,7 @@ export type TenantDataset =
 export type ServiceScope =
   | { mode: "date"; date: string }
   | { mode: "range"; from: string; to: string }
+  | { mode: "bus_range"; from: string; to: string }
   | { mode: "ids"; ids: string[] };
 
 export type TenantOperationalDataOptions = {
@@ -65,7 +66,7 @@ function resolveDatasets(options?: TenantOperationalDataOptions): TenantDataset[
 
 function scopeKey(scope: ServiceScope): string {
   if (scope.mode === "date") return `date:${scope.date}`;
-  if (scope.mode === "range") return `range:${scope.from}:${scope.to}`;
+  if (scope.mode === "range" || scope.mode === "bus_range") return `${scope.mode}:${scope.from}:${scope.to}`;
   return `ids:${[...scope.ids].sort().join(",")}`;
 }
 
@@ -97,7 +98,7 @@ export function buildTenantDataRequest(options?: TenantOperationalDataOptions): 
     params.set("service_scope", scope.mode);
     if (scope.mode === "date") {
       params.set("date", scope.date);
-    } else if (scope.mode === "range") {
+    } else if (scope.mode === "range" || scope.mode === "bus_range") {
       params.set("from", scope.from);
       params.set("to", scope.to);
     } else {
