@@ -324,7 +324,6 @@ export const MARIO_BOSS_GROUP: NavMainGroup = {
     { href: "/bus-network", label: "Linea Bus", icon: "B" },
     { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
     { href: "/smistamento-continente", label: "Smistamento continente", icon: "S" },
-    { href: "/bus-tours", label: "Controllo bus", icon: "B" , supervisorOnly: true },
     { href: "/bus-stops", label: "Fermate bus", icon: "PIN" , supervisorOnly: true },
     { href: "/navette-hotel", label: "Navette Hotel", icon: "V" },
     { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
