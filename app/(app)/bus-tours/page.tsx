@@ -62,7 +62,7 @@ export default function BusToursPage() {
   rangeTo.setDate(rangeTo.getDate() + 180);
   const { loading, tenantId, userId, errorMessage, data, refresh } = useTenantOperationalData({
     datasets: { services: true, assignments: true, hotels: true, memberships: true, busLotConfigs: true },
-    serviceScope: { mode: "range", from: rangeFrom.toISOString().slice(0, 10), to: rangeTo.toISOString().slice(0, 10) }
+    serviceScope: { mode: "bus_range", from: rangeFrom.toISOString().slice(0, 10), to: rangeTo.toISOString().slice(0, 10) }
   });
   const [dateFilter, setDateFilter] = useState("all");
   const [tourNameFilter, setTourNameFilter] = useState("");
@@ -89,8 +89,8 @@ export default function BusToursPage() {
     return () => window.clearTimeout(timeout);
   }, [message]);
 
-  const busLineServices = data.services.filter((service) => isBusLineService(service));
-  const busTours = data.services.filter((service) => isTrueBusTour(service));
+  const busLineServices = useMemo(() => data.services.filter(isBusLineService), [data.services]);
+  const busTours = useMemo(() => data.services.filter(isTrueBusTour), [data.services]);
   const assignmentsByServiceId = useMemo(() => new Map(data.assignments.map((assignment) => [assignment.service_id, assignment])), [data.assignments]);
   const hotelsById = useMemo(() => new Map(data.hotels.map((hotel) => [hotel.id, hotel])), [data.hotels]);
   const drivers = data.memberships.filter((member) => member.role === "driver");
