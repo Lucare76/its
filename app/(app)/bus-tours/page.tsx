@@ -737,14 +737,14 @@ export default function BusToursPage() {
         {filteredBusTours.length === 0 ? (
           <EmptyState title="Nessuna escursione bus trovata." compact />
         ) : (
-          <DataTable toolbar={<p className="text-xs text-muted">Righe visualizzate: {filteredBusTours.length}</p>} footer={<p className="text-xs text-muted">Totale escursioni filtrate: {filteredBusTours.length}</p>}>
+          <DataTable minWidthClassName="w-full table-auto" toolbar={<p className="text-xs text-muted">Righe visualizzate: {filteredBusTours.length}</p>} footer={<p className="text-xs text-muted">Totale escursioni filtrate: {filteredBusTours.length}</p>}>
             <thead>
               <tr>
                 <th className="px-4 py-3">Data/Ora</th>
                 <th className="px-4 py-3">Tour</th>
                 <th className="px-4 py-3">Pax</th>
                 <th className="px-4 py-3">Stato</th>
-                <th className="px-4 py-3">Assegna bus/driver</th>
+                <th className="px-4 py-3">Assegna bus e autista</th>
                 <th className="px-4 py-3">Cambia stato</th>
                 <th className="px-4 py-3">Dettaglio</th>
               </tr>
@@ -765,18 +765,18 @@ export default function BusToursPage() {
                     <td className="px-4 py-3">{service.pax}</td>
                     <td className="px-4 py-3"><span className="status-badge status-badge-assigned">{SERVICE_STATUS_LABELS[service.status]}</span></td>
                     <td className="px-4 py-3">
-                      <div className="flex min-w-[280px] items-center gap-2">
-                        <select className="input-saas min-w-[120px]" value={draftDriverValue} onChange={(event) => setDraftDrivers((prev) => ({ ...prev, [service.id]: event.target.value }))}>
+                      <div className="grid min-w-[10rem] gap-2">
+                        <select className="input-saas min-w-0" value={draftDriverValue} onChange={(event) => setDraftDrivers((prev) => ({ ...prev, [service.id]: event.target.value }))}>
                           {drivers.map((driver) => (
                             <option key={driver.user_id} value={driver.user_id}>{driver.full_name}</option>
                           ))}
                         </select>
-                        <input className="input-saas min-w-[120px]" value={draftBusValue} onChange={(event) => setDraftBus((prev) => ({ ...prev, [service.id]: event.target.value }))} placeholder="Targa bus" />
+                        <input className="input-saas min-w-0" value={draftBusValue} onChange={(event) => setDraftBus((prev) => ({ ...prev, [service.id]: event.target.value }))} placeholder="Targa bus" />
                         <button type="button" className="btn-secondary whitespace-nowrap px-3 py-2" disabled={busyId === service.id} onClick={() => void handleAssignTour(service.id)}>Assegna</button>
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex min-w-[220px] items-center gap-2">
+                      <div className="grid min-w-[9rem] gap-2">
                         <select className="input-saas" value={draftStatusValue} onChange={(event) => setDraftStatus((prev) => ({ ...prev, [service.id]: event.target.value as ServiceStatus }))}>
                           <option value="new">{SERVICE_STATUS_LABELS.new}</option>
                           <option value="assigned">{SERVICE_STATUS_LABELS.assigned}</option>
