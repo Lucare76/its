@@ -505,7 +505,7 @@ export default function BusToursPage() {
     <section className="page-section">
       <PageHeader title="Servizi Bus" subtitle={`Lotti linea bus: ${busLots.length} | Tour bus: ${filteredBusTours.length}`} breadcrumbs={[{ label: "Operazioni", href: "/dashboard" }, { label: "Servizi bus" }]} />
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <div className="card p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Lotti bus</p><p className="mt-2 text-2xl font-semibold text-text">{lotSummary.lots}</p></div>
         <div className="card p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Pax linea bus</p><p className="mt-2 text-2xl font-semibold text-text">{lotSummary.totalPax}</p></div>
         <div className="card p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Lotti critici</p><p className="mt-2 text-2xl font-semibold text-amber-700">{lotSummary.lowSeats}</p></div>
@@ -542,9 +542,9 @@ export default function BusToursPage() {
         </label>
       </FilterBar>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="card p-4">
-          <div className="mb-3 flex items-center justify-between">
+      <div className="grid min-w-0 items-start gap-4 min-[1700px]:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="card min-w-0 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-semibold">Lotti linea bus</h2>
               <p className="text-sm text-muted">Capacita e waiting list si gestiscono qui, a livello lotto e non sul singolo passeggero.</p>
@@ -565,7 +565,7 @@ export default function BusToursPage() {
             <EmptyState title="Nessun lotto linea bus trovato." compact />
           ) : (
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="min-w-[980px] table-auto whitespace-nowrap text-sm">
+              <table className="w-full min-w-[720px] table-auto text-sm">
                 <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-3 py-2.5">Data</th>
@@ -589,11 +589,11 @@ export default function BusToursPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className="block max-w-[220px] truncate font-semibold text-slate-800" title={lot.title ?? "Linea bus"}>{lot.title ?? "Linea bus"}</span>
-                        <span className="block max-w-[220px] truncate text-xs text-muted" title={lot.bus_city_origin ?? "Origine N/D"}>{lot.bus_city_origin ?? "Origine N/D"}</span>
+                        <span className="block max-w-[240px] break-words font-semibold text-slate-800" title={lot.title ?? "Linea bus"}>{lot.title ?? "Linea bus"}</span>
+                        <span className="block max-w-[240px] break-words text-xs text-muted" title={lot.bus_city_origin ?? "Origine N/D"}>{lot.bus_city_origin ?? "Origine N/D"}</span>
                       </td>
                       <td className="px-3 py-2.5">
-                        <span className="block max-w-[150px] truncate font-mono text-xs text-slate-700" title={lot.transport_code ?? "N/D"}>{lot.transport_code ?? "N/D"}</span>
+                        <span className="block max-w-[150px] break-all font-mono text-xs text-slate-700" title={lot.transport_code ?? "N/D"}>{lot.transport_code ?? "N/D"}</span>
                       </td>
                       <td className="px-3 py-2.5 text-slate-700">
                         <span className="font-semibold">{lot.service_count}</span> servizi
@@ -613,7 +613,12 @@ export default function BusToursPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2.5">
-                        <button type="button" className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setSelectedLotKey(lot.key)}>
+                        <button type="button" className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => {
+                          setSelectedLotKey(lot.key);
+                          if (!window.matchMedia("(min-width: 1700px)").matches) {
+                            document.getElementById("dettaglio-lotto-bus")?.scrollIntoView({ block: "start" });
+                          }
+                        }}>
                           {isSelected ? "Aperto" : "Modifica"}
                         </button>
                       </td>
@@ -625,8 +630,8 @@ export default function BusToursPage() {
           )}
         </div>
 
-        <div className="card space-y-3 p-4">
-          <h2 className="font-semibold">Dettaglio lotto bus</h2>
+        <div id="dettaglio-lotto-bus" className="card min-w-0 scroll-mt-4 space-y-3 break-words p-4 min-[1700px]:sticky min-[1700px]:top-4 min-[1700px]:max-h-[calc(100dvh-2rem)] min-[1700px]:overflow-y-auto">
+          <h2 className="text-base font-semibold">Dettaglio lotto bus</h2>
           {!selectedLot ? (
             <p className="text-sm text-muted">Seleziona un lotto linea bus.</p>
           ) : (
@@ -732,14 +737,14 @@ export default function BusToursPage() {
         {filteredBusTours.length === 0 ? (
           <EmptyState title="Nessuna escursione bus trovata." compact />
         ) : (
-          <DataTable toolbar={<p className="text-xs text-muted">Righe visualizzate: {filteredBusTours.length}</p>} footer={<p className="text-xs text-muted">Totale escursioni filtrate: {filteredBusTours.length}</p>}>
+          <DataTable minWidthClassName="w-full table-auto" toolbar={<p className="text-xs text-muted">Righe visualizzate: {filteredBusTours.length}</p>} footer={<p className="text-xs text-muted">Totale escursioni filtrate: {filteredBusTours.length}</p>}>
             <thead>
               <tr>
                 <th className="px-4 py-3">Data/Ora</th>
                 <th className="px-4 py-3">Tour</th>
                 <th className="px-4 py-3">Pax</th>
                 <th className="px-4 py-3">Stato</th>
-                <th className="px-4 py-3">Assegna bus/driver</th>
+                <th className="px-4 py-3">Assegna bus e autista</th>
                 <th className="px-4 py-3">Cambia stato</th>
                 <th className="px-4 py-3">Dettaglio</th>
               </tr>
@@ -760,18 +765,18 @@ export default function BusToursPage() {
                     <td className="px-4 py-3">{service.pax}</td>
                     <td className="px-4 py-3"><span className="status-badge status-badge-assigned">{SERVICE_STATUS_LABELS[service.status]}</span></td>
                     <td className="px-4 py-3">
-                      <div className="flex min-w-[280px] items-center gap-2">
-                        <select className="input-saas min-w-[120px]" value={draftDriverValue} onChange={(event) => setDraftDrivers((prev) => ({ ...prev, [service.id]: event.target.value }))}>
+                      <div className="grid min-w-[10rem] gap-2">
+                        <select className="input-saas min-w-0" value={draftDriverValue} onChange={(event) => setDraftDrivers((prev) => ({ ...prev, [service.id]: event.target.value }))}>
                           {drivers.map((driver) => (
                             <option key={driver.user_id} value={driver.user_id}>{driver.full_name}</option>
                           ))}
                         </select>
-                        <input className="input-saas min-w-[120px]" value={draftBusValue} onChange={(event) => setDraftBus((prev) => ({ ...prev, [service.id]: event.target.value }))} placeholder="Targa bus" />
+                        <input className="input-saas min-w-0" value={draftBusValue} onChange={(event) => setDraftBus((prev) => ({ ...prev, [service.id]: event.target.value }))} placeholder="Targa bus" />
                         <button type="button" className="btn-secondary whitespace-nowrap px-3 py-2" disabled={busyId === service.id} onClick={() => void handleAssignTour(service.id)}>Assegna</button>
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex min-w-[220px] items-center gap-2">
+                      <div className="grid min-w-[9rem] gap-2">
                         <select className="input-saas" value={draftStatusValue} onChange={(event) => setDraftStatus((prev) => ({ ...prev, [service.id]: event.target.value as ServiceStatus }))}>
                           <option value="new">{SERVICE_STATUS_LABELS.new}</option>
                           <option value="assigned">{SERVICE_STATUS_LABELS.assigned}</option>

@@ -273,10 +273,13 @@ export const GESTIONE_GROUP: NavMainGroup = {
     { href: "/services", label: "Servizi", icon: "B" },
     { href: "/booking-groups", label: "Gruppi prenotazione", icon: "👥" },
     { href: "/dispatch", label: "Assegnazioni", icon: "G" },
+    { href: "/mario-planning", label: "Planning mezzi", icon: "P" },
+    { href: "/planning", label: "Servizi futuri", icon: "L" , supervisorOnly: true },
+    { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true },
+    { href: "/preventivi", label: "Preventivi clienti", icon: "Q" },
     { href: "/foglio-viaggio", label: "Foglio di viaggio", icon: "📋" },
     { href: "/cancellazioni", label: "Cancellazioni", icon: "✕" },
     { href: "/richieste-modifica", label: "Richieste modifica", icon: "✏️" },
-    { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
     { href: "/whatsapp-log", label: "WhatsApp Log", icon: "💬" },
     { href: "/medmar-convocations", label: "Convocazioni MEDMAR", icon: "🚢" },
     { href: "/snav-convocations", label: "Convocazioni SNAV", icon: "🚢" },
@@ -290,8 +293,9 @@ export const AGENZIE_GROUP: NavMainGroup = {
   label: "Agenzie",
   icon: "C",
   items: [
-    { href: "/agency-requests", label: "Richieste prenotazioni agenzie", icon: "🏨" },
-    { href: "/agency-imports/mts-globe", label: "Import MTS Globe / Sun&Sea", icon: "📥" },
+    { href: "/crm-agencies", label: "Anagrafica e riepiloghi", icon: "C", supervisorOnly: true },
+    { href: "/agency-requests", label: "Richieste prenotazione", icon: "🏨" },
+    { href: "/agency-imports/mts-globe", label: "Import MTS / Sun&Sea", icon: "📥" },
     { href: "/estratto-conto", label: "Estratto conto", icon: "€" },
     { href: "/agency-statement", label: "Contestazioni prezzo", icon: "⚠️" },
     { href: "/libro-mastro", label: "Libro mastro", icon: "📒" },
@@ -302,29 +306,28 @@ export const AGENZIE_GROUP: NavMainGroup = {
 export const OPERATIVO_GROUP: NavMainGroup = {
   type: "group",
   key: "operativo",
-  label: "Logistica",
+  label: "Biglietteria",
   icon: "O",
   items: [
     { href: "/biglietti-medmar", label: "Biglietti MEDMAR", icon: "⚓" },
     { href: "/medmar-ar", label: "Medmar A/R", icon: "🎫" },
     { href: "/medmar-fleet", label: "Medmar Flotta", icon: "🚗" },
-    { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
   ]
 };
 
 export const MARIO_BOSS_GROUP: NavMainGroup = {
   type: "group",
   key: "mario-boss",
-  label: "Pianificazione",
+  label: "Bus e transfer",
   icon: "MARIO",
   items: [
-    { href: "/mario-planning", label: "Planning", icon: "P" },
     { href: "/bus-network", label: "Linea Bus", icon: "B" },
+    { href: "/bus-convocations", label: "Convocazioni Bus", icon: "📣" },
+    { href: "/smistamento-continente", label: "Smistamento continente", icon: "S" },
+    { href: "/bus-tours", label: "Controllo bus", icon: "B" , supervisorOnly: true },
+    { href: "/bus-stops", label: "Fermate bus", icon: "PIN" , supervisorOnly: true },
     { href: "/navette-hotel", label: "Navette Hotel", icon: "V" },
     { href: "/rete-ischia", label: "Transfer Ischia", icon: "O" },
-    { href: "/escursioni", label: "Escursioni", icon: "E" },
-    { href: "/preventivo-ops", label: "Area preventivi", icon: "%", requiresQuotesAccess: true },
-    { href: "/preventivi", label: "Preventivi clienti", icon: "Q" }
   ]
 };
 
@@ -335,7 +338,6 @@ export const KARMEN_PEACH_GROUP: NavMainGroup = {
   icon: "KARMEN",
   items: [
     { href: "/liste-bruno", label: "Liste Bruno", icon: "S" },
-    { href: "/smistamento-continente", label: "Smistamento continente", icon: "S" },
     { href: "/estratto-escursioni", label: "Estratto Escursioni", icon: "S" }
   ]
 };
@@ -349,17 +351,22 @@ export const SETTINGS_GROUPS: NavGroup[] = [
     title: "Anagrafica",
     items: [
       { href: "/settings/users", label: "Utenti", icon: "R" },
-      { href: "/crm-agencies", label: "Agenzie", icon: "C" },
       { href: "/hotels", label: "Hotel", icon: "H" },
+      { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
+    ]
+  },
+  {
+    title: "Flotta e autisti",
+    items: [
       { href: "/fleet-ops", label: "Flotta e mezzi", icon: "F" },
+      { href: "/inbox/fleet-reports", label: "Segnalazioni veicoli", icon: "🚨" },
+      { href: "/fleet-ops/reports", label: "Report veicoli", icon: "📈" },
       { href: "/fleet-ops/fuel", label: "Rifornimenti", icon: "⛽" },
       { href: "/fleet-ops/maintenance", label: "Manutenzioni", icon: "🔧" },
       { href: "/fleet-ops/inventory", label: "Ricambi magazzino", icon: "🔩" },
-      { href: "/fleet-ops/reports", label: "Report veicoli", icon: "📈" },
+      { href: "/fleet-ops/scadenze", label: "Scadenze documenti", icon: "J" },
       { href: "/fleet-ops/drivers", label: "KPI Autisti", icon: "📊" },
       { href: "/fleet-ops/driver-history", label: "Storico assegnazioni", icon: "J" },
-      { href: "/fleet-ops/scadenze", label: "Scadenze documenti", icon: "J" },
-      { href: "/settings/tenant", label: "Profilo azienda", icon: "🏢" },
     ]
   },
   {
@@ -373,7 +380,6 @@ export const SETTINGS_GROUPS: NavGroup[] = [
   {
     title: "Strumenti",
     items: [
-      { href: "/planning", label: "Pianificazione", icon: "L" },
       { href: "/excel-import", label: "Import Excel", icon: "E" },
       { href: "/driver-file-import", label: "Import file autista", icon: "R" },
       { href: "/excel-workspace", label: "Excel workspace", icon: "X" },
@@ -381,8 +387,6 @@ export const SETTINGS_GROUPS: NavGroup[] = [
       { href: "/ops-rules", label: "Regole operative", icon: "S" },
       { href: "/arrivals-clock", label: "Arrivi a orario", icon: "@" },
       { href: "/report-center", label: "Centro report", icon: "Y" },
-      { href: "/bus-tours", label: "Controllo bus", icon: "B" },
-      { href: "/bus-stops", label: "Fermate bus", icon: "PIN" },
       { href: "/analytics", label: "Analisi", icon: "Y" },
       { href: "/analytics-yoy", label: "Anno su anno", icon: "↕" },
       { href: "/audit", label: "Audit", icon: "Q" },

@@ -1057,7 +1057,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
             {/* Gestione — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
-              const groupActive = GESTIONE_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const visibleItems = GESTIONE_GROUP.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides));
+              const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || gestioneOpen;
               const groupBadge = pendingCancellationsCount + pendingModificationsCount;
               return (
@@ -1097,7 +1098,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   </button>
                   {!collapsed && isExpanded && (
                     <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
-                      {GESTIONE_GROUP.items.map((item) => {
+                      {visibleItems.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
                         const itemBadge = item.href === "/cancellazioni" ? pendingCancellationsCount : item.href === "/richieste-modifica" ? pendingModificationsCount : 0;
@@ -1133,7 +1134,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
             {/* Agenzie — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
-              const groupActive = AGENZIE_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const agencyItems = AGENZIE_GROUP.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides));
+              const groupActive = agencyItems.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || agenzieOpen;
               const groupBadge = pendingAgencyBookingsCount + pendingAgencyReviewCount + pendingStatementPayments + pendingStatementRevisions;
               return (
@@ -1173,7 +1175,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   </button>
                   {!collapsed && isExpanded && (
                     <div className="ml-[22px] mt-1 space-y-0.5 border-l border-white/10 pl-2.5">
-                      {AGENZIE_GROUP.items.map((item) => {
+                      {agencyItems.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
                         const itemBadge = item.href === "/agency-requests" && pendingAgencyBookingsCount > 0
@@ -1197,7 +1199,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                                 {renderNavIcon(item.icon)}
                               </span>
                               <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                                <span className="truncate">{item.label}</span>
+                                <span className="min-w-0 whitespace-normal break-words leading-snug">{item.label}</span>
                                 {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge > 99 ? "99+" : itemBadge}</span> : null}
                               </span>
                             </Link>
@@ -1220,7 +1222,9 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
               const groupActive = OPERATIVO_GROUP.items.some((i) => matchesPath(pathname, i.href));
               const isExpanded = groupActive || operativoOpen;
-              const groupBadge = pendingQrReportsCount > 0 ? pendingQrReportsCount : 0;
+              const groupBadge = OPERATIVO_GROUP.items.some((item) => item.href === "/inbox/fleet-reports")
+                ? pendingQrReportsCount
+                : 0;
               return (
                 <div className="mt-0.5">
                   <button
@@ -1295,7 +1299,8 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
 
             {/* Mario Boss — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor") && (() => {
-              const groupActive = MARIO_BOSS_GROUP.items.some((i) => matchesPath(pathname, i.href));
+              const visibleItems = MARIO_BOSS_GROUP.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides));
+              const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
               return (
                 <div className="mt-0.5">
                   <button
@@ -1323,7 +1328,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   </button>
                   {!collapsed && marioBossOpen && (
                     <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
-                      {MARIO_BOSS_GROUP.items.map((item) => {
+                      {visibleItems.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
                         return (
