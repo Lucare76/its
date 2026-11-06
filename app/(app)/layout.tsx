@@ -1231,10 +1231,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                     type="button"
                     title={collapsed ? OPERATIVO_GROUP.label : undefined}
                     onClick={() => { if (!collapsed) setOperativoOpen((v) => !v); }}
-                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
                       groupActive
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                        ? "border-indigo-400/40 bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white shadow-[0_8px_20px_rgba(79,70,229,0.20)]"
+                        : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
                     {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-1 rounded-r-full bg-amber-500" /> : null}
