@@ -1,5 +1,9 @@
 /**
- * POST /api/cron/vehicle-expiry-check
+ * GET|POST /api/cron/vehicle-expiry-check
+ *
+ * Vercel Cron invoca l'endpoint via GET (senza body). POST resta disponibile
+ * per i test manuali e accetta nel body `today` (YYYY-MM-DD) e `dry_run`.
+ * Entrambi richiedono `Authorization: Bearer <CRON_SECRET>`.
  *
  * Controlla ogni giorno i veicoli con scadenza assicurazione, bollo, collaudo,
  * estintori e carta tachigrafo autisti. Finestra avviso: 60 giorni.
@@ -212,7 +216,9 @@ function buildEmailHtml(warnings: WarningItem[]): string {
 </html>`;
 }
 
-export async function POST(request: NextRequest) {
+type CheckOptions = { today?: unknown; dry_run?: unknown };
+
+async function runVehicleExpiryCheck(request: NextRequest, readOptions: () => Promise<CheckOptions>) {
   const secret = process.env.CRON_SECRET;
   const auth = request.headers.get("authorization");
   if (!secret || auth !== `Bearer ${secret}`) {
@@ -226,7 +232,7 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false } });
-  const body = (await request.json().catch(() => ({}))) as { today?: unknown; dry_run?: unknown };
+  const body = await readOptions();
   const today = isIsoDate(body.today) ? body.today : new Date().toISOString().slice(0, 10);
   const dryRun = body.dry_run === true;
 
@@ -382,4 +388,12 @@ export async function POST(request: NextRequest) {
     preview: warnings,
     delivery: dryRun ? null : { ok: true },
   });
+}
+
+export async function GET(request: NextRequest) {
+  return runVehicleExpiryCheck(request, async () => ({}));
+}
+
+export async function POST(request: NextRequest) {
+  return runVehicleExpiryCheck(request, async () => (await request.json().catch(() => ({}))) as CheckOptions);
 }
