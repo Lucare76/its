@@ -38,11 +38,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [gestioneOpen, setGestioneOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [agenzieOpen, setAgenzieOpen] = useState(false);
   const [operativoOpen, setOperativoOpen] = useState(false);
   const [marioBossOpen, setMarioBossOpen] = useState(false);
-  const [karmenPeachOpen, setKarmenPeachOpen] = useState(false);
   const [inboxPendingCount, setInboxPendingCount] = useState(0);
   const [pendingAccessRequestCount, setPendingAccessRequestCount] = useState(0);
   const [pendingAgencyReviewCount, setPendingAgencyReviewCount] = useState(0);
@@ -91,6 +90,31 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
         : [],
     [authRole, capabilityOverrides, quotesAccess]
   );
+  const isStaff = authRole === "admin" || authRole === "supervisor" || authRole === "operator";
+  const dailyHrefs = ["/arrivals", "/departures", "/inbox", "/piano-giorno", "/whatsapp"];
+  const dailyNav = isStaff ? dailyHrefs.flatMap((href) => mainNav.filter((item) => item.href === href)) : mainNav;
+  const contextualHrefs: Record<string, string[]> = {
+    "/piano-giorno": ["/disponibilita", "/controllo-giornata", "/piano-giorno/assegnazione-intelligente", "/dispatch"],
+    "/inbox": ["/booking-groups", "/richieste-modifica", "/cancellazioni"],
+    "/whatsapp": ["/whatsapp-log"],
+    "/bus-network": ["/bus-stops"],
+  };
+  const contextualItems = isStaff ? (contextualHrefs[pathname] ?? []).flatMap((href) => {
+    const item = findNavItemByHref(href);
+    return item && canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides) ? [item] : [];
+  }) : [];
+  const contextualSet = new Set(Object.values(contextualHrefs).flat());
+  const emergencyItem = isStaff ? mainNav.find((item) => item.href === "/emergenza-assistenza") : undefined;
+  const moreGroups = isStaff ? [
+    { title: "Operatività", items: [...mainNav.filter((item) => !dailyHrefs.includes(item.href) && item !== emergencyItem), ...GESTIONE_GROUP.items.filter((item) => !["/preventivo-ops", "/preventivi", "/excel-templates"].includes(item.href))] },
+    { title: "Preventivi", items: GESTIONE_GROUP.items.filter((item) => ["/preventivo-ops", "/preventivi"].includes(item.href)) },
+    { title: "Report e liste", items: authRole === "operator" ? [] : KARMEN_PEACH_GROUP.items },
+    { title: "Modelli Excel", items: GESTIONE_GROUP.items.filter((item) => item.href === "/excel-templates") },
+  ].map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !contextualSet.has(item.href) && canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides)),
+  })).filter((group) => group.items.length > 0) : [];
+  const bookingBadge = inboxPendingCount + pendingModificationsCount + pendingCancellationsCount;
   const settingsGroups = useMemo(() => {
     if (authRole !== "admin" && authRole !== "supervisor" && authRole !== "operator") return [];
     const groups = SETTINGS_GROUPS
@@ -996,10 +1020,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {!collapsed ? (
               <p className="px-3 pb-1.5 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Operativo</p>
             ) : null}
-            {mainNav.map((item) => {
+            {dailyNav.map((item) => {
               const active = matchesPath(pathname, item.href);
-              const badge = item.href === "/inbox" && inboxPendingCount > 0
-                ? inboxPendingCount
+              const badge = item.href === "/inbox" && bookingBadge > 0
+                ? bookingBadge
                 : item.href === "/whatsapp" && whatsAppUnreadCount > 0
                 ? whatsAppUnreadCount
                 : item.href === "/richieste-modifica" && pendingModificationsCount > 0
@@ -1054,83 +1078,6 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 </div>
               );
             })}
-
-            {/* Gestione — gruppo collassabile */}
-            {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
-              const visibleItems = GESTIONE_GROUP.items.filter((item) => canSeeNavItem(item, authRole, quotesAccess, capabilityOverrides));
-              const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
-              const isExpanded = groupActive || gestioneOpen;
-              const groupBadge = pendingCancellationsCount + pendingModificationsCount;
-              return (
-                <div className="mt-2 border-t border-white/10 pt-2">
-                  <button
-                    type="button"
-                    title={collapsed ? GESTIONE_GROUP.label : undefined}
-                    onClick={() => { if (!collapsed) setGestioneOpen((v) => !v); }}
-                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
-                      groupActive
-                        ? "bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white"
-                        : "text-slate-200 hover:bg-white/10 hover:text-white"
-                    } ${collapsed ? "justify-center" : ""}`}
-                  >
-                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
-                      {renderNavIcon(GESTIONE_GROUP.icon)}
-                    </span>
-                    {!collapsed ? (
-                      <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
-                        <span className="truncate text-sm font-semibold uppercase tracking-[0.08em]">{GESTIONE_GROUP.label}</span>
-                        <span className="flex items-center gap-1.5">
-                          {groupBadge > 0 && !isExpanded ? (
-                            <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                              {groupBadge > 99 ? "99+" : groupBadge}
-                            </span>
-                          ) : null}
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} aria-hidden="true">
-                            <path d="M6 3.5l4 4.5-4 4.5" />
-                          </svg>
-                        </span>
-                      </span>
-                    ) : groupBadge > 0 ? (
-                      <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[9px] font-semibold text-white">
-                        {groupBadge > 9 ? "9+" : groupBadge}
-                      </span>
-                    ) : null}
-                  </button>
-                  {!collapsed && isExpanded && (
-                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
-                      {visibleItems.map((item) => {
-                        const active = matchesPath(pathname, item.href);
-                        const isFav = favorites.includes(item.href);
-                        const itemBadge = item.href === "/cancellazioni" ? pendingCancellationsCount : item.href === "/richieste-modifica" ? pendingModificationsCount : 0;
-                        return (
-                          <div key={item.href} className="group/fav relative">
-                            <Link href={item.href}
-                              className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "bg-indigo-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
-                              } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
-                            >
-                              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
-                                {renderNavIcon(item.icon)}
-                              </span>
-                              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                                <span className="truncate">{item.label}</span>
-                                {itemBadge > 0 ? <span className="inline-flex items-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">{itemBadge > 99 ? "99+" : itemBadge}</span> : null}
-                              </span>
-                            </Link>
-                            {isFav || favoritesEditMode ? (
-                              <button type="button" onClick={() => toggleFavorite(item.href)}
-                                title={isFav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
-                                className={`absolute right-1.5 top-1/2 -translate-y-1/2 z-10 text-xs transition-all ${isFav ? "text-amber-400 hover:text-rose-500 opacity-100" : "text-slate-300 hover:text-amber-400 opacity-0 group-hover/fav:opacity-100"}`}
-                              >{isFav ? "★" : "☆"}</button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
 
             {/* Agenzie — gruppo collassabile */}
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
@@ -1358,50 +1305,58 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
               );
             })()}
 
-            {/* Karmen Peach — gruppo collassabile */}
-            {(authRole === "admin" || authRole === "supervisor") && (() => {
-              const groupActive = KARMEN_PEACH_GROUP.items.some((i) => matchesPath(pathname, i.href));
+            {/* Altro — gruppo collassabile */}
+            {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
+              const visibleItems = moreGroups.flatMap((group) => group.items);
+              const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
+              const isExpanded = groupActive || moreOpen;
               return (
-                <div className="mt-0.5">
+                <div className="mt-2 border-t border-white/10 pt-2">
                   <button
                     type="button"
-                    title={collapsed ? KARMEN_PEACH_GROUP.label : undefined}
-                    onClick={() => { if (!collapsed) setKarmenPeachOpen((v) => !v); }}
-                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl border px-2.5 py-2 text-left transition ${
+                    title={collapsed ? "Altro" : undefined}
+                    onClick={() => { if (!collapsed) setMoreOpen((v) => !v); }}
+                    className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
                       groupActive
-                        ? "border-indigo-400/40 bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white shadow-[0_8px_20px_rgba(79,70,229,0.20)]"
-                        : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
+                        ? "bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white"
+                        : "text-slate-200 hover:bg-white/10 hover:text-white"
                     } ${collapsed ? "justify-center" : ""}`}
                   >
-                    {groupActive ? <span className="absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-r-full bg-pink-500" /> : null}
-                    <span className={`inline-flex shrink-0 items-center justify-center rounded-2xl transition-all duration-300 ${groupActive ? "bg-white/20 text-white shadow-sm" : "bg-white/10 text-violet-300 ring-1 ring-white/10"} ${karmenPeachOpen ? "h-10 w-10" : "h-8 w-8"}`}>
-                      <span className={`transition-all duration-300 ${karmenPeachOpen ? "text-2xl" : "text-base"}`} aria-hidden="true">🌸</span>
+                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center transition">
+                      {renderNavIcon(GESTIONE_GROUP.icon)}
                     </span>
                     {!collapsed ? (
                       <span className="flex min-w-0 flex-1 items-center justify-between gap-1">
-                        <span className="truncate text-sm font-semibold">{KARMEN_PEACH_GROUP.label}</span>
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${karmenPeachOpen ? "rotate-90" : ""}`} aria-hidden="true">
-                          <path d="M6 3.5l4 4.5-4 4.5" />
-                        </svg>
+                        <span className="truncate text-sm font-semibold uppercase tracking-[0.08em]">Altro</span>
+                        <span className="flex items-center gap-1.5">
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} aria-hidden="true">
+                            <path d="M6 3.5l4 4.5-4 4.5" />
+                          </svg>
+                        </span>
                       </span>
                     ) : null}
                   </button>
-                  {!collapsed && karmenPeachOpen && (
-                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-violet-400/30 pl-2">
-                      {KARMEN_PEACH_GROUP.items.map((item) => {
+                  {!collapsed && isExpanded && (
+                    <div className="ml-4 mt-1 space-y-0.5 border-l-2 border-indigo-400/30 pl-2">
+                      {moreGroups.map((group) => (
+                        <div key={group.title} className="space-y-0.5 pb-2">
+                          <p className="px-2 pt-1 text-xs text-slate-300">{group.title}</p>
+                          {group.items.map((item) => {
                         const active = matchesPath(pathname, item.href);
                         const isFav = favorites.includes(item.href);
                         return (
                           <div key={item.href} className="group/fav relative">
                             <Link href={item.href}
                               className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-2 py-1.5 text-sm transition ${
-                                active ? "bg-violet-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
+                                active ? "bg-indigo-600 text-white font-semibold" : "border-transparent text-slate-200 hover:bg-white/10 hover:text-white"
                               } ${isFav || favoritesEditMode ? "pr-7" : ""}`}
                             >
                               <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition ${active ? "text-white" : "text-slate-400"}`}>
                                 {renderNavIcon(item.icon)}
                               </span>
-                              <span className="truncate">{item.label}</span>
+                              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                                <span className="truncate">{item.label}</span>
+                              </span>
                             </Link>
                             {isFav || favoritesEditMode ? (
                               <button type="button" onClick={() => toggleFavorite(item.href)}
@@ -1411,7 +1366,9 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                             ) : null}
                           </div>
                         );
-                      })}
+                          })}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1695,7 +1652,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
           </div>
           </div>
           <div className="mt-3 mobile-nav-strip">
-            {mainNav.map((item) => {
+            {dailyNav.map((item) => {
               const active = pathname.startsWith(item.href);
               return (
                 <Link
@@ -1704,7 +1661,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   className={active ? "btn-primary px-3 py-1.5 text-xs" : "btn-secondary px-3 py-1.5 text-xs"}
                 >
                   {item.label}
-                  {item.href === "/inbox" && inboxPendingCount > 0 ? ` (${inboxPendingCount > 99 ? "99+" : inboxPendingCount})` : ""}
+                  {item.href === "/inbox" && bookingBadge > 0 ? ` (${bookingBadge > 99 ? "99+" : bookingBadge})` : ""}
                   {item.href === "/whatsapp" && whatsAppUnreadCount > 0 ? ` (${whatsAppUnreadCount > 99 ? "99+" : whatsAppUnreadCount})` : ""}
                   {item.href === "/agency-requests" && pendingAgencyBookingsCount > 0 ? ` (${pendingAgencyBookingsCount > 99 ? "99+" : pendingAgencyBookingsCount})` : ""}
                   {item.href === "/richieste-modifica" && pendingModificationsCount > 0 ? ` (${pendingModificationsCount > 99 ? "99+" : pendingModificationsCount})` : ""}
@@ -1746,6 +1703,35 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             </div>
           ) : null}
         </header> : null}
+        {emergencyItem ? (
+          <div className="mb-2 flex justify-end">
+            <Link href={emergencyItem.href} className="btn-secondary px-3 py-1.5 text-sm">
+              {emergencyItem.label}
+            </Link>
+          </div>
+        ) : null}
+        {moreGroups.length > 0 ? (
+          <details className="mb-3 rounded-xl border border-slate-200 p-2 md:hidden">
+            <summary className="cursor-pointer text-sm font-semibold">Altro</summary>
+            {moreGroups.map((group) => (
+              <div key={group.title} className="mt-2">
+                <p className="text-xs font-semibold">{group.title}</p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {group.items.map((item) => (
+                    <Link key={item.href} href={item.href} className="btn-secondary px-3 py-1.5 text-xs">{item.label}</Link>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </details>
+        ) : null}
+        {contextualItems.length > 0 ? (
+          <nav aria-label="Funzioni collegate" className="mb-3 flex flex-wrap gap-2">
+            {contextualItems.map((item) => (
+              <Link key={item.href} href={item.href} className="btn-secondary px-3 py-1.5 text-sm">{item.label}</Link>
+            ))}
+          </nav>
+        ) : null}
         {children}
       </div>
       {slaAlertMessage ? (
