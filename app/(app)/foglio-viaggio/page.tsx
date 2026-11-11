@@ -335,7 +335,7 @@ export default function FoglioViaggioPage() {
   }, [allGroups, data, selectedVehicle]);
   const selectedServices = selectedGroup?.services ?? [];
   const selectedPax = selectedServices.reduce((sum, service) => sum + service.pax, 0);
-  const missingPhones = selectedServices.filter((service) => !service.phone).length;
+  const missingPhones = selectedServices.filter((service) => service.booking_service_kind !== "navetta" && !service.phone).length;
   const missingHotels = selectedServices.filter((service) => !service.hotel_name && !service.meeting_point).length;
   const warningCount = missingPhones + missingHotels + (selectedPax > 30 ? 1 : 0);
   const firstService = selectedServices[0] ?? null;
