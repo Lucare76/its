@@ -38,7 +38,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState<boolean | null>(null);
   const [agenzieOpen, setAgenzieOpen] = useState(false);
   const [operativoOpen, setOperativoOpen] = useState(false);
   const [marioBossOpen, setMarioBossOpen] = useState(false);
@@ -1309,13 +1309,13 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {(authRole === "admin" || authRole === "supervisor" || authRole === "operator") && (() => {
               const visibleItems = moreGroups.flatMap((group) => group.items);
               const groupActive = visibleItems.some((i) => matchesPath(pathname, i.href));
-              const isExpanded = groupActive || moreOpen;
+              const isExpanded = moreOpen ?? groupActive;
               return (
                 <div className="mt-2 border-t border-white/10 pt-2">
                   <button
                     type="button"
                     title={collapsed ? "Altro" : undefined}
-                    onClick={() => { if (!collapsed) setMoreOpen((v) => !v); }}
+                    onClick={() => { if (!collapsed) setMoreOpen(!isExpanded); }}
                     className={`group relative flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
                       groupActive
                         ? "bg-gradient-to-r from-indigo-600/85 to-violet-600/75 text-white"
