@@ -55,6 +55,20 @@ function clientName(s: ServiceRow) {
   return s.customer_name;
 }
 
+function operationalNote(notes: string | null) {
+  if (!notes) return "—";
+  const visible = notes
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) =>
+      part.length > 0 &&
+      !part.startsWith("[") &&
+      !/^booking approvato da email$/i.test(part) &&
+      !/^(pickup\/porto|hotel\/destinazione):/i.test(part),
+    );
+  return visible.join(" | ") || "—";
+}
+
 function directionLabel(s: ServiceRow) {
   const kind = s.service_type_code ?? s.booking_service_kind ?? "";
   if (kind.includes("airport") || s.place_type === "airport") return { icon: "✈️", label: s.direction === "arrival" ? "Arrivo aeroporto" : "Partenza aeroporto" };
@@ -104,7 +118,7 @@ function buildPrintHtml(data: FoglioData): string {
         <td style="padding:7px 10px;border:1px solid #e2e8f0">${dest}</td>
         <td style="padding:7px 10px;border:1px solid #e2e8f0;color:#475569;font-size:11px">${s.vessel ?? "—"}</td>
         <td style="padding:7px 10px;border:1px solid #e2e8f0;color:#475569;font-size:11px">${s.phone ?? "—"}</td>
-        <td style="padding:7px 10px;border:1px solid #e2e8f0;color:#64748b;font-size:11px">${s.notes ?? ""}</td>
+        <td style="padding:7px 10px;border:1px solid #e2e8f0;color:#64748b;font-size:11px">${operationalNote(s.notes)}</td>
         <td style="padding:7px 10px;border:1px solid #e2e8f0;font-size:11px;color:#64748b">${statusText}</td>
       </tr>`;
     }).join("");
@@ -201,7 +215,7 @@ function ServiceRow({ s }: { s: ServiceRow }) {
       <td className="px-3 py-2 text-sm text-slate-700">{dest}</td>
       <td className="px-3 py-2 text-xs text-slate-500">{s.vessel ?? "—"}</td>
       <td className="px-3 py-2 text-xs text-slate-500">{s.phone ?? "—"}</td>
-      <td className="px-3 py-2 text-xs text-slate-400 max-w-[180px] truncate">{s.notes ?? ""}</td>
+      <td className="px-3 py-2 text-xs text-slate-400 max-w-[180px] truncate">{operationalNote(s.notes)}</td>
       <td className="px-3 py-2">
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusBadge(s.status)}`}>
           {statusLabel(s.status)}
@@ -483,7 +497,7 @@ export default function FoglioViaggioPage() {
                             <p className="text-sm text-slate-600">→ {service.hotel_name ?? service.meeting_point ?? "Da verificare"}</p>
                           </td>
                           <td className="px-4 py-4 text-center text-base font-extrabold">{service.pax}</td>
-                          <td className="px-4 py-4"><span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">{service.notes || "—"}</span></td>
+                          <td className="px-4 py-4"><span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">{operationalNote(service.notes)}</span></td>
                           <td className="px-4 py-4"><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge(service.status)}`}>{statusLabel(service.status)}</span></td>
                         </tr>
                       );
