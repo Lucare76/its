@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { SectionCard } from "@/components/ui/section-card";
@@ -62,6 +62,7 @@ export default function AssegnazioneIntelligentePage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<PlanItem | null>(null);
   const [tab, setTab] = useState<"review" | "unresolved">("review");
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (targetDate: string) => {
     setLoading(true);
@@ -85,6 +86,11 @@ export default function AssegnazioneIntelligentePage() {
   }, [date, load]);
 
   async function handleGenerate() {
+    // Leggiamo il valore effettivamente visibile nel campo: su alcuni browser il
+    // click immediato dopo la selezione di una data può arrivare prima del
+    // rerender di React e usare ancora la data precedente.
+    const targetDate = dateInputRef.current?.value || date;
+    if (targetDate !== date) setDate(targetDate);
     setGenerating(true);
     setError(null);
     try {
@@ -92,7 +98,7 @@ export default function AssegnazioneIntelligentePage() {
       const res = await fetch("/api/ops/piano-giorno/assignment-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
-        body: JSON.stringify({ date }),
+        body: JSON.stringify({ date: targetDate }),
       });
       const body = await res.json();
       if (!res.ok || !body.ok) throw new Error(body.error ?? "Errore generazione piano.");
@@ -156,6 +162,7 @@ export default function AssegnazioneIntelligentePage() {
         actions={
           <>
             <input
+              ref={dateInputRef}
               type="date"
               value={date}
               onChange={(event) => setDate(event.target.value)}
