@@ -14,6 +14,7 @@
  *   (APPLICA SOLUZIONE), mai automatico.
  */
 import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
+import { vehiclePoolForDriver } from "@/lib/piano-scheduled-vehicles";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import type { PlanItemDraft } from "@/lib/server/assignment-engine/classify-plan";
 import type { RankableDriver, RankableVehicle } from "@/lib/server/assignment-engine/rank-candidates";
@@ -56,7 +57,8 @@ export function suggestOperationalFix(args: {
   vehicles: RankableVehicle[];
 }): SuggestedFix | null {
   if (!args.blockedService.operational_time) return null;
-  const blockedStart = minutes(args.blockedService.operational_time);
+  const blockedTime = args.blockedService.operational_time;
+  const blockedStart = minutes(blockedTime);
   if (blockedStart == null) return null;
 
   const movableItems = args.planItems.filter(
@@ -84,8 +86,13 @@ export function suggestOperationalFix(args: {
       { missingAvailability: "blocker", missingBounds: "warning" }
     );
     if (!canCoverBlocked.allowed) continue;
+    const canCarryBlocked = vehiclePoolForDriver(args.vehicles, currentDriver, args.drivers, blockedTime).some(
+      (vehicle) => vehicle.available !== false && (vehicle.capacity ?? 0) >= (args.blockedService.pax ?? 0) && canDriverUseVehicle(currentDriver, vehicle).allowed
+    );
+    if (!canCarryBlocked) continue;
 
     // Cerca un altro autista disponibile per il servizio da spostare.
+    const movedTime = info.operational_time;
     const alternativeDriver = args.drivers.find((driver) => {
       if (driver.id === currentDriverId) return false;
       const availability = canDriverCoverInterval(
@@ -94,7 +101,7 @@ export function suggestOperationalFix(args: {
         { missingAvailability: "blocker", missingBounds: "warning" }
       );
       if (!availability.allowed) return false;
-      const vehicle = args.vehicles.find(
+      const vehicle = vehiclePoolForDriver(args.vehicles, driver, args.drivers, movedTime).find(
         (candidate) => candidate.available !== false && (candidate.capacity ?? 0) >= (info.pax ?? 0) && canDriverUseVehicle(driver, candidate).allowed
       );
       return Boolean(vehicle);

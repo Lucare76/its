@@ -1,3 +1,4 @@
+import { vehiclePoolForDriver, type ScheduledVehicleSlot } from "@/lib/piano-scheduled-vehicles";
 import type { AssignableMacroCategory } from "@/lib/piano-assignable-service";
 import type { AutoAssignPreviewServiceRow } from "@/lib/piano-assignable-preview";
 import {
@@ -17,6 +18,7 @@ export type PlannerDriver = {
   available_from?: string | null;
   available_to?: string | null;
   max_vehicle_capacity?: number | null;
+  vehicle_slots?: ScheduledVehicleSlot[];
 };
 
 export type PlannerVehicle = {
@@ -543,12 +545,14 @@ export function planAutoAssignPreview(args: {
       continue;
     }
 
-    const currentMin = minutes(service.operational_time);
+    const serviceTime = service.operational_time;
+    const currentMin = minutes(serviceTime);
+    const poolForDriver = (driver: PlannerDriver) => vehiclePoolForDriver(vehicles, driver, drivers, serviceTime);
     const compatibleGroups = groups
       .map((group) => {
         const vehicle = vehicles.find((item) => item.id === group.vehicle_id);
         const driver = drivers.find((item) => item.id === group.driver_id);
-        if (!vehicle || !driver || !driverAvailable(driver, service.operational_time!)) return null;
+        if (!vehicle || !driver || !driverAvailable(driver, serviceTime) || !poolForDriver(driver).includes(vehicle)) return null;
         const evaluation = evaluateAppend(group, service, vehicle);
         return evaluation.ok ? { group, evaluation } : null;
       })
@@ -578,16 +582,23 @@ export function planAutoAssignPreview(args: {
       continue;
     }
 
+    const poolForNewGroup = (driver: PlannerDriver) => {
+      const pool = poolForDriver(driver);
+      if (driver.vehicle_slots?.length) return pool;
+      const bound = driverVehicleBinding.get(driver.id);
+      if (bound) return pool.filter((vehicle) => vehicle.id === bound.id);
+      return pool.filter((vehicle) => {
+        if (!fixedVehicleMode) return true;
+        const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
+        return Boolean(key && !vehicleDriverBinding.has(key));
+      });
+    };
     const driver = [...drivers]
       .filter((item) => driverAvailable(item, service.operational_time!))
       .filter((item) => {
-        const bound = driverVehicleBinding.get(item.id);
-        if (bound) return (bound.capacity ?? 0) >= (service.pax ?? 0) && driverCanUseVehicle(item, bound);
-        if (!fixedVehicleMode) return true;
-        return vehicles.some((vehicle) => {
-          const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
-          return Boolean(key && !vehicleDriverBinding.has(key) && (vehicle.capacity ?? 0) >= (service.pax ?? 0) && driverCanUseVehicle(item, vehicle));
-        });
+        const pool = poolForNewGroup(item);
+        if (!fixedVehicleMode && !item.vehicle_slots?.length) return true;
+        return pool.some((vehicle) => (vehicle.capacity ?? 0) >= (service.pax ?? 0) && driverCanUseVehicle(item, vehicle));
       })
       .filter((item) => {
         const events = driverEvents.get(item.id) ?? [];
@@ -606,13 +617,7 @@ export function planAutoAssignPreview(args: {
     }
 
     const boundVehicle = driverVehicleBinding.get(driver.id) ?? null;
-    const availableVehiclePool = boundVehicle
-      ? [boundVehicle]
-      : vehicles.filter((vehicle) => {
-          if (!fixedVehicleMode) return true;
-          const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
-          return Boolean(key && !vehicleDriverBinding.has(key));
-        });
+    const availableVehiclePool = poolForNewGroup(driver);
     const vehicle = smallestVehicleAvailableAt(availableVehiclePool, service.pax ?? 0, vehicleTimeline, service.operational_time, driver);
     if (!vehicle) {
       const reason = boundVehicle
@@ -626,7 +631,7 @@ export function planAutoAssignPreview(args: {
     }
 
     const vehicleKey = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
-    if (fixedVehicleMode && vehicleKey) {
+    if (fixedVehicleMode && vehicleKey && !driver.vehicle_slots?.length) {
       const boundDriver = vehicleDriverBinding.get(vehicleKey);
       if (boundDriver && boundDriver !== driver.id) {
         conflicts.push({

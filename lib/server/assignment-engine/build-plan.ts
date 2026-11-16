@@ -134,7 +134,7 @@ export async function buildAndPersistAssignmentPlan(
       : Promise.resolve({ data: [] as AutoAssignPreviewAssignment[], error: null }),
     listDriverRegistry(admin, args.tenantId, { activeOnly: true }),
     admin.from("vehicles").select("id, label, capacity, active").eq("tenant_id", args.tenantId).eq("active", true).order("capacity"),
-    admin.from("driver_daily_availability").select("driver_profile_id, available, available_from, available_to").eq("tenant_id", args.tenantId).eq("date", args.date),
+    admin.from("driver_daily_availability").select("driver_profile_id, available, available_from, available_to, vehicle_1_id, vehicle_1_from, vehicle_1_to, vehicle_2_id, vehicle_2_from, vehicle_2_to").eq("tenant_id", args.tenantId).eq("date", args.date),
     admin.from("vehicle_daily_availability").select("vehicle_id, available").eq("tenant_id", args.tenantId).eq("date", args.date),
     admin.from("daily_availability_confirmations").select("confirmed").eq("tenant_id", args.tenantId).eq("date", args.date).maybeSingle(),
   ]);
@@ -162,7 +162,15 @@ export async function buildAndPersistAssignmentPlan(
   const driverAvailabilityById = new Map(
     (driverAvailabilityResult.data ?? []).map((row) => [
       row.driver_profile_id as string,
-      { available: row.available as boolean | null, available_from: row.available_from as string | null, available_to: row.available_to as string | null },
+      {
+        available: row.available as boolean | null,
+        available_from: row.available_from as string | null,
+        available_to: row.available_to as string | null,
+        vehicle_slots: [
+          { vehicleId: row.vehicle_1_id as string | null, from: row.vehicle_1_from as string | null, to: row.vehicle_1_to as string | null },
+          { vehicleId: row.vehicle_2_id as string | null, from: row.vehicle_2_from as string | null, to: row.vehicle_2_to as string | null },
+        ].flatMap(({ vehicleId, from, to }) => vehicleId ? [{ vehicleId, from, to }] : []),
+      },
     ])
   );
   const vehicleAvailabilityById = new Map((vehicleAvailabilityResult.data ?? []).map((row) => [row.vehicle_id as string, row.available as boolean | null]));
@@ -180,6 +188,7 @@ export async function buildAndPersistAssignmentPlan(
         available_from: availability?.available_from ?? null,
         available_to: availability?.available_to ?? null,
         max_vehicle_capacity: driver.max_vehicle_capacity ?? null,
+        vehicle_slots: availability?.available === false ? [] : availability?.vehicle_slots,
       };
     });
   const activeVehicles: RankableVehicle[] = ((vehiclesResult.data ?? []) as Array<{ id: string; label: string; capacity: number | null }>).map((vehicle) => ({
@@ -205,14 +214,7 @@ export async function buildAndPersistAssignmentPlan(
   const planning = planAutoAssignPreview({
     services: preview.services,
     availability_confirmed: availabilityConfirmationResult.data?.confirmed === true,
-    drivers: activeDrivers.map((driver) => ({
-      id: driver.id,
-      name: driver.name,
-      available: driver.available,
-      available_from: driver.available_from,
-      available_to: driver.available_to,
-      max_vehicle_capacity: driver.max_vehicle_capacity,
-    })),
+    drivers: activeDrivers,
     vehicles: activeVehicles,
     locked_assignments: lockedAssignments,
   });
