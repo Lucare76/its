@@ -50,6 +50,28 @@ function row(overrides: Partial<AutoAssignPreviewServiceRow>): AutoAssignPreview
 }
 
 describe("planAutoAssignPreview", () => {
+  it("plans a 22-passenger hotel pickup before smaller pickups on the same sailing", () => {
+    const sailing = { ferry_company: "Medmar", ferry_departure_time: "08:10", port_departure: "Ischia Porto", destination_label: "Ischia Porto" };
+    const hotelRows = [2, 2, 2, 2, 2, 4, 2, 6].map((pax, index) => row({
+      ...sailing, service_id: `cristallo-${index}`, operational_time: "07:15", pickup_label: "Cristallo", pax,
+    }));
+    const result = planAutoAssignPreview({
+      availability_confirmed: true,
+      drivers,
+      vehicles,
+      services: [
+        row({ ...sailing, service_id: "carlo-magno", operational_time: "07:00", pickup_label: "Carlo Magno" }),
+        ...hotelRows,
+      ],
+    });
+
+    const group = result.proposed_groups.find((item) => item.services.some((service) => service.service_id === "cristallo-0"));
+    expect(group?.services.map((service) => service.service_id)).toEqual(hotelRows.map((service) => service.service_id));
+    expect(group?.vehicle_id).toBe("bus25");
+    expect(group?.total_pax).toBe(22);
+    expect(result.summary.planned_services_count).toBe(9);
+  });
+
   it("groups two departures from the same hotel and same time window", () => {
     const result = planAutoAssignPreview({
       availability_confirmed: true,
