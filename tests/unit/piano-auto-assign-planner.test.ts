@@ -356,3 +356,38 @@ describe("planAutoAssignPreview", () => {
     expect(vehicleIntervalsOverlap({ start_min: 540, end_min: 570 }, { start_min: 560, end_min: 590 }, 20)).toBe(true);
   });
 });
+
+describe("ritiri stradali della stessa partenza", () => {
+  const sailing = {
+    ferry_company: "Medmar", ferry_departure_time: "08:10", port_departure: "Ischia Porto",
+    destination_label: "Ischia Porto", operational_time: "07:20", pickup_zone: "Ischia",
+  };
+  const felix = row({ ...sailing, service_id: "felix", pickup_label: "Felix" });
+  const ferdinando = row({ ...sailing, service_id: "ferdinando", pickup_label: "Re Ferdinando", pax: 4 });
+  const run = (services: AutoAssignPreviewServiceRow[], betweenSeconds: number, toPortSeconds: number) => planAutoAssignPreview({
+    availability_confirmed: true,
+    drivers: [{ id: "driver", name: "Autista", available_from: "06:00", available_to: "09:00" }],
+    vehicles: [vehicles[0]],
+    services,
+    ferryRoadRouting: () => ({ betweenSeconds, toPortSeconds }),
+  });
+
+  it("propone Re Ferdinando alle 07:26 e lascia il giro da verificare", () => {
+    const plan = run([felix, ferdinando], 65.5, 467.5);
+    expect(plan.proposed_groups[0].services.map((service) => service.operational_time)).toEqual(["07:20", "07:26"]);
+    expect(plan.proposed_groups[0].warnings).toContain("Giro con più hotel da verificare");
+  });
+
+  it("mantiene Augusto alle 07:10 se il percorso rientra nella finestra", () => {
+    const carlo = row({ ...sailing, service_id: "carlo", pickup_label: "Carlo Magno", operational_time: "07:00", pax: 4 });
+    const augusto = row({ ...sailing, service_id: "augusto", pickup_label: "Augusto", operational_time: "07:10", pax: 3 });
+    const plan = run([carlo, augusto], 244.3, 718.7);
+    expect(plan.proposed_groups[0].services.map((service) => service.operational_time)).toEqual(["07:00", "07:10"]);
+    expect(plan.proposed_groups[0].total_pax).toBe(7);
+  });
+
+  it("non unisce i ritiri se manca il margine di imbarco", () => {
+    const plan = run([felix, ferdinando], 65.5, 1_800);
+    expect(plan.proposed_groups.every((group) => group.services.length === 1)).toBe(true);
+  });
+});
