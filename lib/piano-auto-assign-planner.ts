@@ -1,3 +1,4 @@
+import { vehiclePoolForDriver, type ScheduledVehicleSlot } from "@/lib/piano-scheduled-vehicles";
 import type { AssignableMacroCategory } from "@/lib/piano-assignable-service";
 import type { AutoAssignPreviewServiceRow } from "@/lib/piano-assignable-preview";
 import {
@@ -17,6 +18,7 @@ export type PlannerDriver = {
   available_from?: string | null;
   available_to?: string | null;
   max_vehicle_capacity?: number | null;
+  vehicle_slots?: ScheduledVehicleSlot[];
 };
 
 export type PlannerVehicle = {
@@ -369,6 +371,58 @@ function createGroup(
   };
 }
 
+function departureRunKey(service: AutoAssignPreviewServiceRow) {
+  if (service.macro_category !== "PARTENZA") return null;
+  const parts = [service.ferry_company, service.port_departure, service.ferry_departure_time].map(normalize);
+  return parts.every(Boolean) ? JSON.stringify(parts) : null;
+}
+
+function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCapacity: number) {
+  const pickups = new Map<string, AutoAssignPreviewServiceRow[]>();
+  for (const service of candidates) {
+    const run = departureRunKey(service);
+    if (!run || !service.operational_time || !service.pickup_label || !service.destination_label || !service.pax) continue;
+    const key = JSON.stringify([run, service.operational_time, normalize(service.pickup_label), normalize(service.destination_label)]);
+    const pickup = pickups.get(key) ?? [];
+    pickup.push(service);
+    pickups.set(key, pickup);
+  }
+
+  const members = new Map<string, AutoAssignPreviewServiceRow[]>();
+  const included = new Set<string>();
+  for (const pickup of pickups.values()) {
+    if (pickup.length < 2) continue;
+    const pax = pickup.reduce((total, service) => total + (service.pax ?? 0), 0);
+    if (pax > maxCapacity) continue;
+    members.set(pickup[0].service_id, pickup);
+    for (const service of pickup.slice(1)) included.add(service.service_id);
+  }
+
+  const work = candidates.filter((service) => !included.has(service.service_id)).map((service) => {
+    const pickup = members.get(service.service_id);
+    return pickup ? { ...service, pax: pickup.reduce((total, row) => total + (row.pax ?? 0), 0),
+      confidence_score: Math.min(...pickup.map((row) => row.confidence_score)) } : service;
+  });
+  const runPositions = new Map<string, number[]>();
+  work.forEach((service, index) => {
+    const run = departureRunKey(service);
+    if (!run) return;
+    const positions = runPositions.get(run) ?? [];
+    positions.push(index);
+    runPositions.set(run, positions);
+  });
+  // Reserve the scarce larger vehicles before smaller pickups on the same sailing.
+  for (const positions of runPositions.values()) {
+    if (!positions.some((index) => members.has(work[index].service_id))) continue;
+    const ordered = positions.map((index) => work[index]).sort((a, b) =>
+      Number(members.has(b.service_id)) - Number(members.has(a.service_id)) ||
+      (members.has(a.service_id) ? (b.pax ?? 0) - (a.pax ?? 0) : 0)
+    );
+    positions.forEach((index, offset) => { work[index] = ordered[offset]; });
+  }
+  return { work, members };
+}
+
 export function planAutoAssignPreview(args: {
   services: AutoAssignPreviewServiceRow[];
   drivers: PlannerDriver[];
@@ -484,17 +538,21 @@ export function planAutoAssignPreview(args: {
 
   let nextGroupIndex = 1;
 
-  for (const service of candidates) {
+  const { work, members } = buildDepartureBatches(candidates, Math.max(0, ...vehicles.map((vehicle) => vehicle.capacity ?? 0)));
+  for (const service of work) {
     if (!service.operational_time || !service.pickup_label || !service.destination_label) {
       unplanned.push({ service_id: service.service_id, customer_name: service.customer_name, reason: "Servizio operativo incompleto" });
       continue;
     }
 
-    const currentMin = minutes(service.operational_time);
+    const serviceTime = service.operational_time;
+    const currentMin = minutes(serviceTime);
+    const poolForDriver = (driver: PlannerDriver) => vehiclePoolForDriver(vehicles, driver, drivers, serviceTime);
     const compatibleGroups = groups
       .map((group) => {
         const vehicle = vehicles.find((item) => item.id === group.vehicle_id);
-        if (!vehicle) return null;
+        const driver = drivers.find((item) => item.id === group.driver_id);
+        if (!vehicle || !driver || !driverAvailable(driver, serviceTime) || !poolForDriver(driver).includes(vehicle)) return null;
         const evaluation = evaluateAppend(group, service, vehicle);
         return evaluation.ok ? { group, evaluation } : null;
       })
@@ -524,16 +582,23 @@ export function planAutoAssignPreview(args: {
       continue;
     }
 
+    const poolForNewGroup = (driver: PlannerDriver) => {
+      const pool = poolForDriver(driver);
+      if (driver.vehicle_slots?.length) return pool;
+      const bound = driverVehicleBinding.get(driver.id);
+      if (bound) return pool.filter((vehicle) => vehicle.id === bound.id);
+      return pool.filter((vehicle) => {
+        if (!fixedVehicleMode) return true;
+        const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
+        return Boolean(key && !vehicleDriverBinding.has(key));
+      });
+    };
     const driver = [...drivers]
       .filter((item) => driverAvailable(item, service.operational_time!))
       .filter((item) => {
-        const bound = driverVehicleBinding.get(item.id);
-        if (bound) return (bound.capacity ?? 0) >= (service.pax ?? 0) && driverCanUseVehicle(item, bound);
-        if (!fixedVehicleMode) return true;
-        return vehicles.some((vehicle) => {
-          const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
-          return Boolean(key && !vehicleDriverBinding.has(key) && (vehicle.capacity ?? 0) >= (service.pax ?? 0) && driverCanUseVehicle(item, vehicle));
-        });
+        const pool = poolForNewGroup(item);
+        if (!fixedVehicleMode && !item.vehicle_slots?.length) return true;
+        return pool.some((vehicle) => (vehicle.capacity ?? 0) >= (service.pax ?? 0) && driverCanUseVehicle(item, vehicle));
       })
       .filter((item) => {
         const events = driverEvents.get(item.id) ?? [];
@@ -552,13 +617,7 @@ export function planAutoAssignPreview(args: {
     }
 
     const boundVehicle = driverVehicleBinding.get(driver.id) ?? null;
-    const availableVehiclePool = boundVehicle
-      ? [boundVehicle]
-      : vehicles.filter((vehicle) => {
-          if (!fixedVehicleMode) return true;
-          const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
-          return Boolean(key && !vehicleDriverBinding.has(key));
-        });
+    const availableVehiclePool = poolForNewGroup(driver);
     const vehicle = smallestVehicleAvailableAt(availableVehiclePool, service.pax ?? 0, vehicleTimeline, service.operational_time, driver);
     if (!vehicle) {
       const reason = boundVehicle
@@ -572,7 +631,7 @@ export function planAutoAssignPreview(args: {
     }
 
     const vehicleKey = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
-    if (fixedVehicleMode && vehicleKey) {
+    if (fixedVehicleMode && vehicleKey && !driver.vehicle_slots?.length) {
       const boundDriver = vehicleDriverBinding.get(vehicleKey);
       if (boundDriver && boundDriver !== driver.id) {
         conflicts.push({
@@ -622,18 +681,29 @@ export function planAutoAssignPreview(args: {
     a.start_time.localeCompare(b.start_time)
   );
 
+  for (const group of groups) {
+    group.services = group.services.flatMap((service) =>
+      members.get(service.service_id)?.map(proposedService) ?? [service]
+    );
+  }
+  const expandedUnplanned = unplanned.flatMap((item) =>
+    members.get(item.service_id)?.map((service) => ({ ...item, service_id: service.service_id, customer_name: service.customer_name })) ?? [item]
+  );
+  const expandedConflicts = conflicts.flatMap((item) =>
+    members.get(item.service_id)?.map((service) => ({ ...item, service_id: service.service_id })) ?? [item]
+  );
   const plannedServicesCount = groups.reduce((sum, group) => sum + group.services.length, 0);
   return {
     proposed_groups: groups,
-    unplanned,
-    conflicts,
+    unplanned: expandedUnplanned,
+    conflicts: expandedConflicts,
     protected_locked: protectedLocked,
     summary: {
       candidate_services: candidates.length,
       proposed_groups_count: groups.length,
       planned_services_count: plannedServicesCount,
-      unplanned_count: unplanned.length,
-      conflict_count: conflicts.length,
+      unplanned_count: expandedUnplanned.length,
+      conflict_count: expandedConflicts.length,
       locked_count: protectedLocked.length,
     },
   };

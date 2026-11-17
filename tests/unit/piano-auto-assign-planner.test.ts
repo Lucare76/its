@@ -50,6 +50,48 @@ function row(overrides: Partial<AutoAssignPreviewServiceRow>): AutoAssignPreview
 }
 
 describe("planAutoAssignPreview", () => {
+  it("respects scheduled vehicles and vehicle change windows", () => {
+    const result = planAutoAssignPreview({
+      availability_confirmed: true,
+      vehicles,
+      drivers: [
+        { id: "a", name: "Alberto", available_from: "05:00", available_to: "11:00", vehicle_slots: [{ vehicleId: "ducato", from: null, to: null }] },
+        { id: "l", name: "Leo", vehicle_slots: [
+          { vehicleId: "bus25", from: null, to: "12:00" },
+          { vehicleId: "vito", from: "12:00", to: null },
+        ] },
+      ],
+      services: [
+        row({ service_id: "morning", operational_time: "07:15", pax: 22 }),
+        row({ service_id: "afternoon", operational_time: "13:00", pax: 2 }),
+      ],
+    });
+    expect(result.proposed_groups.find((group) => group.services[0]?.service_id === "morning")?.vehicle_id).toBe("bus25");
+    expect(result.proposed_groups.find((group) => group.services[0]?.service_id === "afternoon")?.vehicle_id).toBe("vito");
+  });
+
+  it("plans a 22-passenger hotel pickup before smaller pickups on the same sailing", () => {
+    const sailing = { ferry_company: "Medmar", ferry_departure_time: "08:10", port_departure: "Ischia Porto", destination_label: "Ischia Porto" };
+    const hotelRows = [2, 2, 2, 2, 2, 4, 2, 6].map((pax, index) => row({
+      ...sailing, service_id: `cristallo-${index}`, operational_time: "07:15", pickup_label: "Cristallo", pax,
+    }));
+    const result = planAutoAssignPreview({
+      availability_confirmed: true,
+      drivers,
+      vehicles,
+      services: [
+        row({ ...sailing, service_id: "carlo-magno", operational_time: "07:00", pickup_label: "Carlo Magno" }),
+        ...hotelRows,
+      ],
+    });
+
+    const group = result.proposed_groups.find((item) => item.services.some((service) => service.service_id === "cristallo-0"));
+    expect(group?.services.map((service) => service.service_id)).toEqual(hotelRows.map((service) => service.service_id));
+    expect(group?.vehicle_id).toBe("bus25");
+    expect(group?.total_pax).toBe(22);
+    expect(result.summary.planned_services_count).toBe(9);
+  });
+
   it("groups two departures from the same hotel and same time window", () => {
     const result = planAutoAssignPreview({
       availability_confirmed: true,

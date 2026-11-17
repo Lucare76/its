@@ -13,6 +13,7 @@
  * architetturale (mai convertire un vincolo duro in penalita').
  */
 import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
+import { vehiclePoolForDriver, type ScheduledVehicleSlot } from "@/lib/piano-scheduled-vehicles";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import type { PlanItemAlternative } from "@/lib/server/assignment-engine/classify-plan";
 
@@ -23,6 +24,7 @@ export type RankableDriver = {
   available_from?: string | null;
   available_to?: string | null;
   max_vehicle_capacity?: number | null;
+  vehicle_slots?: ScheduledVehicleSlot[];
 };
 
 export type RankableVehicle = {
@@ -78,7 +80,7 @@ export function rankCandidatesForService(args: {
     );
     if (!availability.allowed) continue;
 
-    const vehicleForDriver = eligibleVehicles.find((vehicle) => canDriverUseVehicle(driver, vehicle).allowed) ?? null;
+    const vehicleForDriver = vehiclePoolForDriver(eligibleVehicles, driver, args.drivers, args.service.operational_time).find((vehicle) => canDriverUseVehicle(driver, vehicle).allowed) ?? null;
     if (!vehicleForDriver) continue;
     const eligibility = canDriverUseVehicle(driver, vehicleForDriver);
 
