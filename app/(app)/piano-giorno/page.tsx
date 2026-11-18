@@ -3555,6 +3555,14 @@ export default function PianoGiornoPage() {
             >
               {patchingVehicles ? "Aggiorno..." : "Assegna mezzi"}
             </button>
+            <button type="button" className="h-11 rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-800 hover:bg-blue-100 disabled:opacity-50" disabled={!data} aria-pressed={viewMode === "convocation"}
+              onClick={() => {
+                setSelectedIds(new Set());
+                setConvocationId("");
+                setViewMode("convocation");
+              }}>
+              Convocazione «TUTTI»
+            </button>
             <button
               onClick={() => void runAiPlan()}
               disabled={aiPlanning || autoAssigning || !token || !data}
@@ -3593,6 +3601,67 @@ export default function PianoGiornoPage() {
             </button>
           </div>
         </div>
+
+        {data && viewMode === "convocation" && (() => {
+          const convocations = buildArrivalConvocations(data.services, hotelMap);
+          const selected = convocations.find((entry) => entry.id === convocationId);
+          return (
+            <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
+              <section className="card p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-bold">Convocazione «TUTTI»</h2>
+                  <button type="button" className="btn-secondary text-xs" onClick={() => {
+                    setSelectedIds(new Set());
+                    setViewMode("plan");
+                  }}>Torna al piano</button>
+                </div>
+                <label className="mt-3 block text-sm">
+                  Fascia di arrivo
+                  <select className="input-saas mt-1 w-full" value={selected?.id ?? ""}
+                    onChange={(event) => {
+                      setConvocationId(event.target.value);
+                      setSelectedIds(new Set());
+                    }}>
+                    <option value="">Seleziona una fascia</option>
+                    {convocations.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.time} · {entry.port} · {entry.company}{entry.ferryTime ? ` ${entry.ferryTime}` : ""} · {entry.pax} pax
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selected && (
+                  <div className="mt-4">
+                    <p className="text-sm font-semibold">{selected.pax} passeggeri · {selected.loads.length} destinazioni</p>
+                    {selected.loads.map((load) => {
+                      const pending = load.serviceIds.filter((id) => !assignmentMap.has(id));
+                      const pendingPax = pending.reduce((count, id) => count + (serviceMap.get(id)?.pax ?? 0), 0);
+                      return (
+                        <div key={load.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2">
+                          <div className="text-sm">
+                            <p className="font-semibold">{load.label}</p>
+                            <p className="text-muted">{load.pax} pax · {pendingPax ? `${pendingPax} posti da abbinare` : "Assegnato"}</p>
+                          </div>
+                          <button type="button" className="btn-secondary text-xs"
+                            disabled={!pending.length}
+                            onClick={() => setSelectedIds(new Set(pending))}>
+                            Prepara giro
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+              <section className="card p-4">
+                <TripBuilder key={date} convocation selectedIds={selectedIds} services={serviceMap} hotels={hotelMap}
+                  drivers={driverEntries} vehicles={data.vehicles} tripGroups={data.trip_groups}
+                  assignments={assignmentMap} token={token!} date={date} onRemove={() => setSelectedIds(new Set())}
+                  onClear={() => setSelectedIds(new Set())} onDone={reload} />
+              </section>
+            </div>
+          );
+        })()}
 
         {/* Barra superiore */}
         <div className="hidden">
@@ -3673,14 +3742,6 @@ export default function PianoGiornoPage() {
               className="btn-secondary text-xs"
             >
               {viewMode === "plan" ? "Strumenti manuali" : "Torna al piano"}
-            </button>
-            <button type="button" className="btn-secondary text-xs" aria-pressed={viewMode === "convocation"}
-              onClick={() => {
-                setSelectedIds(new Set());
-                setConvocationId("");
-                setViewMode("convocation");
-              }}>
-              Convocazione «TUTTI»
             </button>
             <button
               onClick={() => void runAiPlan()}
@@ -5085,61 +5146,6 @@ export default function PianoGiornoPage() {
             </div>
           </div>
         )}
-
-        {data && viewMode === "convocation" && (() => {
-          const convocations = buildArrivalConvocations(data.services, hotelMap);
-          const selected = convocations.find((entry) => entry.id === convocationId);
-          return (
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
-              <section className="card p-4">
-                <h2 className="font-bold">Convocazione «TUTTI»</h2>
-                <label className="mt-3 block text-sm">
-                  Fascia di arrivo
-                  <select className="input-saas mt-1 w-full" value={selected?.id ?? ""}
-                    onChange={(event) => {
-                      setConvocationId(event.target.value);
-                      setSelectedIds(new Set());
-                    }}>
-                    <option value="">Seleziona una fascia</option>
-                    {convocations.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.time} · {entry.port} · {entry.company}{entry.ferryTime ? ` ${entry.ferryTime}` : ""} · {entry.pax} pax
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {selected && (
-                  <div className="mt-4">
-                    <p className="text-sm font-semibold">{selected.pax} passeggeri · {selected.loads.length} destinazioni</p>
-                    {selected.loads.map((load) => {
-                      const pending = load.serviceIds.filter((id) => !assignmentMap.has(id));
-                      const pendingPax = pending.reduce((count, id) => count + (serviceMap.get(id)?.pax ?? 0), 0);
-                      return (
-                        <div key={load.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2">
-                          <div className="text-sm">
-                            <p className="font-semibold">{load.label}</p>
-                            <p className="text-muted">{load.pax} pax · {pendingPax ? `${pendingPax} posti da abbinare` : "Assegnato"}</p>
-                          </div>
-                          <button type="button" className="btn-secondary text-xs"
-                            disabled={!pending.length}
-                            onClick={() => setSelectedIds(new Set(pending))}>
-                            Prepara giro
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-              <section className="card p-4">
-                <TripBuilder key={date} convocation selectedIds={selectedIds} services={serviceMap} hotels={hotelMap}
-                  drivers={driverEntries} vehicles={data.vehicles} tripGroups={data.trip_groups}
-                  assignments={assignmentMap} token={token!} date={date} onRemove={() => setSelectedIds(new Set())}
-                  onClear={() => setSelectedIds(new Set())} onDone={reload} />
-              </section>
-            </div>
-          );
-        })()}
 
         {data && viewMode === "manual" && (
           <div className="grid grid-cols-[minmax(300px,1fr)_280px_minmax(280px,1fr)] gap-3 h-[calc(100vh-220px)] min-h-[500px]">
