@@ -1203,7 +1203,7 @@ export function buildRealGiroDiagnostics(args: {
     const assignableStopsInput = rows
       .filter((row) => row.assignable && !row.needs_review)
       .map(rowToSameStopService);
-    const stops = mergeMultiDropStops(mergeSameStops(assignableStopsInput));
+    const stops = mergeMultiDropStops(mergeSameStops(assignableStopsInput, { confirmedTrip: true }));
     const shuttlePairResult = detectShuttlePairs(stops, {
       enabledHotelNames: ["hotel terme president"],
       maxDeltaMinutes: 10,

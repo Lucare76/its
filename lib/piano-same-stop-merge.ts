@@ -115,13 +115,27 @@ function shouldStaySingle(service: ResolvedServiceForSameStop) {
 function canMerge(
   left: ResolvedServiceForSameStop,
   right: ResolvedServiceForSameStop,
-  tolerance: number
+  tolerance: number,
+  confirmedTrip: boolean,
 ) {
   if (shouldStaySingle(left) || shouldStaySingle(right)) return false;
   if (left.macro_category !== right.macro_category) return false;
   if (!timeCompatible(left, right, tolerance)) return false;
 
   if (left.macro_category === "ARRIVO") {
+    // A saved trip can carry several bookings for exactly the same stop even
+    // when the imported manifest omits the ferry departure time.
+    if (confirmedTrip &&
+        timeCompatible(left, right, 0) &&
+        sameRequiredField(left.pickup_label, right.pickup_label) &&
+        sameRequiredField(left.destination_label, right.destination_label) &&
+        sameRequiredField(left.ferry_company, right.ferry_company) &&
+        normalize(left.ferry_departure_time) === normalize(right.ferry_departure_time) &&
+        normalize(left.ferry_arrival_time) === normalize(right.ferry_arrival_time) &&
+        normalize(left.port_arrival) === normalize(right.port_arrival)) {
+      return true;
+    }
+
     return sameRequiredField(left.ferry_company, right.ferry_company)
       && sameRequiredField(left.ferry_departure_time, right.ferry_departure_time)
       && sameRequiredField(left.port_arrival, right.port_arrival)
@@ -268,6 +282,7 @@ export function mergeSameStops(
   options?: {
     maxVehicleCapacity?: number;
     timeToleranceMinutes?: number;
+    confirmedTrip?: boolean;
   }
 ): MergedStop[] {
   const tolerance = options?.timeToleranceMinutes ?? 15;
@@ -283,7 +298,7 @@ export function mergeSameStops(
       continue;
     }
 
-    const bucket = buckets.find((candidate) => canMerge(candidate.anchor, service, tolerance));
+    const bucket = buckets.find((candidate) => canMerge(candidate.anchor, service, tolerance, options?.confirmedTrip === true));
     if (bucket) {
       bucket.services.push(service);
       continue;
