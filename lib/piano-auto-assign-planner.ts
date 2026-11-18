@@ -425,7 +425,7 @@ function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCap
       const anchors = new Map<string, AutoAssignPreviewServiceRow>();
       const ties = new Map<string, number[]>();
       ordered.forEach((row, index) => {
-        const key = JSON.stringify([row.operational_time, normalize(row.pickup_zone)]);
+        const key = row.operational_time ?? "";
         if (members.has(row.service_id)) {
           if (!anchors.has(key)) anchors.set(key, row);
         } else {
@@ -437,8 +437,11 @@ function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCap
       for (const [key, indexes] of ties) {
         const anchor = anchors.get(key);
         if (!anchor || indexes.length < 2) continue;
-        const distance = (row: AutoAssignPreviewServiceRow) =>
-          routing(anchor.service_id, row.service_id)?.betweenSeconds ?? Number.MAX_VALUE;
+        const distance = (row: AutoAssignPreviewServiceRow) => {
+          const leg = routing(anchor.service_id, row.service_id);
+          return leg && !leg.nextPickupFixed && (leg.sameMunicipality ?? sameText(anchor.pickup_zone, row.pickup_zone))
+            ? leg.betweenSeconds : Number.MAX_VALUE;
+        };
         const stops = indexes.map((index) => ordered[index]).sort((a, b) => distance(a) - distance(b));
         indexes.forEach((index, offset) => { ordered[index] = stops[offset]; });
       }
@@ -596,7 +599,8 @@ export function planAutoAssignPreview(args: {
             first: minutes(last.operational_time),
             nominal: currentMin,
             sailing: minutes(service.ferry_departure_time),
-            mayShift: currentMin === minutes(previous.operational_time) && sameText(previous.pickup_zone, service.pickup_zone),
+            mayShift: !leg.nextPickupFixed && currentMin === minutes(previous.operational_time) &&
+              (leg.sameMunicipality ?? sameText(previous.pickup_zone, service.pickup_zone)),
             maxShift: roadMission ? 15 : 10,
             firstPax: last.pax ?? 0,
             secondPax: service.pax ?? 0,

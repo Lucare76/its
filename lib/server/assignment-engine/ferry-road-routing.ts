@@ -2,14 +2,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AutoAssignPreviewServiceRow } from "@/lib/piano-assignable-preview";
 import type { FerryRoadRouting } from "@/lib/piano-ferry-road-pickup";
 
-type ServicePlaces = { id: string; origin_place_id?: unknown; destination_place_id?: unknown; hotel_id?: string | null };
+type ServicePlaces = { id: string; origin_place_id?: unknown; destination_place_id?: unknown; hotel_id?: string | null; notes?: string | null };
 
 export async function loadFerryRoadRouting(
   admin: SupabaseClient,
   tenantId: string,
   rows: AutoAssignPreviewServiceRow[],
   services: ServicePlaces[],
-  hotels: Array<{ id: string; lat: number | null; lng: number | null }>,
+  hotels: Array<{ id: string; lat: number | null; lng: number | null; city?: string | null }>,
 ): Promise<FerryRoadRouting> {
   const unavailable = () => null;
   const departures = new Set(rows.filter((row) =>
@@ -22,7 +22,7 @@ export async function loadFerryRoadRouting(
   ))];
   if (!placeIds.length || placeIds.length > 100) return unavailable;
 
-  const { data, error } = await admin.from("places").select("id, lat, lng, place_type")
+  const { data, error } = await admin.from("places").select("id, lat, lng, place_type, city")
     .eq("tenant_id", tenantId).eq("active", true).in("id", placeIds);
   if (error || !data) return unavailable;
   const places = new Map(data.map((place) => [place.id, place]));
@@ -35,13 +35,26 @@ export async function loadFerryRoadRouting(
     if (!indexes.has(key)) indexes.set(key, indexes.size);
     return indexes.get(key)!;
   };
-  const points = new Map<string, { pickup: number; port: number }>();
+  const fixedPickupKey = (row: AutoAssignPreviewServiceRow) =>
+    JSON.stringify([row.pickup_label, row.operational_time, row.port_departure, row.ferry_departure_time]);
+  const notesById = new Map(candidates.map((service) => [service.id, service.notes ?? ""]));
+  const fixedPickups = new Set(rows.filter((row) =>
+    /\b(?:orari[oa] fiss[oa]|orari[oa] tassativ[oa]|ritiro tassativo|pickup fisso|non (?:spostare|posticipare|anticipare))\b/i.test(notesById.get(row.service_id) ?? "")
+  ).map(fixedPickupKey));
+  const rowById = new Map(rows.map((row) => [row.service_id, row]));
+  const points = new Map<string, { pickup: number; port: number; city: string; fixed: boolean }>();
   for (const service of candidates) {
     const destination = places.get(service.destination_place_id);
     if (!destination || !["port", "porto"].includes(destination.place_type)) continue;
     const port = register(destination);
-    const pickup = register(places.get(service.origin_place_id) ?? hotelsById.get(service.hotel_id ?? ""));
-    if (pickup !== null && port !== null && pickup !== port) points.set(service.id, { pickup, port });
+    const origin = places.get(service.origin_place_id);
+    const hotel = hotelsById.get(service.hotel_id ?? "");
+    const pickup = register(origin ?? hotel);
+    const city = String(origin?.city || hotel?.city || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLowerCase();
+    const row = rowById.get(service.id);
+    if (pickup !== null && port !== null && pickup !== port && row) {
+      points.set(service.id, { pickup, port, city, fixed: fixedPickups.has(fixedPickupKey(row)) });
+    }
   }
   if (points.size < 2 || indexes.size > 50) return unavailable;
 
@@ -62,7 +75,7 @@ export async function loadFerryRoadRouting(
       const betweenSeconds = durations[previous.pickup]?.[next.pickup];
       const toPortSeconds = durations[next.pickup]?.[next.port];
       return typeof betweenSeconds === "number" && typeof toPortSeconds === "number"
-        ? { betweenSeconds, toPortSeconds }
+        ? { betweenSeconds, toPortSeconds, sameMunicipality: Boolean(previous.city && previous.city === next.city), nextPickupFixed: next.fixed }
         : null;
     };
   } catch {

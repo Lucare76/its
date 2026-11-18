@@ -1,7 +1,12 @@
 export const FERRY_PICKUP_DWELL_MINUTES = 5;
 const PORT_LEAD_MINUTES = 15;
 
-export type FerryRoadLeg = { betweenSeconds: number; toPortSeconds: number };
+export type FerryRoadLeg = {
+  betweenSeconds: number;
+  toPortSeconds: number;
+  sameMunicipality?: boolean;
+  nextPickupFixed?: boolean;
+};
 export type FerryRoadRouting = (previousServiceId: string, serviceId: string) => FerryRoadLeg | null;
 
 export function scheduleFerryPickup(input: {

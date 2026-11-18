@@ -412,6 +412,19 @@ describe("ritiri stradali della stessa partenza", () => {
     expect(group.warnings).toContain("Giro con più hotel da verificare");
   });
 
+  it("sposta orari uguali in zone diverse solo nello stesso comune e se il ritiro è flessibile", () => {
+    const plan = (sameMunicipality: boolean, nextPickupFixed: boolean) => planAutoAssignPreview({
+      availability_confirmed: true,
+      drivers: [{ id: "driver", name: "Autista", available_from: "06:00", available_to: "09:00" }],
+      vehicles: [vehicles[0]],
+      services: [felix, { ...ferdinando, pickup_zone: "Ischia Porto" }],
+      ferryRoadRouting: () => ({ betweenSeconds: 65.5, toPortSeconds: 467.5, sameMunicipality, nextPickupFixed }),
+    });
+    expect(plan(true, false).proposed_groups[0].services.map((service) => service.operational_time)).toEqual(["07:20", "07:26"]);
+    expect(plan(false, false).proposed_groups.every((group) => group.services.length === 1)).toBe(true);
+    expect(plan(true, true).proposed_groups.every((group) => group.services.length === 1)).toBe(true);
+  });
+
   it("non unisce i ritiri se manca il margine di imbarco", () => {
     const plan = run([felix, ferdinando], 65.5, 1_800);
     expect(plan.proposed_groups.every((group) => group.services.length === 1)).toBe(true);
