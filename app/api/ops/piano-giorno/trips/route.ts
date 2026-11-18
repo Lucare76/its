@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
       vehicle_id?: string | null;
       vehicle_capacity?: number | null;
       notes?: string | null;
+      dry_run?: boolean;
       // update_trip / delete_trip / move_services
       group_id?: string;
       // move_services
@@ -172,6 +173,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: vehicleConflict.error }, { status: vehicleConflict.status ?? 409 });
       }
       const warnings = [...validation.warnings, ...vehicleConflict.warnings];
+
+      if (body.dry_run === true) {
+        return NextResponse.json({ ok: true, dry_run: true, warnings });
+      }
 
       // 1. Crea trip_group
       const { data: group, error: groupErr } = await auth.admin

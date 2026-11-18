@@ -771,7 +771,7 @@ async function tripAction(token: string, body: Record<string, unknown>) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
-  return (await res.json()) as { ok: boolean; group_id?: string; error?: string };
+  return (await res.json()) as { ok: boolean; group_id?: string; error?: string; warnings?: string[] };
 }
 
 // ─── Driver Timeline ──────────────────────────────────────────────────────────
@@ -1297,6 +1297,8 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [verification, setVerification] = useState<{ key: string; warnings: string[] } | null>(null);
+  const tripKey = JSON.stringify([date, [...selectedIds], selectedProfileId, vehicleId]);
 
   const selectedList = useMemo(() => [...selectedIds].map((id) => services.get(id)).filter(Boolean) as Service[], [selectedIds, services]);
   const totalPax = selectedList.reduce((n, s) => n + s.pax, 0);
@@ -1319,13 +1321,16 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
     return groupIds.length > 0 ? "close" : "ok";
   }, [driverBusy]);
 
-  const confirm = async () => {
-    if (!selectedIds.size || !selectedProfileId || (convocation && (!selectedVehicle?.capacity || overbooking > 0))) return;
-    setSaving(true); setErr(null);
+  const confirm = async (dryRun = false) => {
+    if (!selectedIds.size || !selectedProfileId || (convocation && (!selectedVehicle?.capacity || (!dryRun && overbooking > 0)))) return;
+    setSaving(true);
+    setErr(null);
+    setVerification(null);
     const vehicle = vehicles.find((v) => v.id === vehicleId);
     const selectedDriver = drivers.find((d) => d.profileId === selectedProfileId);
     const res = await tripAction(token, {
       action: "create_trip",
+      dry_run: dryRun,
       date,
       service_ids: [...selectedIds],
       driver_user_id: selectedDriver?.userId ?? null,
@@ -1336,7 +1341,11 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
       notes: notes || null,
     });
     setSaving(false);
-    if (!res.ok) { setErr(res.error ?? "Errore salvataggio."); return; }
+    if (!res.ok) { setErr(res.error ?? "Errore verifica o salvataggio del giro."); return; }
+    if (dryRun) {
+      setVerification({ key: tripKey, warnings: res.warnings ?? [] });
+      return;
+    }
     onClear();
     onDone();
   };
@@ -1367,7 +1376,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
               <p className="text-[10px] text-slate-500">{hotels.get(svc.hotel_id ?? "")?.name ?? "—"} · {serviceDisplayTime(svc)}</p>
             </div>
             <span className="text-[10px] font-semibold text-slate-600 shrink-0">{svc.pax} px</span>
-            <button onClick={() => onRemove(svc.id)} className="text-slate-300 hover:text-red-500 text-xs shrink-0">✕</button>
+            <button type="button" onClick={() => onRemove(svc.id)} aria-label={`Togli ${customerName(svc)} da questo giro`} className="text-slate-500 hover:text-red-500 text-xs shrink-0">✕</button>
           </div>
         ))}
       </div>
@@ -1435,7 +1444,20 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
         />
       </label>
 
-      {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
+      {err && <p role="alert" className="text-xs text-red-600 mb-2">{err}</p>}
+      {convocation && verification?.key === tripKey && (
+        <div role="status" className="mb-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-800">
+          Controlli superati. Nessun giro salvato.
+          {verification.warnings.length > 0 && <ul className="mt-1 list-inside list-disc">
+            {verification.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+          </ul>}
+        </div>
+      )}
+      {convocation && <button type="button" onClick={() => void confirm(true)}
+        disabled={saving || !selectedProfileId || !selectedVehicle?.capacity}
+        className="btn-secondary mb-2 w-full text-sm disabled:opacity-50">
+        Verifica senza salvare
+      </button>}
 
       <button
         onClick={() => void confirm()}
@@ -3654,9 +3676,17 @@ export default function PianoGiornoPage() {
                 )}
               </section>
               <section className="card p-4">
+                {selectedIds.size > 0 && <p className="mb-3 text-xs text-slate-600">
+                  Per usare più mezzi, togli da questo giro le prenotazioni da caricare sul prossimo. Dopo aver confermato, riapri la destinazione per preparare il giro con i posti rimasti.
+                </p>}
                 <TripBuilder key={date} convocation selectedIds={selectedIds} services={serviceMap} hotels={hotelMap}
                   drivers={driverEntries} vehicles={data.vehicles} tripGroups={data.trip_groups}
-                  assignments={assignmentMap} token={token!} date={date} onRemove={() => setSelectedIds(new Set())}
+                  assignments={assignmentMap} token={token!} date={date} onRemove={(id) => {
+                    const bookingGroupId = serviceMap.get(id)?.booking_group_id;
+                    setSelectedIds((ids) => new Set([...ids].filter((selectedId) =>
+                      selectedId !== id && (!bookingGroupId || serviceMap.get(selectedId)?.booking_group_id !== bookingGroupId)
+                    )));
+                  }}
                   onClear={() => setSelectedIds(new Set())} onDone={reload} />
               </section>
             </div>
