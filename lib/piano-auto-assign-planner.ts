@@ -11,6 +11,8 @@ import { buildVehicleDailyBinding } from "@/lib/piano-vehicle-daily-binding";
 import { canDriverUseVehicle } from "@/lib/piano-driver-vehicle-eligibility";
 import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 
+import { scheduleFerryPickup, type FerryRoadRouting } from "@/lib/piano-ferry-road-pickup";
+
 export type PlannerDriver = {
   id: string;
   name: string;
@@ -94,6 +96,7 @@ type DriverEvent = {
   time: number;
   zone: string | null;
   driverId: string;
+  missionId?: string;
 };
 
 type CandidateEvaluation = {
@@ -377,7 +380,7 @@ function departureRunKey(service: AutoAssignPreviewServiceRow) {
   return parts.every(Boolean) ? JSON.stringify(parts) : null;
 }
 
-function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCapacity: number) {
+function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCapacity: number, routing?: FerryRoadRouting) {
   const pickups = new Map<string, AutoAssignPreviewServiceRow[]>();
   for (const service of candidates) {
     const run = departureRunKey(service);
@@ -418,6 +421,31 @@ function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCap
       Number(members.has(b.service_id)) - Number(members.has(a.service_id)) ||
       (members.has(a.service_id) ? (b.pax ?? 0) - (a.pax ?? 0) : 0)
     );
+    if (routing) {
+      const anchors = new Map<string, AutoAssignPreviewServiceRow>();
+      const ties = new Map<string, number[]>();
+      ordered.forEach((row, index) => {
+        const key = row.operational_time ?? "";
+        if (members.has(row.service_id)) {
+          if (!anchors.has(key)) anchors.set(key, row);
+        } else {
+          const indexes = ties.get(key) ?? [];
+          indexes.push(index);
+          ties.set(key, indexes);
+        }
+      });
+      for (const [key, indexes] of ties) {
+        const anchor = anchors.get(key);
+        if (!anchor || indexes.length < 2) continue;
+        const distance = (row: AutoAssignPreviewServiceRow) => {
+          const leg = routing(anchor.service_id, row.service_id);
+          return leg && !leg.nextPickupFixed && (leg.sameMunicipality ?? sameText(anchor.pickup_zone, row.pickup_zone))
+            ? leg.betweenSeconds : Number.MAX_VALUE;
+        };
+        const stops = indexes.map((index) => ordered[index]).sort((a, b) => distance(a) - distance(b));
+        indexes.forEach((index, offset) => { ordered[index] = stops[offset]; });
+      }
+    }
     positions.forEach((index, offset) => { work[index] = ordered[offset]; });
   }
   return { work, members };
@@ -429,6 +457,7 @@ export function planAutoAssignPreview(args: {
   vehicles: PlannerVehicle[];
   availability_confirmed: boolean;
   locked_assignments?: PlannerLockedAssignment[];
+  ferryRoadRouting?: FerryRoadRouting;
 }): PlannerResult {
   const protectedLocked = args.services
     .filter((service) => service.is_locked)
@@ -516,7 +545,7 @@ export function planAutoAssignPreview(args: {
     const vehicleKey = vehicleResourceKey({ id: matched.id, label: matched.label }).key;
     if (vehicleKey) vehicleDriverBinding.set(vehicleKey, driverId);
   }
-  const vehicleTimeline = new Map<string, VehicleTimelineEntry[]>();
+  const vehicleTimeline = new Map<string, Array<VehicleTimelineEntry & { missionId?: string }>>();
   for (const locked of protectedLocked) {
     if (!locked.vehicle_label || !locked.operational_time) continue;
     const keyInfo = vehicleResourceKey({ id: locked.vehicle_id, label: locked.vehicle_label });
@@ -538,7 +567,9 @@ export function planAutoAssignPreview(args: {
 
   let nextGroupIndex = 1;
 
-  const { work, members } = buildDepartureBatches(candidates, Math.max(0, ...vehicles.map((vehicle) => vehicle.capacity ?? 0)));
+  const { work, members } = buildDepartureBatches(candidates, Math.max(0, ...vehicles.map((vehicle) => vehicle.capacity ?? 0)), args.ferryRoadRouting);
+  const workById = new Map(work.map((service) => [service.service_id, service]));
+  const roadMissions = new Set<string>();
   for (const service of work) {
     if (!service.operational_time || !service.pickup_label || !service.destination_label) {
       unplanned.push({ service_id: service.service_id, customer_name: service.customer_name, reason: "Servizio operativo incompleto" });
@@ -553,25 +584,86 @@ export function planAutoAssignPreview(args: {
         const vehicle = vehicles.find((item) => item.id === group.vehicle_id);
         const driver = drivers.find((item) => item.id === group.driver_id);
         if (!vehicle || !driver || !driverAvailable(driver, serviceTime) || !poolForDriver(driver).includes(vehicle)) return null;
+        const roadMission = roadMissions.has(group.temp_group_id);
+        const last = group.services.at(-1);
+        const previous = last ? workById.get(last.service_id) : undefined;
+        const run = departureRunKey(service);
+        if (args.ferryRoadRouting && previous?.macro_category === "PARTENZA" && service.macro_category === "PARTENZA" &&
+            !sameText(previous.pickup_label, service.pickup_label)) {
+          if (!run || departureRunKey(previous) !== run || (!roadMission && group.services.length !== 1) ||
+              group.services.length >= 3 || !last?.operational_time || !service.ferry_departure_time ||
+              !driverCanUseVehicle(driver, vehicle) || group.total_pax + (service.pax ?? 0) > (vehicle.capacity ?? 0)) return null;
+          const leg = args.ferryRoadRouting(previous.service_id, service.service_id);
+          if (!leg) return null;
+          const schedule = scheduleFerryPickup({
+            first: minutes(last.operational_time),
+            nominal: currentMin,
+            sailing: minutes(service.ferry_departure_time),
+            mayShift: !leg.nextPickupFixed && currentMin === minutes(previous.operational_time) &&
+              (leg.sameMunicipality ?? sameText(previous.pickup_zone, service.pickup_zone)),
+            maxShift: roadMission ? 15 : 10,
+            firstPax: last.pax ?? 0,
+            secondPax: service.pax ?? 0,
+            leg,
+          });
+          if (!schedule) return null;
+          const pickup = formatMinutes(schedule.pickup);
+          const arrival = formatMinutes(schedule.portArrival);
+          const reserveEnd = Math.max(schedule.portArrival, schedule.pickup + 30);
+          if (!driverAvailable(driver, group.start_time, arrival) ||
+              !vehiclePoolForDriver(vehicles, driver, drivers, pickup).includes(vehicle) ||
+              !vehiclePoolForDriver(vehicles, driver, drivers, arrival).includes(vehicle)) return null;
+          const start = minutes(group.start_time);
+          const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
+          const entries = key ? vehicleTimeline.get(key) ?? [] : [];
+          if (entries.some((entry) =>
+            entry.missionId !== group.temp_group_id &&
+            entry.start_min < reserveEnd && entry.end_min > start
+          )) return null;
+          if ((driverEvents.get(driver.id) ?? []).some((event) => event.missionId !== group.temp_group_id &&
+              event.time >= start - 30 && event.time < reserveEnd)) return null;
+
+          const evaluation: CandidateEvaluation = {
+            ok: true,
+            score: roadMission ? 181 : 180,
+            buffer: schedule.pickup - start,
+            warnings: ["Giro con più hotel da verificare"],
+            explanation: [
+              `Ritiri proposti: ${group.services.map((stop) => `${stop.operational_time} ${stop.pickup_label}`).join(", ")}, ${pickup} ${service.pickup_label}. Arrivo stimato al porto ${arrival}`,
+              ...(schedule.pickup !== currentMin ? [`Aggiornare il ritiro di ${service.pickup_label} dalle ${serviceTime} alle ${pickup} nella scheda servizio prima di assegnare`] : []),
+            ],
+          };
+          return { group, evaluation, pickup, reserveEnd };
+        }
+        if (roadMission) return null;
         const evaluation = evaluateAppend(group, service, vehicle);
-        return evaluation.ok ? { group, evaluation } : null;
+        return evaluation.ok ? { group, evaluation, pickup: serviceTime, reserveEnd: null } : null;
       })
-      .filter((value): value is { group: PlannerProposedGroup; evaluation: CandidateEvaluation } => Boolean(value))
+      .filter((value): value is NonNullable<typeof value> => value !== null)
       .sort((a, b) => b.evaluation.score - a.evaluation.score);
 
     const bestGroup = compatibleGroups[0];
     if (bestGroup && bestGroup.evaluation.score >= 80) {
-      updateGroup(bestGroup.group, service, bestGroup.evaluation);
+      if (bestGroup.reserveEnd !== null) {
+        bestGroup.group.explanation = bestGroup.group.explanation.filter((line) => !line.startsWith("Ritiri proposti:") && !line.startsWith("Capienza mezzo "));
+      }
+      updateGroup(bestGroup.group, { ...service, operational_time: bestGroup.pickup }, bestGroup.evaluation);
+      const pickupMin = minutes(bestGroup.pickup);
+      if (bestGroup.reserveEnd !== null) {
+        roadMissions.add(bestGroup.group.temp_group_id);
+        bestGroup.group.explanation.push(`Capienza mezzo ${vehicles.find((vehicle) => vehicle.id === bestGroup.group.vehicle_id)?.capacity ?? "?"}, pax totale ${bestGroup.group.total_pax}`);
+      }
       driverEvents.set(bestGroup.group.driver_id, [
         ...(driverEvents.get(bestGroup.group.driver_id) ?? []),
-        { time: currentMin, zone: serviceEndZone(service), driverId: bestGroup.group.driver_id },
+        { time: Math.max(pickupMin, (bestGroup.reserveEnd ?? pickupMin + 30) - 30), zone: serviceEndZone(service), driverId: bestGroup.group.driver_id, missionId: bestGroup.group.temp_group_id },
       ]);
       const keyInfo = vehicleResourceKey({ id: bestGroup.group.vehicle_id, label: bestGroup.group.vehicle_label });
       if (keyInfo.key) vehicleTimeline.set(keyInfo.key, [
         ...(vehicleTimeline.get(keyInfo.key) ?? []),
         {
-          start_min: currentMin,
-          end_min: currentMin + 30,
+          missionId: bestGroup.group.temp_group_id,
+          start_min: pickupMin,
+          end_min: bestGroup.reserveEnd ?? pickupMin + 30,
           driver_id: bestGroup.group.driver_id,
           driver_name: bestGroup.group.driver_name,
           vehicle_id: bestGroup.group.vehicle_id,
@@ -659,12 +751,13 @@ export function planAutoAssignPreview(args: {
     groups.push(group);
     driverEvents.set(driver.id, [
       ...(driverEvents.get(driver.id) ?? []),
-      { time: currentMin, zone: serviceEndZone(service), driverId: driver.id },
+      { time: currentMin, zone: serviceEndZone(service), driverId: driver.id, missionId: group.temp_group_id },
     ]);
     const keyInfo = vehicleResourceKey({ id: vehicle.id, label: vehicle.label });
     if (keyInfo.key) vehicleTimeline.set(keyInfo.key, [
       ...(vehicleTimeline.get(keyInfo.key) ?? []),
       {
+        missionId: group.temp_group_id,
         start_min: currentMin,
         end_min: currentMin + 30,
         driver_id: driver.id,
@@ -683,7 +776,10 @@ export function planAutoAssignPreview(args: {
 
   for (const group of groups) {
     group.services = group.services.flatMap((service) =>
-      members.get(service.service_id)?.map(proposedService) ?? [service]
+      members.get(service.service_id)?.map((member) => ({
+        ...proposedService(member),
+        operational_time: service.operational_time,
+      })) ?? [service]
     );
   }
   const expandedUnplanned = unplanned.flatMap((item) =>

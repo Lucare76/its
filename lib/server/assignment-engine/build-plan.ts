@@ -27,6 +27,7 @@ import {
   type AutoAssignPreviewService,
   type AutoAssignPreviewTripGroup,
 } from "@/lib/piano-assignable-preview";
+import { loadFerryRoadRouting } from "@/lib/server/assignment-engine/ferry-road-routing";
 import { planAutoAssignPreview } from "@/lib/piano-auto-assign-planner";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { auditLog } from "@/lib/server/ops-audit";
@@ -211,7 +212,11 @@ export async function buildAndPersistAssignmentPlan(
       vehicle_label: assignment.vehicle_label ?? null,
     }));
 
+  const ferryRoadRouting = process.env.VERCEL_ENV === "preview" && availabilityConfirmationResult.data?.confirmed === true
+    ? await loadFerryRoadRouting(admin, args.tenantId, preview.services, services, hotelsResult.data ?? [])
+    : undefined;
   const planning = planAutoAssignPreview({
+    ferryRoadRouting,
     services: preview.services,
     availability_confirmed: availabilityConfirmationResult.data?.confirmed === true,
     drivers: activeDrivers,

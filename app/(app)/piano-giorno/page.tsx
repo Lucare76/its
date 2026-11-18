@@ -11,6 +11,7 @@ import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
 import type { PianoDisplayUnit, PianoBookingGroupUnit } from "@/lib/piano-booking-group-display";
 import { deriveControlliStatus } from "@/lib/piano-controlli-status";
+import { buildArrivalConvocations } from "@/lib/piano-arrival-convocations";
 import { todayIsoDate } from "@/lib/utils";
 
 // ─── Tipi ─────────────────────────────────────────────────────────────────────
@@ -770,7 +771,7 @@ async function tripAction(token: string, body: Record<string, unknown>) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
-  return (await res.json()) as { ok: boolean; group_id?: string; error?: string };
+  return (await res.json()) as { ok: boolean; group_id?: string; error?: string; warnings?: string[] };
 }
 
 // ─── Driver Timeline ──────────────────────────────────────────────────────────
@@ -1290,12 +1291,14 @@ type BuilderProps = {
   onDone: () => void;
 };
 
-function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGroups, assignments, token, date, onRemove, onClear, onDone }: BuilderProps) {
+function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGroups, assignments, token, date, onRemove, onClear, onDone, convocation = false }: BuilderProps & { convocation?: boolean }) {
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [verification, setVerification] = useState<{ key: string; warnings: string[] } | null>(null);
+  const tripKey = JSON.stringify([date, [...selectedIds], selectedProfileId, vehicleId]);
 
   const selectedList = useMemo(() => [...selectedIds].map((id) => services.get(id)).filter(Boolean) as Service[], [selectedIds, services]);
   const totalPax = selectedList.reduce((n, s) => n + s.pax, 0);
@@ -1318,13 +1321,16 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
     return groupIds.length > 0 ? "close" : "ok";
   }, [driverBusy]);
 
-  const confirm = async () => {
-    if (!selectedIds.size || !selectedProfileId) return;
-    setSaving(true); setErr(null);
+  const confirm = async (dryRun = false) => {
+    if (!selectedIds.size || !selectedProfileId || (convocation && (!selectedVehicle?.capacity || (!dryRun && overbooking > 0)))) return;
+    setSaving(true);
+    setErr(null);
+    setVerification(null);
     const vehicle = vehicles.find((v) => v.id === vehicleId);
     const selectedDriver = drivers.find((d) => d.profileId === selectedProfileId);
     const res = await tripAction(token, {
       action: "create_trip",
+      dry_run: dryRun,
       date,
       service_ids: [...selectedIds],
       driver_user_id: selectedDriver?.userId ?? null,
@@ -1335,7 +1341,11 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
       notes: notes || null,
     });
     setSaving(false);
-    if (!res.ok) { setErr(res.error ?? "Errore salvataggio."); return; }
+    if (!res.ok) { setErr(res.error ?? "Errore verifica o salvataggio del giro."); return; }
+    if (dryRun) {
+      setVerification({ key: tripKey, warnings: res.warnings ?? [] });
+      return;
+    }
     onClear();
     onDone();
   };
@@ -1366,7 +1376,7 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
               <p className="text-[10px] text-slate-500">{hotels.get(svc.hotel_id ?? "")?.name ?? "—"} · {serviceDisplayTime(svc)}</p>
             </div>
             <span className="text-[10px] font-semibold text-slate-600 shrink-0">{svc.pax} px</span>
-            <button onClick={() => onRemove(svc.id)} className="text-slate-300 hover:text-red-500 text-xs shrink-0">✕</button>
+            <button type="button" onClick={() => onRemove(svc.id)} aria-label={`Togli ${customerName(svc)} da questo giro`} className="text-slate-500 hover:text-red-500 text-xs shrink-0">✕</button>
           </div>
         ))}
       </div>
@@ -1434,11 +1444,24 @@ function TripBuilder({ selectedIds, services, hotels, drivers, vehicles, tripGro
         />
       </label>
 
-      {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
+      {err && <p role="alert" className="text-xs text-red-600 mb-2">{err}</p>}
+      {convocation && verification?.key === tripKey && (
+        <div role="status" className="mb-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-800">
+          Controlli superati. Nessun giro salvato.
+          {verification.warnings.length > 0 && <ul className="mt-1 list-inside list-disc">
+            {verification.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+          </ul>}
+        </div>
+      )}
+      {convocation && <button type="button" onClick={() => void confirm(true)}
+        disabled={saving || !selectedProfileId || !selectedVehicle?.capacity}
+        className="btn-secondary mb-2 w-full text-sm disabled:opacity-50">
+        Verifica senza salvare
+      </button>}
 
       <button
         onClick={() => void confirm()}
-        disabled={saving || !selectedProfileId}
+        disabled={saving || !selectedProfileId || (convocation && (!selectedVehicle?.capacity || overbooking > 0))}
         className="btn-primary w-full text-sm disabled:opacity-50"
       >
         {saving ? "Salvataggio…" : "Conferma giro"}
@@ -2133,7 +2156,8 @@ export default function PianoGiornoPage() {
   const [showAutoModal, setShowAutoModal] = useState(false);
   const [showGeoPrecheckModal, setShowGeoPrecheckModal] = useState(false);
   const [pendingAutoMode, setPendingAutoMode] = useState<"unassigned_only" | "regenerate_all" | null>(null);
-  const [viewMode, setViewMode] = useState<"plan" | "manual">("plan");
+  const [viewMode, setViewMode] = useState<"plan" | "manual" | "convocation">("plan");
+  const [convocationId, setConvocationId] = useState("");
   const [planFilter, setPlanFilter] = useState<"all" | "issues" | "missing_driver" | "departures" | "arrivals">("all");
   const [planSearch, setPlanSearch] = useState("");
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
@@ -3553,6 +3577,14 @@ export default function PianoGiornoPage() {
             >
               {patchingVehicles ? "Aggiorno..." : "Assegna mezzi"}
             </button>
+            <button type="button" className="h-11 rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-800 hover:bg-blue-100 disabled:opacity-50" disabled={!data} aria-pressed={viewMode === "convocation"}
+              onClick={() => {
+                setSelectedIds(new Set());
+                setConvocationId("");
+                setViewMode("convocation");
+              }}>
+              Convocazione «TUTTI»
+            </button>
             <button
               onClick={() => void runAiPlan()}
               disabled={aiPlanning || autoAssigning || !token || !data}
@@ -3591,6 +3623,75 @@ export default function PianoGiornoPage() {
             </button>
           </div>
         </div>
+
+        {data && viewMode === "convocation" && (() => {
+          const convocations = buildArrivalConvocations(data.services, hotelMap);
+          const selected = convocations.find((entry) => entry.id === convocationId);
+          return (
+            <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
+              <section className="card p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-bold">Convocazione «TUTTI»</h2>
+                  <button type="button" className="btn-secondary text-xs" onClick={() => {
+                    setSelectedIds(new Set());
+                    setViewMode("plan");
+                  }}>Torna al piano</button>
+                </div>
+                <label className="mt-3 block text-sm">
+                  Fascia di arrivo
+                  <select className="input-saas mt-1 w-full" value={selected?.id ?? ""}
+                    onChange={(event) => {
+                      setConvocationId(event.target.value);
+                      setSelectedIds(new Set());
+                    }}>
+                    <option value="">Seleziona una fascia</option>
+                    {convocations.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.time} · {entry.port} · {entry.company}{entry.ferryTime ? ` ${entry.ferryTime}` : ""} · {entry.pax} pax
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selected && (
+                  <div className="mt-4">
+                    <p className="text-sm font-semibold">{selected.pax} passeggeri · {selected.loads.length} destinazioni</p>
+                    {selected.loads.map((load) => {
+                      const pending = load.serviceIds.filter((id) => !assignmentMap.has(id));
+                      const pendingPax = pending.reduce((count, id) => count + (serviceMap.get(id)?.pax ?? 0), 0);
+                      return (
+                        <div key={load.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2">
+                          <div className="text-sm">
+                            <p className="font-semibold">{load.label}</p>
+                            <p className="text-muted">{load.pax} pax · {pendingPax ? `${pendingPax} posti da abbinare` : "Assegnato"}</p>
+                          </div>
+                          <button type="button" className="btn-secondary text-xs"
+                            disabled={!pending.length}
+                            onClick={() => setSelectedIds(new Set(pending))}>
+                            Prepara giro
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+              <section className="card p-4">
+                {selectedIds.size > 0 && <p className="mb-3 text-xs text-slate-600">
+                  Per usare più mezzi, togli da questo giro le prenotazioni da caricare sul prossimo. Dopo aver confermato, riapri la destinazione per preparare il giro con i posti rimasti.
+                </p>}
+                <TripBuilder key={date} convocation selectedIds={selectedIds} services={serviceMap} hotels={hotelMap}
+                  drivers={driverEntries} vehicles={data.vehicles} tripGroups={data.trip_groups}
+                  assignments={assignmentMap} token={token!} date={date} onRemove={(id) => {
+                    const bookingGroupId = serviceMap.get(id)?.booking_group_id;
+                    setSelectedIds((ids) => new Set([...ids].filter((selectedId) =>
+                      selectedId !== id && (!bookingGroupId || serviceMap.get(selectedId)?.booking_group_id !== bookingGroupId)
+                    )));
+                  }}
+                  onClear={() => setSelectedIds(new Set())} onDone={reload} />
+              </section>
+            </div>
+          );
+        })()}
 
         {/* Barra superiore */}
         <div className="hidden">
@@ -3664,7 +3765,10 @@ export default function PianoGiornoPage() {
 
           <div className="flex gap-2 ml-auto">
             <button
-              onClick={() => setViewMode(viewMode === "plan" ? "manual" : "plan")}
+              onClick={() => {
+                if (viewMode === "convocation") setSelectedIds(new Set());
+                setViewMode(viewMode === "plan" ? "manual" : "plan");
+              }}
               className="btn-secondary text-xs"
             >
               {viewMode === "plan" ? "Strumenti manuali" : "Torna al piano"}

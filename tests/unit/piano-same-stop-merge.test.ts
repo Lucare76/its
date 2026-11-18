@@ -249,3 +249,26 @@ describe("mergeSameStops", () => {
     expect(buildSameStopMergeKey(resolved({ service_id: "review", assignable: false, needs_review: true }))).toBe("review|review");
   });
 });
+
+describe("same stop in a confirmed trip", () => {
+  const manifest = Array.from({ length: 7 }, (_, index) => ({
+    ...arrival({ service_id: `colella-${index}`, destination_label: "Colella", operational_time: "15:40" }),
+    ferry_departure_time: null,
+    ferry_arrival_time: null,
+  }));
+
+  it("treats seven bookings for the same hotel and pickup as a single stop", () => {
+    expect(mergeSameStops(manifest)).toHaveLength(7);
+    const stops = mergeSameStops(manifest, { confirmedTrip: true });
+    expect(stops).toHaveLength(1);
+    expect(stops[0]?.total_pax).toBe(14);
+  });
+
+  it("keeps distinct hotels and ferry times separate when route data is incomplete", () => {
+    expect(mergeSameStops([
+      manifest[0],
+      { ...manifest[1], destination_label: "President" },
+      { ...manifest[2], ferry_departure_time: "14:20" },
+    ], { confirmedTrip: true })).toHaveLength(3);
+  });
+});

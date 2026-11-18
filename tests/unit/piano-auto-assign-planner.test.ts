@@ -356,3 +356,77 @@ describe("planAutoAssignPreview", () => {
     expect(vehicleIntervalsOverlap({ start_min: 540, end_min: 570 }, { start_min: 560, end_min: 590 }, 20)).toBe(true);
   });
 });
+
+describe("ritiri stradali della stessa partenza", () => {
+  const sailing = {
+    ferry_company: "Medmar", ferry_departure_time: "08:10", port_departure: "Ischia Porto",
+    destination_label: "Ischia Porto", operational_time: "07:20", pickup_zone: "Ischia",
+  };
+  const felix = row({ ...sailing, service_id: "felix", pickup_label: "Felix" });
+  const ferdinando = row({ ...sailing, service_id: "ferdinando", pickup_label: "Re Ferdinando", pax: 4 });
+  const run = (services: AutoAssignPreviewServiceRow[], betweenSeconds: number, toPortSeconds: number) => planAutoAssignPreview({
+    availability_confirmed: true,
+    drivers: [{ id: "driver", name: "Autista", available_from: "06:00", available_to: "09:00" }],
+    vehicles: [vehicles[0]],
+    services,
+    ferryRoadRouting: () => ({ betweenSeconds, toPortSeconds }),
+  });
+
+  it("propone Re Ferdinando alle 07:26 e lascia il giro da verificare", () => {
+    const plan = run([felix, ferdinando], 65.5, 467.5);
+    expect(plan.proposed_groups[0].services.map((service) => service.operational_time)).toEqual(["07:20", "07:26"]);
+    expect(plan.proposed_groups[0].warnings).toContain("Giro con più hotel da verificare");
+  });
+
+  it("mantiene Augusto alle 07:10 se il percorso rientra nella finestra", () => {
+    const carlo = row({ ...sailing, service_id: "carlo", pickup_label: "Carlo Magno", operational_time: "07:00", pax: 4 });
+    const augusto = row({ ...sailing, service_id: "augusto", pickup_label: "Augusto", operational_time: "07:10", pax: 3 });
+    const plan = run([carlo, augusto], 244.3, 718.7);
+    expect(plan.proposed_groups[0].services.map((service) => service.operational_time)).toEqual(["07:00", "07:10"]);
+    expect(plan.proposed_groups[0].total_pax).toBe(7);
+  });
+
+  it("raggruppa Isola Verde, Felix e Re Ferdinando in un solo giro da 15 posti", () => {
+    const plan = planAutoAssignPreview({
+      availability_confirmed: true,
+      drivers: [{ id: "ilaria", name: "Ilaria", available_from: "07:20", available_to: "18:00" }],
+      vehicles: [vehicles[2]],
+      services: [
+        row({ ...sailing, service_id: "isola-1", pickup_label: "Isola Verde", pax: 5 }),
+        ferdinando,
+        row({ ...sailing, service_id: "isola-2", pickup_label: "Isola Verde", pax: 4 }),
+        felix,
+      ],
+      ferryRoadRouting: (from, to) => {
+        if (from === "isola-1") return { betweenSeconds: to === "felix" ? 120 : 180, toPortSeconds: 480 };
+        return from === "felix" && to === "ferdinando" ? { betweenSeconds: 65.5, toPortSeconds: 467.5 } : null;
+      },
+    });
+    expect(plan.proposed_groups).toHaveLength(1);
+    const group = plan.proposed_groups[0];
+    expect(group.total_pax).toBe(15);
+    expect(group.services.map(({ operational_time }) => operational_time)).toEqual(["07:20", "07:20", "07:27", "07:33"]);
+    expect(group.explanation.filter((line) => line.startsWith("Ritiri proposti:"))).toEqual([
+      "Ritiri proposti: 07:20 Isola Verde, 07:27 Felix, 07:33 Re Ferdinando. Arrivo stimato al porto 07:45",
+    ]);
+    expect(group.warnings).toContain("Giro con più hotel da verificare");
+  });
+
+  it("sposta orari uguali in zone diverse solo nello stesso comune e se il ritiro è flessibile", () => {
+    const plan = (sameMunicipality: boolean, nextPickupFixed: boolean) => planAutoAssignPreview({
+      availability_confirmed: true,
+      drivers: [{ id: "driver", name: "Autista", available_from: "06:00", available_to: "09:00" }],
+      vehicles: [vehicles[0]],
+      services: [felix, { ...ferdinando, pickup_zone: "Ischia Porto" }],
+      ferryRoadRouting: () => ({ betweenSeconds: 65.5, toPortSeconds: 467.5, sameMunicipality, nextPickupFixed }),
+    });
+    expect(plan(true, false).proposed_groups[0].services.map((service) => service.operational_time)).toEqual(["07:20", "07:26"]);
+    expect(plan(false, false).proposed_groups.every((group) => group.services.length === 1)).toBe(true);
+    expect(plan(true, true).proposed_groups.every((group) => group.services.length === 1)).toBe(true);
+  });
+
+  it("non unisce i ritiri se manca il margine di imbarco", () => {
+    const plan = run([felix, ferdinando], 65.5, 1_800);
+    expect(plan.proposed_groups.every((group) => group.services.length === 1)).toBe(true);
+  });
+});
