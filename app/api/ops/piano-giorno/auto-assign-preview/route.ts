@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
+import { loadCollectiveReservations } from "@/lib/server/collective-convocations";
 import { planAutoAssignPreview } from "@/lib/piano-auto-assign-planner";
 import {
   buildAutoAssignPreview,
@@ -228,7 +229,9 @@ async function handlePreview(request: NextRequest) {
         .filter((driver) => driver.user_id)
         .map((driver) => [driver.user_id!, driver.full_name])
     );
+    const collectiveReservations = await loadCollectiveReservations(auth.admin, tenantId, date);
     const planningPreview = planAutoAssignPreview({
+      collectiveReservations,
       services: preview.services,
       availability_confirmed: availabilityConfirmationResult.data?.confirmed === true,
       drivers: driverRegistry

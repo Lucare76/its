@@ -331,18 +331,24 @@ export type Database = {
           agency_review_status: string
           agency_reviewed_at: string | null
           created_at: string
+          date_basis: string
           id: string
           invoice_data: Json
+          invoice_number: string
           paid_at: string | null
           paid_by_user_id: string | null
+          paid_cents: number
           payment_note: string | null
           period_from: string
           period_to: string
+          review_draft: Json
+          review_draft_updated_at: string | null
           sent_at: string | null
           services_count: number
           status: string
           tenant_id: string
           total_cents: number
+          waived_cents: number
         }
         Insert: {
           agency_id?: string | null
@@ -350,18 +356,24 @@ export type Database = {
           agency_review_status?: string
           agency_reviewed_at?: string | null
           created_at?: string
+          date_basis?: string
           id?: string
           invoice_data?: Json
+          invoice_number: string
           paid_at?: string | null
           paid_by_user_id?: string | null
+          paid_cents?: number
           payment_note?: string | null
           period_from: string
           period_to: string
+          review_draft?: Json
+          review_draft_updated_at?: string | null
           sent_at?: string | null
           services_count?: number
           status?: string
           tenant_id: string
           total_cents?: number
+          waived_cents?: number
         }
         Update: {
           agency_id?: string | null
@@ -369,18 +381,24 @@ export type Database = {
           agency_review_status?: string
           agency_reviewed_at?: string | null
           created_at?: string
+          date_basis?: string
           id?: string
           invoice_data?: Json
+          invoice_number?: string
           paid_at?: string | null
           paid_by_user_id?: string | null
+          paid_cents?: number
           payment_note?: string | null
           period_from?: string
           period_to?: string
+          review_draft?: Json
+          review_draft_updated_at?: string | null
           sent_at?: string | null
           services_count?: number
           status?: string
           tenant_id?: string
           total_cents?: number
+          waived_cents?: number
         }
         Relationships: [
           {
@@ -595,6 +613,153 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "agency_review_sessions_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agency_statement_counters: {
+        Row: {
+          last_number: number
+          tenant_id: string
+          year: number
+        }
+        Insert: {
+          last_number: number
+          tenant_id: string
+          year: number
+        }
+        Update: {
+          last_number?: number
+          tenant_id?: string
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agency_statement_counters_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agency_statement_payment_events: {
+        Row: {
+          amount_cents: number
+          created_at: string
+          id: string
+          idempotency_key: string
+          invoice_id: string
+          method: string
+          note: string | null
+          paid_on: string
+          tenant_id: string
+          user_id: string | null
+        }
+        Insert: {
+          amount_cents: number
+          created_at?: string
+          id?: string
+          idempotency_key: string
+          invoice_id: string
+          method: string
+          note?: string | null
+          paid_on: string
+          tenant_id: string
+          user_id?: string | null
+        }
+        Update: {
+          amount_cents?: number
+          created_at?: string
+          id?: string
+          idempotency_key?: string
+          invoice_id?: string
+          method?: string
+          note?: string | null
+          paid_on?: string
+          tenant_id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agency_statement_payment_events_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "agency_invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agency_statement_payment_events_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agency_statement_payment_reports: {
+        Row: {
+          agency_id: string
+          amount_cents: number
+          created_at: string
+          id: string
+          invoice_id: string
+          method: string
+          note: string | null
+          paid_on: string
+          status: string
+          tenant_id: string
+          verified_at: string | null
+          verified_by: string | null
+        }
+        Insert: {
+          agency_id: string
+          amount_cents: number
+          created_at?: string
+          id?: string
+          invoice_id: string
+          method: string
+          note?: string | null
+          paid_on: string
+          status?: string
+          tenant_id: string
+          verified_at?: string | null
+          verified_by?: string | null
+        }
+        Update: {
+          agency_id?: string
+          amount_cents?: number
+          created_at?: string
+          id?: string
+          invoice_id?: string
+          method?: string
+          note?: string | null
+          paid_on?: string
+          status?: string
+          tenant_id?: string
+          verified_at?: string | null
+          verified_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agency_statement_payment_reports_agency_id_fkey"
+            columns: ["agency_id"]
+            isOneToOne: false
+            referencedRelation: "agencies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agency_statement_payment_reports_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "agency_invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agency_statement_payment_reports_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -2167,6 +2332,50 @@ export type Database = {
           },
           {
             foreignKeyName: "cancellation_requests_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      collective_ferry_convocations: {
+        Row: {
+          active: boolean
+          date: string
+          event_key: string
+          last_departure: string
+          margin_max: number
+          margin_min: number
+          tenant_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          active?: boolean
+          date: string
+          event_key: string
+          last_departure: string
+          margin_max?: number
+          margin_min?: number
+          tenant_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          active?: boolean
+          date?: string
+          event_key?: string
+          last_departure?: string
+          margin_max?: number
+          margin_min?: number
+          tenant_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "collective_ferry_convocations_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -6649,6 +6858,7 @@ export type Database = {
           id: string
           idempotency_key: string
           linked_service_id: string | null
+          paid_amount_cents: number
           penalty_amount_cents: number
           penalty_notes: string | null
           penalty_percentage: number | null
@@ -6691,6 +6901,7 @@ export type Database = {
           id?: string
           idempotency_key: string
           linked_service_id?: string | null
+          paid_amount_cents?: number
           penalty_amount_cents?: number
           penalty_notes?: string | null
           penalty_percentage?: number | null
@@ -6733,6 +6944,7 @@ export type Database = {
           id?: string
           idempotency_key?: string
           linked_service_id?: string | null
+          paid_amount_cents?: number
           penalty_amount_cents?: number
           penalty_notes?: string | null
           penalty_percentage?: number | null
@@ -7326,6 +7538,7 @@ export type Database = {
         Row: {
           agency_booking_id: string | null
           agency_id: string | null
+          agency_paid_amount_cents: number
           agency_paid_at: string | null
           agency_payment_status: string
           agency_price_cents: number | null
@@ -7458,6 +7671,7 @@ export type Database = {
         Insert: {
           agency_booking_id?: string | null
           agency_id?: string | null
+          agency_paid_amount_cents?: number
           agency_paid_at?: string | null
           agency_payment_status?: string
           agency_price_cents?: number | null
@@ -7590,6 +7804,7 @@ export type Database = {
         Update: {
           agency_booking_id?: string | null
           agency_id?: string | null
+          agency_paid_amount_cents?: number
           agency_paid_at?: string | null
           agency_payment_status?: string
           agency_price_cents?: number | null
@@ -11248,6 +11463,17 @@ export type Database = {
           lock_token: string
         }[]
       }
+      agency_accounting_rows: {
+        Args: { p_agency_id?: string; p_tenant_id: string }
+        Returns: Json[]
+      }
+      agency_statement_dates: {
+        Args: { p_service_id: string; p_tenant_id: string }
+        Returns: {
+          arrival_date: string
+          departure_date: string
+        }[]
+      }
       allocate_bus_service: {
         Args: {
           p_bus_line_id: string
@@ -11304,6 +11530,17 @@ export type Database = {
           bus_allocations_cleared: number
           out_service_id: string
         }[]
+      }
+      close_inactive_whatsapp_threads: { Args: never; Returns: Json }
+      create_agency_statement: {
+        Args: {
+          p_agency_id: string
+          p_basis: string
+          p_from: string
+          p_tenant_id: string
+          p_to: string
+        }
+        Returns: Json
       }
       current_agency_id: { Args: never; Returns: string }
       current_tenant_id: { Args: never; Returns: string }
@@ -11397,6 +11634,24 @@ export type Database = {
           inserted_count: number
         }[]
       }
+      pay_agency_statement: {
+        Args: {
+          p_amount: number
+          p_invoice_id: string
+          p_key: string
+          p_method: string
+          p_note: string
+          p_paid_on: string
+          p_report_id?: string
+          p_tenant_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      refresh_agency_statement: {
+        Args: { p_invoice_id: string; p_tenant_id: string }
+        Returns: undefined
+      }
       release_email_import_lock: {
         Args: {
           p_error?: string
@@ -11419,6 +11674,16 @@ export type Database = {
         }
         Returns: Json
       }
+      resolve_statement_dispute: {
+        Args: {
+          p_action: string
+          p_dispute_id: string
+          p_note: string
+          p_tenant_id: string
+          p_user_id: string
+        }
+        Returns: undefined
+      }
       restore_cancelled_service: {
         Args: {
           p_penalty_action?: string
@@ -11438,6 +11703,26 @@ export type Database = {
           stale_bus_allocations_cleared: number
           voided_penalty_ids: string[]
         }[]
+      }
+      review_agency_statement: {
+        Args: {
+          p_action: string
+          p_agency_id: string
+          p_corrections: Json
+          p_invoice_id: string
+          p_tenant_id: string
+          p_user_id?: string
+        }
+        Returns: Json
+      }
+      set_agency_service_payment: {
+        Args: {
+          p_amount?: number
+          p_service_id: string
+          p_status: string
+          p_tenant_id: string
+        }
+        Returns: undefined
       }
       unaccent: { Args: { "": string }; Returns: string }
       vehicle_document_object_authorized: {

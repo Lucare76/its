@@ -8,6 +8,7 @@
  * gia' cablati dentro assignServiceCore (was_override calcolato li' in base
  * al driver precedente): nessuna logica ML duplicata qui.
  */
+import { loadCollectiveConvocations } from "@/lib/server/collective-convocations";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
@@ -29,14 +30,25 @@ export async function POST(request: NextRequest) {
 
   const { data: item, error: itemError } = await auth.admin
     .from("assignment_plan_items")
-    .select("id, plan_id, service_id, proposed_driver_id, score, locked")
+    .select("id, plan_id, service_id, proposed_driver_id, score, locked, reason")
     .eq("id", body.itemId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (itemError) return NextResponse.json({ ok: false, error: itemError.message }, { status: 500 });
   if (!item) return NextResponse.json({ ok: false, error: "Item non trovato." }, { status: 404 });
+  if (item.reason?.details?.collective) return NextResponse.json({ ok: false, error: "TUTTI: Mario effettua lo smistamento al porto." }, { status: 409 });
   if (item.locked) return NextResponse.json({ ok: false, error: "Item bloccato: sblocca prima di riassegnare." }, { status: 409 });
 
+  const { data: plan, error: planError } = await auth.admin.from("assignment_plans")
+    .select("plan_date, generated_at").eq("tenant_id", tenantId).eq("id", item.plan_id).maybeSingle();
+  if (planError || !plan) return NextResponse.json({ ok: false, error: "Piano non disponibile: ricalcola" }, { status: 409 });
+  try {
+    const configs = await loadCollectiveConvocations(auth.admin, tenantId, plan.plan_date);
+    if (configs.some((event) => Date.parse(event.updated_at ?? "") > Date.parse(plan.generated_at)))
+      return NextResponse.json({ ok: false, error: "Convocazione TUTTI modificata: ricalcola il piano." }, { status: 409 });
+  } catch {
+    return NextResponse.json({ ok: false, error: "Impossibile verificare le convocazioni TUTTI" }, { status: 503 });
+  }
   const [drivers, vehicles] = await Promise.all([
     listDriverRegistry(auth.admin, tenantId, { activeOnly: false }),
     loadOperationalVehicles(auth.admin, tenantId, { activeOnly: false }),

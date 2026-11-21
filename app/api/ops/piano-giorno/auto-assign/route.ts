@@ -18,6 +18,7 @@
  *   - Autisti assegnati per punteggio: no-conflitto orario (75 min) > stessa zona > minor carico
  *   - Mezzo più piccolo che soddisfa i PAX del giro
  */
+import { loadCollectiveConvocations } from "@/lib/server/collective-convocations";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { isNapoliHotel, hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
@@ -1024,6 +1025,9 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as { date?: string; mode?: string };
     // Fix P2 (audit pre-go-live): Europe/Rome, non UTC — vedi lib/utils.ts.
     const date = body.date ?? todayIsoDate();
+    if ((await loadCollectiveConvocations(auth.admin, tenantId, date)).some((event) => event.active)) {
+      return NextResponse.json({ ok: false, error: "Convocazione TUTTI attiva: usa Assegnazione Intelligente e ricalcola il piano." }, { status: 409 });
+    }
     const mode: "unassigned_only" | "regenerate_all" =
       body.mode === "regenerate_all" ? "regenerate_all" : "unassigned_only";
 
