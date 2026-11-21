@@ -28,7 +28,10 @@ import {
   type AutoAssignPreviewTripGroup,
 } from "@/lib/piano-assignable-preview";
 import { loadFerryRoadRouting } from "@/lib/server/assignment-engine/ferry-road-routing";
-import { planAutoAssignPreview } from "@/lib/piano-auto-assign-planner";
+import { loadCollectiveConvocations } from "@/lib/server/collective-convocations";
+import { planAutoAssignPreview, collectiveServiceImpact } from "@/lib/piano-auto-assign-planner";
+import { resolveCollectiveReservations } from "@/lib/piano-collective-convocations";
+import type { ConvocationArrival } from "@/lib/piano-arrival-convocations";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
 import { auditLog } from "@/lib/server/ops-audit";
 import {
@@ -215,7 +218,10 @@ export async function buildAndPersistAssignmentPlan(
   const ferryRoadRouting = process.env.VERCEL_ENV === "preview" && availabilityConfirmationResult.data?.confirmed === true
     ? await loadFerryRoadRouting(admin, args.tenantId, preview.services, services, hotelsResult.data ?? [])
     : undefined;
+  const collectiveConfigs = await loadCollectiveConvocations(admin, args.tenantId, args.date);
+  const collectiveReservations = resolveCollectiveReservations(collectiveConfigs, servicesResult.data as ConvocationArrival[] ?? []);
   const planning = planAutoAssignPreview({
+    collectiveReservations,
     ferryRoadRouting,
     services: preview.services,
     availability_confirmed: availabilityConfirmationResult.data?.confirmed === true,
@@ -266,17 +272,23 @@ export async function buildAndPersistAssignmentPlan(
   }
 
   const items = classifyPlanItems({
+    collectiveReservations,
     preview,
     planning,
     assignmentByServiceId,
     previousItemsByServiceId,
-    rankAlternatives: (row) =>
-      rankCandidatesForService({
+    rankAlternatives: (row) => {
+      if (collectiveServiceImpact(collectiveReservations, row).blocked) return [];
+      const group = planning.proposed_groups.find((entry) => entry.services.some((service) => service.service_id === row.service_id));
+      if (collectiveReservations.length && group) return [{ driver_id: group.driver_id, driver_name: group.driver_name,
+        vehicle_id: group.vehicle_id, vehicle_label: group.vehicle_label, score: group.score, reason: [...group.explanation, ...group.warnings] }];
+      return rankCandidatesForService({
         service: { operational_time: row.operational_time, pax: row.pax },
         drivers: activeDrivers,
         vehicles: activeVehicles,
         assignmentsCountByDriverId,
-      }),
+      });
+    },
   });
 
   // Suggerimento di manovra per gli 'unresolved' (richiede la vista completa del piano).
@@ -296,7 +308,7 @@ export async function buildAndPersistAssignmentPlan(
     });
   }
 
-  const scopeServiceIds = args.scope?.changedServiceIds?.length ? new Set(args.scope.changedServiceIds) : null;
+  const scopeServiceIds = !collectiveConfigs.length && args.scope?.changedServiceIds?.length ? new Set(args.scope.changedServiceIds) : null;
   const writableItems = scopeServiceIds ? expandIncrementalScope(items, scopeServiceIds) : items;
 
   const durationMs = Date.now() - startedAt;
@@ -320,7 +332,7 @@ export async function buildAndPersistAssignmentPlan(
         plan_date: args.date,
         status: "ready",
         generated_by: args.userId,
-        generated_at: now,
+        generated_at: new Date(startedAt).toISOString(),
         duration_ms: durationMs,
         ...summary,
         summary: summary,
@@ -353,7 +365,7 @@ export async function buildAndPersistAssignmentPlan(
   }
 
   return {
-    plan: { id: planId, plan_date: args.date, generated_at: now, duration_ms: durationMs, ...summary },
+    plan: { id: planId, plan_date: args.date, generated_at: new Date(startedAt).toISOString(), duration_ms: durationMs, ...summary },
     items,
   };
 }

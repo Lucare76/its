@@ -13,6 +13,8 @@ import { canDriverCoverInterval } from "@/lib/piano-driver-availability";
 
 import { scheduleFerryPickup, type FerryRoadRouting } from "@/lib/piano-ferry-road-pickup";
 
+import { collectiveImpact, timeMinutes, type CollectiveReservation } from "@/lib/piano-collective-convocations";
+
 export type PlannerDriver = {
   id: string;
   name: string;
@@ -451,6 +453,22 @@ function buildDepartureBatches(candidates: AutoAssignPreviewServiceRow[], maxCap
   return { work, members };
 }
 
+/** Geographic buffers are estimates; the on-site split and last hotel are unknown. */
+export function collectiveServiceImpact(reservations: CollectiveReservation[], service: AutoAssignPreviewServiceRow) {
+  if (!service.operational_time) return { blocked: undefined, uncertain: undefined };
+  const duration = Math.max(30, estimateTravelBuffer({
+    destination_label: service.pickup_label, destination_zone: service.pickup_zone,
+    macro_category: service.macro_category, pax: service.pax,
+  }, { pickup_label: service.destination_label, pickup_zone: service.destination_zone,
+    macro_category: service.macro_category, pax: service.pax }).minutes);
+  const impacts = reservations.map((event) => collectiveImpact([event], minutes(service.operational_time),
+    duration + estimateTravelBuffer(service, {
+      pickup_label: event.port, pickup_zone: event.port, macro_category: "ARRIVO", pax: 0,
+    }).minutes));
+  return { blocked: impacts.find((impact) => impact.blocked)?.blocked,
+    uncertain: impacts.find((impact) => impact.uncertain)?.uncertain };
+}
+
 export function planAutoAssignPreview(args: {
   services: AutoAssignPreviewServiceRow[];
   drivers: PlannerDriver[];
@@ -458,6 +476,7 @@ export function planAutoAssignPreview(args: {
   availability_confirmed: boolean;
   locked_assignments?: PlannerLockedAssignment[];
   ferryRoadRouting?: FerryRoadRouting;
+  collectiveReservations?: CollectiveReservation[];
 }): PlannerResult {
   const protectedLocked = args.services
     .filter((service) => service.is_locked)
@@ -474,8 +493,10 @@ export function planAutoAssignPreview(args: {
       };
     });
 
+  const collectiveIds = new Set(args.collectiveReservations?.flatMap((event) => event.serviceIds));
   const candidates = args.services
     .filter((service) =>
+      !collectiveIds.has(service.service_id) &&
       service.assignable &&
       !service.needs_review &&
       !service.is_locked &&
@@ -576,6 +597,13 @@ export function planAutoAssignPreview(args: {
       continue;
     }
 
+    const impact = collectiveServiceImpact(args.collectiveReservations ?? [], service);
+    if (impact.blocked) {
+      const reason = `Da confermare con Mario: convocazione TUTTI ${impact.blocked.label}; possibile liberazione anticipata solo sul posto`;
+      unplanned.push({ service_id: service.service_id, customer_name: service.customer_name, reason });
+      conflicts.push({ service_id: service.service_id, conflict_type: "collective_convocation", reason });
+      continue;
+    }
     const serviceTime = service.operational_time;
     const currentMin = minutes(serviceTime);
     const poolForDriver = (driver: PlannerDriver) => vehiclePoolForDriver(vehicles, driver, drivers, serviceTime);
@@ -613,6 +641,9 @@ export function planAutoAssignPreview(args: {
           if (!driverAvailable(driver, group.start_time, arrival) ||
               !vehiclePoolForDriver(vehicles, driver, drivers, pickup).includes(vehicle) ||
               !vehiclePoolForDriver(vehicles, driver, drivers, arrival).includes(vehicle)) return null;
+          if ((args.collectiveReservations ?? []).some((event) =>
+            minutes(group.start_time) < timeMinutes(event.last_departure) &&
+            reserveEnd > timeMinutes(event.arrival))) return null;
           const start = minutes(group.start_time);
           const key = vehicleResourceKey({ id: vehicle.id, label: vehicle.label }).key;
           const entries = key ? vehicleTimeline.get(key) ?? [] : [];
@@ -648,6 +679,7 @@ export function planAutoAssignPreview(args: {
         bestGroup.group.explanation = bestGroup.group.explanation.filter((line) => !line.startsWith("Ritiri proposti:") && !line.startsWith("Capienza mezzo "));
       }
       updateGroup(bestGroup.group, { ...service, operational_time: bestGroup.pickup }, bestGroup.evaluation);
+      if (impact.uncertain) bestGroup.group.warnings.push("Da confermare con Mario: disponibilità e posizione dopo TUTTI stimate, smistamento svolto al porto");
       const pickupMin = minutes(bestGroup.pickup);
       if (bestGroup.reserveEnd !== null) {
         roadMissions.add(bestGroup.group.temp_group_id);
@@ -743,6 +775,7 @@ export function planAutoAssignPreview(args: {
     }
 
     const group = createGroup(nextGroupIndex, service, driver, vehicle);
+    if (impact.uncertain) group.warnings.push("Da confermare con Mario: disponibilità e posizione dopo TUTTI stimate, smistamento svolto al porto");
     nextGroupIndex += 1;
     if (service.macro_category === "ESCURSIONE" && (service.pax ?? 0) >= 15) {
       group.warnings.push("Escursione pax alto: giro dedicato consigliato");
