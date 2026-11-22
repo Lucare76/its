@@ -239,7 +239,9 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
     const json = await res.json();
     setKmSubmitting(false);
     if (json.ok) {
-      setKmMsg({ ok: true, text: `Turno chiuso. Km percorsi: ${Number(kmEnd) - openLog.start_km}` });
+      setKmMsg({ ok: true, text: json.km_needs_review
+        ? "Turno chiuso. I km inseriti sono da verificare: l'ufficio ha ricevuto una segnalazione."
+        : `Turno chiuso. Km percorsi: ${Number(kmEnd) - openLog.start_km}` });
       setKmSection("idle");
       setKmEnd(""); setKmNotes("");
       loadData();

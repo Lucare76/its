@@ -9655,6 +9655,8 @@ export type Database = {
       }
       vehicle_fuel: {
         Row: {
+          invoice_supplier: string | null
+          last_edited_by: string | null
           approval_status: string
           approved_at: string | null
           approved_by: string | null
@@ -9675,6 +9677,8 @@ export type Database = {
           vehicle_id: string
         }
         Insert: {
+          invoice_supplier?: string | null
+          last_edited_by?: string | null
           approval_status?: string
           approved_at?: string | null
           approved_by?: string | null
@@ -9695,6 +9699,8 @@ export type Database = {
           vehicle_id: string
         }
         Update: {
+          invoice_supplier?: string | null
+          last_edited_by?: string | null
           approval_status?: string
           approved_at?: string | null
           approved_by?: string | null
@@ -9796,6 +9802,9 @@ export type Database = {
       }
       vehicle_insurances: {
         Row: {
+          suspended_from: string | null
+          suspended_until: string | null
+          reactivated_on: string | null
           annual_amount_cents: number | null
           company: string
           created_at: string
@@ -9810,6 +9819,9 @@ export type Database = {
           vehicle_id: string
         }
         Insert: {
+          suspended_from?: string | null
+          suspended_until?: string | null
+          reactivated_on?: string | null
           annual_amount_cents?: number | null
           company: string
           created_at?: string
@@ -9824,6 +9836,9 @@ export type Database = {
           vehicle_id: string
         }
         Update: {
+          suspended_from?: string | null
+          suspended_until?: string | null
+          reactivated_on?: string | null
           annual_amount_cents?: number | null
           company?: string
           created_at?: string
@@ -10181,6 +10196,8 @@ export type Database = {
       }
       vehicles: {
         Row: {
+          consumption_min_l_per_100km: number | null
+          consumption_max_l_per_100km: number | null
           active: boolean
           blocked_from: string | null
           blocked_reason: string | null
@@ -10217,6 +10234,8 @@ export type Database = {
           vehicle_size: string | null
         }
         Insert: {
+          consumption_min_l_per_100km?: number | null
+          consumption_max_l_per_100km?: number | null
           active?: boolean
           blocked_from?: string | null
           blocked_reason?: string | null
@@ -10253,6 +10272,8 @@ export type Database = {
           vehicle_size?: string | null
         }
         Update: {
+          consumption_min_l_per_100km?: number | null
+          consumption_max_l_per_100km?: number | null
           active?: boolean
           blocked_from?: string | null
           blocked_reason?: string | null
