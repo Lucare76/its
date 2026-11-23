@@ -24,4 +24,11 @@ describe("fuel invoice reconciliation", () => {
     expect(proposeFuelMatch(line, [manual, { ...manual, id: "two" }], "UTA")).toMatchObject({ status: "ambiguous" });
     expect(proposeFuelMatch(line, [manual], "UTA", new Set(["one"]))).toMatchObject({ status: "missing" });
   });
+
+  it("confronta il netto UTA a quattro decimali con i centesimi della fattura", () => {
+    const invoice = { date: "2026-11-23", station: "Q8 Teano", liters: 25, amount: 40.98, reference: "12345678" };
+    const manual = { id: "uta-1", fuel_date: invoice.date, station: invoice.station,
+      liters: invoice.liters, cost: 40.9836, invoice_supplier: "UTA" };
+    expect(proposeFuelMatch(invoice, [manual], "UTA")).toMatchObject({ status: "candidate", amountDifference: 0 });
+  });
 });

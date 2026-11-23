@@ -10088,6 +10088,7 @@ export type Database = {
           fiscal_document_url: string | null
           fuel_date: string
           fuel_type: string | null
+          gross_cost: number | null
           id: string
           invoice_supplier: string | null
           km_at_fuel: number | null
@@ -10110,6 +10111,7 @@ export type Database = {
           fiscal_document_url?: string | null
           fuel_date: string
           fuel_type?: string | null
+          gross_cost?: number | null
           id?: string
           invoice_supplier?: string | null
           km_at_fuel?: number | null
@@ -10132,6 +10134,7 @@ export type Database = {
           fiscal_document_url?: string | null
           fuel_date?: string
           fuel_type?: string | null
+          gross_cost?: number | null
           id?: string
           invoice_supplier?: string | null
           km_at_fuel?: number | null
