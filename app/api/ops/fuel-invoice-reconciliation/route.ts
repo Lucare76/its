@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { extractFuelInvoiceLines } from "@/lib/server/fuel-invoice-pdf";
-import { normalizeStation, proposeFuelMatch, type FuelInvoiceLine, type ManualFuelLine } from "@/lib/server/fuel-invoice-reconciliation";
+import { fuelCanLink, proposeFuelMatch, type FuelInvoiceLine, type ManualFuelLine } from "@/lib/server/fuel-invoice-reconciliation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -104,11 +104,11 @@ export async function POST(request: NextRequest) {
   ]);
   if (!line || !fuel || line.matched_fuel_id) return NextResponse.json({ error: "Operazione non disponibile." }, { status: 409 });
   const { data: batch } = await db.from("fuel_invoice_imports").select("supplier").eq("tenant_id", tenantId).eq("id", line.import_id).single();
-  if (!batch || batch.supplier !== fuel.invoice_supplier || line.fuel_date !== fuel.fuel_date
-    || !fuel.station || !normalizeStation(fuel.station) || !normalizeStation(line.station)
-    || !(normalizeStation(fuel.station).includes(normalizeStation(line.station))
-      || normalizeStation(line.station).includes(normalizeStation(fuel.station)))) {
-    return NextResponse.json({ error: "Fornitore, data o distributore diversi: collegamento non consentito." }, { status: 409 });
+  if (!batch || !fuelCanLink(
+    { date: line.fuel_date, station: line.station, liters: Number(line.liters), amount: Number(line.amount), reference: "" },
+    fuel as ManualFuelLine, batch.supplier,
+  )) {
+    return NextResponse.json({ error: "Fornitore, data o valori del rifornimento incompatibili: collegamento non consentito." }, { status: 409 });
   }
   const { data: changed, error } = await db.from("fuel_invoice_lines")
     .update({ matched_fuel_id: fuel.id, matched_at: new Date().toISOString(), matched_by: auth.user.id })

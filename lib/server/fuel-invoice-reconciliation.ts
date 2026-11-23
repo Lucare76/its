@@ -21,6 +21,22 @@ export function normalizeStation(value: string): string {
     .replace(/[^A-Z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
+export function fuelStationsOverlap(first: string | null, second: string): boolean {
+  const a = normalizeStation(first ?? "");
+  const b = normalizeStation(second);
+  return Boolean(a && b && (a.includes(b) || b.includes(a)));
+}
+
+export function fuelCanLink(line: FuelInvoiceLine, row: ManualFuelLine, supplier: string): boolean {
+  if (row.invoice_supplier !== supplier || row.fuel_date !== line.date || !row.station || !normalizeStation(row.station) || !normalizeStation(line.station)) return false;
+  if (fuelStationsOverlap(row.station, line.station)) return true;
+  // Different descriptions of the same pump may use a town instead of a locality.
+  // Only exact liters and a difference of at most two cents permit a manual review.
+  return row.liters != null && row.cost != null
+    && Math.round(row.liters * 100) === Math.round(line.liters * 100)
+    && Math.abs(Math.round(row.cost * 100) - Math.round(line.amount * 100)) <= 2;
+}
+
 function decimal(value: string): number {
   return Number(value.replace(/\./g, "").replace(",", "."));
 }
@@ -68,12 +84,9 @@ export function parseFuelInvoiceRows(rows: string[][], supplier: "ENI" | "UTA"):
 export function proposeFuelMatch(line: FuelInvoiceLine, manual: ManualFuelLine[], supplier: string, alreadyLinked: Set<string> = new Set()) {
   // An absent issuer is deliberately not treated as a match. A UTA purchase
   // at a Q8 pump must not be paired with a Q8 purchase on a different invoice.
-  const candidates = manual.filter((row) => row.invoice_supplier === supplier && !alreadyLinked.has(row.id)
-    && row.fuel_date === line.date && row.station
-    && normalizeStation(row.station) && normalizeStation(line.station)
-    && (normalizeStation(row.station).includes(normalizeStation(line.station))
-      || normalizeStation(line.station).includes(normalizeStation(row.station))));
+  const candidates = manual.filter((row) => !alreadyLinked.has(row.id) && fuelCanLink(line, row, supplier));
   const ranked = candidates.map((row) => ({ row,
+    stationMismatch: !fuelStationsOverlap(row.station, line.station),
     amountDifference: row.cost == null ? null : (Math.round((line.amount - row.cost) * 100) / 100 || 0),
     litersDifference: row.liters == null ? null : Math.round((line.liters - row.liters) * 100) / 100,
   }));
