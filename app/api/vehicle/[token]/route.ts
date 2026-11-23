@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { checkRateLimit } from "@/lib/server/rate-limit";
 import { auditLog } from "@/lib/server/ops-audit";
+import { utaNetFromGross } from "@/lib/fuel-cost";
 
 export const runtime = "nodejs";
 
@@ -220,7 +221,7 @@ export async function GET(
       .limit(10),
     admin
       .from("vehicle_fuel")
-      .select("id, fuel_date, liters, cost, km_at_fuel, fuel_type, station, approval_status")
+      .select("id, fuel_date, liters, cost, gross_cost, invoice_supplier, km_at_fuel, fuel_type, station, approval_status")
       .eq("vehicle_id", vehicle.id)
       .eq("approval_status", "approved")
       .order("fuel_date", { ascending: false })
@@ -548,6 +549,7 @@ export async function POST(
   if (action === "fuel") {
     const liters   = body.liters   ? Number(body.liters)   : null;
     const cost     = body.cost     ? Number(body.cost)     : null;
+    const supplier = typeof body.invoice_supplier === "string" ? body.invoice_supplier.trim().toUpperCase() : null;
     const kmAtFuel = body.km_at_fuel ? Number(body.km_at_fuel) : null;
     const fuelType = typeof body.fuel_type === "string" ? body.fuel_type : "diesel";
     const station  = (body.station as string)?.trim() || null;
@@ -556,6 +558,7 @@ export async function POST(
     if (!validFuelTypes.has(fuelType)) return fail("Tipo carburante non valido.");
     if (liters !== null && (!Number.isFinite(liters) || liters <= 0 || liters > 600)) return fail("Litri non validi.");
     if (cost !== null && (!Number.isFinite(cost) || cost < 0 || cost > 5000)) return fail("Costo non valido.");
+    if (supplier !== "ENI" && supplier !== "UTA") return fail("Seleziona il fornitore ENI o UTA.");
     if (kmAtFuel !== null && (!Number.isInteger(kmAtFuel) || kmAtFuel < 0)) return fail("Km al rifornimento non validi.");
     if (station && station.length > 160) return fail("Nome distributore troppo lungo.");
 
@@ -567,7 +570,9 @@ export async function POST(
       tenant_id:  veh?.tenant_id,
       fuel_date:  new Date().toISOString().slice(0, 10),
       liters,
-      cost,
+      cost: supplier === "UTA" && cost !== null ? utaNetFromGross(cost) : cost,
+      gross_cost: supplier === "UTA" ? cost : null,
+      invoice_supplier: supplier,
       km_at_fuel: kmAtFuel,
       fuel_type:  fuelType,
       station,

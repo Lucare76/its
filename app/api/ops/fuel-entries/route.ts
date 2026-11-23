@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { normalizeStation } from "@/lib/server/fuel-invoice-reconciliation";
 import { fuelApprovalSchema } from "@/lib/server/fleet-schemas";
+import { utaNetFromGross } from "@/lib/fuel-cost";
 
 export const runtime = "nodejs";
 
@@ -37,6 +38,7 @@ const editFuelSchema = z.object({
   fuel_type:    z.string().max(40).nullable().optional(),
   station:      z.string().max(160).nullable().optional(),
   invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
+  cost_input: z.enum(["net", "gross"]).optional(),
   notes:        z.string().max(1000).nullable().optional(),
 });
 
@@ -52,7 +54,7 @@ export async function GET(request: NextRequest) {
 
   let query = auth.admin
     .from("vehicle_fuel")
-    .select("id, vehicle_id, fuel_date, liters, cost, km_at_fuel, fuel_type, station, invoice_supplier, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
+    .select("id, vehicle_id, fuel_date, liters, cost, gross_cost, km_at_fuel, fuel_type, station, invoice_supplier, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("fuel_date", { ascending: false })
     .limit(250);
@@ -151,7 +153,7 @@ export async function POST(request: NextRequest) {
       approval_status: "approved",
       approved_at: new Date().toISOString(),
       approved_by: auth.user.id,
-      submitted_via_qr: parsed.submitted_via_qr ?? false,
+      submitted_via_qr: false,
       created_by: auth.user.id,
     });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -160,6 +162,13 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "edit") {
     const parsed = editFuelSchema.parse(body.data);
+    const { data: original, error: originalError } = await auth.admin.from("vehicle_fuel")
+      .select("id, submitted_via_qr")
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.id).maybeSingle();
+    if (originalError) return NextResponse.json({ error: originalError.message }, { status: 500 });
+    if (!original) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
+    if (parsed.cost_input === "gross" && (!original.submitted_via_qr || parsed.invoice_supplier !== "UTA"))
+      return NextResponse.json({ error: "Importo lordo consentito solo per un rifornimento QR UTA." }, { status: 400 });
     const { data: vehicle } = await auth.admin.from("vehicles").select("id")
       .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.vehicle_id).maybeSingle();
     if (!vehicle) return NextResponse.json({ error: "Mezzo non disponibile per questo tenant." }, { status: 404 });
@@ -180,7 +189,8 @@ export async function POST(request: NextRequest) {
         vehicle_id: parsed.vehicle_id,
         fuel_date:  parsed.fuel_date,
         liters:     parsed.liters ?? null,
-        cost:       parsed.cost ?? null,
+        cost:       parsed.cost_input === "gross" && parsed.cost != null ? utaNetFromGross(parsed.cost) : parsed.cost ?? null,
+        ...(parsed.cost_input === "gross" ? { gross_cost: parsed.cost ?? null } : {}),
         km_at_fuel: parsed.km_at_fuel ?? null,
         fuel_type:  parsed.fuel_type ?? null,
         station:    parsed.station ?? null,

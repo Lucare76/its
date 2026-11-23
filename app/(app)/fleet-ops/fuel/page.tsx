@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { utaNetFromGross } from "@/lib/fuel-cost";
 
 type VehicleOption = {
   id: string;
@@ -17,6 +18,7 @@ type FuelRecord = {
   fuel_date: string;
   liters?: number | null;
   cost?: number | null;
+  gross_cost?: number | null;
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
@@ -41,6 +43,7 @@ type EditModalState = {
     fuel_date: string;
     liters: string;
     cost: string;
+    cost_basis: "net" | "gross";
     km_at_fuel: string;
     fuel_type: string;
     station: string;
@@ -74,6 +77,13 @@ const PAGE_SIZE = 10;
 
 function fmtMoney(value: number | null | undefined) {
   return value != null ? `EUR ${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-";
+}
+
+function fmtFuelCost(record: FuelRecord) {
+  return record.cost == null ? "-" : `EUR ${record.cost.toLocaleString("it-IT", {
+    minimumFractionDigits: record.invoice_supplier === "UTA" ? 4 : 2,
+    maximumFractionDigits: record.invoice_supplier === "UTA" ? 4 : 2,
+  })}`;
 }
 
 function fmtNumber(value: number | null | undefined, suffix = "") {
@@ -192,6 +202,7 @@ export default function FleetFuelPage() {
       record.vehicle?.plate,
       record.vehicle?.license_number,
       record.station,
+      record.invoice_supplier,
       record.fuel_type,
       record.fiscal_document_name,
       record.notes,
@@ -367,6 +378,7 @@ export default function FleetFuelPage() {
         fuel_date:  record.fuel_date,
         liters:     record.liters != null ? String(record.liters) : "",
         cost:       record.cost != null ? String(record.cost) : "",
+        cost_basis: "net",
         km_at_fuel: record.km_at_fuel != null ? String(record.km_at_fuel) : "",
         fuel_type:  record.fuel_type ?? "diesel",
         station:    record.station ?? "",
@@ -393,6 +405,7 @@ export default function FleetFuelPage() {
           fuel_date:  f.fuel_date,
           liters:     f.liters ? Number(f.liters) : null,
           cost:       f.cost ? Number(f.cost) : null,
+          cost_input: f.cost_basis,
           km_at_fuel: f.km_at_fuel ? Number(f.km_at_fuel) : null,
           fuel_type:  f.fuel_type || null,
           station:    f.station || null,
@@ -565,8 +578,8 @@ export default function FleetFuelPage() {
                     onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, liters: e.target.value } } : null)} />
                 </label>
                 <label className="text-xs font-semibold text-slate-500">
-                  Costo
-                  <input className="input-saas mt-1 w-full" type="number" min="0" value={editModal.form.cost}
+                  {editModal.form.cost_basis === "gross" ? "Importo pagato (IVA inclusa)" : editModal.form.invoice_supplier === "UTA" ? "Costo netto (€)" : "Costo (€)"}
+                  <input className="input-saas mt-1 w-full" type="number" min="0" step={editModal.form.cost_basis === "gross" ? "0.01" : "0.0001"} value={editModal.form.cost}
                     onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, cost: e.target.value } } : null)} />
                 </label>
                 <label className="text-xs font-semibold text-slate-500">
@@ -586,6 +599,9 @@ export default function FleetFuelPage() {
                   </select>
                 </label>
               </div>
+              {editModal.form.cost_basis === "gross" && editModal.form.cost && Number.isFinite(Number(editModal.form.cost)) ? (
+                <p className="text-xs text-emerald-700">Netto UTA calcolato: €{utaNetFromGross(Number(editModal.form.cost)).toFixed(4)}</p>
+              ) : null}
               <label className="text-xs font-semibold text-slate-500">
                 Distributore
                 <input className="input-saas mt-1 w-full" value={editModal.form.station}
@@ -594,7 +610,16 @@ export default function FleetFuelPage() {
               <label className="text-xs font-semibold text-slate-500">
                 Fornitore fattura
                 <select className="input-saas mt-1 w-full" value={editModal.form.invoice_supplier}
-                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, invoice_supplier: e.target.value } } : null)}>
+                  onChange={e => setEditModal(m => {
+                    if (!m) return null;
+                    const nextSupplier = e.target.value;
+                    const grossInput = m.record.submitted_via_qr && nextSupplier === "UTA" && m.form.invoice_supplier !== "UTA";
+                    const leavingUta = m.record.submitted_via_qr && m.form.invoice_supplier === "UTA" && nextSupplier !== "UTA" && m.form.cost_basis === "net";
+                    return { ...m, form: { ...m.form, invoice_supplier: nextSupplier,
+                      cost_basis: grossInput ? "gross" : "net",
+                      cost: grossInput && m.record.gross_cost != null ? String(m.record.gross_cost)
+                        : leavingUta && m.record.gross_cost != null ? String(m.record.gross_cost) : m.form.cost } };
+                  })}>
                   <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
                 </select>
               </label>
@@ -654,7 +679,7 @@ export default function FleetFuelPage() {
                 className="input-saas h-10 min-w-0 basis-full text-xs lg:w-64 lg:basis-auto"
                 value={searchQuery}
                 onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }}
-                placeholder="Cerca mezzo, targa, distributore"
+                placeholder="Cerca mezzo, targa, distributore o fornitore"
               />
               {([
                 ["pending", `Da approvare (${counts.pending})`],
@@ -682,15 +707,15 @@ export default function FleetFuelPage() {
             <>
             <div className="hidden overflow-hidden rounded-lg border border-slate-200 lg:block">
               <div className="grid grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
-                <span>Data</span><span>Mezzo</span><span>Distributore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
+                <span>Data</span><span>Mezzo</span><span>Distributore / Fornitore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
               </div>
               {paginatedRecords.map((record) => (
                 <button key={record.id} type="button" onClick={() => setSelectedRecord(record)} className="grid w-full grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span></span>
-                  <span className="truncate text-slate-600">{record.station ?? "Non indicato"}</span>
+                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span><span className="block text-[11px] font-semibold text-blue-700">{record.invoice_supplier ?? "Fornitore da associare"}</span></span>
                   <span className="font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</span>
-                  <span className="font-semibold text-slate-900">{fmtMoney(record.cost)}</span>
+                  <span className="font-semibold text-slate-900" title={record.gross_cost != null ? `Pagato dall'autista: €${record.gross_cost.toFixed(2)}` : undefined}>{fmtFuelCost(record)}{record.invoice_supplier === "UTA" ? <span className="block text-[10px] font-normal text-slate-500">netto IVA</span> : null}</span>
                   <span className="text-slate-600">{fmtUnitPrice(record)}</span>
                   <span className="text-slate-600">{fmtNumber(record.km_at_fuel)}</span>
                   <span className={`truncate ${hasFiscalDocument(record) ? "text-blue-700" : "font-medium text-rose-600"}`}>{record.fiscal_document_name ?? "Mancante"}</span>
@@ -708,7 +733,7 @@ export default function FleetFuelPage() {
                         {record.vehicle?.label ?? "Veicolo"} {record.vehicle?.plate ? `- ${record.vehicle.plate}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"}
+                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier ?? "Fornitore da associare"}
                       </p>
                       <p className="mt-1 text-xs text-slate-400">
                         {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
@@ -730,7 +755,8 @@ export default function FleetFuelPage() {
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Costo</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? `EUR ${record.cost.toFixed(2)}` : "-"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{fmtFuelCost(record)}</p>
+                      {record.gross_cost != null ? <p className="text-[11px] text-slate-500">Pagato EUR {record.gross_cost.toFixed(2)}</p> : null}
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Km</p>
@@ -847,11 +873,11 @@ export default function FleetFuelPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs font-semibold text-slate-500">
                 Litri
-                <input className="input-saas mt-1 w-full" type="number" min="0" value={form.liters} onChange={(event) => setForm((current) => ({ ...current, liters: event.target.value }))} />
+                <input className="input-saas mt-1 w-full" type="number" min="0" step="0.01" value={form.liters} onChange={(event) => setForm((current) => ({ ...current, liters: event.target.value }))} />
               </label>
               <label className="text-xs font-semibold text-slate-500">
-                Costo
-                <input className="input-saas mt-1 w-full" type="number" min="0" value={form.cost} onChange={(event) => setForm((current) => ({ ...current, cost: event.target.value }))} />
+                Costo (€; per UTA inserisci il netto)
+                <input className="input-saas mt-1 w-full" type="number" min="0" step="0.0001" value={form.cost} onChange={(event) => setForm((current) => ({ ...current, cost: event.target.value }))} />
               </label>
               <label className="text-xs font-semibold text-slate-500">
                 Km al rifornimento
@@ -903,7 +929,8 @@ export default function FleetFuelPage() {
               <div><p className="text-lg font-bold text-slate-950">{selectedRecord.vehicle?.label ?? "Veicolo"}</p><p className="text-sm text-slate-500">{selectedRecord.vehicle?.plate ?? "Targa non indicata"}</p></div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-5 border-y border-slate-100 py-5">
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Litri</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.liters != null ? `${selectedRecord.liters.toFixed(1)} L` : "-"}</dd></div>
-                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Costo totale</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtMoney(selectedRecord.cost)}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">{selectedRecord.invoice_supplier === "UTA" ? "Costo netto" : "Costo totale"}</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtFuelCost(selectedRecord)}</dd>{selectedRecord.gross_cost != null && <p className="text-xs text-slate-500">Pagato EUR {selectedRecord.gross_cost.toFixed(2)}</p>}</div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Fornitore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.invoice_supplier ?? "Da associare"}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Prezzo al litro</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtUnitPrice(selectedRecord)} EUR/L</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Chilometraggio</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtNumber(selectedRecord.km_at_fuel, " km")}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Distributore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.station ?? "Non indicato"}</dd></div>

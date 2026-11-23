@@ -244,6 +244,33 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     mocks.checkRateLimit.mockResolvedValue({ allowed: true });
   });
 
+  it("salva il fornitore scelto dall'autista e scorpora l'IVA solo per UTA", async () => {
+    const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
+    mocks.createClient.mockReturnValue(fake.admin);
+    const uta = await callPost({ action: "fuel", liters: 25, cost: 50, station: "Q8", invoice_supplier: "UTA" });
+    const eni = await callPost({ action: "fuel", liters: 25, cost: 50, station: "ENI", invoice_supplier: "ENI" });
+    expect(uta.status).toBe(200);
+    expect(eni.status).toBe(200);
+    expect(fake.tables.vehicle_fuel[0]).toMatchObject({ invoice_supplier: "UTA", cost: 40.9836, gross_cost: 50, submitted_via_qr: true });
+    expect(fake.tables.vehicle_fuel[1]).toMatchObject({ invoice_supplier: "ENI", cost: 50, gross_cost: null, submitted_via_qr: true });
+  });
+
+  it("rifiuta un fornitore diverso da ENI e UTA", async () => {
+    const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
+    mocks.createClient.mockReturnValue(fake.admin);
+    const res = await callPost({ action: "fuel", cost: 50, invoice_supplier: "ALTRO" });
+    expect(res.status).toBe(400);
+    expect(fake.tables.vehicle_fuel).toHaveLength(0);
+  });
+
+  it("richiede il fornitore anche quando l'autista invia il modulo senza selezione", async () => {
+    const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
+    mocks.createClient.mockReturnValue(fake.admin);
+    const res = await callPost({ action: "fuel", cost: 50, liters: 25 });
+    expect(res.status).toBe(400);
+    expect(fake.tables.vehicle_fuel).toHaveLength(0);
+  });
+
   it("1. success GET invariato: veicolo trovato → 200 con tutte le sezioni attese", async () => {
     const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
     mocks.createClient.mockReturnValue(fake.admin);
@@ -362,7 +389,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     fake.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fake.admin);
 
-    const res = await callPost({ action: "fuel", liters: 40, cost: 60, station: "Agip" });
+    const res = await callPost({ action: "fuel", liters: 40, cost: 60, station: "Agip", invoice_supplier: "ENI" });
     const rawText = await res.clone().text();
 
     expect(rawText).not.toContain("submitted_via_qr_legacy");
@@ -390,7 +417,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    expect((await callPost({ action: "fuel", liters: 40 })).status).toBe(500);
+    expect((await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI" })).status).toBe(500);
   });
 
   it("13. fallback generico corretto per ciascun ramo", async () => {
@@ -412,7 +439,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    const bodyFuel = await (await callPost({ action: "fuel", liters: 40 })).json();
+    const bodyFuel = await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI" })).json();
     expect(bodyFuel).toEqual({ error: "Impossibile registrare il rifornimento." });
   });
 
@@ -433,7 +460,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    assertNoForbiddenFields(await (await callPost({ action: "fuel", liters: 40 })).json());
+    assertNoForbiddenFields(await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI" })).json());
   });
 
   it("15. nessun oggetto error serializzato: body.error è sempre una stringa", async () => {

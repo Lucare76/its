@@ -124,7 +124,7 @@ export default function FuelReconcilePage() {
         <p className="text-xs text-slate-500">Documento/operazione: {line.reference}</p>
         {fuel ? <div className="mt-2 space-y-2">
           <p>{differences(line, fuel)}</p>
-          {(fuel.cost !== Number(line.amount) || fuel.liters !== Number(line.liters)) &&
+          {(fuel.cost == null || Math.round(Number(fuel.cost) * 100) !== Math.round(Number(line.amount) * 100) || fuel.liters !== Number(line.liters)) &&
             <button className="text-blue-700 underline disabled:opacity-50" disabled={busy} onClick={() => void correct(fuel, line)}>Correggi registrazione manuale</button>}
         </div> : candidates.length ? <div className="mt-2">
           <p className="font-medium text-amber-800">{candidates.length > 1 ? "Più registrazioni possibili: scegli quella corretta." : "Possibile corrispondenza: verifica prima di collegare."}</p>

@@ -74,7 +74,7 @@ export function proposeFuelMatch(line: FuelInvoiceLine, manual: ManualFuelLine[]
     && (normalizeStation(row.station).includes(normalizeStation(line.station))
       || normalizeStation(line.station).includes(normalizeStation(row.station))));
   const ranked = candidates.map((row) => ({ row,
-    amountDifference: row.cost == null ? null : Math.round((line.amount - row.cost) * 100) / 100,
+    amountDifference: row.cost == null ? null : (Math.round((line.amount - row.cost) * 100) / 100 || 0),
     litersDifference: row.liters == null ? null : Math.round((line.liters - row.liters) * 100) / 100,
   }));
   return ranked.length === 1 ? { status: "candidate" as const, ...ranked[0]! }
