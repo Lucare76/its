@@ -30,9 +30,25 @@ export async function POST(request: NextRequest) {
       }
     }
     const invoiceNumbers = new Set(lines.map(line => line.number));
-    return NextResponse.json({ lines: lines.map(line => ({ ...line, found: supplied.has(line.number) })),
+    // Riconcilia i numeri Me… persistiti alla consegna, nel solo tenant dell'operatore.
+    // Evita di dedurre corrispondenze dal codice prenotazione AG… (non è un numero di biglietto).
+    const stored = new Set<string>();
+    const invoiceList = [...invoiceNumbers];
+    for (let index = 0; index < invoiceList.length; index += 100) {
+      const { data: storedRows, error: storedError } = await auth.admin
+        .from("medmar_delivery_attempts")
+        .select("ticket_numbers")
+        .eq("tenant_id", auth.membership.tenant_id)
+        .eq("status", "delivered")
+        .overlaps("ticket_numbers", invoiceList.slice(index, index + 100));
+      if (storedError) throw new Error("Impossibile leggere i biglietti registrati. Verifica che la migrazione dei numeri Medmar sia applicata.");
+      for (const row of storedRows ?? []) for (const number of row.ticket_numbers as string[] ?? []) {
+        if (invoiceNumbers.has(number.toUpperCase())) stored.add(number.toUpperCase());
+      }
+    }
+    return NextResponse.json({ lines: lines.map(line => ({ ...line, found: supplied.has(line.number) || stored.has(line.number), stored: stored.has(line.number) })),
       missing_from_invoice: [...supplied].filter(number => !invoiceNumbers.has(number)),
-      supplied_count: supplied.size });
+      supplied_count: supplied.size, stored_count: stored.size });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "PDF non leggibile." }, { status: 422 });
   }

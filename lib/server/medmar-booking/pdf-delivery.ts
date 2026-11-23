@@ -25,6 +25,7 @@ import {
 import { MedmarPdfMailboxError, findMedmarTicketPdf, findMedmarPdfByUid } from "./pdf-mailbox-lookup";
 import { cleanMedmarPdf, MedmarPdfCleanerError } from "./pdf-cleaner";
 import { validateCleanedMedmarPdf } from "./pdf-validation";
+import { ticketNumbers } from "../medmar-invoice-compare";
 import { loadAgencyRecipient } from "./recipient-repository";
 import { resolveFinalTicketRecipient, type MedmarFinalRecipient } from "./recipient-resolver";
 import type { MedmarPreflightResult } from "./types";
@@ -264,7 +265,7 @@ export async function sendMedmarCleanedTicketEmail(input: {
 }
 
 type PdfResolution =
-  | { kind: "ok"; original: Buffer; cleaned: Uint8Array; filename: string; messageUid: string; originalSha256: string; cleanedSha256: string }
+  | { kind: "ok"; original: Buffer; cleaned: Uint8Array; filename: string; messageUid: string; originalSha256: string; cleanedSha256: string; ticketNumbers: string[] }
   | { kind: "not_found" }
   | { kind: "ambiguous"; detail: string }
   | { kind: "validation_failed"; detail: string };
@@ -364,6 +365,7 @@ async function resolvePdfForDelivery(
     messageUid: located.messageUid,
     originalSha256: located.sha256,
     cleanedSha256: createHash("sha256").update(Buffer.from(cleaned)).digest("hex"),
+    ticketNumbers: ticketNumbers(validation.extractedText),
   };
 }
 
@@ -536,6 +538,7 @@ export async function deliverMedmarTicket(input: MedmarDeliveryInput, deps?: Med
         pdf_filename: pdfResolution.filename,
         pdf_original_sha256: pdfResolution.originalSha256,
         pdf_cleaned_sha256: pdfResolution.cleanedSha256,
+        ticket_numbers: pdfResolution.ticketNumbers,
       },
       beforePdfStatus
     )
