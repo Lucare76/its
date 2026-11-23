@@ -5,8 +5,9 @@ import { getToken } from "@/lib/supabase/client";
 
 type Fuel = { id: string; vehicle_id: string; fuel_date: string; station: string; invoice_supplier: string;
   cost: number | null; liters: number | null; km_at_fuel: number | null; fuel_type: string | null; notes: string | null };
-type Candidate = { status: "candidate"; row: Fuel; amountDifference: number | null; litersDifference: number | null } |
-  { status: "missing" | "ambiguous"; candidates: Array<{ row: Fuel; amountDifference: number | null; litersDifference: number | null }> };
+type CandidateRow = { row: Fuel; amountDifference: number | null; litersDifference: number | null; stationMismatch: boolean };
+type Candidate = ({ status: "candidate" } & CandidateRow) |
+  { status: "missing" | "ambiguous"; candidates: CandidateRow[] };
 type Line = { id: string; line_no: number; fuel_date: string; station: string; liters: number; amount: number;
   reference: string; matched_fuel_id: string | null; manual_match: Fuel | null; proposal: Candidate | null };
 type Batch = { id: string; supplier: string; invoice_number: string; filename: string; created_at: string };
@@ -46,12 +47,13 @@ export default function FuelReconcilePage() {
     await refresh(result.import_id);
   }
 
-  async function link(lineId: string, fuelId: string) {
+  async function link(line: Line, candidate: CandidateRow) {
+    if (candidate.stationMismatch && !window.confirm(`I luoghi sono diversi:\nFattura: ${line.station}\nRegistro: ${candidate.row.station}\n\nData e litri coincidono; l'importo differisce al massimo di 2 centesimi. Hai verificato che è lo stesso rifornimento?`)) return;
     const token = await getToken(); if (!token) return;
     setBusy(true);
     const res = await fetch("/api/ops/fuel-invoice-reconciliation", {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "link", line_id: lineId, fuel_id: fuelId }),
+      body: JSON.stringify({ action: "link", line_id: line.id, fuel_id: candidate.row.id }),
     });
     const result = await res.json(); setBusy(false);
     setMessage(res.ok ? "Operazione collegata. Controlla eventuali differenze." : result.error ?? "Collegamento fallito.");
@@ -116,8 +118,8 @@ export default function FuelReconcilePage() {
       </select>
     </label>
     <div className="space-y-3">{data.lines.map(line => {
-      const candidates = line.proposal?.status === "candidate" ? [line.proposal.row]
-        : line.proposal && "candidates" in line.proposal ? line.proposal.candidates.map(x => x.row) : [];
+      const candidates: CandidateRow[] = line.proposal?.status === "candidate" ? [line.proposal]
+        : line.proposal && "candidates" in line.proposal ? line.proposal.candidates : [];
       const fuel = line.manual_match;
       return <section key={line.id} className="rounded-xl border bg-white p-4 text-sm">
         <p className="font-semibold">{line.fuel_date} · {line.station} · {Number(line.liters).toFixed(2)} L · €{Number(line.amount).toFixed(2)}</p>
@@ -128,11 +130,12 @@ export default function FuelReconcilePage() {
             <button className="text-blue-700 underline disabled:opacity-50" disabled={busy} onClick={() => void correct(fuel, line)}>Correggi registrazione manuale</button>}
         </div> : candidates.length ? <div className="mt-2">
           <p className="font-medium text-amber-800">{candidates.length > 1 ? "Più registrazioni possibili: scegli quella corretta." : "Possibile corrispondenza: verifica prima di collegare."}</p>
-          {candidates.map(row => <div key={row.id} className="mt-2 flex flex-wrap items-center gap-3">
-            <span>Ufficio: {row.station} · €{row.cost ?? "—"} · {row.liters ?? "—"} L</span>
-            <button disabled={busy} onClick={() => void link(line.id, row.id)} className="rounded-lg border border-blue-300 px-2 py-1 text-blue-700">Collega</button>
+          {candidates.map(candidate => <div key={candidate.row.id} className="mt-2 flex flex-wrap items-center gap-3">
+            <span>Registro: {candidate.row.station} · €{candidate.row.cost ?? "—"} · {candidate.row.liters ?? "—"} L</span>
+            {candidate.stationMismatch && <span className="font-semibold text-amber-700">Luogo scritto diversamente: verifica prima di collegare.</span>}
+            <button disabled={busy} onClick={() => void link(line, candidate)} className="rounded-lg border border-blue-300 px-2 py-1 text-blue-700">{candidate.stationMismatch ? "Verifica e collega" : "Collega"}</button>
           </div>)}
-        </div> : <p className="mt-2 font-medium text-rose-700">Nessun rifornimento manuale dello stesso fornitore, data e luogo. Controlla anche il fornitore indicato nel registro.</p>}
+        </div> : <p className="mt-2 font-medium text-rose-700">Nessuna registrazione compatibile per questo fornitore e questa data. Controlla se il rifornimento è stato inserito nel registro e verifica litri e importo.</p>}
       </section>;
     })}</div>
     {!!data.unbilled_manual?.length && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">

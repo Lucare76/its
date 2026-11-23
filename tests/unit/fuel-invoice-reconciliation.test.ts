@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFuelInvoiceRows, proposeFuelMatch } from "@/lib/server/fuel-invoice-reconciliation";
+import { fuelCanLink, parseFuelInvoiceRows, proposeFuelMatch } from "@/lib/server/fuel-invoice-reconciliation";
 
 describe("fuel invoice reconciliation", () => {
   it("parses ENI purchases but excludes invoice fees and totals", () => {
@@ -30,5 +30,17 @@ describe("fuel invoice reconciliation", () => {
     const manual = { id: "uta-1", fuel_date: invoice.date, station: invoice.station,
       liters: invoice.liters, cost: 40.9836, invoice_supplier: "UTA" };
     expect(proposeFuelMatch(invoice, [manual], "UTA")).toMatchObject({ status: "candidate", amountDifference: 0 });
+  });
+
+  it("propone i luoghi ENI descritti diversamente soltanto con data, litri e importo compatibili", () => {
+    const line = { date: "2026-10-19", station: "DUE CARRARE", liters: 216.9, amount: 475.01, reference: "00914931" };
+    const row = { id: "qr-1", fuel_date: line.date, station: "San pelagico Eni ovest", liters: 216.9, cost: 475, invoice_supplier: "ENI" };
+    expect(proposeFuelMatch(line, [row], "ENI")).toMatchObject({ status: "candidate", stationMismatch: true, amountDifference: 0.01 });
+    expect(fuelCanLink(line, row, "ENI")).toBe(true);
+    expect(fuelCanLink(line, { ...row, invoice_supplier: "UTA" }, "ENI")).toBe(false);
+    expect(fuelCanLink(line, { ...row, fuel_date: "2026-10-20" }, "ENI")).toBe(false);
+    expect(fuelCanLink(line, { ...row, liters: 216.89 }, "ENI")).toBe(false);
+    expect(fuelCanLink(line, { ...row, cost: 475.04 }, "ENI")).toBe(false);
+    expect(proposeFuelMatch(line, [row, { ...row, id: "qr-2" }], "ENI")).toMatchObject({ status: "ambiguous" });
   });
 });
