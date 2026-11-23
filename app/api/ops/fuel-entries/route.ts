@@ -43,6 +43,7 @@ const editFuelSchema = z.object({
 });
 
 const deleteFuelSchema = z.object({ id: z.string().uuid() });
+const assignSupplierSchema = z.object({ id: z.string().uuid(), invoice_supplier: z.enum(["ENI", "UTA"]) });
 
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -127,6 +128,7 @@ export async function POST(request: NextRequest) {
     | { action: "approve"; data: z.infer<typeof fuelApprovalSchema> }
     | { action: "update_document"; data: z.infer<typeof updateFuelDocumentSchema> }
     | { action: "edit"; data: z.infer<typeof editFuelSchema> }
+    | { action: "assign_supplier"; data: z.infer<typeof assignSupplierSchema> }
     | { action: "delete"; data: z.infer<typeof deleteFuelSchema> }
     | null;
 
@@ -201,6 +203,34 @@ export async function POST(request: NextRequest) {
       .eq("tenant_id", auth.membership.tenant_id)
       .eq("id", parsed.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "assign_supplier") {
+    const parsed = assignSupplierSchema.safeParse(body.data);
+    if (!parsed.success) return NextResponse.json({ error: "Seleziona ENI o UTA." }, { status: 400 });
+    const { id, invoice_supplier } = parsed.data;
+    const { data: original, error: readError } = await auth.admin.from("vehicle_fuel")
+      .select("id, cost, submitted_via_qr, invoice_supplier")
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", id).maybeSingle();
+    if (readError) return NextResponse.json({ error: readError.message }, { status: 500 });
+    if (!original) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
+    if (original.invoice_supplier) return NextResponse.json({ error: "Fornitore già associato: aggiorna la pagina." }, { status: 409 });
+    const { data: existingLink, error: linkError } = await (auth.admin as unknown as SupabaseClient).from("fuel_invoice_lines")
+      .select("id").eq("tenant_id", auth.membership.tenant_id).eq("matched_fuel_id", id).maybeSingle();
+    if (linkError) return NextResponse.json({ error: linkError.message }, { status: 500 });
+    if (existingLink) return NextResponse.json({ error: "Scollega prima la fattura per cambiare fornitore." }, { status: 409 });
+    const isUtaQr = invoice_supplier === "UTA" && original.submitted_via_qr && original.cost != null;
+    const { data: updated, error } = await auth.admin.from("vehicle_fuel")
+      .update({
+        invoice_supplier,
+        ...(isUtaQr ? { gross_cost: original.cost, cost: utaNetFromGross(original.cost) } : {}),
+        last_edited_by: auth.user.id,
+      })
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", id).is("invoice_supplier", null)
+      .select("id").maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!updated) return NextResponse.json({ error: "Il rifornimento è stato modificato: aggiorna la pagina." }, { status: 409 });
     return NextResponse.json({ ok: true });
   }
 
