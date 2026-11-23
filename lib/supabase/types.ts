@@ -4818,6 +4818,7 @@ export type Database = {
           service_ids: string[]
           status: string
           tenant_id: string
+          ticket_numbers: string[]
           updated_at: string
         }
         Insert: {
@@ -4842,6 +4843,7 @@ export type Database = {
           service_ids: string[]
           status: string
           tenant_id: string
+          ticket_numbers?: string[]
           updated_at?: string
         }
         Update: {
@@ -4866,6 +4868,7 @@ export type Database = {
           service_ids?: string[]
           status?: string
           tenant_id?: string
+          ticket_numbers?: string[]
           updated_at?: string
         }
         Relationships: [

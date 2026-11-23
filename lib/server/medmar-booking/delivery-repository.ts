@@ -10,6 +10,7 @@ function normalizeAttempt(row: Record<string, unknown>): MedmarDeliveryAttempt {
     status: row.status as MedmarDeliveryAttempt["status"],
     medmar_id_prenotazione: (row.medmar_id_prenotazione as string | null | undefined) ?? null,
     medmar_numero: (row.medmar_numero as string | null | undefined) ?? null,
+    ticket_numbers: Array.isArray(row.ticket_numbers) ? row.ticket_numbers.map(String) : [],
     pdf_mailbox_message_uid: (row.pdf_mailbox_message_uid as string | null | undefined) ?? null,
     pdf_filename: (row.pdf_filename as string | null | undefined) ?? null,
     pdf_original_sha256: (row.pdf_original_sha256 as string | null | undefined) ?? null,

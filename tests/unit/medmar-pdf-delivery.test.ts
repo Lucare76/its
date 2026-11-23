@@ -26,6 +26,7 @@ function makeIssuingAttemptRow(overrides: Partial<{
     remote_state_unknown: false,
     medmar_id_prenotazione: ID_PRENOTAZIONE,
     medmar_numero: MEDMAR_NUMERO,
+    ticket_numbers: [],
     preflight_snapshot: {
       outward: { route: { from: "Pozzuoli", to: "Casamicciola" }, date: "2026-08-23", matched_departure_time: "08:15:00" },
       return: { route: { from: "Ischia", to: "Pozzuoli" }, date: "2026-08-26", matched_departure_time: "15:00:00" },
@@ -206,6 +207,18 @@ describe("deliverMedmarTicket — state machine delivery PDF Medmar", () => {
       expect(outcome.attempt.pdf_cleaned_sha256).toBeTruthy();
       expect(outcome.attempt.pdf_original_sha256).not.toBe(outcome.attempt.pdf_cleaned_sha256);
     }
+  });
+
+  it("salva i numeri Me distinti dal codice AG durante la consegna", async () => {
+    const outcome = await deliverMedmarTicket(
+      { admin: fakeAdminWithServicesUpdateSpy(vi.fn()), tenantId: TENANT, userId: USER, issuingAttemptId: ISSUING_ATTEMPT_ID },
+      baseDeps({
+        repo: makeDeliveryRepo(),
+        validatePdf: (async () => ({ ok: true, extractedText: `Prenotazione ${MEDMAR_NUMERO}\nMe26AG190004415 Me26AG190004416 Me26AG190004415` })) as never,
+      })
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.attempt.ticket_numbers).toEqual(["ME26AG190004415", "ME26AG190004416"]);
   });
 
   it("6. validazione PDF fallita blocca l'invio -> pdf_validation_failed, sendEmail mai chiamato", async () => {
