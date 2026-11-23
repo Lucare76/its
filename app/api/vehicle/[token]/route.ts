@@ -401,7 +401,7 @@ export async function POST(
 
   const { data: vehicle, error } = await admin
     .from("vehicles")
-    .select("id")
+    .select("id, tenant_id")
     .eq("qr_token", token)
     .maybeSingle();
 
@@ -514,7 +514,10 @@ export async function POST(
 
     if (logError || !logRow) return fail("Turno non trovato.", 404);
     if (logRow.end_km !== null) return fail("Questo turno risulta gia chiuso.", 409);
-    if (endKm < logRow.start_km) return fail("I km finali non possono essere inferiori ai km iniziali.");
+    // A driver must be able to finish the shift even after mistyping the
+    // odometer. Keep the submitted value for office review, but do not use an
+    // implausible value to overwrite the vehicle's current odometer.
+    const kmNeedsReview = endKm < logRow.start_km || endKm - logRow.start_km > 1000;
 
     const notes = typeof body.notes === "string" ? body.notes.trim() : "";
     if (notes.length > 1000) return fail("Note troppo lunghe.");
@@ -534,9 +537,11 @@ export async function POST(
     }
 
     // Aggiorna km veicolo con il valore finale
-    await admin.from("vehicles").update({ km: endKm }).eq("id", vehicle.id);
+    if (!kmNeedsReview) {
+      await admin.from("vehicles").update({ km: endKm }).eq("id", vehicle.id);
+    }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, km_needs_review: kmNeedsReview });
   }
 
   /* ── Rifornimento rapido ────────────────────────────────────────────────── */

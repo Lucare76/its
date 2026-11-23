@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { normalizeStation } from "@/lib/server/fuel-invoice-reconciliation";
 import { fuelApprovalSchema } from "@/lib/server/fleet-schemas";
 
 export const runtime = "nodejs";
@@ -13,6 +15,7 @@ const createFuelSchema = z.object({
   km_at_fuel: z.number().int().min(0).nullable().optional(),
   fuel_type: z.string().max(40).nullable().optional(),
   station: z.string().max(160).nullable().optional(),
+  invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
   notes: z.string().max(1000).nullable().optional(),
   submitted_via_qr: z.boolean().optional(),
 });
@@ -33,6 +36,7 @@ const editFuelSchema = z.object({
   km_at_fuel:   z.number().int().min(0).nullable().optional(),
   fuel_type:    z.string().max(40).nullable().optional(),
   station:      z.string().max(160).nullable().optional(),
+  invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
   notes:        z.string().max(1000).nullable().optional(),
 });
 
@@ -48,7 +52,7 @@ export async function GET(request: NextRequest) {
 
   let query = auth.admin
     .from("vehicle_fuel")
-    .select("id, vehicle_id, fuel_date, liters, cost, km_at_fuel, fuel_type, station, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
+    .select("id, vehicle_id, fuel_date, liters, cost, km_at_fuel, fuel_type, station, invoice_supplier, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("fuel_date", { ascending: false })
     .limit(250);
@@ -130,6 +134,9 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "create") {
     const parsed = createFuelSchema.parse(body.data);
+    const { data: vehicle } = await auth.admin.from("vehicles").select("id")
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.vehicle_id).maybeSingle();
+    if (!vehicle) return NextResponse.json({ error: "Mezzo non disponibile per questo tenant." }, { status: 404 });
     const { error } = await auth.admin.from("vehicle_fuel").insert({
       tenant_id: auth.membership.tenant_id,
       vehicle_id: parsed.vehicle_id,
@@ -139,6 +146,7 @@ export async function POST(request: NextRequest) {
       km_at_fuel: parsed.km_at_fuel ?? null,
       fuel_type: parsed.fuel_type ?? null,
       station: parsed.station ?? null,
+      invoice_supplier: parsed.invoice_supplier ?? null,
       notes: parsed.notes ?? null,
       approval_status: "approved",
       approved_at: new Date().toISOString(),
@@ -151,8 +159,21 @@ export async function POST(request: NextRequest) {
   }
 
   if (body.action === "edit") {
-    if (auth.membership.role !== "admin") return NextResponse.json({ error: "Solo admin può modificare un rifornimento." }, { status: 403 });
     const parsed = editFuelSchema.parse(body.data);
+    const { data: vehicle } = await auth.admin.from("vehicles").select("id")
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.vehicle_id).maybeSingle();
+    if (!vehicle) return NextResponse.json({ error: "Mezzo non disponibile per questo tenant." }, { status: 404 });
+    const { data: existingLink } = await (auth.admin as unknown as SupabaseClient).from("fuel_invoice_lines")
+      .select("id, fuel_date, station").eq("tenant_id", auth.membership.tenant_id).eq("matched_fuel_id", parsed.id).maybeSingle();
+    if (existingLink) {
+      const { data: batch } = await auth.admin.from("vehicle_fuel").select("invoice_supplier")
+        .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.id).maybeSingle();
+      if (parsed.invoice_supplier !== batch?.invoice_supplier) return NextResponse.json({ error: "Scollega prima la fattura per cambiare fornitore." }, { status: 409 });
+      if (parsed.fuel_date !== existingLink.fuel_date || !parsed.station || !normalizeStation(parsed.station) || !normalizeStation(existingLink.station) ||
+        !(normalizeStation(parsed.station).includes(normalizeStation(existingLink.station)) ||
+          normalizeStation(existingLink.station).includes(normalizeStation(parsed.station))))
+        return NextResponse.json({ error: "La data o il distributore non coincidono più con la fattura collegata." }, { status: 409 });
+    }
     const { error } = await auth.admin
       .from("vehicle_fuel")
       .update({
@@ -163,6 +184,8 @@ export async function POST(request: NextRequest) {
         km_at_fuel: parsed.km_at_fuel ?? null,
         fuel_type:  parsed.fuel_type ?? null,
         station:    parsed.station ?? null,
+        invoice_supplier: parsed.invoice_supplier ?? null,
+        last_edited_by: auth.user.id,
         notes:      parsed.notes ?? null,
       })
       .eq("tenant_id", auth.membership.tenant_id)

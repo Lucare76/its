@@ -12,6 +12,11 @@ type ComplianceEntry = {
   days_left: number | null;
   status: StatusLevel;
   company?: string;
+  suspension_status?: "none" | "scheduled" | "suspended" | "reactivated" | "ended";
+  source?: "policy" | "archived_policy" | "legacy_vehicle";
+  suspended_from?: string | null;
+  suspended_until?: string | null;
+  reactivated_on?: string | null;
   outcome?: string;
   count?: number;
 };
@@ -164,6 +169,9 @@ const EMPTY_INSURANCE = {
   expiry_date: "",
   annual_amount_cents: "",
   notes: "",
+  suspended_from: "",
+  suspended_until: "",
+  reactivated_on: "",
 };
 
 const EMPTY_INSPECTION = {
@@ -197,7 +205,7 @@ function CompliancePill({ label, entry }: { label: string; entry: ComplianceEntr
     <div className={`rounded-xl px-3 py-2 text-xs ${STATUS_CELL[status]}`}>
       <div className="font-semibold opacity-60">{label}</div>
       {entry ? (
-        <div className="mt-0.5 font-bold">{formatDays(entry.days_left)}</div>
+        <div className="mt-0.5 font-bold">{entry.suspension_status === "suspended" ? "Polizza sospesa" : formatDays(entry.days_left)}</div>
       ) : (
         <div className="mt-0.5 font-bold">—</div>
       )}
@@ -354,7 +362,7 @@ export default function ScadenzePage() {
 
   const getCurrentRecordForTab = useCallback((tab: PanelTab, records: PanelRecords) => {
     if (tab === "insurance") {
-      return records.insurances.find((row) => row.is_current === true) ?? records.insurances[0] ?? null;
+      return records.insurances.find((row) => row.is_current === true) ?? null;
     }
     if (tab === "inspection") {
       return records.inspections.find((row) => row.is_current === true) ?? records.inspections[0] ?? null;
@@ -398,6 +406,9 @@ export default function ScadenzePage() {
           expiry_date: String(currentRecord.expiry_date ?? ""),
           annual_amount_cents: currentRecord.annual_amount_cents != null ? String(Number(currentRecord.annual_amount_cents) / 100) : "",
           notes: String(currentRecord.notes ?? ""),
+          suspended_from: String(currentRecord.suspended_from ?? ""),
+          suspended_until: String(currentRecord.suspended_until ?? ""),
+          reactivated_on: String(currentRecord.reactivated_on ?? ""),
         });
       } else if (panelTab === "inspection") {
         setInspectionForm({
@@ -483,6 +494,9 @@ export default function ScadenzePage() {
           ? Math.round(parseFloat(insuranceForm.annual_amount_cents) * 100)
           : null,
         notes: insuranceForm.notes || null,
+        suspended_from: insuranceForm.suspended_from || null,
+        suspended_until: insuranceForm.suspended_until || null,
+        reactivated_on: insuranceForm.reactivated_on || null,
       };
     } else if (panelTab === "inspection") {
       if (!inspectionForm.expiry_date) {
@@ -1004,7 +1018,7 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
         className={`inline-flex flex-col gap-0.5 rounded-lg px-2 py-1 text-left text-xs font-medium transition hover:opacity-85 ${STATUS_CELL[entry.status]}`}
       >
         <span>{formatDate(entry.expiry_date)}</span>
-        <span className="opacity-75">{formatDays(entry.days_left)}</span>
+        <span className="opacity-75">{tab === "insurance" && entry.source === "archived_policy" ? "Non attuale · verifica" : formatDays(entry.days_left)}</span>
       </button>
     );
   };
@@ -1698,6 +1712,14 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                             <label className="label">Note</label>
                             <input className="input" value={insuranceForm.notes} onChange={(e) => setInsuranceForm((f) => ({ ...f, notes: e.target.value }))} />
                           </div>
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                            <p className="mb-2 text-sm font-semibold text-amber-900">Sospensione della polizza</p>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                              <label className="label">Dal<input type="date" className="input" value={insuranceForm.suspended_from} onChange={e => setInsuranceForm(f => ({ ...f, suspended_from: e.target.value }))} /></label>
+                              <label className="label">Al (previsto)<input type="date" className="input" value={insuranceForm.suspended_until} onChange={e => setInsuranceForm(f => ({ ...f, suspended_until: e.target.value }))} /></label>
+                              <label className="label">Riattivata il (se anticipata)<input type="date" className="input" value={insuranceForm.reactivated_on} onChange={e => setInsuranceForm(f => ({ ...f, reactivated_on: e.target.value }))} /></label>
+                            </div>
+                          </div>
                         </>
                       )}
 
@@ -1887,7 +1909,7 @@ function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
         const status: StatusLevel = !expiry ? "missing" : days! < 0 ? "expired" : days! <= 7 ? "critical" : days! <= 30 ? "warning" : "ok";
 
         return (
-          <div key={row.id as string ?? i} className={`rounded-xl border p-3 text-sm ${isCurrent ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
+          <div key={row.id as string ?? i} className={`rounded-xl border p-3 text-sm ${isCurrent ? "border-slate-200 bg-white" : "border-amber-200 bg-amber-50"}`}>
             <div className="flex items-center justify-between gap-2">
               <div className="font-medium text-slate-800">
                 {tab === "insurance" && (row.company as string)}
@@ -1897,8 +1919,9 @@ function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {isCurrent && (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Attivo</span>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Attuale</span>
                 )}
+                {!isCurrent && tab === "insurance" && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Non attuale: verificare rinnovo</span>}
                 {expiry && (
                   <span className={`rounded-lg px-2 py-0.5 text-xs font-semibold ${STATUS_CELL[status]}`}>
                     {formatDate(expiry)} · {formatDays(days)}
@@ -1908,6 +1931,12 @@ function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
             </div>
             {tab === "insurance" && !!row.policy_number && (
               <div className="mt-1 text-xs text-slate-400">Polizza: {row.policy_number as string}</div>
+            )}
+            {tab === "insurance" && !!row.suspended_from && !!row.suspended_until && (
+              <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
+                Sospensione: {formatDate(String(row.suspended_from))} – {formatDate(String(row.suspended_until))}.
+                {row.reactivated_on ? ` Riattivata il ${formatDate(String(row.reactivated_on))}.` : " Non risulta ancora riattivata."}
+              </div>
             )}
             {tab === "inspection" && !!row.outcome && (
               <div className="mt-1 text-xs text-slate-400">Esito: {row.outcome === "passed" ? "Superato" : row.outcome === "failed" ? "Bocciato" : "In attesa"}</div>

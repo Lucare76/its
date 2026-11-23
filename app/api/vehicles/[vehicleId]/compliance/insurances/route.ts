@@ -1,9 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 
 type Ctx = { params: Promise<{ vehicleId: string }> };
+
+const iso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional();
+const suspensionSchema = z.object({ suspended_from: iso, suspended_until: iso, reactivated_on: iso });
+function parseSuspension(body: unknown) {
+  const parsed = suspensionSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const { suspended_from, suspended_until, reactivated_on } = parsed.data;
+  if (Boolean(suspended_from) !== Boolean(suspended_until)
+    || (suspended_from && suspended_until && suspended_until < suspended_from)
+    || (reactivated_on && (!suspended_from || reactivated_on < suspended_from))) return null;
+  return { suspended_from: suspended_from ?? null, suspended_until: suspended_until ?? null, reactivated_on: reactivated_on ?? null };
+}
 
 export async function GET(request: NextRequest, { params }: Ctx) {
   const { vehicleId } = await params;
@@ -29,6 +42,8 @@ export async function POST(request: NextRequest, { params }: Ctx) {
   const { admin, user, membership: { tenant_id } } = ctx;
 
   const body = await request.json().catch(() => ({}));
+  const suspension = parseSuspension(body);
+  if (!suspension) return NextResponse.json({ error: "Date di sospensione o riattivazione non valide." }, { status: 400 });
   const { company, policy_number, expiry_date, annual_amount_cents, document_path, notes } = body;
 
   if (!company || !expiry_date) {
@@ -63,6 +78,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
       annual_amount_cents: annual_amount_cents ?? null,
       document_path: document_path ?? null,
       notes: notes ?? null,
+      ...suspension,
       is_current: true,
       created_by: user.id,
     })
@@ -92,6 +108,8 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
   const { admin, user, membership: { tenant_id } } = ctx;
 
   const body = await request.json().catch(() => ({}));
+  const suspension = parseSuspension(body);
+  if (!suspension) return NextResponse.json({ error: "Date di sospensione o riattivazione non valide." }, { status: 400 });
   const { id, company, policy_number, expiry_date, annual_amount_cents, document_path, notes } = body;
 
   if (!id) return NextResponse.json({ error: "id obbligatorio" }, { status: 400 });
@@ -105,6 +123,7 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
       annual_amount_cents: annual_amount_cents ?? null,
       document_path: document_path ?? null,
       notes: notes ?? null,
+      ...suspension,
     })
     .eq("id", id)
     .eq("tenant_id", tenant_id)

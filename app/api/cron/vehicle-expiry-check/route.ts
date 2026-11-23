@@ -26,6 +26,7 @@ import {
   buildStatusLabel,
   INSURANCE_GRACE_DAYS,
   WARN_DAYS,
+  insuranceSuspensionStatus,
 } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
@@ -238,22 +239,22 @@ async function runVehicleExpiryCheck(request: NextRequest, readOptions: () => Pr
 
   const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes, graceRes] = await Promise.all([
     admin.from("vehicles").select("id, tenant_id, label, plate, habitual_driver_profile_id, insurance_expiry, road_tax_expiry, inspection_expiry").eq("active", true),
-    admin.from("vehicle_insurances").select("vehicle_id, expiry_date").eq("is_current", true),
+    admin.from("vehicle_insurances").select("vehicle_id, expiry_date, suspended_from, suspended_until, reactivated_on").eq("is_current", true),
     admin.from("vehicle_inspections").select("vehicle_id, expiry_date").eq("is_current", true),
     admin.from("vehicle_extinguishers").select("vehicle_id, expiry_date, serial_number").eq("active", true),
     admin.from("driver_profiles").select("id, full_name, tachograph_card_expiry").eq("active", true).not("tachograph_card_expiry", "is", null),
     admin.from("vehicle_compliance_grace_periods").select("tenant_id, compliance_type, grace_days").eq("compliance_type", "insurance"),
   ]);
 
-  if (vehiclesRes.error) {
-    return NextResponse.json({ ok: false, error: vehiclesRes.error.message }, { status: 500 });
-  }
+  const queryError = [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes, graceRes]
+    .find((result) => result.error)?.error;
+  if (queryError) return NextResponse.json({ ok: false, error: queryError.message }, { status: 500 });
 
   const vehicles = vehiclesRes.data ?? [];
 
   // Build lookup maps for new compliance tables
-  const insuranceMap = new Map<string, string>();
-  for (const ins of insurancesRes.data ?? []) insuranceMap.set(ins.vehicle_id, ins.expiry_date);
+  const insuranceMap = new Map<string, NonNullable<typeof insurancesRes.data>[number]>();
+  for (const ins of insurancesRes.data ?? []) insuranceMap.set(ins.vehicle_id, ins);
 
   const inspectionMap = new Map<string, string>();
   for (const ins of inspectionsRes.data ?? []) inspectionMap.set(ins.vehicle_id, ins.expiry_date);
@@ -282,7 +283,25 @@ async function runVehicleExpiryCheck(request: NextRequest, readOptions: () => Pr
   for (const vehicle of vehicles) {
     const insuranceGraceDays = insuranceGraceMap.get(vehicle.tenant_id as string) ?? INSURANCE_GRACE_DAYS;
     // Insurance: prefer new table, fallback to legacy
-    const insuranceExpiry = insuranceMap.get(vehicle.id) ?? (vehicle.insurance_expiry as string | null);
+    const policy = insuranceMap.get(vehicle.id);
+    const insuranceExpiry = policy?.expiry_date ?? (vehicle.insurance_expiry as string | null);
+    const suspension = insuranceSuspensionStatus(today, policy?.suspended_from, policy?.suspended_until, policy?.reactivated_on);
+    if (suspension === "suspended" && policy?.suspended_until) {
+      warnings.push({
+        label: vehicle.label, plate: vehicle.plate, docType: "Polizza sospesa",
+        expiryDate: policy.suspended_until, effectiveExpiryDate: policy.suspended_until,
+        daysLeft: diffDays(today, policy.suspended_until),
+        note: `Polizza sospesa dal ${formatDate(policy.suspended_from!)}. Riattivazione prevista ${formatDate(policy.suspended_until)}; verificare prima di usare il mezzo.`,
+      });
+    }
+    if (policy?.reactivated_on === today && policy.suspended_until && today < policy.suspended_until) {
+      warnings.push({
+        label: vehicle.label, plate: vehicle.plate, docType: "Riattivazione anticipata",
+        expiryDate: policy.suspended_until, effectiveExpiryDate: policy.suspended_until,
+        daysLeft: diffDays(today, policy.suspended_until),
+        note: `Polizza riattivata il ${formatDate(today)}, prima della data prevista ${formatDate(policy.suspended_until)}.`,
+      });
+    }
     // Inspection: prefer new table, fallback to legacy
     const inspectionExpiry = inspectionMap.get(vehicle.id) ?? (vehicle.inspection_expiry as string | null);
 

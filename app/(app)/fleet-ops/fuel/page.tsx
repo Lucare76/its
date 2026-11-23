@@ -20,6 +20,7 @@ type FuelRecord = {
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
+  invoice_supplier?: "ENI" | "UTA" | null;
   notes?: string | null;
   approval_status: "pending" | "approved" | "rejected";
   fiscal_document_url?: string | null;
@@ -43,6 +44,7 @@ type EditModalState = {
     km_at_fuel: string;
     fuel_type: string;
     station: string;
+    invoice_supplier: string;
     notes: string;
   };
 };
@@ -63,6 +65,7 @@ const EMPTY_FORM = {
   km_at_fuel: "",
   fuel_type: "diesel",
   station: "",
+  invoice_supplier: "",
   notes: "",
 };
 
@@ -234,6 +237,7 @@ export default function FleetFuelPage() {
           km_at_fuel: form.km_at_fuel ? Number(form.km_at_fuel) : null,
           fuel_type: form.fuel_type || null,
           station: form.station || null,
+          invoice_supplier: form.invoice_supplier || null,
           notes: form.notes || null,
           submitted_via_qr: false,
         },
@@ -366,6 +370,7 @@ export default function FleetFuelPage() {
         km_at_fuel: record.km_at_fuel != null ? String(record.km_at_fuel) : "",
         fuel_type:  record.fuel_type ?? "diesel",
         station:    record.station ?? "",
+        invoice_supplier: record.invoice_supplier ?? "",
         notes:      record.notes ?? "",
       },
     });
@@ -391,6 +396,7 @@ export default function FleetFuelPage() {
           km_at_fuel: f.km_at_fuel ? Number(f.km_at_fuel) : null,
           fuel_type:  f.fuel_type || null,
           station:    f.station || null,
+          invoice_supplier: f.invoice_supplier || null,
           notes:      f.notes || null,
         },
       }),
@@ -435,10 +441,14 @@ export default function FleetFuelPage() {
           </nav>
           <p className="mt-1 text-sm text-slate-600">Controllo consumi, approvazioni e documenti fiscali.</p>
         </div>
-        <button type="button" onClick={() => setShowCreateModal(true)} className="btn-primary inline-flex min-h-10 items-center justify-center gap-2 px-4 text-sm">
-          <span aria-hidden="true" className="text-lg leading-none">+</span>
-          Nuovo rifornimento
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <a href="/fleet-ops/fuel/reconcile" className="inline-flex min-h-10 items-center rounded-xl border border-blue-200 px-4 text-sm font-semibold text-blue-800 hover:bg-blue-50">Confronta fatture</a>
+          <a href="/fleet-ops/cards" className="inline-flex min-h-10 items-center rounded-xl border border-blue-200 px-4 text-sm font-semibold text-blue-800 hover:bg-blue-50">Carte e autisti</a>
+          <a href="/fleet-ops/consumi" className="inline-flex min-h-10 items-center rounded-xl border border-blue-200 px-4 text-sm font-semibold text-blue-800 hover:bg-blue-50">Consumi per mezzo</a>
+          <button type="button" onClick={() => setShowCreateModal(true)} className="btn-primary inline-flex min-h-10 items-center justify-center gap-2 px-4 text-sm">
+            <span aria-hidden="true" className="text-lg leading-none">+</span>Nuovo rifornimento
+          </button>
+        </div>
       </div>
 
       {toast ? (
@@ -580,6 +590,13 @@ export default function FleetFuelPage() {
                 Distributore
                 <input className="input-saas mt-1 w-full" value={editModal.form.station}
                   onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, station: e.target.value } } : null)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-500">
+                Fornitore fattura
+                <select className="input-saas mt-1 w-full" value={editModal.form.invoice_supplier}
+                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, invoice_supplier: e.target.value } } : null)}>
+                  <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+                </select>
               </label>
               <label className="text-xs font-semibold text-slate-500">
                 Note
@@ -856,6 +873,12 @@ export default function FleetFuelPage() {
               <input className="input-saas mt-1 w-full" value={form.station} onChange={(event) => setForm((current) => ({ ...current, station: event.target.value }))} />
             </label>
             <label className="text-xs font-semibold text-slate-500">
+              Fornitore fattura (se noto)
+              <select className="input-saas mt-1 w-full" value={form.invoice_supplier} onChange={(event) => setForm((current) => ({ ...current, invoice_supplier: event.target.value }))}>
+                <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-slate-500">
               Note
               <textarea className="input-saas mt-1 w-full resize-none" rows={3} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} />
             </label>
@@ -895,7 +918,7 @@ export default function FleetFuelPage() {
               {selectedRecord.approval_status !== "rejected" ? <button type="button" onClick={() => { setSelectedRecord(null); void updateFuelApproval(selectedRecord, "rejected"); }} className="min-h-11 rounded-lg border border-rose-300 px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">Respingi</button> : null}
               {selectedRecord.approval_status === "approved" && canInsertFiscalDocument(selectedRecord) ? <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); void updateFuelDocument(record); }} className="min-h-11 rounded-lg border border-blue-200 px-4 text-sm font-semibold text-blue-700">Aggiungi documento fiscale</button> : null}
               {selectedRecord.approval_status === "approved" && canEditFiscalDocument(selectedRecord) ? <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); void updateFuelDocument(record); }} className="min-h-11 rounded-lg border border-blue-200 px-4 text-sm font-semibold text-blue-700">Modifica documento fiscale</button> : null}
-              {currentRole === "admin" ? <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); openEditModal(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700">Modifica</button><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); setDeleteConfirm(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-rose-700">Elimina</button></div> : null}
+              <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); openEditModal(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700">Modifica</button>{currentRole === "admin" && <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); setDeleteConfirm(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-rose-700">Elimina</button>}</div>
             </footer>
           </aside>
         </div>
