@@ -139,6 +139,9 @@ export default function FleetFuelPage() {
   const [documentModalName, setDocumentModalName] = useState("");
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [supplierRecord, setSupplierRecord] = useState<FuelRecord | null>(null);
+  const [supplierChoice, setSupplierChoice] = useState<"ENI" | "UTA" | "">("");
+  const [supplierSaving, setSupplierSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<FuelRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -388,6 +391,34 @@ export default function FleetFuelPage() {
     });
   }
 
+  function openSupplierModal(record: FuelRecord) {
+    setSupplierRecord(record);
+    setSupplierChoice("");
+  }
+
+  async function saveSupplier() {
+    if (!supplierRecord || !supplierChoice || supplierSaving) return;
+    const token = await accessToken();
+    if (!token) { showToast("Sessione scaduta. Accedi di nuovo.", false); return; }
+    setSupplierSaving(true);
+    try {
+      const res = await fetch("/api/ops/fuel-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: "assign_supplier", data: { id: supplierRecord.id, invoice_supplier: supplierChoice } }),
+      });
+      const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !json?.ok) { showToast(json?.error ?? "Associazione non riuscita.", false); return; }
+      setSupplierRecord(null);
+      showToast("Fornitore associato.", true);
+      void load();
+    } catch {
+      showToast("Connessione non disponibile. Riprova.", false);
+    } finally {
+      setSupplierSaving(false);
+    }
+  }
+
   async function saveEdit() {
     if (!editModal) return;
     const token = await accessToken();
@@ -545,6 +576,28 @@ export default function FleetFuelPage() {
               >
                 {documentModalSaving ? "Salvataggio..." : documentModal.mode === "approve" ? "Approva rifornimento" : "Salva documento"}
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {supplierRecord ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4" role="dialog" aria-modal="true" aria-label="Associa fornitore">
+          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <h2 className="text-base font-bold text-slate-900">Associa fornitore</h2>
+            <p className="mt-2 text-sm text-slate-600">{supplierRecord.vehicle?.label ?? "Veicolo"} · {fmtDate(supplierRecord.fuel_date)} · {supplierRecord.station ?? "Distributore non indicato"}</p>
+            <label className="mt-5 block text-xs font-semibold text-slate-600">
+              Fornitore della fattura
+              <select className="input-saas mt-2 w-full" value={supplierChoice} onChange={e => setSupplierChoice(e.target.value as "ENI" | "UTA" | "")}>
+                <option value="">Seleziona fornitore</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+              </select>
+            </label>
+            {supplierChoice === "UTA" && supplierRecord.submitted_via_qr && supplierRecord.cost != null ? (
+              <p className="mt-3 text-xs text-emerald-700">Importo pagato: {fmtMoney(supplierRecord.cost)}. Costo netto registrato: €{utaNetFromGross(supplierRecord.cost).toFixed(4)}.</p>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" disabled={supplierSaving} onClick={() => setSupplierRecord(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Annulla</button>
+              <button type="button" disabled={!supplierChoice || supplierSaving} onClick={() => void saveSupplier()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{supplierSaving ? "Salvataggio..." : "Associa fornitore"}</button>
             </div>
           </div>
         </div>
@@ -710,10 +763,10 @@ export default function FleetFuelPage() {
                 <span>Data</span><span>Mezzo</span><span>Distributore / Fornitore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
               </div>
               {paginatedRecords.map((record) => (
-                <button key={record.id} type="button" onClick={() => setSelectedRecord(record)} className="grid w-full grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
+                <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span></span>
-                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span><span className="block text-[11px] font-semibold text-blue-700">{record.invoice_supplier ?? "Fornitore da associare"}</span></span>
+                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className="block text-[11px] font-semibold text-blue-700">{record.invoice_supplier}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
                   <span className="font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</span>
                   <span className="font-semibold text-slate-900" title={record.gross_cost != null ? `Pagato dall'autista: €${record.gross_cost.toFixed(2)}` : undefined}>{fmtFuelCost(record)}{record.invoice_supplier === "UTA" ? <span className="block text-[10px] font-normal text-slate-500">netto IVA</span> : null}</span>
                   <span className="text-slate-600">{fmtUnitPrice(record)}</span>
@@ -721,7 +774,7 @@ export default function FleetFuelPage() {
                   <span className={`truncate ${hasFiscalDocument(record) ? "text-blue-700" : "font-medium text-rose-600"}`}>{record.fiscal_document_name ?? "Mancante"}</span>
                   <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-semibold ${record.approval_status === "approved" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : record.approval_status === "rejected" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{record.approval_status === "approved" ? "Approvato" : record.approval_status === "rejected" ? "Respinto" : "Da approvare"}</span>
                   <span className="text-lg text-slate-400" aria-hidden="true">›</span>
-                </button>
+                </div>
               ))}
             </div>
             <div className="space-y-3 lg:hidden">
@@ -735,6 +788,7 @@ export default function FleetFuelPage() {
                       <p className="mt-1 text-xs text-slate-500">
                         {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier ?? "Fornitore da associare"}
                       </p>
+                      {!record.invoice_supplier && <button type="button" onClick={() => openSupplierModal(record)} className="mt-2 text-left text-xs font-semibold text-blue-700 underline underline-offset-2">Associa fornitore</button>}
                       <p className="mt-1 text-xs text-slate-400">
                         {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
                       </p>
