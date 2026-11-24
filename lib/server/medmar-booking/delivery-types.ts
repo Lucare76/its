@@ -44,6 +44,7 @@ export type MedmarDeliveryAttempt = {
   status: MedmarDeliveryStatus;
   medmar_id_prenotazione: string | null;
   medmar_numero: string | null;
+  ticket_numbers: string[];
   pdf_mailbox_message_uid: string | null;
   pdf_filename: string | null;
   pdf_original_sha256: string | null;

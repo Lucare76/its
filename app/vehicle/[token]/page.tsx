@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { use } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { utaNetFromGross } from "@/lib/fuel-cost";
 
 const _supabasePublic = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -55,6 +56,8 @@ type Fuel = {
   fuel_date: string;
   liters?: number | null;
   cost?: number | null;
+  gross_cost?: number | null;
+  invoice_supplier?: "ENI" | "UTA" | null;
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
@@ -165,9 +168,11 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
   const [showFuel,      setShowFuel]      = useState(false);
   const [fuelLiters,    setFuelLiters]    = useState("");
   const [fuelCost,      setFuelCost]      = useState("");
+  const [fuelSupplier,  setFuelSupplier]  = useState("");
   const [fuelKm,        setFuelKm]        = useState("");
   const [fuelType,      setFuelType]      = useState("diesel");
   const [fuelStation,   setFuelStation]   = useState("");
+  const [fuelDriver,    setFuelDriver]    = useState("");
   const [fuelSubmitting,setFuelSubmitting]= useState(false);
   const [fuelMsg,       setFuelMsg]       = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -239,7 +244,9 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
     const json = await res.json();
     setKmSubmitting(false);
     if (json.ok) {
-      setKmMsg({ ok: true, text: `Turno chiuso. Km percorsi: ${Number(kmEnd) - openLog.start_km}` });
+      setKmMsg({ ok: true, text: json.km_needs_review
+        ? "Turno chiuso. I km inseriti sono da verificare: l'ufficio ha ricevuto una segnalazione."
+        : `Turno chiuso. Km percorsi: ${Number(kmEnd) - openLog.start_km}` });
       setKmSection("idle");
       setKmEnd(""); setKmNotes("");
       loadData();
@@ -259,9 +266,11 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
         action: "fuel",
         liters: fuelLiters || undefined,
         cost: fuelCost || undefined,
+        invoice_supplier: fuelSupplier || undefined,
         km_at_fuel: fuelKm || undefined,
         fuel_type: fuelType,
         station: fuelStation || undefined,
+        driver_name: fuelDriver,
       }),
     });
     const json = await res.json();
@@ -269,7 +278,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
     if (json.ok) {
       setFuelMsg({ ok: true, text: "Rifornimento inviato correttamente. Sara visibile dopo l'approvazione in ufficio." });
       setShowFuel(false);
-      setFuelLiters(""); setFuelCost(""); setFuelKm(""); setFuelStation("");
+      setFuelLiters(""); setFuelCost(""); setFuelSupplier(""); setFuelKm(""); setFuelStation(""); setFuelDriver("");
       loadData();
     } else {
       setFuelMsg({ ok: false, text: json.error ?? "Errore." });
@@ -689,11 +698,27 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
           )}
 
           {!showFuel ? (
-            <button onClick={() => setShowFuel(true)} style={{ width: "100%", background: "transparent", border: "2px dashed #334155", borderRadius: 12, padding: "12px", color: "#64748b", fontSize: 14, cursor: "pointer", marginBottom: fuel.length > 0 ? 12 : 0 }}>
+            <button onClick={() => { setFuelDriver((current) => current || openLog?.driver_name || ""); setShowFuel(true); }} style={{ width: "100%", background: "transparent", border: "2px dashed #334155", borderRadius: 12, padding: "12px", color: "#64748b", fontSize: 14, cursor: "pointer", marginBottom: fuel.length > 0 ? 12 : 0 }}>
               + Registra rifornimento
             </button>
           ) : (
             <form onSubmit={handleFuel} style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 14 }}>
+              <div>
+                <label style={labelStyle}>Nome autista *</label>
+                <input value={fuelDriver} onChange={(e) => setFuelDriver(e.target.value)} required maxLength={120}
+                  list="fuel-driver-options" autoComplete="off" placeholder="Es. Mario Rossi" style={inputStyle} />
+                <datalist id="fuel-driver-options">
+                  {drivers.map((d) => <option key={d.id} value={d.full_name} />)}
+                </datalist>
+              </div>
+              <div>
+                <label style={labelStyle}>Fornitore della carta o del rifornimento</label>
+                <select required value={fuelSupplier} onChange={(e) => setFuelSupplier(e.target.value)} style={inputStyle}>
+                  <option value="">Seleziona fornitore</option>
+                  <option value="ENI">ENI</option>
+                  <option value="UTA">UTA</option>
+                </select>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
                   <label style={labelStyle}>Tipo carburante</label>
@@ -706,17 +731,20 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
                 </div>
                 <div>
                   <label style={labelStyle}>Litri</label>
-                  <input type="number" value={fuelLiters} onChange={(e) => setFuelLiters(e.target.value)} placeholder="Es. 60" style={inputStyle} />
+                  <input type="number" min="0" step="0.01" value={fuelLiters} onChange={(e) => setFuelLiters(e.target.value)} placeholder="Es. 60" style={inputStyle} />
                 </div>
                 <div>
-                  <label style={labelStyle}>Costo (€)</label>
-                  <input type="number" value={fuelCost} onChange={(e) => setFuelCost(e.target.value)} placeholder="Es. 95.00" style={inputStyle} />
+                  <label style={labelStyle}>Importo pagato (€){fuelSupplier === "UTA" ? " — IVA inclusa" : ""}</label>
+                  <input type="number" min="0" step="0.01" value={fuelCost} onChange={(e) => setFuelCost(e.target.value)} placeholder="Es. 95.00" style={inputStyle} />
                 </div>
                 <div>
                   <label style={labelStyle}>Km al rifornimento</label>
                   <input type="number" value={fuelKm} onChange={(e) => setFuelKm(e.target.value)} placeholder="Es. 123400" style={inputStyle} />
                 </div>
               </div>
+              {fuelSupplier === "UTA" && fuelCost && Number.isFinite(Number(fuelCost)) && (
+                <p style={{ color: "#34d399", fontSize: 13 }}>Costo netto registrato: €{utaNetFromGross(Number(fuelCost)).toFixed(4)} (€{Number(fuelCost).toFixed(2)} / 1,22)</p>
+              )}
               <div>
                 <label style={labelStyle}>Distributore (opzionale)</label>
                 <input value={fuelStation} onChange={(e) => setFuelStation(e.target.value)} placeholder="Es. Q8 Forio" style={inputStyle} />
@@ -736,13 +764,14 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
                 <div key={f.id} style={cardStyle}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
-                      {f.fuel_type && <div style={{ fontSize: 12, color: "#fbbf24", fontWeight: 700, textTransform: "uppercase" }}>{f.fuel_type}</div>}
+                      {f.fuel_type && <div style={{ fontSize: 12, color: "#fbbf24", fontWeight: 700, textTransform: "uppercase" }}>{f.fuel_type}{f.invoice_supplier ? ` · ${f.invoice_supplier}` : ""}</div>}
                       {f.station && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>🏪 {f.station}</div>}
                       <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{formatDate(f.fuel_date)}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
                       {f.liters != null && <div style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0" }}>{f.liters.toFixed(1)} L</div>}
-                      {f.cost != null && <div style={{ fontSize: 12, color: "#34d399" }}>€{f.cost.toFixed(2)}</div>}
+                      {f.cost != null && <div style={{ fontSize: 12, color: "#34d399" }}>€{f.cost.toFixed(f.invoice_supplier === "UTA" ? 4 : 2)}{f.invoice_supplier === "UTA" ? " netto" : ""}</div>}
+                      {f.gross_cost != null && <div style={{ fontSize: 11, color: "#94a3b8" }}>Pagato €{f.gross_cost.toFixed(2)}</div>}
                       {f.km_at_fuel != null && <div style={{ fontSize: 11, color: "#64748b" }}>{f.km_at_fuel.toLocaleString("it-IT")} km</div>}
                     </div>
                   </div>

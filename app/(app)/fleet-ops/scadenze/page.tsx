@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionCard, SidePanel } from "@/components/ui";
 import { hasSupabaseEnv, supabase, getToken} from "@/lib/supabase/client";
+import { insuranceSuspensionStatus } from "@/lib/vehicle-compliance";
 
 type StatusLevel = "expired" | "critical" | "warning" | "missing" | "ok";
 
@@ -12,6 +13,11 @@ type ComplianceEntry = {
   days_left: number | null;
   status: StatusLevel;
   company?: string;
+  suspension_status?: "none" | "scheduled" | "suspended" | "reactivated" | "ended";
+  source?: "policy" | "archived_policy" | "legacy_vehicle";
+  suspended_from?: string | null;
+  suspended_until?: string | null;
+  reactivated_on?: string | null;
   outcome?: string;
   count?: number;
 };
@@ -133,6 +139,7 @@ type CalendarEntry = {
 
 const COMPLIANCE_TYPE_LABELS: Record<string, string> = {
   insurance: "Assicurazione",
+  insurance_reactivation: "Riattivazione assicurazione prevista",
   insurance_grace: "Fine copertura assicurazione",
   inspection: "Collaudo",
   road_tax: "Bollo",
@@ -151,6 +158,7 @@ const DOC_LABELS: Record<DocType, string> = {
 
 const CALENDAR_TYPE_SHORT_LABEL: Record<string, string> = {
   insurance: "Ass.",
+  insurance_reactivation: "Riatt. ass.",
   insurance_grace: "Fine cop.",
   inspection: "Collaudo",
   road_tax: "Bollo",
@@ -164,6 +172,9 @@ const EMPTY_INSURANCE = {
   expiry_date: "",
   annual_amount_cents: "",
   notes: "",
+  suspended_from: "",
+  suspended_until: "",
+  reactivated_on: "",
 };
 
 const EMPTY_INSPECTION = {
@@ -197,7 +208,7 @@ function CompliancePill({ label, entry }: { label: string; entry: ComplianceEntr
     <div className={`rounded-xl px-3 py-2 text-xs ${STATUS_CELL[status]}`}>
       <div className="font-semibold opacity-60">{label}</div>
       {entry ? (
-        <div className="mt-0.5 font-bold">{formatDays(entry.days_left)}</div>
+        <div className="mt-0.5 font-bold">{entry.suspension_status === "suspended" ? "Polizza sospesa" : formatDays(entry.days_left)}</div>
       ) : (
         <div className="mt-0.5 font-bold">—</div>
       )}
@@ -221,7 +232,7 @@ function ComplianceDots({ item }: { item: VehicleCompliance }) {
         return (
           <span
             key={letter}
-            title={`${letter === "A" ? "Assicurazione" : letter === "C" ? "Collaudo" : letter === "B" ? "Bollo" : letter === "E" ? "Estintori" : "Tachigrafo"}${entry ? ` · ${formatDays(entry.days_left)}` : " · Non inserito"}`}
+            title={`${letter === "A" ? "Assicurazione" : letter === "C" ? "Collaudo" : letter === "B" ? "Bollo" : letter === "E" ? "Estintori" : "Tachigrafo"}${entry ? entry.suspension_status === "suspended" ? " · Polizza sospesa" : ` · ${formatDays(entry.days_left)}` : " · Non inserito"}`}
             className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold ${
               s === "expired" ? "bg-rose-500 text-white" :
               s === "critical" ? "bg-orange-500 text-white" :
@@ -354,7 +365,7 @@ export default function ScadenzePage() {
 
   const getCurrentRecordForTab = useCallback((tab: PanelTab, records: PanelRecords) => {
     if (tab === "insurance") {
-      return records.insurances.find((row) => row.is_current === true) ?? records.insurances[0] ?? null;
+      return records.insurances.find((row) => row.is_current === true) ?? null;
     }
     if (tab === "inspection") {
       return records.inspections.find((row) => row.is_current === true) ?? records.inspections[0] ?? null;
@@ -398,6 +409,9 @@ export default function ScadenzePage() {
           expiry_date: String(currentRecord.expiry_date ?? ""),
           annual_amount_cents: currentRecord.annual_amount_cents != null ? String(Number(currentRecord.annual_amount_cents) / 100) : "",
           notes: String(currentRecord.notes ?? ""),
+          suspended_from: String(currentRecord.suspended_from ?? ""),
+          suspended_until: String(currentRecord.suspended_until ?? ""),
+          reactivated_on: String(currentRecord.reactivated_on ?? ""),
         });
       } else if (panelTab === "inspection") {
         setInspectionForm({
@@ -483,6 +497,9 @@ export default function ScadenzePage() {
           ? Math.round(parseFloat(insuranceForm.annual_amount_cents) * 100)
           : null,
         notes: insuranceForm.notes || null,
+        suspended_from: insuranceForm.suspended_from || null,
+        suspended_until: insuranceForm.suspended_until || null,
+        reactivated_on: insuranceForm.reactivated_on || null,
       };
     } else if (panelTab === "inspection") {
       if (!inspectionForm.expiry_date) {
@@ -691,8 +708,8 @@ export default function ScadenzePage() {
       item.plate ?? "",
       item.capacity?.toString() ?? "",
       item.insurance?.expiry_date ?? "",
-      item.insurance?.days_left?.toString() ?? "",
-      item.insurance?.status ?? "missing",
+      item.insurance?.suspension_status === "suspended" ? "" : item.insurance?.days_left?.toString() ?? "",
+      item.insurance?.suspension_status === "suspended" ? "sospesa" : item.insurance?.status ?? "missing",
       item.inspection?.expiry_date ?? "",
       item.inspection?.days_left?.toString() ?? "",
       item.inspection?.status ?? "missing",
@@ -751,9 +768,10 @@ export default function ScadenzePage() {
       if (days === 0) return "Oggi";
       return `${days}gg`;
     };
-    const cell = (entry: ComplianceEntry | null) => {
+    const cell = (entry: ComplianceEntry | null, insurance = false) => {
       if (!entry) return `<td class="missing">—</td>`;
       const s = entry.status;
+      if (insurance && entry.suspension_status === "suspended") return `<td style="background:${BG[s]};color:${FG[s]};">Polizza sospesa<br><small>Riattivazione prevista ${entry.suspended_until ? fmt(entry.suspended_until) : "—"}</small><br><small>Scadenza registrata ${fmt(entry.expiry_date)}</small></td>`;
       return `<td style="background:${BG[s]};color:${FG[s]};">${fmt(entry.expiry_date)}<br><small>${fmtDays(entry.days_left)}</small></td>`;
     };
 
@@ -762,7 +780,7 @@ export default function ScadenzePage() {
       return `<tr>
         <td><strong>${item.label}</strong>${item.plate ? `<br><span class="mono">${item.plate}</span>` : ""}</td>
         <td>${item.capacity ?? "—"}</td>
-        ${cell(item.insurance)}
+        ${cell(item.insurance, true)}
         ${cell(item.inspection)}
         ${cell(item.road_tax)}
         ${cell(item.extinguisher)}
@@ -863,6 +881,19 @@ small{font-size:9px;opacity:.75}
       ];
       for (const [type, entry] of types) {
         if (!entry?.expiry_date) continue;
+        if (type === "insurance" && entry.suspension_status === "suspended") {
+          if (entry.suspended_until) {
+            const planned = new Date(`${entry.suspended_until}T12:00:00Z`);
+            if (planned.getUTCFullYear() === year && planned.getUTCMonth() === month) {
+              const day = planned.getUTCDate();
+              if (!map[day]) map[day] = [];
+              map[day].push({ vehicleId: item.vehicle_id, label: item.label, plate: item.plate,
+                type: "insurance_reactivation", status: entry.status, expiryDate: entry.suspended_until,
+                daysLeft: Math.round((planned.getTime() - new Date(`${new Date().toISOString().slice(0, 10)}T12:00:00Z`).getTime()) / 86400000) });
+            }
+          }
+          continue;
+        }
         const d = new Date(entry.expiry_date + "T00:00:00Z");
         if (d.getFullYear() === year && d.getMonth() === month) {
           const day = d.getDate();
@@ -973,6 +1004,7 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
 
   const CAL_TYPE_COLOR: Record<string, string> = {
     insurance: "bg-rose-400",
+    insurance_reactivation: "bg-amber-500",
     insurance_grace: "bg-rose-200",
     inspection: "bg-blue-400",
     road_tax: "bg-slate-500",
@@ -1003,8 +1035,11 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
         onClick={openCellEditor}
         className={`inline-flex flex-col gap-0.5 rounded-lg px-2 py-1 text-left text-xs font-medium transition hover:opacity-85 ${STATUS_CELL[entry.status]}`}
       >
-        <span>{formatDate(entry.expiry_date)}</span>
-        <span className="opacity-75">{formatDays(entry.days_left)}</span>
+        {tab === "insurance" && entry.suspension_status === "suspended" ? (
+          <><span className="font-bold">Polizza sospesa</span><span className="opacity-75">Riattivazione prevista: {entry.suspended_until ? formatDate(entry.suspended_until) : "—"}</span></>
+        ) : (
+          <><span>{formatDate(entry.expiry_date)}</span><span className="opacity-75">{tab === "insurance" && entry.source === "archived_policy" ? "Non attuale · verifica" : formatDays(entry.days_left)}</span></>
+        )}
       </button>
     );
   };
@@ -1698,6 +1733,14 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                             <label className="label">Note</label>
                             <input className="input" value={insuranceForm.notes} onChange={(e) => setInsuranceForm((f) => ({ ...f, notes: e.target.value }))} />
                           </div>
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                            <p className="mb-2 text-sm font-semibold text-amber-900">Sospensione della polizza</p>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                              <label className="label">Dal<input type="date" className="input" value={insuranceForm.suspended_from} onChange={e => setInsuranceForm(f => ({ ...f, suspended_from: e.target.value }))} /></label>
+                              <label className="label">Al (previsto)<input type="date" className="input" value={insuranceForm.suspended_until} onChange={e => setInsuranceForm(f => ({ ...f, suspended_until: e.target.value }))} /></label>
+                              <label className="label">Riattivata il (se anticipata)<input type="date" className="input" value={insuranceForm.reactivated_on} onChange={e => setInsuranceForm(f => ({ ...f, reactivated_on: e.target.value }))} /></label>
+                            </div>
+                          </div>
                         </>
                       )}
 
@@ -1881,13 +1924,15 @@ function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
     <div className="space-y-2">
       {(list as Record<string, unknown>[]).map((row, i) => {
         const isCurrent = row.is_current === true || row.active === true;
+        const suspended = tab === "insurance" && !!row.suspended_from && !!row.suspended_until
+          && insuranceSuspensionStatus(new Date().toISOString().slice(0, 10), String(row.suspended_from), String(row.suspended_until), row.reactivated_on ? String(row.reactivated_on) : null) === "suspended";
         const expiry = row.expiry_date as string | null;
         const today = new Date().toISOString().slice(0, 10);
         const days = expiry ? Math.floor((new Date(`${expiry}T00:00:00Z`).getTime() - new Date(`${today}T00:00:00Z`).getTime()) / 86400000) : null;
         const status: StatusLevel = !expiry ? "missing" : days! < 0 ? "expired" : days! <= 7 ? "critical" : days! <= 30 ? "warning" : "ok";
 
         return (
-          <div key={row.id as string ?? i} className={`rounded-xl border p-3 text-sm ${isCurrent ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
+          <div key={row.id as string ?? i} className={`rounded-xl border p-3 text-sm ${isCurrent ? "border-slate-200 bg-white" : "border-amber-200 bg-amber-50"}`}>
             <div className="flex items-center justify-between gap-2">
               <div className="font-medium text-slate-800">
                 {tab === "insurance" && (row.company as string)}
@@ -1897,17 +1942,25 @@ function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {isCurrent && (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Attivo</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${suspended ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700"}`}>{suspended ? "Sospesa" : "Attuale"}</span>
                 )}
+                {!isCurrent && tab === "insurance" && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Non attuale: verificare rinnovo</span>}
                 {expiry && (
                   <span className={`rounded-lg px-2 py-0.5 text-xs font-semibold ${STATUS_CELL[status]}`}>
-                    {formatDate(expiry)} · {formatDays(days)}
+                    {suspended ? `Scadenza registrata: ${formatDate(expiry)}` : `${formatDate(expiry)} · ${formatDays(days)}`}
                   </span>
                 )}
               </div>
             </div>
             {tab === "insurance" && !!row.policy_number && (
               <div className="mt-1 text-xs text-slate-400">Polizza: {row.policy_number as string}</div>
+            )}
+            {tab === "insurance" && !!row.suspended_from && !!row.suspended_until && (
+              <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
+                Sospensione: {formatDate(String(row.suspended_from))} – {formatDate(String(row.suspended_until))}.
+                {row.reactivated_on ? ` Riattivata il ${formatDate(String(row.reactivated_on))}.` : " Non risulta ancora riattivata."}
+                {suspended ? " La data di scadenza registrata non viene aggiornata automaticamente: inserisci quella comunicata dall'assicuratore alla riattivazione." : ""}
+              </div>
             )}
             {tab === "inspection" && !!row.outcome && (
               <div className="mt-1 text-xs text-slate-400">Esito: {row.outcome === "passed" ? "Superato" : row.outcome === "failed" ? "Bocciato" : "In attesa"}</div>

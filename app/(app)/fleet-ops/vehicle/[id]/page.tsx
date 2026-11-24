@@ -214,6 +214,27 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     setLoading(false);
   }, [loadCosts, loadDocs, vehicleId, tab]);
 
+  async function correctEndKm(log: KmLog) {
+    const raw = window.prompt(`Km finali corretti per ${log.driver_name} (iniziali ${log.start_km})`, String(log.end_km ?? ""));
+    if (raw === null) return;
+    const endKm = Number(raw);
+    if (!raw.trim() || !Number.isInteger(endKm) || endKm < log.start_km) {
+      showMsg("Inserisci km finali validi e non inferiori ai km iniziali.", false);
+      return;
+    }
+    const token = await getToken();
+    if (!token) return;
+    const res = await fetch("/api/ops/vehicle-km-corrections", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ vehicle_id: vehicleId, log_id: log.id, end_km: endKm }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) return showMsg(result.error ?? "Correzione km non riuscita.", false);
+    showMsg("Km corretti. Valore precedente conservato nello storico modifiche.", true);
+    await load();
+  }
+
   // Carica ruolo utente
   useEffect(() => {
     getClientSessionContext().then((s) => setUserRole(s?.role ?? null)).catch(() => null);
@@ -1043,7 +1064,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
               ))}
               {tab === "km_logs" && (records as unknown as KmLog[]).map((r) => {
                 const km = r.end_km != null ? r.end_km - r.start_km : null;
-                const isOpen = r.end_km == null;
+                const isOpen = r.end_at == null;
                 return (
                   <tr key={r.id} className={isOpen ? "bg-blue-50 hover:bg-blue-100" : "hover:bg-slate-50"}>
                     <td className="px-4 py-3 text-slate-500 whitespace-nowrap text-xs">
@@ -1051,11 +1072,13 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{r.driver_name}</td>
                     <td className="px-4 py-3 text-right text-slate-600 hidden sm:table-cell">{r.start_km.toLocaleString("it-IT")}</td>
-                    <td className="px-4 py-3 text-right text-slate-600 hidden sm:table-cell">{r.end_km != null ? r.end_km.toLocaleString("it-IT") : "—"}</td>
+                    <td className="px-4 py-3 text-right text-slate-600 hidden sm:table-cell">{r.end_km != null ? r.end_km.toLocaleString("it-IT") : "—"}{!isOpen && <button type="button" className="ml-2 text-xs text-blue-700 underline" onClick={() => void correctEndKm(r)}>Correggi</button>}</td>
                     <td className="px-4 py-3 text-right font-bold text-emerald-700">{km != null ? `+${km.toLocaleString("it-IT")}` : "—"}</td>
                     <td className="px-4 py-3 text-slate-400 text-xs hidden sm:table-cell">{r.notes ?? "—"}</td>
                     <td className="px-4 py-3">
-                      {isOpen ? (
+                      {!isOpen && r.end_km != null && r.end_km < r.start_km ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Km da verificare</span>
+                      ) : isOpen ? (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">In corso</span>
                       ) : (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">Chiuso</span>

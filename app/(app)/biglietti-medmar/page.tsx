@@ -489,7 +489,7 @@ export default function BigliettiMedmarPage() {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dateFrom, setDateFrom] = useState(todayIso());
+  const [dateFrom, setDateFrom] = useState(addDays(todayIso(), -14));
   const [dateTo, setDateTo] = useState(addDays(todayIso(), 14));
   const [copied, setCopied] = useState<string | null>(null);
   const [sending, setSending] = useState<string | null>(null); // key del gruppo in invio
@@ -987,12 +987,12 @@ export default function BigliettiMedmarPage() {
   }, [bookingGroups, issuanceEvidence]);
 
   const visibleGroups = useMemo(
-    () => showSent
+    () => showSent || Boolean(medmarSearchQuery.trim())
       ? bookingGroups
       // Una prenotazione ripristinata con biglietto già emesso resta visibile
       // (bloccata) anche se risulta "inviata": l'operatore deve vederla.
       : bookingGroups.filter((g) => (g.sentAt == null && !sentKeys.has(g.key)) || issuanceViewByKey.get(g.key)?.forceVisible),
-    [bookingGroups, showSent, sentKeys, issuanceViewByKey]
+    [bookingGroups, showSent, medmarSearchQuery, sentKeys, issuanceViewByKey]
   );
 
   const medmarAgencyOptions = useMemo(() => {
@@ -1033,7 +1033,7 @@ export default function BigliettiMedmarPage() {
       if (!matchesMedmarSearch(searchable, medmarSearchQuery)) return false;
       if (medmarAgencyFilter !== "all" && (g.agencyName?.trim() || "Privato") !== medmarAgencyFilter) return false;
 
-      if (isSent) {
+      if (isSent && !medmarSearchQuery.trim()) {
         const dateKey = medmarSentDateKey(attempt?.delivered_at, attempt?.updated_at ?? g.sentAt);
         if (!matchesMedmarSentDateFilter(dateKey, medmarSentDateFilter, todayKey)) return false;
       }
@@ -1367,6 +1367,7 @@ export default function BigliettiMedmarPage() {
             className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
             + Memorizza ticket da foto
           </button>
+          <a href="/biglietti-medmar/confronto-fattura" className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Confronta fattura</a>
           <button
             type="button"
             onClick={() => setShowSent((v) => !v)}

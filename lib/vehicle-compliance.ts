@@ -12,6 +12,15 @@ export const INSURANCE_GRACE_DAYS = 15;
 export const WARN_DAYS = 60;
 export const INSURANCE_WARN_WINDOW_DAYS = 61;
 
+export function insuranceSuspensionStatus(
+  today: string, from?: string | null, until?: string | null, reactivatedOn?: string | null,
+): "none" | "scheduled" | "suspended" | "reactivated" | "ended" {
+  if (!from || !until) return "none";
+  if (today < from) return "scheduled";
+  if (reactivatedOn && today >= reactivatedOn) return "reactivated";
+  return today <= until ? "suspended" : "ended";
+}
+
 /** Giorni interi tra due date ISO (positivo = futuro, negativo = passato). */
 export function diffDays(from: string, to: string): number {
   const a = new Date(`${from}T00:00:00Z`);

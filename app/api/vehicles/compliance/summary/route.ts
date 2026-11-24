@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
-import { INSURANCE_GRACE_DAYS, addDays, diffDays, expiryStatus, inspectionExpiryStatus, insuranceExpiryStatus, worstStatus } from "@/lib/vehicle-compliance";
+import { INSURANCE_GRACE_DAYS, addDays, diffDays, expiryStatus, inspectionExpiryStatus, insuranceExpiryStatus, insuranceSuspensionStatus, worstStatus } from "@/lib/vehicle-compliance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,16 +13,20 @@ export async function GET(request: NextRequest) {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes, graceRes] = await Promise.all([
+  const [vehiclesRes, insurancesRes, archivedRes, inspectionsRes, extinguishersRes, tachographsRes, graceRes] = await Promise.all([
     admin.from("vehicles")
-      .select("id, label, plate, active, capacity, road_tax_expiry, compliance_override_until, compliance_override_reason")
+      .select("id, label, plate, active, capacity, insurance_expiry, road_tax_expiry, compliance_override_until, compliance_override_reason")
       .eq("tenant_id", tenant_id)
       .order("capacity", { ascending: false })
       .order("label"),
     admin.from("vehicle_insurances")
-      .select("vehicle_id, expiry_date, company, policy_number")
+      .select("vehicle_id, expiry_date, company, policy_number, suspended_from, suspended_until, reactivated_on")
       .eq("tenant_id", tenant_id)
       .eq("is_current", true),
+    admin.from("vehicle_insurances")
+      .select("vehicle_id, expiry_date, company")
+      .eq("tenant_id", tenant_id).eq("is_current", false)
+      .order("created_at", { ascending: false }),
     admin.from("vehicle_inspections")
       .select("vehicle_id, expiry_date, outcome")
       .eq("tenant_id", tenant_id)
@@ -42,6 +46,10 @@ export async function GET(request: NextRequest) {
       .maybeSingle(),
   ]);
 
+  const queryError = [vehiclesRes, insurancesRes, archivedRes, inspectionsRes, extinguishersRes, tachographsRes, graceRes]
+    .find(result => result.error)?.error;
+  if (queryError) return NextResponse.json({ error: queryError.message }, { status: 500 });
+
   const vehicles = vehiclesRes.data ?? [];
   const insurances = insurancesRes.data ?? [];
   const inspections = inspectionsRes.data ?? [];
@@ -52,6 +60,8 @@ export async function GET(request: NextRequest) {
   // Build lookup maps
   const insuranceMap = new Map<string, (typeof insurances)[0]>();
   for (const ins of insurances) insuranceMap.set(ins.vehicle_id, ins);
+  const archivedMap = new Map<string, NonNullable<typeof archivedRes.data>[number]>();
+  for (const row of archivedRes.data ?? []) if (!archivedMap.has(row.vehicle_id)) archivedMap.set(row.vehicle_id, row);
 
   const inspectionMap = new Map<string, (typeof inspections)[0]>();
   for (const ins of inspections) inspectionMap.set(ins.vehicle_id, ins);
@@ -72,14 +82,20 @@ export async function GET(request: NextRequest) {
 
   const items = vehicles.map((v) => {
     const insurance = insuranceMap.get(v.id) ?? null;
+    const archived = !insurance ? archivedMap.get(v.id) : null;
     const inspection = inspectionMap.get(v.id) ?? null;
     const ext = extMap.get(v.id) ?? null;
     const tach = tachographMap.get(v.id) ?? null;
     const roadTaxDays = v.road_tax_expiry ? diffDays(today, v.road_tax_expiry) : null;
     const roadTaxStatus = v.road_tax_expiry ? expiryStatus(roadTaxDays) : ("missing" as const);
 
-    const insuranceDays = insurance ? diffDays(today, insurance.expiry_date) : null;
-    const insuranceStatus = insurance ? insuranceExpiryStatus(insurance.expiry_date, today, insuranceGraceDays) : ("missing" as const);
+    // Earlier vehicle forms saved the expiry directly on vehicles. Keep it visible
+    // until a current policy record supersedes that legacy value.
+    const insuranceExpiry = insurance?.expiry_date ?? archived?.expiry_date ?? v.insurance_expiry;
+    const insuranceDays = insuranceExpiry ? diffDays(today, insuranceExpiry) : null;
+    const suspensionStatus = insuranceSuspensionStatus(today, insurance?.suspended_from, insurance?.suspended_until, insurance?.reactivated_on);
+    const insuranceStatus = archived ? "missing" as const : suspensionStatus === "suspended" ? "critical" as const
+      : insuranceExpiry ? insuranceExpiryStatus(insuranceExpiry, today, insuranceGraceDays) : ("missing" as const);
     const inspectionDays = inspection ? diffDays(today, inspection.expiry_date) : null;
     const inspectionStatus = inspection ? inspectionExpiryStatus(inspection.expiry_date, today) : ("missing" as const);
     const extDays = ext ? diffDays(today, ext.expiry_date) : null;
@@ -102,11 +118,16 @@ export async function GET(request: NextRequest) {
             reason: v.compliance_override_reason,
           }
         : null,
-      insurance: insurance
+      insurance: insuranceExpiry
         ? {
-            expiry_date: insurance.expiry_date,
-            effective_expiry_date: addDays(insurance.expiry_date, insuranceGraceDays),
-            company: insurance.company,
+            expiry_date: insuranceExpiry,
+            effective_expiry_date: addDays(insuranceExpiry, insuranceGraceDays),
+            company: insurance?.company ?? archived?.company ?? null,
+            source: insurance ? "policy" : archived ? "archived_policy" : "legacy_vehicle",
+            suspension_status: suspensionStatus,
+            suspended_from: insurance?.suspended_from ?? null,
+            suspended_until: insurance?.suspended_until ?? null,
+            reactivated_on: insurance?.reactivated_on ?? null,
             days_left: insuranceDays,
             status: insuranceStatus,
           }

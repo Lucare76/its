@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DateInput, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
+import { utaNetFromGross } from "@/lib/fuel-cost";
 
 type VehicleOption = {
   id: string;
@@ -17,9 +18,12 @@ type FuelRecord = {
   fuel_date: string;
   liters?: number | null;
   cost?: number | null;
+  gross_cost?: number | null;
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
+  invoice_supplier?: "ENI" | "UTA" | null;
+  driver_name?: string | null;
   notes?: string | null;
   approval_status: "pending" | "approved" | "rejected";
   fiscal_document_url?: string | null;
@@ -40,12 +44,17 @@ type EditModalState = {
     fuel_date: string;
     liters: string;
     cost: string;
+    cost_basis: "net" | "gross";
     km_at_fuel: string;
     fuel_type: string;
     station: string;
+    invoice_supplier: string;
+    driver_name: string;
     notes: string;
   };
 };
+
+type DriverOption = { id: string; full_name: string };
 
 type FuelRole = "admin" | "operator" | "supervisor" | string;
 
@@ -63,14 +72,39 @@ const EMPTY_FORM = {
   km_at_fuel: "",
   fuel_type: "diesel",
   station: "",
+  invoice_supplier: "",
+  driver_name: "",
   notes: "",
 };
 
 const PLACEHOLDER_FISCAL_DOCUMENT_HOSTS = new Set(["example.com", "example.org", "example.net"]);
 const PAGE_SIZE = 10;
 
+function isoDay(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Intervalli rapidi calcolati sulla data locale (Europe/Rome), non UTC.
+function datePreset(preset: "this_month" | "last_month" | "this_year") {
+  const today = new Date();
+  if (preset === "this_month") return { from: isoDay(new Date(today.getFullYear(), today.getMonth(), 1)), to: isoDay(today) };
+  if (preset === "last_month") return {
+    from: isoDay(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+    to: isoDay(new Date(today.getFullYear(), today.getMonth(), 0)),
+  };
+  return { from: isoDay(new Date(today.getFullYear(), 0, 1)), to: isoDay(today) };
+}
+
 function fmtMoney(value: number | null | undefined) {
   return value != null ? `EUR ${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-";
+}
+
+function fmtFuelCost(record: FuelRecord) {
+  return record.cost == null ? "-" : `EUR ${record.cost.toLocaleString("it-IT", {
+    minimumFractionDigits: record.invoice_supplier === "UTA" ? 4 : 2,
+    maximumFractionDigits: record.invoice_supplier === "UTA" ? 4 : 2,
+  })}`;
 }
 
 function fmtNumber(value: number | null | undefined, suffix = "") {
@@ -113,10 +147,14 @@ function normalizeFiscalDocumentUrl(raw: string | null | undefined) {
 export default function FleetFuelPage() {
   const [records, setRecords] = useState<FuelRecord[]>([]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
+  const [drivers, setDrivers] = useState<DriverOption[]>([]);
   const [currentRole, setCurrentRole] = useState<FuelRole>("operator");
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
   const [searchQuery, setSearchQuery] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [truncated, setTruncated] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -126,6 +164,9 @@ export default function FleetFuelPage() {
   const [documentModalName, setDocumentModalName] = useState("");
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [supplierRecord, setSupplierRecord] = useState<FuelRecord | null>(null);
+  const [supplierChoice, setSupplierChoice] = useState<"ENI" | "UTA" | "">("");
+  const [supplierSaving, setSupplierSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<FuelRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -145,7 +186,11 @@ export default function FleetFuelPage() {
       return;
     }
     setLoading(true);
-    const query = statusFilter === "all" ? "" : `?status=${statusFilter}`;
+    const params = new URLSearchParams();
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
     const res = await fetch(`/api/ops/fuel-entries${query}`, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${token}` },
@@ -155,6 +200,8 @@ export default function FleetFuelPage() {
       error?: string;
       records?: FuelRecord[];
       vehicles?: VehicleOption[];
+      drivers?: DriverOption[];
+      truncated?: boolean;
       counts?: { pending?: number; approved?: number; rejected?: number };
       current_role?: FuelRole;
     } | null;
@@ -165,6 +212,8 @@ export default function FleetFuelPage() {
     }
     setRecords(json.records ?? []);
     setVehicles(json.vehicles ?? []);
+    setDrivers(json.drivers ?? []);
+    setTruncated(Boolean(json.truncated));
     setCounts({
       pending: json.counts?.pending ?? 0,
       approved: json.counts?.approved ?? 0,
@@ -172,7 +221,7 @@ export default function FleetFuelPage() {
     });
     setCurrentRole(json.current_role ?? "operator");
     setLoading(false);
-  }, [showToast, statusFilter]);
+  }, [dateFrom, dateTo, showToast, statusFilter]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -189,6 +238,8 @@ export default function FleetFuelPage() {
       record.vehicle?.plate,
       record.vehicle?.license_number,
       record.station,
+      record.driver_name,
+      record.invoice_supplier,
       record.fuel_type,
       record.fiscal_document_name,
       record.notes,
@@ -234,6 +285,8 @@ export default function FleetFuelPage() {
           km_at_fuel: form.km_at_fuel ? Number(form.km_at_fuel) : null,
           fuel_type: form.fuel_type || null,
           station: form.station || null,
+          invoice_supplier: form.invoice_supplier || null,
+          driver_name: form.driver_name.trim() || null,
           notes: form.notes || null,
           submitted_via_qr: false,
         },
@@ -363,12 +416,43 @@ export default function FleetFuelPage() {
         fuel_date:  record.fuel_date,
         liters:     record.liters != null ? String(record.liters) : "",
         cost:       record.cost != null ? String(record.cost) : "",
+        cost_basis: "net",
         km_at_fuel: record.km_at_fuel != null ? String(record.km_at_fuel) : "",
         fuel_type:  record.fuel_type ?? "diesel",
         station:    record.station ?? "",
+        invoice_supplier: record.invoice_supplier ?? "",
+        driver_name: record.driver_name ?? "",
         notes:      record.notes ?? "",
       },
     });
+  }
+
+  function openSupplierModal(record: FuelRecord) {
+    setSupplierRecord(record);
+    setSupplierChoice("");
+  }
+
+  async function saveSupplier() {
+    if (!supplierRecord || !supplierChoice || supplierSaving) return;
+    const token = await accessToken();
+    if (!token) { showToast("Sessione scaduta. Accedi di nuovo.", false); return; }
+    setSupplierSaving(true);
+    try {
+      const res = await fetch("/api/ops/fuel-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: "assign_supplier", data: { id: supplierRecord.id, invoice_supplier: supplierChoice } }),
+      });
+      const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !json?.ok) { showToast(json?.error ?? "Associazione non riuscita.", false); return; }
+      setSupplierRecord(null);
+      showToast("Fornitore associato.", true);
+      void load();
+    } catch {
+      showToast("Connessione non disponibile. Riprova.", false);
+    } finally {
+      setSupplierSaving(false);
+    }
   }
 
   async function saveEdit() {
@@ -388,9 +472,12 @@ export default function FleetFuelPage() {
           fuel_date:  f.fuel_date,
           liters:     f.liters ? Number(f.liters) : null,
           cost:       f.cost ? Number(f.cost) : null,
+          cost_input: f.cost_basis,
           km_at_fuel: f.km_at_fuel ? Number(f.km_at_fuel) : null,
           fuel_type:  f.fuel_type || null,
           station:    f.station || null,
+          invoice_supplier: f.invoice_supplier || null,
+          driver_name: f.driver_name.trim() || null,
           notes:      f.notes || null,
         },
       }),
@@ -435,10 +522,14 @@ export default function FleetFuelPage() {
           </nav>
           <p className="mt-1 text-sm text-slate-600">Controllo consumi, approvazioni e documenti fiscali.</p>
         </div>
-        <button type="button" onClick={() => setShowCreateModal(true)} className="btn-primary inline-flex min-h-10 items-center justify-center gap-2 px-4 text-sm">
-          <span aria-hidden="true" className="text-lg leading-none">+</span>
-          Nuovo rifornimento
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <a href="/fleet-ops/fuel/reconcile" className="inline-flex min-h-10 items-center rounded-xl border border-blue-200 px-4 text-sm font-semibold text-blue-800 hover:bg-blue-50">Confronta fatture</a>
+          <a href="/fleet-ops/cards" className="inline-flex min-h-10 items-center rounded-xl border border-blue-200 px-4 text-sm font-semibold text-blue-800 hover:bg-blue-50">Carte e autisti</a>
+          <a href="/fleet-ops/consumi" className="inline-flex min-h-10 items-center rounded-xl border border-blue-200 px-4 text-sm font-semibold text-blue-800 hover:bg-blue-50">Consumi per mezzo</a>
+          <button type="button" onClick={() => setShowCreateModal(true)} className="btn-primary inline-flex min-h-10 items-center justify-center gap-2 px-4 text-sm">
+            <span aria-hidden="true" className="text-lg leading-none">+</span>Nuovo rifornimento
+          </button>
+        </div>
       </div>
 
       {toast ? (
@@ -527,6 +618,28 @@ export default function FleetFuelPage() {
         </div>
       ) : null}
 
+      {supplierRecord ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4" role="dialog" aria-modal="true" aria-label="Associa fornitore">
+          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <h2 className="text-base font-bold text-slate-900">Associa fornitore</h2>
+            <p className="mt-2 text-sm text-slate-600">{supplierRecord.vehicle?.label ?? "Veicolo"} · {fmtDate(supplierRecord.fuel_date)} · {supplierRecord.station ?? "Distributore non indicato"}</p>
+            <label className="mt-5 block text-xs font-semibold text-slate-600">
+              Fornitore della fattura
+              <select className="input-saas mt-2 w-full" value={supplierChoice} onChange={e => setSupplierChoice(e.target.value as "ENI" | "UTA" | "")}>
+                <option value="">Seleziona fornitore</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+              </select>
+            </label>
+            {supplierChoice === "UTA" && supplierRecord.submitted_via_qr && supplierRecord.cost != null ? (
+              <p className="mt-3 text-xs text-emerald-700">Importo pagato: {fmtMoney(supplierRecord.cost)}. Costo netto registrato: €{utaNetFromGross(supplierRecord.cost).toFixed(4)}.</p>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" disabled={supplierSaving} onClick={() => setSupplierRecord(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Annulla</button>
+              <button type="button" disabled={!supplierChoice || supplierSaving} onClick={() => void saveSupplier()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{supplierSaving ? "Salvataggio..." : "Associa fornitore"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* ── Modale modifica rifornimento ────────────────────────────────── */}
       {editModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
@@ -548,6 +661,12 @@ export default function FleetFuelPage() {
                 <DateInput className="input-saas mt-1 w-full" value={editModal.form.fuel_date}
                   onChange={iso => setEditModal(m => m ? { ...m, form: { ...m.form, fuel_date: iso } } : null)} />
               </label>
+              <label className="text-xs font-semibold text-slate-500">
+                Autista
+                <input className="input-saas mt-1 w-full" list="fuel-office-driver-options" autoComplete="off" maxLength={120}
+                  placeholder="Seleziona o scrivi il nome" value={editModal.form.driver_name}
+                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, driver_name: e.target.value } } : null)} />
+              </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-slate-500">
                   Litri
@@ -555,8 +674,8 @@ export default function FleetFuelPage() {
                     onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, liters: e.target.value } } : null)} />
                 </label>
                 <label className="text-xs font-semibold text-slate-500">
-                  Costo
-                  <input className="input-saas mt-1 w-full" type="number" min="0" value={editModal.form.cost}
+                  {editModal.form.cost_basis === "gross" ? "Importo pagato (IVA inclusa)" : editModal.form.invoice_supplier === "UTA" ? "Costo netto (€)" : "Costo (€)"}
+                  <input className="input-saas mt-1 w-full" type="number" min="0" step={editModal.form.cost_basis === "gross" ? "0.01" : "0.0001"} value={editModal.form.cost}
                     onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, cost: e.target.value } } : null)} />
                 </label>
                 <label className="text-xs font-semibold text-slate-500">
@@ -576,10 +695,29 @@ export default function FleetFuelPage() {
                   </select>
                 </label>
               </div>
+              {editModal.form.cost_basis === "gross" && editModal.form.cost && Number.isFinite(Number(editModal.form.cost)) ? (
+                <p className="text-xs text-emerald-700">Netto UTA calcolato: €{utaNetFromGross(Number(editModal.form.cost)).toFixed(4)}</p>
+              ) : null}
               <label className="text-xs font-semibold text-slate-500">
                 Distributore
                 <input className="input-saas mt-1 w-full" value={editModal.form.station}
                   onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, station: e.target.value } } : null)} />
+              </label>
+              <label className="text-xs font-semibold text-slate-500">
+                Fornitore fattura
+                <select className="input-saas mt-1 w-full" value={editModal.form.invoice_supplier}
+                  onChange={e => setEditModal(m => {
+                    if (!m) return null;
+                    const nextSupplier = e.target.value;
+                    const grossInput = m.record.submitted_via_qr && nextSupplier === "UTA" && m.form.invoice_supplier !== "UTA";
+                    const leavingUta = m.record.submitted_via_qr && m.form.invoice_supplier === "UTA" && nextSupplier !== "UTA" && m.form.cost_basis === "net";
+                    return { ...m, form: { ...m.form, invoice_supplier: nextSupplier,
+                      cost_basis: grossInput ? "gross" : "net",
+                      cost: grossInput && m.record.gross_cost != null ? String(m.record.gross_cost)
+                        : leavingUta && m.record.gross_cost != null ? String(m.record.gross_cost) : m.form.cost } };
+                  })}>
+                  <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+                </select>
               </label>
               <label className="text-xs font-semibold text-slate-500">
                 Note
@@ -630,15 +768,50 @@ export default function FleetFuelPage() {
       <div>
         <SectionCard
           title="Coda rifornimenti"
-          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}`}
+          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
           actions={(
             <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <input
                 className="input-saas h-10 min-w-0 basis-full text-xs lg:w-64 lg:basis-auto"
                 value={searchQuery}
                 onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }}
-                placeholder="Cerca mezzo, targa, distributore"
+                placeholder="Cerca mezzo, targa, distributore o fornitore"
               />
+              <div className="flex basis-full flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1 text-xs font-semibold text-slate-500">
+                  Dal
+                  <DateInput className="input-saas h-10 w-36 text-xs" value={dateFrom} max={dateTo || undefined}
+                    title="Data iniziale (gg/mm/aaaa)"
+                    onChange={(iso) => { setDateFrom(iso); setCurrentPage(1); }} />
+                </label>
+                <label className="flex items-center gap-1 text-xs font-semibold text-slate-500">
+                  Al
+                  <DateInput className="input-saas h-10 w-36 text-xs" value={dateTo} min={dateFrom || undefined}
+                    title="Data finale (gg/mm/aaaa)"
+                    onChange={(iso) => { setDateTo(iso); setCurrentPage(1); }} />
+                </label>
+                {([
+                  ["this_month", "Questo mese"],
+                  ["last_month", "Mese scorso"],
+                  ["this_year", "Quest'anno"],
+                ] as const).map(([preset, label]) => {
+                  const range = datePreset(preset);
+                  const active = dateFrom === range.from && dateTo === range.to;
+                  return (
+                    <button key={preset} type="button"
+                      onClick={() => { setDateFrom(range.from); setDateTo(range.to); setCurrentPage(1); }}
+                      className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${active ? "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      {label}
+                    </button>
+                  );
+                })}
+                {dateFrom || dateTo ? (
+                  <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); setCurrentPage(1); }}
+                    className="min-h-10 rounded-lg px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50">
+                    Azzera date
+                  </button>
+                ) : null}
+              </div>
               {([
                 ["pending", `Da approvare (${counts.pending})`],
                 ["approved", `Approvati (${counts.approved})`],
@@ -657,6 +830,11 @@ export default function FleetFuelPage() {
             </div>
           )}
         >
+          {truncated && !loading ? (
+            <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+              Mostrati solo i 250 rifornimenti più recenti: i totali qui sopra non sono completi. Restringi il periodo con il filtro date.
+            </p>
+          ) : null}
           {loading ? (
             <p className="text-sm text-slate-400">Caricamento...</p>
           ) : visibleRecords.length === 0 ? (
@@ -664,22 +842,23 @@ export default function FleetFuelPage() {
           ) : (
             <>
             <div className="hidden overflow-hidden rounded-lg border border-slate-200 lg:block">
-              <div className="grid grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
-                <span>Data</span><span>Mezzo</span><span>Distributore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
+              <div className="grid grid-cols-[100px_minmax(170px,1.4fr)_minmax(120px,1fr)_minmax(130px,1fr)_70px_95px_70px_90px_minmax(110px,1fr)_130px_28px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
+                <span>Data</span><span>Mezzo</span><span>Autista</span><span>Distributore / Fornitore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
               </div>
               {paginatedRecords.map((record) => (
-                <button key={record.id} type="button" onClick={() => setSelectedRecord(record)} className="grid w-full grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
+                <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[100px_minmax(170px,1.4fr)_minmax(120px,1fr)_minmax(130px,1fr)_70px_95px_70px_90px_minmax(110px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span></span>
-                  <span className="truncate text-slate-600">{record.station ?? "Non indicato"}</span>
+                  <span className={`min-w-0 truncate ${record.driver_name ? "text-slate-700" : "italic text-slate-400"}`}>{record.driver_name ?? "Non indicato"}</span>
+                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className="block text-[11px] font-semibold text-blue-700">{record.invoice_supplier}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
                   <span className="font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</span>
-                  <span className="font-semibold text-slate-900">{fmtMoney(record.cost)}</span>
+                  <span className="font-semibold text-slate-900" title={record.gross_cost != null ? `Pagato dall'autista: €${record.gross_cost.toFixed(2)}` : undefined}>{fmtFuelCost(record)}{record.invoice_supplier === "UTA" ? <span className="block text-[10px] font-normal text-slate-500">netto IVA</span> : null}</span>
                   <span className="text-slate-600">{fmtUnitPrice(record)}</span>
                   <span className="text-slate-600">{fmtNumber(record.km_at_fuel)}</span>
                   <span className={`truncate ${hasFiscalDocument(record) ? "text-blue-700" : "font-medium text-rose-600"}`}>{record.fiscal_document_name ?? "Mancante"}</span>
                   <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-semibold ${record.approval_status === "approved" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : record.approval_status === "rejected" ? "border-rose-200 bg-rose-50 text-rose-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>{record.approval_status === "approved" ? "Approvato" : record.approval_status === "rejected" ? "Respinto" : "Da approvare"}</span>
                   <span className="text-lg text-slate-400" aria-hidden="true">›</span>
-                </button>
+                </div>
               ))}
             </div>
             <div className="space-y-3 lg:hidden">
@@ -691,10 +870,11 @@ export default function FleetFuelPage() {
                         {record.vehicle?.label ?? "Veicolo"} {record.vehicle?.plate ? `- ${record.vehicle.plate}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"}
+                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier ?? "Fornitore da associare"}
                       </p>
+                      {!record.invoice_supplier && <button type="button" onClick={() => openSupplierModal(record)} className="mt-2 text-left text-xs font-semibold text-blue-700 underline underline-offset-2">Associa fornitore</button>}
                       <p className="mt-1 text-xs text-slate-400">
-                        {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
+                        Autista: {record.driver_name ?? "non indicato"} · {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
                       </p>
                     </div>
                     <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
@@ -713,7 +893,8 @@ export default function FleetFuelPage() {
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Costo</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? `EUR ${record.cost.toFixed(2)}` : "-"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{fmtFuelCost(record)}</p>
+                      {record.gross_cost != null ? <p className="text-[11px] text-slate-500">Pagato EUR {record.gross_cost.toFixed(2)}</p> : null}
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Km</p>
@@ -827,14 +1008,20 @@ export default function FleetFuelPage() {
               Data
               <DateInput className="input-saas mt-1 w-full" value={form.fuel_date} onChange={(iso) => setForm((current) => ({ ...current, fuel_date: iso }))} />
             </label>
+            <label className="text-xs font-semibold text-slate-500">
+              Autista
+              <input className="input-saas mt-1 w-full" list="fuel-office-driver-options" autoComplete="off" maxLength={120}
+                placeholder="Seleziona o scrivi il nome" value={form.driver_name}
+                onChange={(event) => setForm((current) => ({ ...current, driver_name: event.target.value }))} />
+            </label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs font-semibold text-slate-500">
                 Litri
-                <input className="input-saas mt-1 w-full" type="number" min="0" value={form.liters} onChange={(event) => setForm((current) => ({ ...current, liters: event.target.value }))} />
+                <input className="input-saas mt-1 w-full" type="number" min="0" step="0.01" value={form.liters} onChange={(event) => setForm((current) => ({ ...current, liters: event.target.value }))} />
               </label>
               <label className="text-xs font-semibold text-slate-500">
-                Costo
-                <input className="input-saas mt-1 w-full" type="number" min="0" value={form.cost} onChange={(event) => setForm((current) => ({ ...current, cost: event.target.value }))} />
+                Costo (€; per UTA inserisci il netto)
+                <input className="input-saas mt-1 w-full" type="number" min="0" step="0.0001" value={form.cost} onChange={(event) => setForm((current) => ({ ...current, cost: event.target.value }))} />
               </label>
               <label className="text-xs font-semibold text-slate-500">
                 Km al rifornimento
@@ -854,6 +1041,12 @@ export default function FleetFuelPage() {
             <label className="text-xs font-semibold text-slate-500">
               Distributore
               <input className="input-saas mt-1 w-full" value={form.station} onChange={(event) => setForm((current) => ({ ...current, station: event.target.value }))} />
+            </label>
+            <label className="text-xs font-semibold text-slate-500">
+              Fornitore fattura (se noto)
+              <select className="input-saas mt-1 w-full" value={form.invoice_supplier} onChange={(event) => setForm((current) => ({ ...current, invoice_supplier: event.target.value }))}>
+                <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+              </select>
             </label>
             <label className="text-xs font-semibold text-slate-500">
               Note
@@ -880,10 +1073,12 @@ export default function FleetFuelPage() {
               <div><p className="text-lg font-bold text-slate-950">{selectedRecord.vehicle?.label ?? "Veicolo"}</p><p className="text-sm text-slate-500">{selectedRecord.vehicle?.plate ?? "Targa non indicata"}</p></div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-5 border-y border-slate-100 py-5">
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Litri</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.liters != null ? `${selectedRecord.liters.toFixed(1)} L` : "-"}</dd></div>
-                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Costo totale</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtMoney(selectedRecord.cost)}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">{selectedRecord.invoice_supplier === "UTA" ? "Costo netto" : "Costo totale"}</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtFuelCost(selectedRecord)}</dd>{selectedRecord.gross_cost != null && <p className="text-xs text-slate-500">Pagato EUR {selectedRecord.gross_cost.toFixed(2)}</p>}</div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Fornitore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.invoice_supplier ?? "Da associare"}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Prezzo al litro</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtUnitPrice(selectedRecord)} EUR/L</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Chilometraggio</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtNumber(selectedRecord.km_at_fuel, " km")}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Distributore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.station ?? "Non indicato"}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Autista</dt><dd className={`mt-1 text-sm font-semibold ${selectedRecord.driver_name ? "text-slate-900" : "text-rose-600"}`}>{selectedRecord.driver_name ?? "Non indicato — usa Modifica per inserirlo"}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Provenienza</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.submitted_via_qr ? "QR autista" : "Inserimento ufficio"}</dd></div>
               </dl>
               <div><p className="text-[10px] font-bold uppercase text-slate-400">Documento fiscale</p><button type="button" disabled={!selectedRecord.fiscal_document_url} onClick={() => openFiscalDocument(selectedRecord)} className="mt-2 text-left text-sm font-semibold text-blue-700 disabled:text-slate-400">{selectedRecord.fiscal_document_name ?? "Documento non collegato"}</button></div>
@@ -895,11 +1090,14 @@ export default function FleetFuelPage() {
               {selectedRecord.approval_status !== "rejected" ? <button type="button" onClick={() => { setSelectedRecord(null); void updateFuelApproval(selectedRecord, "rejected"); }} className="min-h-11 rounded-lg border border-rose-300 px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">Respingi</button> : null}
               {selectedRecord.approval_status === "approved" && canInsertFiscalDocument(selectedRecord) ? <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); void updateFuelDocument(record); }} className="min-h-11 rounded-lg border border-blue-200 px-4 text-sm font-semibold text-blue-700">Aggiungi documento fiscale</button> : null}
               {selectedRecord.approval_status === "approved" && canEditFiscalDocument(selectedRecord) ? <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); void updateFuelDocument(record); }} className="min-h-11 rounded-lg border border-blue-200 px-4 text-sm font-semibold text-blue-700">Modifica documento fiscale</button> : null}
-              {currentRole === "admin" ? <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); openEditModal(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700">Modifica</button><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); setDeleteConfirm(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-rose-700">Elimina</button></div> : null}
+              <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); openEditModal(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-slate-700">Modifica</button>{currentRole === "admin" && <button type="button" onClick={() => { const record = selectedRecord; setSelectedRecord(null); setDeleteConfirm(record); }} className="min-h-11 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-rose-700">Elimina</button>}</div>
             </footer>
           </aside>
         </div>
       ) : null}
+      <datalist id="fuel-office-driver-options">
+        {drivers.map((driver) => <option key={driver.id} value={driver.full_name} />)}
+      </datalist>
     </section>
   );
 }
