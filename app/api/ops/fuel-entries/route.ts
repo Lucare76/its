@@ -49,6 +49,12 @@ const editFuelSchema = z.object({
 });
 
 const RECORDS_LIMIT = 250;
+
+// Il blocco delle fatture carburante chiuse è un trigger nel database: il suo
+// messaggio è già in italiano, va solo restituito come conflitto, non come 500.
+function lockedStatus(message: string) {
+  return message.toLowerCase().includes("fattura carburante chiusa") ? 409 : 500;
+}
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)));
 
 const deleteFuelSchema = z.object({ id: z.string().uuid() });
@@ -236,7 +242,7 @@ export async function POST(request: NextRequest) {
       })
       .eq("tenant_id", auth.membership.tenant_id)
       .eq("id", parsed.id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ error: error.message }, { status: lockedStatus(error.message) });
     return NextResponse.json({ ok: true });
   }
 
@@ -276,7 +282,7 @@ export async function POST(request: NextRequest) {
       .delete()
       .eq("tenant_id", auth.membership.tenant_id)
       .eq("id", parsed.id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ error: error.message }, { status: lockedStatus(error.message) });
     return NextResponse.json({ ok: true });
   }
 
@@ -346,6 +352,6 @@ export async function POST(request: NextRequest) {
     .eq("tenant_id", auth.membership.tenant_id)
     .eq("id", parsed.id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return NextResponse.json({ error: error.message }, { status: lockedStatus(error.message) });
   return NextResponse.json({ ok: true });
 }
