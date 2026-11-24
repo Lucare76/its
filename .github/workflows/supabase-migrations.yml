@@ -1,10 +1,12 @@
 name: Deploy Supabase Migrations
 
+# DISATTIVATO in automatico: le migrazioni si applicano a mano dal SQL Editor
+# di Supabase, quindi la cronologia remota (supabase_migrations) non è
+# allineata e `db push --include-all` proverebbe a rieseguirle tutte in
+# produzione. Fallisce comunque da novembre 2026 (config.toml: `inbucket`
+# non più supportato dalla CLI latest). Avvio solo manuale, consapevole.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'supabase/migrations/**'
+  workflow_dispatch:
 
 jobs:
   migrate:
