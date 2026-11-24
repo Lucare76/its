@@ -48,6 +48,9 @@ const editFuelSchema = z.object({
   notes:        z.string().max(1000).nullable().optional(),
 });
 
+const RECORDS_LIMIT = 250;
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)));
+
 const deleteFuelSchema = z.object({ id: z.string().uuid() });
 const assignSupplierSchema = z.object({ id: z.string().uuid(), invoice_supplier: z.enum(["ENI", "UTA"]) });
 
@@ -58,16 +61,30 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
   const vehicleId = searchParams.get("vehicle_id");
+  const rawFrom = searchParams.get("date_from");
+  const rawTo = searchParams.get("date_to");
+  const dateFrom = rawFrom ? isoDateSchema.safeParse(rawFrom) : null;
+  const dateTo = rawTo ? isoDateSchema.safeParse(rawTo) : null;
+  if ((dateFrom && !dateFrom.success) || (dateTo && !dateTo.success)) {
+    return NextResponse.json({ error: "Date del filtro non valide (formato AAAA-MM-GG)." }, { status: 400 });
+  }
+  if (dateFrom?.success && dateTo?.success && dateFrom.data > dateTo.data) {
+    return NextResponse.json({ error: "La data iniziale è successiva a quella finale." }, { status: 400 });
+  }
 
   let query = auth.admin
     .from("vehicle_fuel")
     .select("id, vehicle_id, fuel_date, liters, cost, gross_cost, km_at_fuel, fuel_type, station, invoice_supplier, driver_name, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("fuel_date", { ascending: false })
-    .limit(250);
+    .order("created_at", { ascending: false })
+    // Uno in più del limite per sapere se l'elenco è stato troncato.
+    .limit(RECORDS_LIMIT + 1);
 
   if (status && ["pending", "approved", "rejected"].includes(status)) query = query.eq("approval_status", status);
   if (vehicleId) query = query.eq("vehicle_id", vehicleId);
+  if (dateFrom?.success) query = query.gte("fuel_date", dateFrom.data);
+  if (dateTo?.success) query = query.lte("fuel_date", dateTo.data);
 
   const countQuery = (approvalStatus: "pending" | "approved" | "rejected") => {
     let nextQuery = auth.admin
@@ -77,6 +94,8 @@ export async function GET(request: NextRequest) {
       .eq("approval_status", approvalStatus);
 
     if (vehicleId) nextQuery = nextQuery.eq("vehicle_id", vehicleId);
+    if (dateFrom?.success) nextQuery = nextQuery.gte("fuel_date", dateFrom.data);
+    if (dateTo?.success) nextQuery = nextQuery.lte("fuel_date", dateTo.data);
     return nextQuery;
   };
 
@@ -110,7 +129,8 @@ export async function GET(request: NextRequest) {
   }
 
   const vehicleMap = new Map((vehicles ?? []).map((vehicle) => [vehicle.id, vehicle]));
-  const enriched = (records ?? []).map((record) => ({
+  const truncated = (records ?? []).length > RECORDS_LIMIT;
+  const enriched = (records ?? []).slice(0, RECORDS_LIMIT).map((record) => ({
     ...record,
     vehicle: vehicleMap.get(record.vehicle_id) ?? null,
   }));
@@ -120,6 +140,7 @@ export async function GET(request: NextRequest) {
     records: enriched,
     vehicles: vehicles ?? [],
     drivers: drivers ?? [],
+    truncated,
     counts: {
       pending: pendingCount ?? 0,
       approved: approvedCount ?? 0,
