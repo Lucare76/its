@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fuelCanLink, parseFuelInvoiceRows, proposeFuelMatch } from "@/lib/server/fuel-invoice-reconciliation";
+import { fuelCanLink, parseFuelInvoiceRows, proposeFuelMatch, selectExactAutoLinks } from "@/lib/server/fuel-invoice-reconciliation";
 
 describe("fuel invoice reconciliation", () => {
   it("parses ENI purchases but excludes invoice fees and totals", () => {
@@ -42,5 +42,54 @@ describe("fuel invoice reconciliation", () => {
     expect(fuelCanLink(line, { ...row, liters: 216.89 }, "ENI")).toBe(false);
     expect(fuelCanLink(line, { ...row, cost: 475.04 }, "ENI")).toBe(false);
     expect(proposeFuelMatch(line, [row, { ...row, id: "qr-2" }], "ENI")).toMatchObject({ status: "ambiguous" });
+  });
+});
+
+describe("collegamento automatico solo per corrispondenze esatte", () => {
+  const line = { id: "L1", date: "2026-10-19", station: "ANAGNI", liters: 68.53, amount: 150.08, reference: "00944117" };
+  const fuel = { id: "F1", fuel_date: "2026-10-19", station: "ANAGNI", liters: 68.53, cost: 150.08, invoice_supplier: "ENI", approval_status: "approved" };
+
+  it("collega il caso tipico: data, distributore, litri e importo identici", () => {
+    expect(selectExactAutoLinks([line], [fuel], "ENI")).toEqual([{ line_id: "L1", fuel_id: "F1" }]);
+  });
+
+  it("tollera solo 1 centesimo di arrotondamento (netto UTA a quattro decimali)", () => {
+    expect(selectExactAutoLinks([line], [{ ...fuel, cost: 150.0851 }], "ENI")).toHaveLength(1);
+    expect(selectExactAutoLinks([line], [{ ...fuel, cost: 150.07 }], "ENI")).toHaveLength(1);
+    expect(selectExactAutoLinks([line], [{ ...fuel, cost: 150.06 }], "ENI")).toEqual([]);
+  });
+
+  it.each([
+    ["litri diversi", { liters: 68.5 }],
+    ["luogo scritto diversamente", { station: "San Pelagico Eni ovest" }],
+    ["importo mancante", { cost: null }],
+    ["litri mancanti", { liters: null }],
+    ["rifornimento respinto", { approval_status: "rejected" }],
+    ["altro fornitore", { invoice_supplier: "UTA" }],
+    ["altra data", { fuel_date: "2026-10-20" }],
+  ])("non collega con %s", (_label, change) => {
+    expect(selectExactAutoLinks([line], [{ ...fuel, ...change }], "ENI")).toEqual([]);
+  });
+
+  it("collega i rifornimenti da approvare (non respinti)", () => {
+    expect(selectExactAutoLinks([line], [{ ...fuel, approval_status: "pending" }], "ENI")).toHaveLength(1);
+  });
+
+  it("non collega se ci sono due rifornimenti candidati per la stessa riga", () => {
+    expect(selectExactAutoLinks([line], [fuel, { ...fuel, id: "F2" }], "ENI")).toEqual([]);
+  });
+
+  it("non collega se lo stesso rifornimento è candidato per due righe", () => {
+    expect(selectExactAutoLinks([line, { ...line, id: "L2", reference: "00944118" }], [fuel], "ENI")).toEqual([]);
+  });
+
+  it("non riusa un rifornimento già collegato ad altra fattura", () => {
+    expect(selectExactAutoLinks([line], [fuel], "ENI", new Set(["F1"]))).toEqual([]);
+  });
+
+  it("collega le righe sicure e lascia manuali le altre nella stessa fattura", () => {
+    const other = { id: "L2", date: "2026-10-19", station: "DUE CARRARE", liters: 216.9, amount: 475.01, reference: "00914931" };
+    const otherFuel = { id: "F2", fuel_date: "2026-10-19", station: "San pelagico Eni ovest", liters: 216.9, cost: 475, invoice_supplier: "ENI", approval_status: "approved" };
+    expect(selectExactAutoLinks([line, other], [fuel, otherFuel], "ENI")).toEqual([{ line_id: "L1", fuel_id: "F1" }]);
   });
 });

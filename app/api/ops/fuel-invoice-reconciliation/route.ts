@@ -5,13 +5,17 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { extractFuelInvoiceLines } from "@/lib/server/fuel-invoice-pdf";
 import { fuelCanLink, proposeFuelMatch, type FuelInvoiceLine, type ManualFuelLine } from "@/lib/server/fuel-invoice-reconciliation";
+import { autoLinkExactMatches } from "@/lib/server/fuel-invoice-auto-link";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type InvoiceRow = { id: string; line_no: number; fuel_date: string; station: string; liters: number;
-  amount: number; reference: string; matched_fuel_id: string | null };
-const linkSchema = z.object({ action: z.literal("link"), line_id: z.string().uuid(), fuel_id: z.string().uuid() });
+  amount: number; reference: string; matched_fuel_id: string | null; match_method: string | null };
+const actionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("link"), line_id: z.string().uuid(), fuel_id: z.string().uuid() }),
+  z.object({ action: z.literal("unlink"), line_id: z.string().uuid() }),
+]);
 
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -23,8 +27,10 @@ export async function GET(request: NextRequest) {
   const importId = new URL(request.url).searchParams.get("import_id") ?? imports?.[0]?.id;
   if (!importId || !imports?.some((row) => row.id === importId)) return NextResponse.json({ imports: imports ?? [], lines: [] });
   const chosen = imports.find((row) => row.id === importId)!;
+  // Anche all'apertura: aggancia i rifornimenti registrati dopo l'importazione.
+  const autoLinked = await autoLinkExactMatches(db, auth.membership.tenant_id, chosen.id, chosen.supplier, auth.user.id);
   const { data: lines, error: linesError } = await db.from("fuel_invoice_lines")
-    .select("id, line_no, fuel_date, station, liters, amount, reference, matched_fuel_id")
+    .select("id, line_no, fuel_date, station, liters, amount, reference, matched_fuel_id, match_method")
     .eq("tenant_id", auth.membership.tenant_id).eq("import_id", importId).order("line_no");
   if (linesError) return NextResponse.json({ error: linesError.message }, { status: 500 });
   const invoiceDates = (lines ?? []).map((line) => line.fuel_date as string).sort();
@@ -50,7 +56,7 @@ export async function GET(request: NextRequest) {
   }));
   const unbilledManual = (manual ?? []).filter((row) =>
     !linked.has(row.id) && (!dateFrom || row.fuel_date >= dateFrom) && (!dateTo || row.fuel_date <= dateTo));
-  return NextResponse.json({ imports, selected_import: chosen, lines: proposals, unbilled_manual: unbilledManual });
+  return NextResponse.json({ imports, selected_import: chosen, lines: proposals, unbilled_manual: unbilledManual, auto_linked: autoLinked });
 }
 
 export async function POST(request: NextRequest) {
@@ -76,7 +82,10 @@ export async function POST(request: NextRequest) {
     const digest = createHash("sha256").update(bytes).digest("hex");
     const { data: existing } = await db.from("fuel_invoice_imports").select("id")
       .eq("tenant_id", tenantId).eq("supplier", supplier).eq("pdf_sha256", digest).maybeSingle();
-    if (existing) return NextResponse.json({ ok: true, import_id: existing.id, already_imported: true });
+    if (existing) {
+      const autoLinked = await autoLinkExactMatches(db, tenantId, existing.id, String(supplier), auth.user.id);
+      return NextResponse.json({ ok: true, import_id: existing.id, already_imported: true, auto_linked: autoLinked });
+    }
     const { data: batch, error: batchError } = await db.from("fuel_invoice_imports").insert({
       tenant_id: tenantId, supplier, invoice_number: invoiceNumber, pdf_sha256: digest,
       filename: pdf.name.slice(0, 200), created_by: auth.user.id,
@@ -90,11 +99,21 @@ export async function POST(request: NextRequest) {
       await db.from("fuel_invoice_imports").delete().eq("tenant_id", tenantId).eq("id", batch.id);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
-    return NextResponse.json({ ok: true, import_id: batch.id, count: parsed.lines.length });
+    const autoLinked = await autoLinkExactMatches(db, tenantId, batch.id, String(supplier), auth.user.id);
+    return NextResponse.json({ ok: true, import_id: batch.id, count: parsed.lines.length, auto_linked: autoLinked });
   }
 
-  const parsed = linkSchema.safeParse(await request.json().catch(() => null));
+  const parsed = actionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Collegamento non valido." }, { status: 400 });
+  if (parsed.data.action === "unlink") {
+    const { data: changed, error } = await db.from("fuel_invoice_lines")
+      .update({ matched_fuel_id: null, matched_at: null, matched_by: auth.user.id, match_method: "unlinked" })
+      .eq("tenant_id", tenantId).eq("id", parsed.data.line_id).not("matched_fuel_id", "is", null)
+      .select("id").maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!changed) return NextResponse.json({ error: "Riga non collegata o non trovata." }, { status: 409 });
+    return NextResponse.json({ ok: true });
+  }
   const { line_id, fuel_id } = parsed.data;
   const [{ data: line }, { data: fuel }] = await Promise.all([
     db.from("fuel_invoice_lines").select("id, import_id, fuel_date, station, liters, amount, matched_fuel_id")
@@ -111,7 +130,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Fornitore, data o valori del rifornimento incompatibili: collegamento non consentito." }, { status: 409 });
   }
   const { data: changed, error } = await db.from("fuel_invoice_lines")
-    .update({ matched_fuel_id: fuel.id, matched_at: new Date().toISOString(), matched_by: auth.user.id })
+    .update({ matched_fuel_id: fuel.id, matched_at: new Date().toISOString(), matched_by: auth.user.id, match_method: "manual" })
     .eq("tenant_id", tenantId).eq("id", line.id).is("matched_fuel_id", null).select("id").maybeSingle();
   if (error || !changed) return NextResponse.json({ error: error?.message ?? "Operazione già collegata." }, { status: 409 });
   return NextResponse.json({ ok: true,

@@ -9,9 +9,10 @@ type CandidateRow = { row: Fuel; amountDifference: number | null; litersDifferen
 type Candidate = ({ status: "candidate" } & CandidateRow) |
   { status: "missing" | "ambiguous"; candidates: CandidateRow[] };
 type Line = { id: string; line_no: number; fuel_date: string; station: string; liters: number; amount: number;
-  reference: string; matched_fuel_id: string | null; manual_match: Fuel | null; proposal: Candidate | null };
+  reference: string; matched_fuel_id: string | null; match_method: "auto" | "manual" | "unlinked" | null;
+  manual_match: Fuel | null; proposal: Candidate | null };
 type Batch = { id: string; supplier: string; invoice_number: string; filename: string; created_at: string };
-type Result = { imports: Batch[]; selected_import?: Batch; lines: Line[]; unbilled_manual?: Fuel[]; error?: string };
+type Result = { imports: Batch[]; selected_import?: Batch; lines: Line[]; unbilled_manual?: Fuel[]; auto_linked?: number; error?: string };
 
 export default function FuelReconcilePage() {
   const [supplier, setSupplier] = useState<"ENI" | "UTA">("ENI");
@@ -30,6 +31,7 @@ export default function FuelReconcilePage() {
     const result = await res.json() as Result;
     if (!res.ok) return setMessage(result.error ?? "Impossibile caricare il confronto.");
     setData(result); setSelectedId(result.selected_import?.id ?? "");
+    return result;
   }, []);
   useEffect(() => { void Promise.resolve().then(() => refresh()); }, [refresh]);
 
@@ -43,7 +45,11 @@ export default function FuelReconcilePage() {
     const result = await res.json();
     setBusy(false);
     if (!res.ok) return setMessage(result.error ?? "Importazione fallita.");
-    setMessage(result.already_imported ? "Questo PDF era già stato importato." : `${result.count} operazioni lette. Controlla le proposte prima di collegarle.`);
+    const autoLinked = Number(result.auto_linked ?? 0);
+    const autoText = autoLinked > 0 ? ` ${autoLinked} collegate in automatico perché tutto corrisponde.` : "";
+    setMessage(result.already_imported
+      ? `Questo PDF era già stato importato.${autoText}`
+      : `${result.count} operazioni lette.${autoText} Controlla le altre proposte prima di collegarle.`);
     await refresh(result.import_id);
   }
 
@@ -57,6 +63,19 @@ export default function FuelReconcilePage() {
     });
     const result = await res.json(); setBusy(false);
     setMessage(res.ok ? "Operazione collegata. Controlla eventuali differenze." : result.error ?? "Collegamento fallito.");
+    if (res.ok) await refresh(selectedId);
+  }
+
+  async function unlink(line: Line) {
+    if (!window.confirm("Scollegare questa riga dal rifornimento? Non verrà più collegata in automatico: potrai ricollegarla a mano.")) return;
+    const token = await getToken(); if (!token) return;
+    setBusy(true);
+    const res = await fetch("/api/ops/fuel-invoice-reconciliation", {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "unlink", line_id: line.id }),
+    });
+    const result = await res.json(); setBusy(false);
+    setMessage(res.ok ? "Riga scollegata." : result.error ?? "Operazione non riuscita.");
     if (res.ok) await refresh(selectedId);
   }
 
@@ -125,10 +144,18 @@ export default function FuelReconcilePage() {
         <p className="font-semibold">{line.fuel_date} · {line.station} · {Number(line.liters).toFixed(2)} L · €{Number(line.amount).toFixed(2)}</p>
         <p className="text-xs text-slate-500">Documento/operazione: {line.reference}</p>
         {fuel ? <div className="mt-2 space-y-2">
+          <p className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${line.match_method === "auto" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+              {line.match_method === "auto" ? "Collegata automaticamente" : "Collegata"}
+            </span>
+            <span className="text-slate-600">Registro: {fuel.station} · €{fuel.cost ?? "—"} · {fuel.liters ?? "—"} L</span>
+            <button className="text-xs text-rose-700 underline disabled:opacity-50" disabled={busy} onClick={() => void unlink(line)}>Scollega</button>
+          </p>
           <p>{differences(line, fuel)}</p>
           {(fuel.cost == null || Math.round(Number(fuel.cost) * 100) !== Math.round(Number(line.amount) * 100) || fuel.liters !== Number(line.liters)) &&
             <button className="text-blue-700 underline disabled:opacity-50" disabled={busy} onClick={() => void correct(fuel, line)}>Correggi registrazione manuale</button>}
         </div> : candidates.length ? <div className="mt-2">
+          {line.match_method === "unlinked" && <p className="text-xs text-slate-500">Scollegata a mano: non viene ricollegata in automatico.</p>}
           <p className="font-medium text-amber-800">{candidates.length > 1 ? "Più registrazioni possibili: scegli quella corretta." : "Possibile corrispondenza: verifica prima di collegare."}</p>
           {candidates.map(candidate => <div key={candidate.row.id} className="mt-2 flex flex-wrap items-center gap-3">
             <span>Registro: {candidate.row.station} · €{candidate.row.cost ?? "—"} · {candidate.row.liters ?? "—"} L</span>

@@ -3355,6 +3355,7 @@ export type Database = {
           import_id: string
           line_no: number
           liters: number
+          match_method: string | null
           matched_at: string | null
           matched_by: string | null
           matched_fuel_id: string | null
@@ -3369,6 +3370,7 @@ export type Database = {
           import_id: string
           line_no: number
           liters: number
+          match_method?: string | null
           matched_at?: string | null
           matched_by?: string | null
           matched_fuel_id?: string | null
@@ -3383,6 +3385,7 @@ export type Database = {
           import_id?: string
           line_no?: number
           liters?: number
+          match_method?: string | null
           matched_at?: string | null
           matched_by?: string | null
           matched_fuel_id?: string | null

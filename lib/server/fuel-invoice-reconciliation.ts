@@ -93,3 +93,47 @@ export function proposeFuelMatch(line: FuelInvoiceLine, manual: ManualFuelLine[]
   return ranked.length === 1 ? { status: "candidate" as const, ...ranked[0]! }
     : { status: ranked.length ? "ambiguous" as const : "missing" as const, candidates: ranked };
 }
+
+export type AutoLinkInvoiceLine = FuelInvoiceLine & { id: string };
+export type AutoLinkManualLine = ManualFuelLine & { approval_status?: string | null };
+
+/**
+ * Collegamenti automatici sicuri: solo quando una riga fattura e un
+ * rifornimento corrispondono esattamente e senza alternative.
+ *  - stesso fornitore e stessa data (già richiesti da fuelCanLink)
+ *  - distributore coincidente (non solo "scritto diversamente")
+ *  - litri identici al centesimo, importo con al massimo 1 centesimo di scarto
+ *  - un solo rifornimento candidato per la riga, e quel rifornimento non è
+ *    candidato per nessun'altra riga ancora da collegare
+ *  - i rifornimenti respinti non vengono mai collegati in automatico
+ * Le righe passate devono essere solo quelle ancora collegabili in automatico.
+ */
+export function selectExactAutoLinks(
+  lines: AutoLinkInvoiceLine[],
+  manual: AutoLinkManualLine[],
+  supplier: string,
+  alreadyLinked: Set<string> = new Set(),
+): Array<{ line_id: string; fuel_id: string }> {
+  const eligible = manual.filter((row) => row.approval_status !== "rejected");
+  const candidatesByLine = new Map(lines.map((line) => [
+    line.id,
+    eligible.filter((row) => !alreadyLinked.has(row.id) && fuelCanLink(line, row, supplier)),
+  ]));
+  const linesPerFuel = new Map<string, number>();
+  for (const candidates of candidatesByLine.values()) {
+    for (const row of candidates) linesPerFuel.set(row.id, (linesPerFuel.get(row.id) ?? 0) + 1);
+  }
+  const links: Array<{ line_id: string; fuel_id: string }> = [];
+  for (const line of lines) {
+    const candidates = candidatesByLine.get(line.id) ?? [];
+    if (candidates.length !== 1) continue;
+    const row = candidates[0]!;
+    if (linesPerFuel.get(row.id) !== 1) continue;
+    if (!fuelStationsOverlap(row.station, line.station)) continue;
+    if (row.liters == null || row.cost == null) continue;
+    if (Math.round(Number(row.liters) * 100) !== Math.round(line.liters * 100)) continue;
+    if (Math.abs(Math.round(Number(row.cost) * 100) - Math.round(line.amount * 100)) > 1) continue;
+    links.push({ line_id: line.id, fuel_id: row.id });
+  }
+  return links;
+}
