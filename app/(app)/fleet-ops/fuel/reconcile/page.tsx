@@ -28,6 +28,9 @@ type Result = { imports: Batch[]; selected_import?: Batch; lines: Line[]; unbill
 
 const euro = (value: number | null | undefined) => value == null ? "—"
   : new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(Number(value));
+const liters = (value: number | null | undefined) => value == null ? "—"
+  : `${Number(value).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L`;
+const dateIt = (iso: string) => iso.split("-").reverse().join("/");
 const dateTime = (value: string) => new Date(value).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" });
 function statusLabel(batch: Batch) {
   if (batch.status !== "closed") return "Da controllare";
@@ -177,9 +180,9 @@ export default function FuelReconcilePage() {
     const amountDiff = fuel.cost == null ? null : Number((Number(line.amount) - Number(fuel.cost)).toFixed(2));
     const litersDiff = fuel.liters == null ? null : Number((Number(line.liters) - Number(fuel.liters)).toFixed(2));
     if (amountDiff === 0 && litersDiff === 0) return <span className="text-emerald-700">Importo e litri corrispondono</span>;
-    return <span className="font-semibold text-amber-700">Attenzione: ufficio €{fuel.cost ?? "—"} / {fuel.liters ?? "—"} L;
-      fattura €{Number(line.amount).toFixed(2)} / {Number(line.liters).toFixed(2)} L.
-      {amountDiff != null && ` Differenza €${amountDiff.toFixed(2)}.`}</span>;
+    return <span className="font-semibold text-amber-700">Attenzione: ufficio {euro(fuel.cost)} / {liters(fuel.liters)};
+      fattura {euro(line.amount)} / {liters(line.liters)}.
+      {amountDiff != null && ` Differenza ${euro(amountDiff)}.`}</span>;
   }
 
   return <main className="mx-auto max-w-6xl space-y-6 p-5">
@@ -259,14 +262,14 @@ export default function FuelReconcilePage() {
       const fuel = line.manual_match;
       const locked = data.selected_import?.status === "closed";
       return <section key={line.id} className="rounded-xl border bg-white p-4 text-sm">
-        <p className="font-semibold">{line.fuel_date} · {line.station} · {Number(line.liters).toFixed(2)} L · €{Number(line.amount).toFixed(2)}</p>
+        <p className="font-semibold">{dateIt(line.fuel_date)} · {line.station} · {liters(line.liters)} · {euro(line.amount)}</p>
         <p className="text-xs text-slate-500">Documento/operazione: {line.reference}</p>
         {fuel ? <div className="mt-2 space-y-2">
           <p className="flex flex-wrap items-center gap-2">
             <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${line.match_method === "auto" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
               {line.match_method === "auto" ? "Collegata automaticamente" : "Collegata"}
             </span>
-            <span className="text-slate-600">Registro: {fuel.station} · €{fuel.cost ?? "—"} · {fuel.liters ?? "—"} L</span>
+            <span className="text-slate-600">Registro: {fuel.station} · {euro(fuel.cost)} · {liters(fuel.liters)}</span>
             {!locked && <button className="text-xs text-rose-700 underline disabled:opacity-50" disabled={busy} onClick={() => void unlink(line)}>Scollega</button>}
           </p>
           <p>{differences(line, fuel)}</p>
@@ -276,7 +279,7 @@ export default function FuelReconcilePage() {
           {line.match_method === "unlinked" && <p className="text-xs text-slate-500">Scollegata a mano: non viene ricollegata in automatico.</p>}
           <p className="font-medium text-amber-800">{candidates.length > 1 ? "Più registrazioni possibili: scegli quella corretta." : "Possibile corrispondenza: verifica prima di collegare."}</p>
           {candidates.map(candidate => <div key={candidate.row.id} className="mt-2 flex flex-wrap items-center gap-3">
-            <span>Registro: {candidate.row.station} · €{candidate.row.cost ?? "—"} · {candidate.row.liters ?? "—"} L</span>
+            <span>Registro: {candidate.row.station} · {euro(candidate.row.cost)} · {liters(candidate.row.liters)}</span>
             {candidate.stationMismatch && <span className="font-semibold text-amber-700">Luogo scritto diversamente: verifica prima di collegare.</span>}
             {!locked && <button disabled={busy} onClick={() => void link(line, candidate)} className="rounded-lg border border-blue-300 px-2 py-1 text-blue-700">{candidate.stationMismatch ? "Verifica e collega" : "Collega"}</button>}
           </div>)}
@@ -286,7 +289,7 @@ export default function FuelReconcilePage() {
     {!!data.unbilled_manual?.length && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
       <h2 className="font-semibold text-amber-900">Rifornimenti ufficio senza riga fatturata nel periodo</h2>
       <p className="text-xs text-amber-800">Sono registrazioni dello stesso fornitore non ancora collegate. Controlla anche eventuali altre fatture del periodo.</p>
-      {data.unbilled_manual.map(row => <p key={row.id} className="mt-2 text-sm">{row.fuel_date} · {row.station} · €{row.cost ?? "—"} · {row.liters ?? "—"} L</p>)}
+      {data.unbilled_manual.map(row => <p key={row.id} className="mt-2 text-sm">{dateIt(row.fuel_date)} · {row.station} · {euro(row.cost)} · {liters(row.liters)}</p>)}
     </section>}
   </main>;
 }
