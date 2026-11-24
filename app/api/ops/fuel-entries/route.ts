@@ -90,13 +90,16 @@ export async function GET(request: NextRequest) {
     // Uno in più del limite per sapere se l'elenco è stato troncato.
     .limit(RECORDS_LIMIT + 1);
 
-  if (status && ["pending", "approved", "rejected"].includes(status)) query = query.eq("approval_status", status);
-  if (vehicleId) query = query.eq("vehicle_id", vehicleId);
-  if (dateFrom?.success) query = query.gte("fuel_date", dateFrom.data);
-  if (dateTo?.success) query = query.lte("fuel_date", dateTo.data);
   if (onlyCashToReimburse) {
+    // Lista di cose da fare: tutti i contanti non rimborsati e non respinti,
+    // qualunque stato di approvazione e periodo (come il riepilogo).
     query = query.eq("invoice_supplier", "CONTANTI").is("reimbursed_at", null).neq("approval_status", "rejected");
+  } else {
+    if (status && ["pending", "approved", "rejected"].includes(status)) query = query.eq("approval_status", status);
+    if (dateFrom?.success) query = query.gte("fuel_date", dateFrom.data);
+    if (dateTo?.success) query = query.lte("fuel_date", dateTo.data);
   }
+  if (vehicleId) query = query.eq("vehicle_id", vehicleId);
 
   const countQuery = (approvalStatus: "pending" | "approved" | "rejected") => {
     let nextQuery = auth.admin

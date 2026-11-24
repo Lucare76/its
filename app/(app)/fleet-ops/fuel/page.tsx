@@ -808,7 +808,7 @@ export default function FleetFuelPage() {
       <div>
         <SectionCard
           title="Coda rifornimenti"
-          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
+          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${onlyCashToReimburse ? " · solo contanti da rimborsare" : dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
           actions={(
             <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <input
@@ -822,13 +822,13 @@ export default function FleetFuelPage() {
                   Dal
                   <DateInput className="input-saas h-10 w-36 text-xs" value={dateFrom} max={dateTo || undefined}
                     title="Data iniziale (gg/mm/aaaa)"
-                    onChange={(iso) => { setDateFrom(iso); setCurrentPage(1); }} />
+                    onChange={(iso) => { setDateFrom(iso); setOnlyCashToReimburse(false); setCurrentPage(1); }} />
                 </label>
                 <label className="flex items-center gap-1 text-xs font-semibold text-slate-500">
                   Al
                   <DateInput className="input-saas h-10 w-36 text-xs" value={dateTo} min={dateFrom || undefined}
                     title="Data finale (gg/mm/aaaa)"
-                    onChange={(iso) => { setDateTo(iso); setCurrentPage(1); }} />
+                    onChange={(iso) => { setDateTo(iso); setOnlyCashToReimburse(false); setCurrentPage(1); }} />
                 </label>
                 {([
                   ["this_month", "Questo mese"],
@@ -836,10 +836,10 @@ export default function FleetFuelPage() {
                   ["this_year", "Quest'anno"],
                 ] as const).map(([preset, label]) => {
                   const range = datePreset(preset);
-                  const active = dateFrom === range.from && dateTo === range.to;
+                  const active = !onlyCashToReimburse && dateFrom === range.from && dateTo === range.to;
                   return (
                     <button key={preset} type="button"
-                      onClick={() => { setDateFrom(range.from); setDateTo(range.to); setCurrentPage(1); }}
+                      onClick={() => { setDateFrom(range.from); setDateTo(range.to); setOnlyCashToReimburse(false); setCurrentPage(1); }}
                       className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${active ? "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
                       {label}
                     </button>
@@ -861,8 +861,8 @@ export default function FleetFuelPage() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => { setStatusFilter(value); setCurrentPage(1); }}
-                  className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${statusFilter === value ? "border-violet-600 bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                  onClick={() => { setStatusFilter(value); setOnlyCashToReimburse(false); setCurrentPage(1); }}
+                  className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${statusFilter === value && !onlyCashToReimburse ? "border-violet-600 bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                 >
                   {label}
                 </button>
@@ -882,6 +882,7 @@ export default function FleetFuelPage() {
                   {onlyCashToReimburse ? "Mostra tutti" : "Mostra solo da rimborsare"}
                 </button>
               </div>
+              {onlyCashToReimburse ? <p className="mt-1 font-medium">Vista contanti da rimborsare: stato e periodo non si applicano.</p> : null}
               <p className="mt-1">{cashToReimburse.by_driver.map((row) => `${row.driver_name}: ${fmtMoney(row.total)} (${row.count})`).join(" · ")}</p>
             </div>
           ) : null}

@@ -218,4 +218,15 @@ describe("fuel-entries — Q8, contanti e rimborso all'autista", () => {
     expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["invoice_supplier", "CONTANTI"] });
     expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "neq", args: ["approval_status", "rejected"] });
   });
+
+  it("vista contanti da rimborsare: ignora stato e periodo (altrimenti un contante approvato sparisce)", async () => {
+    rows.vehicles = []; rows.vehicle_fuel = [];
+    await GET(new NextRequest("https://its.test/api/ops/fuel-entries?reimbursement=pending&status=pending&date_from=2026-11-01&date_to=2026-11-30"));
+    const first = calls.findIndex((call) => call.table === "vehicle_fuel" && call.method === "select");
+    const next = calls.findIndex((call, index) => index > first && call.table === "vehicle_fuel" && call.method === "select");
+    const listCalls = calls.slice(first, next);
+    expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["invoice_supplier", "CONTANTI"] });
+    expect(listCalls).not.toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["approval_status", "pending"] });
+    expect(listCalls.some((call) => call.method === "gte" || call.method === "lte")).toBe(false);
+  });
 });
