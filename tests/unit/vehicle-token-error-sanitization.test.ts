@@ -247,12 +247,23 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
   it("salva il fornitore scelto dall'autista e scorpora l'IVA solo per UTA", async () => {
     const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
     mocks.createClient.mockReturnValue(fake.admin);
-    const uta = await callPost({ action: "fuel", liters: 25, cost: 50, station: "Q8", invoice_supplier: "UTA" });
-    const eni = await callPost({ action: "fuel", liters: 25, cost: 50, station: "ENI", invoice_supplier: "ENI" });
+    const uta = await callPost({ action: "fuel", liters: 25, cost: 50, station: "Q8", invoice_supplier: "UTA", driver_name: "Mario Rossi" });
+    const eni = await callPost({ action: "fuel", liters: 25, cost: 50, station: "ENI", invoice_supplier: "ENI", driver_name: "  Luigi Bianchi  " });
     expect(uta.status).toBe(200);
     expect(eni.status).toBe(200);
-    expect(fake.tables.vehicle_fuel[0]).toMatchObject({ invoice_supplier: "UTA", cost: 40.9836, gross_cost: 50, submitted_via_qr: true });
-    expect(fake.tables.vehicle_fuel[1]).toMatchObject({ invoice_supplier: "ENI", cost: 50, gross_cost: null, submitted_via_qr: true });
+    expect(fake.tables.vehicle_fuel[0]).toMatchObject({ invoice_supplier: "UTA", cost: 40.9836, gross_cost: 50, submitted_via_qr: true, driver_name: "Mario Rossi" });
+    expect(fake.tables.vehicle_fuel[1]).toMatchObject({ invoice_supplier: "ENI", cost: 50, gross_cost: null, submitted_via_qr: true, driver_name: "Luigi Bianchi" });
+  });
+
+  it("rifiuta il rifornimento QR senza nome autista (assente o solo spazi)", async () => {
+    const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
+    mocks.createClient.mockReturnValue(fake.admin);
+    const missing = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI" });
+    const blank = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", driver_name: "   " });
+    const tooLong = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", driver_name: "x".repeat(121) });
+    expect([missing.status, blank.status, tooLong.status]).toEqual([400, 400, 400]);
+    expect(await missing.json()).toEqual({ error: "Nome autista obbligatorio." });
+    expect(fake.tables.vehicle_fuel).toHaveLength(0);
   });
 
   it("rifiuta un fornitore diverso da ENI e UTA", async () => {
@@ -389,7 +400,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     fake.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fake.admin);
 
-    const res = await callPost({ action: "fuel", liters: 40, cost: 60, station: "Agip", invoice_supplier: "ENI" });
+    const res = await callPost({ action: "fuel", liters: 40, cost: 60, station: "Agip", invoice_supplier: "ENI", driver_name: "Mario Rossi" });
     const rawText = await res.clone().text();
 
     expect(rawText).not.toContain("submitted_via_qr_legacy");
@@ -417,7 +428,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    expect((await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI" })).status).toBe(500);
+    expect((await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", driver_name: "Mario Rossi" })).status).toBe(500);
   });
 
   it("13. fallback generico corretto per ciascun ramo", async () => {
@@ -439,7 +450,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    const bodyFuel = await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI" })).json();
+    const bodyFuel = await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", driver_name: "Mario Rossi" })).json();
     expect(bodyFuel).toEqual({ error: "Impossibile registrare il rifornimento." });
   });
 
@@ -460,7 +471,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    assertNoForbiddenFields(await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI" })).json());
+    assertNoForbiddenFields(await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", driver_name: "Mario Rossi" })).json());
   });
 
   it("15. nessun oggetto error serializzato: body.error è sempre una stringa", async () => {

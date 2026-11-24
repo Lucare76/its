@@ -172,6 +172,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
   const [fuelKm,        setFuelKm]        = useState("");
   const [fuelType,      setFuelType]      = useState("diesel");
   const [fuelStation,   setFuelStation]   = useState("");
+  const [fuelDriver,    setFuelDriver]    = useState("");
   const [fuelSubmitting,setFuelSubmitting]= useState(false);
   const [fuelMsg,       setFuelMsg]       = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -269,6 +270,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
         km_at_fuel: fuelKm || undefined,
         fuel_type: fuelType,
         station: fuelStation || undefined,
+        driver_name: fuelDriver,
       }),
     });
     const json = await res.json();
@@ -276,7 +278,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
     if (json.ok) {
       setFuelMsg({ ok: true, text: "Rifornimento inviato correttamente. Sara visibile dopo l'approvazione in ufficio." });
       setShowFuel(false);
-      setFuelLiters(""); setFuelCost(""); setFuelSupplier(""); setFuelKm(""); setFuelStation("");
+      setFuelLiters(""); setFuelCost(""); setFuelSupplier(""); setFuelKm(""); setFuelStation(""); setFuelDriver("");
       loadData();
     } else {
       setFuelMsg({ ok: false, text: json.error ?? "Errore." });
@@ -696,11 +698,19 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
           )}
 
           {!showFuel ? (
-            <button onClick={() => setShowFuel(true)} style={{ width: "100%", background: "transparent", border: "2px dashed #334155", borderRadius: 12, padding: "12px", color: "#64748b", fontSize: 14, cursor: "pointer", marginBottom: fuel.length > 0 ? 12 : 0 }}>
+            <button onClick={() => { setFuelDriver((current) => current || openLog?.driver_name || ""); setShowFuel(true); }} style={{ width: "100%", background: "transparent", border: "2px dashed #334155", borderRadius: 12, padding: "12px", color: "#64748b", fontSize: 14, cursor: "pointer", marginBottom: fuel.length > 0 ? 12 : 0 }}>
               + Registra rifornimento
             </button>
           ) : (
             <form onSubmit={handleFuel} style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 14 }}>
+              <div>
+                <label style={labelStyle}>Nome autista *</label>
+                <input value={fuelDriver} onChange={(e) => setFuelDriver(e.target.value)} required maxLength={120}
+                  list="fuel-driver-options" autoComplete="off" placeholder="Es. Mario Rossi" style={inputStyle} />
+                <datalist id="fuel-driver-options">
+                  {drivers.map((d) => <option key={d.id} value={d.full_name} />)}
+                </datalist>
+              </div>
               <div>
                 <label style={labelStyle}>Fornitore della carta o del rifornimento</label>
                 <select required value={fuelSupplier} onChange={(e) => setFuelSupplier(e.target.value)} style={inputStyle}>

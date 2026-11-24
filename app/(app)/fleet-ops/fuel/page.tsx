@@ -23,6 +23,7 @@ type FuelRecord = {
   fuel_type?: string | null;
   station?: string | null;
   invoice_supplier?: "ENI" | "UTA" | null;
+  driver_name?: string | null;
   notes?: string | null;
   approval_status: "pending" | "approved" | "rejected";
   fiscal_document_url?: string | null;
@@ -48,9 +49,12 @@ type EditModalState = {
     fuel_type: string;
     station: string;
     invoice_supplier: string;
+    driver_name: string;
     notes: string;
   };
 };
+
+type DriverOption = { id: string; full_name: string };
 
 type FuelRole = "admin" | "operator" | "supervisor" | string;
 
@@ -69,6 +73,7 @@ const EMPTY_FORM = {
   fuel_type: "diesel",
   station: "",
   invoice_supplier: "",
+  driver_name: "",
   notes: "",
 };
 
@@ -126,6 +131,7 @@ function normalizeFiscalDocumentUrl(raw: string | null | undefined) {
 export default function FleetFuelPage() {
   const [records, setRecords] = useState<FuelRecord[]>([]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
+  const [drivers, setDrivers] = useState<DriverOption[]>([]);
   const [currentRole, setCurrentRole] = useState<FuelRole>("operator");
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
@@ -171,6 +177,7 @@ export default function FleetFuelPage() {
       error?: string;
       records?: FuelRecord[];
       vehicles?: VehicleOption[];
+      drivers?: DriverOption[];
       counts?: { pending?: number; approved?: number; rejected?: number };
       current_role?: FuelRole;
     } | null;
@@ -181,6 +188,7 @@ export default function FleetFuelPage() {
     }
     setRecords(json.records ?? []);
     setVehicles(json.vehicles ?? []);
+    setDrivers(json.drivers ?? []);
     setCounts({
       pending: json.counts?.pending ?? 0,
       approved: json.counts?.approved ?? 0,
@@ -205,6 +213,7 @@ export default function FleetFuelPage() {
       record.vehicle?.plate,
       record.vehicle?.license_number,
       record.station,
+      record.driver_name,
       record.invoice_supplier,
       record.fuel_type,
       record.fiscal_document_name,
@@ -252,6 +261,7 @@ export default function FleetFuelPage() {
           fuel_type: form.fuel_type || null,
           station: form.station || null,
           invoice_supplier: form.invoice_supplier || null,
+          driver_name: form.driver_name.trim() || null,
           notes: form.notes || null,
           submitted_via_qr: false,
         },
@@ -386,6 +396,7 @@ export default function FleetFuelPage() {
         fuel_type:  record.fuel_type ?? "diesel",
         station:    record.station ?? "",
         invoice_supplier: record.invoice_supplier ?? "",
+        driver_name: record.driver_name ?? "",
         notes:      record.notes ?? "",
       },
     });
@@ -441,6 +452,7 @@ export default function FleetFuelPage() {
           fuel_type:  f.fuel_type || null,
           station:    f.station || null,
           invoice_supplier: f.invoice_supplier || null,
+          driver_name: f.driver_name.trim() || null,
           notes:      f.notes || null,
         },
       }),
@@ -624,6 +636,12 @@ export default function FleetFuelPage() {
                 <DateInput className="input-saas mt-1 w-full" value={editModal.form.fuel_date}
                   onChange={iso => setEditModal(m => m ? { ...m, form: { ...m.form, fuel_date: iso } } : null)} />
               </label>
+              <label className="text-xs font-semibold text-slate-500">
+                Autista
+                <input className="input-saas mt-1 w-full" list="fuel-office-driver-options" autoComplete="off" maxLength={120}
+                  placeholder="Seleziona o scrivi il nome" value={editModal.form.driver_name}
+                  onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, driver_name: e.target.value } } : null)} />
+              </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-slate-500">
                   Litri
@@ -759,13 +777,14 @@ export default function FleetFuelPage() {
           ) : (
             <>
             <div className="hidden overflow-hidden rounded-lg border border-slate-200 lg:block">
-              <div className="grid grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
-                <span>Data</span><span>Mezzo</span><span>Distributore / Fornitore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
+              <div className="grid grid-cols-[100px_minmax(170px,1.4fr)_minmax(120px,1fr)_minmax(130px,1fr)_70px_95px_70px_90px_minmax(110px,1fr)_130px_28px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
+                <span>Data</span><span>Mezzo</span><span>Autista</span><span>Distributore / Fornitore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
               </div>
               {paginatedRecords.map((record) => (
-                <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[100px_minmax(180px,1.5fr)_minmax(140px,1.1fr)_70px_95px_70px_90px_minmax(120px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
+                <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[100px_minmax(170px,1.4fr)_minmax(120px,1fr)_minmax(130px,1fr)_70px_95px_70px_90px_minmax(110px,1fr)_130px_28px] items-center gap-3 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span></span>
+                  <span className={`min-w-0 truncate ${record.driver_name ? "text-slate-700" : "italic text-slate-400"}`}>{record.driver_name ?? "Non indicato"}</span>
                   <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className="block text-[11px] font-semibold text-blue-700">{record.invoice_supplier}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
                   <span className="font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</span>
                   <span className="font-semibold text-slate-900" title={record.gross_cost != null ? `Pagato dall'autista: €${record.gross_cost.toFixed(2)}` : undefined}>{fmtFuelCost(record)}{record.invoice_supplier === "UTA" ? <span className="block text-[10px] font-normal text-slate-500">netto IVA</span> : null}</span>
@@ -790,7 +809,7 @@ export default function FleetFuelPage() {
                       </p>
                       {!record.invoice_supplier && <button type="button" onClick={() => openSupplierModal(record)} className="mt-2 text-left text-xs font-semibold text-blue-700 underline underline-offset-2">Associa fornitore</button>}
                       <p className="mt-1 text-xs text-slate-400">
-                        {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
+                        Autista: {record.driver_name ?? "non indicato"} · {record.submitted_via_qr ? "Caricato da QR driver" : "Inserimento ufficio"}{record.vehicle?.license_number ? ` - Licenza ${record.vehicle.license_number}` : ""}
                       </p>
                     </div>
                     <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
@@ -924,6 +943,12 @@ export default function FleetFuelPage() {
               Data
               <DateInput className="input-saas mt-1 w-full" value={form.fuel_date} onChange={(iso) => setForm((current) => ({ ...current, fuel_date: iso }))} />
             </label>
+            <label className="text-xs font-semibold text-slate-500">
+              Autista
+              <input className="input-saas mt-1 w-full" list="fuel-office-driver-options" autoComplete="off" maxLength={120}
+                placeholder="Seleziona o scrivi il nome" value={form.driver_name}
+                onChange={(event) => setForm((current) => ({ ...current, driver_name: event.target.value }))} />
+            </label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs font-semibold text-slate-500">
                 Litri
@@ -988,6 +1013,7 @@ export default function FleetFuelPage() {
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Prezzo al litro</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtUnitPrice(selectedRecord)} EUR/L</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Chilometraggio</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtNumber(selectedRecord.km_at_fuel, " km")}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Distributore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.station ?? "Non indicato"}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Autista</dt><dd className={`mt-1 text-sm font-semibold ${selectedRecord.driver_name ? "text-slate-900" : "text-rose-600"}`}>{selectedRecord.driver_name ?? "Non indicato — usa Modifica per inserirlo"}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Provenienza</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.submitted_via_qr ? "QR autista" : "Inserimento ufficio"}</dd></div>
               </dl>
               <div><p className="text-[10px] font-bold uppercase text-slate-400">Documento fiscale</p><button type="button" disabled={!selectedRecord.fiscal_document_url} onClick={() => openFiscalDocument(selectedRecord)} className="mt-2 text-left text-sm font-semibold text-blue-700 disabled:text-slate-400">{selectedRecord.fiscal_document_name ?? "Documento non collegato"}</button></div>
@@ -1004,6 +1030,9 @@ export default function FleetFuelPage() {
           </aside>
         </div>
       ) : null}
+      <datalist id="fuel-office-driver-options">
+        {drivers.map((driver) => <option key={driver.id} value={driver.full_name} />)}
+      </datalist>
     </section>
   );
 }
