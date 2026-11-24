@@ -1,5 +1,7 @@
 "use client";
 
+import { QrCode } from "@/components/QrCode";
+import { vehicleQrBaseUrl } from "@/lib/app-url";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DateInput, PageHeader, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
@@ -163,7 +165,11 @@ export default function FleetOpsPage() {
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
   const [commitments, setCommitments] = useState<Commitment[]>([]);
-  const [appOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
+  // Il QR va stampato e incollato sul mezzo: deve puntare SEMPRE all'indirizzo
+  // pubblico di produzione, mai a quello da cui l'ufficio ha aperto la pagina
+  // (un deploy *.vercel.app di anteprima è protetto da login Vercel e il
+  // telefono dell'autista resterebbe fermo alla schermata di accesso).
+  const [appOrigin] = useState(() => vehicleQrBaseUrl(typeof window === "undefined" ? "" : window.location.origin));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
@@ -861,20 +867,16 @@ export default function FleetOpsPage() {
                           📱 QR Code — Scheda digitale
                         </summary>
                         <div className="border-t border-indigo-100 px-4 py-3 flex flex-col items-center gap-3">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={appOrigin ? `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`${appOrigin}/vehicle/${selectedVehicle.qr_token}`)}` : ""}
-                            alt="QR Code"
-                            width={160}
-                            height={160}
-                            className="rounded-lg border border-indigo-200"
-                          />
+                          {/* Generato nel browser: il link segreto del mezzo non va a servizi esterni. */}
+                          {appOrigin ? <QrCode value={`${appOrigin}/vehicle/${selectedVehicle.qr_token}`} size={160}
+                            className="rounded-lg border border-indigo-200" /> : null}
+                          <p className="break-all text-center text-[10px] text-indigo-500">{appOrigin}/vehicle/{selectedVehicle.qr_token}</p>
                           <p className="text-xs text-indigo-600 text-center font-medium">
                             Scansiona per vedere la scheda del veicolo
                           </p>
                           <div className="flex gap-2 w-full">
                             <a
-                              href={`/vehicle/${selectedVehicle.qr_token}`}
+                              href={`${appOrigin}/vehicle/${selectedVehicle.qr_token}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="flex-1 rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 text-center"
@@ -884,7 +886,7 @@ export default function FleetOpsPage() {
                             <button
                               type="button"
                               onClick={() => {
-                                const url = `${window.location.origin}/vehicle/${selectedVehicle.qr_token}`;
+                                const url = `${appOrigin}/vehicle/${selectedVehicle.qr_token}`;
                                 void navigator.clipboard.writeText(url);
                                 showToast("Link copiato!", true);
                               }}

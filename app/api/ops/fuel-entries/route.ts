@@ -156,6 +156,27 @@ export async function GET(request: NextRequest) {
     vehicle: vehicleMap.get(record.vehicle_id) ?? null,
   }));
 
+  // Totali degli APPROVATI nel periodo e mezzo scelti, indipendenti dal filtro di
+  // stato e dal limite dei 250 record dell'elenco: paginati a blocchi di 1000
+  // (limite massimo di righe per richiesta di PostgREST).
+  let approvedCostCents = 0; let approvedLitersCenti = 0; let approvedRows = 0;
+  for (let page = 0; page < 50; page += 1) {
+    let totalsQuery = auth.admin.from("vehicle_fuel").select("cost, liters")
+      .eq("tenant_id", auth.membership.tenant_id).eq("approval_status", "approved")
+      .order("id").range(page * 1000, page * 1000 + 999);
+    if (vehicleId) totalsQuery = totalsQuery.eq("vehicle_id", vehicleId);
+    if (dateFrom?.success) totalsQuery = totalsQuery.gte("fuel_date", dateFrom.data);
+    if (dateTo?.success) totalsQuery = totalsQuery.lte("fuel_date", dateTo.data);
+    const { data: totalsRows, error: totalsError } = await totalsQuery;
+    if (totalsError) return NextResponse.json({ error: totalsError.message }, { status: 500 });
+    for (const row of totalsRows ?? []) {
+      approvedRows += 1;
+      if (row.cost != null) approvedCostCents += Math.round(Number(row.cost) * 100);
+      if (row.liters != null) approvedLitersCenti += Math.round(Number(row.liters) * 100);
+    }
+    if ((totalsRows ?? []).length < 1000) break;
+  }
+
   // Somme in centesimi per non accumulare errori di virgola mobile.
   const byDriver = new Map<string, { count: number; cents: number }>();
   let cashCents = 0; let cashMissingAmount = 0;
@@ -171,6 +192,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ok: true,
     records: enriched,
+    approved_totals: { count: approvedRows, cost: approvedCostCents / 100, liters: approvedLitersCenti / 100 },
     cash_to_reimburse: {
       count: (cashToReimburse ?? []).length,
       total: cashCents / 100,

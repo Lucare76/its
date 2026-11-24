@@ -23,7 +23,7 @@ beforeEach(() => {
   const admin = {
     from(table: string) {
       const query: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "is", "not", "neq", "order", "limit", "insert", "update", "delete", "gte", "lte"]) {
+      for (const method of ["select", "eq", "is", "not", "neq", "order", "limit", "range", "insert", "update", "delete", "gte", "lte"]) {
         query[method] = (...args: unknown[]) => { calls.push({ table, method, args }); return query; };
       }
       const result = () => ({ data: rows[table] ?? null, error: null, count: 0 });
@@ -96,9 +96,9 @@ describe("fuel-entries — filtro date", () => {
     expect(res.status).toBe(200);
     const gte = calls.filter((call) => call.table === "vehicle_fuel" && call.method === "gte");
     const lte = calls.filter((call) => call.table === "vehicle_fuel" && call.method === "lte");
-    // 1 elenco + 3 contatori (da approvare, approvati, respinti)
-    expect(gte).toHaveLength(4);
-    expect(lte).toHaveLength(4);
+    // 1 elenco + 3 contatori (da approvare, approvati, respinti) + 1 totali approvati
+    expect(gte).toHaveLength(5);
+    expect(lte).toHaveLength(5);
     expect(gte.every((call) => call.args[0] === "fuel_date" && call.args[1] === "2026-10-01")).toBe(true);
     expect(lte.every((call) => call.args[0] === "fuel_date" && call.args[1] === "2026-10-31")).toBe(true);
   });
@@ -110,7 +110,7 @@ describe("fuel-entries — filtro date", () => {
 
   it("accetta anche un solo estremo", async () => {
     await get("?date_from=2026-11-01");
-    expect(calls.filter((call) => call.method === "gte")).toHaveLength(4);
+    expect(calls.filter((call) => call.method === "gte")).toHaveLength(5);
     expect(calls.some((call) => call.method === "lte")).toBe(false);
   });
 
@@ -228,5 +228,19 @@ describe("fuel-entries — Q8, contanti e rimborso all'autista", () => {
     expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["invoice_supplier", "CONTANTI"] });
     expect(listCalls).not.toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["approval_status", "pending"] });
     expect(listCalls.some((call) => call.method === "gte" || call.method === "lte")).toBe(false);
+  });
+});
+
+describe("fuel-entries — totali approvati dal server", () => {
+  it("somma in centesimi tutti gli approvati del periodo, indipendente dal filtro di stato", async () => {
+    rows.vehicles = [];
+    rows.vehicle_fuel = [{ cost: 0.1, liters: 0.05 }, { cost: 0.2, liters: 0.1 }, { cost: null, liters: 10 }, { cost: 199.01, liters: 89.2 }];
+    const body = await (await GET(new NextRequest("https://its.test/api/ops/fuel-entries?status=pending&date_from=2026-11-01"))).json();
+    expect(body.approved_totals).toEqual({ count: 4, cost: 199.31, liters: 99.35 });
+    const totalsSelect = calls.findIndex((call) => call.table === "vehicle_fuel" && call.method === "select" && call.args[0] === "cost, liters");
+    const totalsCalls = calls.slice(totalsSelect, totalsSelect + 8);
+    expect(totalsCalls).toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["approval_status", "approved"] });
+    expect(totalsCalls).toContainEqual({ table: "vehicle_fuel", method: "gte", args: ["fuel_date", "2026-11-01"] });
+    expect(totalsCalls).not.toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["approval_status", "pending"] });
   });
 });

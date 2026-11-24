@@ -452,6 +452,20 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
       </div>
 
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "0 16px" }}>
+        {/* Azioni dell'autista subito sotto l'intestazione: prima erano sotto le scadenze documenti. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 20 }}>
+          <button type="button" onClick={() => jumpTo("qr-turno")} style={quickActionStyle("#1e40af")}>
+            🛣 {openLog ? "Fine servizio" : "Inizio servizio"}
+          </button>
+          <button type="button" onClick={() => {
+            setFuelDriver((current) => current || openLog?.driver_name || ""); setShowFuel(true); jumpTo("qr-rifornimenti");
+          }} style={quickActionStyle("#047857")}>
+            ⛽ Rifornimento
+          </button>
+          <button type="button" onClick={() => { setShowReport(true); jumpTo("qr-segnala"); }} style={{ ...quickActionStyle("#b91c1c"), gridColumn: "1 / -1" }}>
+            🚨 Segnala danno / problema
+          </button>
+        </div>
         <Section title="🟢 Stato operativo" mt={24}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {operationalBadges.map((badge) => (
@@ -576,6 +590,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
         {/* ══════════════════════════════════════════════════
             SEZIONE KM TURNO
         ══════════════════════════════════════════════════ */}
+        <div id="qr-turno" style={{ scrollMarginTop: 12 }} />
         <Section title="🛣 Registra chilometri turno" mt={24}>
 
           {/* Turno aperto */}
@@ -690,6 +705,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
         {/* ══════════════════════════════════════════════════
             RIFORNIMENTI
         ══════════════════════════════════════════════════ */}
+        <div id="qr-rifornimenti" style={{ scrollMarginTop: 12 }} />
         <Section title="⛽ Rifornimenti carburante" mt={20} count={fuel.length}>
 
           {fuelMsg && (
@@ -794,7 +810,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
         {/* ══════════════════════════════════════════════════
             SEGNALA DANNO
         ══════════════════════════════════════════════════ */}
-        <div style={{ marginTop: 28 }}>
+        <div id="qr-segnala" style={{ marginTop: 28, scrollMarginTop: 12 }}>
           {!showReport && !reportDone && (
             <button onClick={() => setShowReport(true)} style={{ width: "100%", background: "linear-gradient(135deg, #dc2626, #991b1b)", color: "#fff", border: "none", borderRadius: 14, padding: "16px", fontSize: 16, fontWeight: 800, cursor: "pointer" }}>
               🚨 Segnala danno / problema
@@ -901,9 +917,19 @@ const cardStyle: React.CSSProperties = {
   background: "#1e293b", borderRadius: 10, padding: "12px 14px", border: "1px solid #334155",
 };
 
+function jumpTo(id: string) {
+  // Dopo il render del modulo appena aperto.
+  requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function quickActionStyle(background: string): React.CSSProperties {
+  return { minHeight: 52, borderRadius: 14, border: "none", background, color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer", padding: "12px 10px" };
+}
+
 const inputStyle: React.CSSProperties = {
   width: "100%", background: "#0f172a", border: "1px solid #334155", borderRadius: 10,
-  padding: "10px 14px", fontSize: 14, color: "#e2e8f0", outline: "none", boxSizing: "border-box",
+  // 16px: sotto questa soglia Safari su iPhone ingrandisce la pagina a ogni tocco su un campo.
+  padding: "10px 14px", fontSize: 16, color: "#e2e8f0", outline: "none", boxSizing: "border-box",
 };
 
 const labelStyle: React.CSSProperties = {
