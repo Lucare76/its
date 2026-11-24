@@ -53,6 +53,15 @@ describe("fuel-entries — nome autista", () => {
     expect(written("update")).toMatchObject({ driver_name: "Luigi Bianchi" });
   });
 
+  it("una modifica senza driver_name non cancella l'autista già salvato", async () => {
+    const res = await post({ action: "edit", data: { id: FUEL_ID, vehicle_id: VEHICLE_ID, fuel_date: "2026-11-24", invoice_supplier: "ENI", cost: 50, liters: 25 } });
+    expect(res.status).toBe(200);
+    expect(written("update")).not.toHaveProperty("driver_name");
+    calls = [];
+    await post({ action: "edit", data: { id: FUEL_ID, vehicle_id: VEHICLE_ID, fuel_date: "2026-11-24", invoice_supplier: "ENI", driver_name: "" } });
+    expect(written("update")).toMatchObject({ driver_name: null });
+  });
+
   it("salva null quando l'autista è vuoto o assente", async () => {
     await post({ action: "create", data: { vehicle_id: VEHICLE_ID, fuel_date: "2026-11-24", driver_name: "   " } });
     expect(written("insert")).toMatchObject({ driver_name: null });

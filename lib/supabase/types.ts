@@ -3308,32 +3308,47 @@ export type Database = {
       }
       fuel_invoice_imports: {
         Row: {
+          close_note: string | null
+          close_outcome: string | null
+          closed_at: string | null
+          closed_by: string | null
           created_at: string
           created_by: string | null
           filename: string
           id: string
           invoice_number: string
           pdf_sha256: string
+          status: string
           supplier: string
           tenant_id: string
         }
         Insert: {
+          close_note?: string | null
+          close_outcome?: string | null
+          closed_at?: string | null
+          closed_by?: string | null
           created_at?: string
           created_by?: string | null
           filename: string
           id?: string
           invoice_number: string
           pdf_sha256: string
+          status?: string
           supplier: string
           tenant_id: string
         }
         Update: {
+          close_note?: string | null
+          close_outcome?: string | null
+          closed_at?: string | null
+          closed_by?: string | null
           created_at?: string
           created_by?: string | null
           filename?: string
           id?: string
           invoice_number?: string
           pdf_sha256?: string
+          status?: string
           supplier?: string
           tenant_id?: string
         }
@@ -3410,6 +3425,66 @@ export type Database = {
           },
           {
             foreignKeyName: "fuel_invoice_lines_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fuel_invoice_reviews: {
+        Row: {
+          created_at: string
+          event: string
+          id: string
+          import_id: string
+          invoice_total: number | null
+          lines_count: number | null
+          lines_linked: number | null
+          linked_total: number | null
+          note: string | null
+          outcome: string | null
+          tenant_id: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event: string
+          id?: string
+          import_id: string
+          invoice_total?: number | null
+          lines_count?: number | null
+          lines_linked?: number | null
+          linked_total?: number | null
+          note?: string | null
+          outcome?: string | null
+          tenant_id: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event?: string
+          id?: string
+          import_id?: string
+          invoice_total?: number | null
+          lines_count?: number | null
+          lines_linked?: number | null
+          linked_total?: number | null
+          note?: string | null
+          outcome?: string | null
+          tenant_id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fuel_invoice_reviews_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "fuel_invoice_imports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fuel_invoice_reviews_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
