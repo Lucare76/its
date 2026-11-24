@@ -23,7 +23,7 @@ beforeEach(() => {
   const admin = {
     from(table: string) {
       const query: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "is", "order", "limit", "insert", "update", "delete", "gte", "lte"]) {
+      for (const method of ["select", "eq", "is", "not", "neq", "order", "limit", "insert", "update", "delete", "gte", "lte"]) {
         query[method] = (...args: unknown[]) => { calls.push({ table, method, args }); return query; };
       }
       const result = () => ({ data: rows[table] ?? null, error: null, count: 0 });
@@ -131,5 +131,102 @@ describe("fuel-entries — filtro date", () => {
     expect(body.records).toHaveLength(250);
     rows.vehicle_fuel = Array.from({ length: 250 }, (_, i) => ({ id: `f${i}`, vehicle_id: VEHICLE_ID }));
     expect((await (await get()).json()).truncated).toBe(false);
+  });
+});
+
+describe("fuel-entries — Q8, contanti e rimborso all'autista", () => {
+  const CASH = { id: FUEL_ID, invoice_supplier: "CONTANTI", cost: 50, approval_status: "approved", reimbursed_at: null };
+  const setRole = async (role: string) => {
+    const base = await mocks.authorize();
+    mocks.authorize.mockResolvedValue({ ...base, membership: { ...base.membership, role } });
+  };
+
+  it("accetta Q8 e CONTANTI come pagamento, rifiuta valori sconosciuti", async () => {
+    for (const supplier of ["Q8", "CONTANTI"]) {
+      calls = [];
+      const res = await post({ action: "create", data: { vehicle_id: VEHICLE_ID, fuel_date: "2026-11-24", invoice_supplier: supplier, cost: 40 } });
+      expect(res.status).toBe(200);
+      expect(written("insert")).toMatchObject({ invoice_supplier: supplier });
+    }
+    rows.vehicle_fuel = { id: FUEL_ID, invoice_supplier: null, cost: 40, submitted_via_qr: false };
+    const assigned = await post({ action: "assign_supplier", data: { id: FUEL_ID, invoice_supplier: "CONTANTI" } });
+    expect(assigned.status).toBe(200);
+    const bad = await post({ action: "assign_supplier", data: { id: FUEL_ID, invoice_supplier: "SHELL" } });
+    expect(bad.status).toBe(400);
+  });
+
+  it("segna rimborsato un rifornimento in contanti (admin/operatore)", async () => {
+    rows.vehicle_fuel = { ...CASH };
+    const res = await post({ action: "reimburse", data: { id: FUEL_ID, note: "bonifico 25/11" } });
+    expect(res.status).toBe(200);
+    expect(written("update")).toMatchObject({ reimbursed_by: "user-1", reimbursement_note: "bonifico 25/11" });
+    expect(typeof written("update").reimbursed_at).toBe("string");
+    expect(calls).toContainEqual({ table: "vehicle_fuel", method: "is", args: ["reimbursed_at", null] });
+  });
+
+  it.each([
+    ["non è in contanti", { invoice_supplier: "ENI" }, 409],
+    ["è respinto", { approval_status: "rejected" }, 409],
+    ["non ha importo", { cost: null }, 409],
+  ])("non rimborsa se %s", async (_label, change, status) => {
+    rows.vehicle_fuel = { ...CASH, ...change };
+    expect((await post({ action: "reimburse", data: { id: FUEL_ID } })).status).toBe(status);
+    expect(written("update")).toBeUndefined();
+  });
+
+  it("supervisore non rimborsa; solo admin annulla un rimborso", async () => {
+    rows.vehicle_fuel = { ...CASH };
+    await setRole("supervisor");
+    expect((await post({ action: "reimburse", data: { id: FUEL_ID } })).status).toBe(403);
+    rows.vehicle_fuel = { ...CASH, reimbursed_at: "2026-11-24T10:00:00Z" };
+    await setRole("operator");
+    expect((await post({ action: "unreimburse", data: { id: FUEL_ID } })).status).toBe(403);
+    await setRole("admin");
+    calls = [];
+    expect((await post({ action: "unreimburse", data: { id: FUEL_ID } })).status).toBe(200);
+    expect(written("update")).toMatchObject({ reimbursed_at: null, reimbursed_by: null, reimbursement_note: null });
+  });
+
+  it("un contante già rimborsato non può cambiare metodo di pagamento", async () => {
+    rows.vehicle_fuel = { ...CASH, submitted_via_qr: false, reimbursed_at: "2026-11-24T10:00:00Z" };
+    const res = await post({ action: "edit", data: { id: FUEL_ID, vehicle_id: VEHICLE_ID, fuel_date: "2026-11-24", invoice_supplier: "ENI" } });
+    expect(res.status).toBe(409);
+    expect(written("update")).toBeUndefined();
+  });
+
+  it("GET: riepilogo contanti da rimborsare per autista, in centesimi", async () => {
+    rows.vehicles = [];
+    rows.vehicle_fuel = [
+      { cost: 0.1, driver_name: "Mario Rossi" }, { cost: 0.2, driver_name: "Mario Rossi" },
+      { cost: 30, driver_name: "Luigi Bianchi" }, { cost: null, driver_name: null },
+    ];
+    const body = await (await GET(new NextRequest("https://its.test/api/ops/fuel-entries"))).json();
+    expect(body.cash_to_reimburse).toEqual({
+      count: 4, total: 30.3, missing_amount: 1,
+      by_driver: [
+        { driver_name: "Luigi Bianchi", count: 1, total: 30 },
+        { driver_name: "Mario Rossi", count: 2, total: 0.3 },
+        { driver_name: "Autista non indicato", count: 1, total: 0 },
+      ],
+    });
+  });
+
+  it("GET reimbursement=pending filtra solo i contanti non rimborsati e non respinti", async () => {
+    rows.vehicles = []; rows.vehicle_fuel = [];
+    await GET(new NextRequest("https://its.test/api/ops/fuel-entries?reimbursement=pending"));
+    const listCalls = calls.filter((call) => call.table === "vehicle_fuel");
+    expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["invoice_supplier", "CONTANTI"] });
+    expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "neq", args: ["approval_status", "rejected"] });
+  });
+
+  it("vista contanti da rimborsare: ignora stato e periodo (altrimenti un contante approvato sparisce)", async () => {
+    rows.vehicles = []; rows.vehicle_fuel = [];
+    await GET(new NextRequest("https://its.test/api/ops/fuel-entries?reimbursement=pending&status=pending&date_from=2026-11-01&date_to=2026-11-30"));
+    const first = calls.findIndex((call) => call.table === "vehicle_fuel" && call.method === "select");
+    const next = calls.findIndex((call, index) => index > first && call.table === "vehicle_fuel" && call.method === "select");
+    const listCalls = calls.slice(first, next);
+    expect(listCalls).toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["invoice_supplier", "CONTANTI"] });
+    expect(listCalls).not.toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["approval_status", "pending"] });
+    expect(listCalls.some((call) => call.method === "gte" || call.method === "lte")).toBe(false);
   });
 });

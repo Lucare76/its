@@ -10174,6 +10174,9 @@ export type Database = {
           last_edited_by: string | null
           liters: number | null
           notes: string | null
+          reimbursed_at: string | null
+          reimbursed_by: string | null
+          reimbursement_note: string | null
           station: string | null
           submitted_via_qr: boolean
           tenant_id: string
@@ -10198,6 +10201,9 @@ export type Database = {
           last_edited_by?: string | null
           liters?: number | null
           notes?: string | null
+          reimbursed_at?: string | null
+          reimbursed_by?: string | null
+          reimbursement_note?: string | null
           station?: string | null
           submitted_via_qr?: boolean
           tenant_id: string
@@ -10222,6 +10228,9 @@ export type Database = {
           last_edited_by?: string | null
           liters?: number | null
           notes?: string | null
+          reimbursed_at?: string | null
+          reimbursed_by?: string | null
+          reimbursement_note?: string | null
           station?: string | null
           submitted_via_qr?: boolean
           tenant_id?: string

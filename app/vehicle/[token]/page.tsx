@@ -1,5 +1,6 @@
 "use client";
 
+import { FUEL_PAYMENT_LABELS, FUEL_PAYMENT_METHODS, type FuelPaymentMethod } from "@/lib/fuel-payment";
 import { useEffect, useRef, useState } from "react";
 import { use } from "react";
 import { createClient } from "@supabase/supabase-js";
@@ -57,7 +58,7 @@ type Fuel = {
   liters?: number | null;
   cost?: number | null;
   gross_cost?: number | null;
-  invoice_supplier?: "ENI" | "UTA" | null;
+  invoice_supplier?: FuelPaymentMethod | null;
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
@@ -712,12 +713,21 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
                 </datalist>
               </div>
               <div>
-                <label style={labelStyle}>Fornitore della carta o del rifornimento</label>
+                <label style={labelStyle}>Con quale carta hai pagato? *</label>
                 <select required value={fuelSupplier} onChange={(e) => setFuelSupplier(e.target.value)} style={inputStyle}>
-                  <option value="">Seleziona fornitore</option>
-                  <option value="ENI">ENI</option>
-                  <option value="UTA">UTA</option>
+                  <option value="">Seleziona</option>
+                  {FUEL_PAYMENT_METHODS.map((method) => <option key={method} value={method}>
+                    {method === "CONTANTI" ? "Contanti — ho pagato io" : FUEL_PAYMENT_LABELS[method]}
+                  </option>)}
                 </select>
+                <p style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                  Scegli la carta usata, non la marca del distributore: con la carta UTA a una pompa Q8 scegli UTA.
+                </p>
+                {fuelSupplier === "CONTANTI" && (
+                  <p style={{ color: "#fbbf24", fontSize: 13, marginTop: 6 }}>
+                    Conserva lo scontrino e consegnalo in ufficio: serve per il rimborso. L&apos;importo è obbligatorio.
+                  </p>
+                )}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
@@ -734,8 +744,8 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
                   <input type="number" min="0" step="0.01" value={fuelLiters} onChange={(e) => setFuelLiters(e.target.value)} placeholder="Es. 60" style={inputStyle} />
                 </div>
                 <div>
-                  <label style={labelStyle}>Importo pagato (€){fuelSupplier === "UTA" ? " — IVA inclusa" : ""}</label>
-                  <input type="number" min="0" step="0.01" value={fuelCost} onChange={(e) => setFuelCost(e.target.value)} placeholder="Es. 95.00" style={inputStyle} />
+                  <label style={labelStyle}>Importo pagato (€){fuelSupplier === "UTA" ? " — IVA inclusa" : ""}{fuelSupplier === "CONTANTI" ? " *" : ""}</label>
+                  <input type="number" min="0" step="0.01" required={fuelSupplier === "CONTANTI"} value={fuelCost} onChange={(e) => setFuelCost(e.target.value)} placeholder="Es. 95.00" style={inputStyle} />
                 </div>
                 <div>
                   <label style={labelStyle}>Km al rifornimento</label>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { FUEL_PAYMENT_LABELS, FUEL_PAYMENT_METHODS, fuelPaymentLabel, type FuelPaymentMethod } from "@/lib/fuel-payment";
 import { DateInput, SectionCard } from "@/components/ui";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase/client";
 import { utaNetFromGross } from "@/lib/fuel-cost";
@@ -22,8 +23,10 @@ type FuelRecord = {
   km_at_fuel?: number | null;
   fuel_type?: string | null;
   station?: string | null;
-  invoice_supplier?: "ENI" | "UTA" | null;
+  invoice_supplier?: FuelPaymentMethod | null;
   driver_name?: string | null;
+  reimbursed_at?: string | null;
+  reimbursement_note?: string | null;
   notes?: string | null;
   approval_status: "pending" | "approved" | "rejected";
   fiscal_document_url?: string | null;
@@ -55,6 +58,12 @@ type EditModalState = {
 };
 
 type DriverOption = { id: string; full_name: string };
+type CashToReimburse = { count: number; total: number; missing_amount: number;
+  by_driver: Array<{ driver_name: string; count: number; total: number }> };
+
+const PAYMENT_OPTIONS = FUEL_PAYMENT_METHODS.map((method) => (
+  <option key={method} value={method}>{FUEL_PAYMENT_LABELS[method]}</option>
+));
 
 type FuelRole = "admin" | "operator" | "supervisor" | string;
 
@@ -165,7 +174,9 @@ export default function FleetFuelPage() {
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [supplierRecord, setSupplierRecord] = useState<FuelRecord | null>(null);
-  const [supplierChoice, setSupplierChoice] = useState<"ENI" | "UTA" | "">("");
+  const [supplierChoice, setSupplierChoice] = useState<FuelPaymentMethod | "">("");
+  const [cashToReimburse, setCashToReimburse] = useState<CashToReimburse | null>(null);
+  const [onlyCashToReimburse, setOnlyCashToReimburse] = useState(false);
   const [supplierSaving, setSupplierSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<FuelRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -190,6 +201,7 @@ export default function FleetFuelPage() {
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (dateFrom) params.set("date_from", dateFrom);
     if (dateTo) params.set("date_to", dateTo);
+    if (onlyCashToReimburse) params.set("reimbursement", "pending");
     const query = params.size > 0 ? `?${params.toString()}` : "";
     const res = await fetch(`/api/ops/fuel-entries${query}`, {
       cache: "no-store",
@@ -202,6 +214,7 @@ export default function FleetFuelPage() {
       vehicles?: VehicleOption[];
       drivers?: DriverOption[];
       truncated?: boolean;
+      cash_to_reimburse?: CashToReimburse;
       counts?: { pending?: number; approved?: number; rejected?: number };
       current_role?: FuelRole;
     } | null;
@@ -214,6 +227,7 @@ export default function FleetFuelPage() {
     setVehicles(json.vehicles ?? []);
     setDrivers(json.drivers ?? []);
     setTruncated(Boolean(json.truncated));
+    setCashToReimburse(json.cash_to_reimburse ?? null);
     setCounts({
       pending: json.counts?.pending ?? 0,
       approved: json.counts?.approved ?? 0,
@@ -221,7 +235,7 @@ export default function FleetFuelPage() {
     });
     setCurrentRole(json.current_role ?? "operator");
     setLoading(false);
-  }, [dateFrom, dateTo, showToast, statusFilter]);
+  }, [dateFrom, dateTo, onlyCashToReimburse, showToast, statusFilter]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -302,6 +316,32 @@ export default function FleetFuelPage() {
     setShowCreateModal(false);
     showToast("Rifornimento aggiunto.", true);
     void load();
+  }
+
+  async function postReimbursement(record: FuelRecord, action: "reimburse" | "unreimburse", note?: string) {
+    const token = await accessToken();
+    if (!token) return;
+    const res = await fetch("/api/ops/fuel-entries", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, data: { id: record.id, ...(note ? { note } : {}) } }),
+    });
+    const json = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) { showToast(json.error ?? "Operazione non riuscita.", false); return; }
+    showToast(action === "reimburse" ? "Rimborso registrato." : "Rimborso annullato.", true);
+    setSelectedRecord(null);
+    await load();
+  }
+
+  async function reimburse(record: FuelRecord) {
+    const note = window.prompt(`Rimborso di ${fmtMoney(record.cost)} a ${record.driver_name ?? "autista non indicato"}.\nNota (facoltativa, es. "bonifico 25/11" o "contanti in ufficio"):`, "");
+    if (note === null) return;
+    await postReimbursement(record, "reimburse", note.trim() || undefined);
+  }
+
+  async function unreimburse(record: FuelRecord) {
+    if (!window.confirm("Annullare il rimborso registrato? Il rifornimento tornerà tra i contanti da rimborsare.")) return;
+    await postReimbursement(record, "unreimburse");
   }
 
   async function updateFuelApproval(record: FuelRecord, approval_status: "approved" | "rejected") {
@@ -621,12 +661,12 @@ export default function FleetFuelPage() {
       {supplierRecord ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4" role="dialog" aria-modal="true" aria-label="Associa fornitore">
           <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl">
-            <h2 className="text-base font-bold text-slate-900">Associa fornitore</h2>
+            <h2 className="text-base font-bold text-slate-900">Come è stato pagato?</h2>
             <p className="mt-2 text-sm text-slate-600">{supplierRecord.vehicle?.label ?? "Veicolo"} · {fmtDate(supplierRecord.fuel_date)} · {supplierRecord.station ?? "Distributore non indicato"}</p>
             <label className="mt-5 block text-xs font-semibold text-slate-600">
-              Fornitore della fattura
-              <select className="input-saas mt-2 w-full" value={supplierChoice} onChange={e => setSupplierChoice(e.target.value as "ENI" | "UTA" | "")}>
-                <option value="">Seleziona fornitore</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+              Carta usata (non la marca del distributore) o contanti
+              <select className="input-saas mt-2 w-full" value={supplierChoice} onChange={e => setSupplierChoice(e.target.value as FuelPaymentMethod | "")}>
+                <option value="">Seleziona</option>{PAYMENT_OPTIONS}
               </select>
             </label>
             {supplierChoice === "UTA" && supplierRecord.submitted_via_qr && supplierRecord.cost != null ? (
@@ -634,7 +674,7 @@ export default function FleetFuelPage() {
             ) : null}
             <div className="mt-6 flex justify-end gap-2">
               <button type="button" disabled={supplierSaving} onClick={() => setSupplierRecord(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Annulla</button>
-              <button type="button" disabled={!supplierChoice || supplierSaving} onClick={() => void saveSupplier()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{supplierSaving ? "Salvataggio..." : "Associa fornitore"}</button>
+              <button type="button" disabled={!supplierChoice || supplierSaving} onClick={() => void saveSupplier()} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{supplierSaving ? "Salvataggio..." : "Salva"}</button>
             </div>
           </div>
         </div>
@@ -704,7 +744,7 @@ export default function FleetFuelPage() {
                   onChange={e => setEditModal(m => m ? { ...m, form: { ...m.form, station: e.target.value } } : null)} />
               </label>
               <label className="text-xs font-semibold text-slate-500">
-                Fornitore fattura
+                Pagamento
                 <select className="input-saas mt-1 w-full" value={editModal.form.invoice_supplier}
                   onChange={e => setEditModal(m => {
                     if (!m) return null;
@@ -716,7 +756,7 @@ export default function FleetFuelPage() {
                       cost: grossInput && m.record.gross_cost != null ? String(m.record.gross_cost)
                         : leavingUta && m.record.gross_cost != null ? String(m.record.gross_cost) : m.form.cost } };
                   })}>
-                  <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+                  <option value="">Da associare</option>{PAYMENT_OPTIONS}
                 </select>
               </label>
               <label className="text-xs font-semibold text-slate-500">
@@ -768,7 +808,7 @@ export default function FleetFuelPage() {
       <div>
         <SectionCard
           title="Coda rifornimenti"
-          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
+          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${onlyCashToReimburse ? " · solo contanti da rimborsare" : dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
           actions={(
             <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <input
@@ -782,13 +822,13 @@ export default function FleetFuelPage() {
                   Dal
                   <DateInput className="input-saas h-10 w-36 text-xs" value={dateFrom} max={dateTo || undefined}
                     title="Data iniziale (gg/mm/aaaa)"
-                    onChange={(iso) => { setDateFrom(iso); setCurrentPage(1); }} />
+                    onChange={(iso) => { setDateFrom(iso); setOnlyCashToReimburse(false); setCurrentPage(1); }} />
                 </label>
                 <label className="flex items-center gap-1 text-xs font-semibold text-slate-500">
                   Al
                   <DateInput className="input-saas h-10 w-36 text-xs" value={dateTo} min={dateFrom || undefined}
                     title="Data finale (gg/mm/aaaa)"
-                    onChange={(iso) => { setDateTo(iso); setCurrentPage(1); }} />
+                    onChange={(iso) => { setDateTo(iso); setOnlyCashToReimburse(false); setCurrentPage(1); }} />
                 </label>
                 {([
                   ["this_month", "Questo mese"],
@@ -796,10 +836,10 @@ export default function FleetFuelPage() {
                   ["this_year", "Quest'anno"],
                 ] as const).map(([preset, label]) => {
                   const range = datePreset(preset);
-                  const active = dateFrom === range.from && dateTo === range.to;
+                  const active = !onlyCashToReimburse && dateFrom === range.from && dateTo === range.to;
                   return (
                     <button key={preset} type="button"
-                      onClick={() => { setDateFrom(range.from); setDateTo(range.to); setCurrentPage(1); }}
+                      onClick={() => { setDateFrom(range.from); setDateTo(range.to); setOnlyCashToReimburse(false); setCurrentPage(1); }}
                       className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${active ? "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
                       {label}
                     </button>
@@ -821,8 +861,8 @@ export default function FleetFuelPage() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => { setStatusFilter(value); setCurrentPage(1); }}
-                  className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${statusFilter === value ? "border-violet-600 bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                  onClick={() => { setStatusFilter(value); setOnlyCashToReimburse(false); setCurrentPage(1); }}
+                  className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${statusFilter === value && !onlyCashToReimburse ? "border-violet-600 bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                 >
                   {label}
                 </button>
@@ -830,6 +870,22 @@ export default function FleetFuelPage() {
             </div>
           )}
         >
+          {cashToReimburse && cashToReimburse.count > 0 ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-semibold">
+                  Contanti da rimborsare agli autisti: {cashToReimburse.count} · {fmtMoney(cashToReimburse.total)}
+                  {cashToReimburse.missing_amount > 0 ? ` (${cashToReimburse.missing_amount} senza importo)` : ""}
+                </p>
+                <button type="button" onClick={() => { setOnlyCashToReimburse((value) => !value); setCurrentPage(1); }}
+                  className={`rounded-lg border px-3 py-1.5 font-semibold ${onlyCashToReimburse ? "border-amber-600 bg-amber-600 text-white" : "border-amber-300 bg-white text-amber-800"}`}>
+                  {onlyCashToReimburse ? "Mostra tutti" : "Mostra solo da rimborsare"}
+                </button>
+              </div>
+              {onlyCashToReimburse ? <p className="mt-1 font-medium">Vista contanti da rimborsare: stato e periodo non si applicano.</p> : null}
+              <p className="mt-1">{cashToReimburse.by_driver.map((row) => `${row.driver_name}: ${fmtMoney(row.total)} (${row.count})`).join(" · ")}</p>
+            </div>
+          ) : null}
           {truncated && !loading ? (
             <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
               Mostrati solo i 250 rifornimenti più recenti: i totali qui sopra non sono completi. Restringi il periodo con il filtro date.
@@ -850,7 +906,7 @@ export default function FleetFuelPage() {
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span></span>
                   <span className={`min-w-0 truncate ${record.driver_name ? "text-slate-700" : "italic text-slate-400"}`}>{record.driver_name ?? "Non indicato"}</span>
-                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className="block text-[11px] font-semibold text-blue-700">{record.invoice_supplier}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
+                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className={`block text-[11px] font-semibold ${record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "text-emerald-700" : "text-amber-700") : "text-blue-700"}`}>{record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti · rimborsato" : "Contanti · da rimborsare") : fuelPaymentLabel(record.invoice_supplier)}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
                   <span className="font-semibold text-slate-700">{record.liters != null ? `${record.liters.toFixed(1)} L` : "-"}</span>
                   <span className="font-semibold text-slate-900" title={record.gross_cost != null ? `Pagato dall'autista: €${record.gross_cost.toFixed(2)}` : undefined}>{fmtFuelCost(record)}{record.invoice_supplier === "UTA" ? <span className="block text-[10px] font-normal text-slate-500">netto IVA</span> : null}</span>
                   <span className="text-slate-600">{fmtUnitPrice(record)}</span>
@@ -870,7 +926,7 @@ export default function FleetFuelPage() {
                         {record.vehicle?.label ?? "Veicolo"} {record.vehicle?.plate ? `- ${record.vehicle.plate}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier ?? "Fornitore da associare"}
+                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti · rimborsato" : "Contanti · da rimborsare") : record.invoice_supplier ? fuelPaymentLabel(record.invoice_supplier) : "Pagamento da associare"}
                       </p>
                       {!record.invoice_supplier && <button type="button" onClick={() => openSupplierModal(record)} className="mt-2 text-left text-xs font-semibold text-blue-700 underline underline-offset-2">Associa fornitore</button>}
                       <p className="mt-1 text-xs text-slate-400">
@@ -1043,9 +1099,9 @@ export default function FleetFuelPage() {
               <input className="input-saas mt-1 w-full" value={form.station} onChange={(event) => setForm((current) => ({ ...current, station: event.target.value }))} />
             </label>
             <label className="text-xs font-semibold text-slate-500">
-              Fornitore fattura (se noto)
+              Pagamento (se noto)
               <select className="input-saas mt-1 w-full" value={form.invoice_supplier} onChange={(event) => setForm((current) => ({ ...current, invoice_supplier: event.target.value }))}>
-                <option value="">Da associare</option><option value="ENI">ENI</option><option value="UTA">UTA</option>
+                <option value="">Da associare</option>{PAYMENT_OPTIONS}
               </select>
             </label>
             <label className="text-xs font-semibold text-slate-500">
@@ -1074,7 +1130,19 @@ export default function FleetFuelPage() {
               <dl className="grid grid-cols-2 gap-x-4 gap-y-5 border-y border-slate-100 py-5">
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Litri</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.liters != null ? `${selectedRecord.liters.toFixed(1)} L` : "-"}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">{selectedRecord.invoice_supplier === "UTA" ? "Costo netto" : "Costo totale"}</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtFuelCost(selectedRecord)}</dd>{selectedRecord.gross_cost != null && <p className="text-xs text-slate-500">Pagato EUR {selectedRecord.gross_cost.toFixed(2)}</p>}</div>
-                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Fornitore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.invoice_supplier ?? "Da associare"}</dd></div>
+                <div><dt className="text-[10px] font-bold uppercase text-slate-400">Pagamento</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fuelPaymentLabel(selectedRecord.invoice_supplier)}</dd></div>
+                {selectedRecord.invoice_supplier === "CONTANTI" ? <div className="col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <dt className="text-[10px] font-bold uppercase text-amber-700">Rimborso all&apos;autista</dt>
+                  <dd className="mt-1 text-sm text-slate-900">
+                    {selectedRecord.reimbursed_at
+                      ? <>Rimborsato il {new Date(selectedRecord.reimbursed_at).toLocaleDateString("it-IT")}{selectedRecord.reimbursement_note ? ` · ${selectedRecord.reimbursement_note}` : ""}</>
+                      : <>Da rimborsare a <strong>{selectedRecord.driver_name ?? "autista non indicato"}</strong>: {fmtMoney(selectedRecord.cost)}</>}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {!selectedRecord.reimbursed_at && currentRole !== "supervisor" && selectedRecord.approval_status !== "rejected" ? <button type="button" onClick={() => void reimburse(selectedRecord)} className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">Segna rimborsato</button> : null}
+                      {selectedRecord.reimbursed_at && currentRole === "admin" ? <button type="button" onClick={() => void unreimburse(selectedRecord)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700">Annulla rimborso</button> : null}
+                    </div>
+                  </dd>
+                </div> : null}
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Prezzo al litro</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtUnitPrice(selectedRecord)} EUR/L</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Chilometraggio</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{fmtNumber(selectedRecord.km_at_fuel, " km")}</dd></div>
                 <div><dt className="text-[10px] font-bold uppercase text-slate-400">Distributore</dt><dd className="mt-1 text-sm font-semibold text-slate-900">{selectedRecord.station ?? "Non indicato"}</dd></div>
