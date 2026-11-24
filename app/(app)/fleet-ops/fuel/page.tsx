@@ -168,6 +168,7 @@ export default function FleetFuelPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [truncated, setTruncated] = useState(false);
+  const [approvedTotals, setApprovedTotals] = useState<{ count: number; cost: number; liters: number } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -219,6 +220,7 @@ export default function FleetFuelPage() {
       drivers?: DriverOption[];
       truncated?: boolean;
       cash_to_reimburse?: CashToReimburse;
+      approved_totals?: { count: number; cost: number; liters: number };
       counts?: { pending?: number; approved?: number; rejected?: number };
       current_role?: FuelRole;
     } | null;
@@ -232,6 +234,7 @@ export default function FleetFuelPage() {
     setDrivers(json.drivers ?? []);
     setTruncated(Boolean(json.truncated));
     setCashToReimburse(json.cash_to_reimburse ?? null);
+    setApprovedTotals(json.approved_totals ?? null);
     setCounts({
       pending: json.counts?.pending ?? 0,
       approved: json.counts?.approved ?? 0,
@@ -265,9 +268,10 @@ export default function FleetFuelPage() {
   }, [records, searchQuery]);
 
   const fuelSummary = useMemo(() => {
-    const approved = visibleRecords.filter((record) => record.approval_status === "approved");
-    const totalCost = approved.reduce((sum, record) => sum + Number(record.cost ?? 0), 0);
-    const totalLiters = approved.reduce((sum, record) => sum + Number(record.liters ?? 0), 0);
+    // Totali dal server: tutti gli approvati del periodo, qualunque sia il filtro
+    // di stato e anche oltre i 250 record mostrati nell'elenco.
+    const totalCost = approvedTotals?.cost ?? 0;
+    const totalLiters = approvedTotals?.liters ?? 0;
     const missingDocuments = visibleRecords.filter((record) => {
       const hasDocument = Boolean((record.fiscal_document_url ?? "").trim() || (record.fiscal_document_name ?? "").trim());
       return record.approval_status === "approved" && !hasDocument;
@@ -278,7 +282,7 @@ export default function FleetFuelPage() {
       averagePrice: totalLiters > 0 ? totalCost / totalLiters : null,
       missingDocuments,
     };
-  }, [visibleRecords]);
+  }, [approvedTotals, visibleRecords]);
 
   const totalPages = Math.max(1, Math.ceil(visibleRecords.length / PAGE_SIZE));
   const paginatedRecords = useMemo(
@@ -585,7 +589,7 @@ export default function FleetFuelPage() {
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {[
           { label: "Da approvare", value: String(counts.pending), note: "richiedono controllo", tone: "amber" },
-          { label: "Costo approvato", value: fmtMoney(fuelSummary.totalCost), note: "sul filtro corrente", tone: "blue" },
+          { label: "Costo approvato", value: fmtMoney(fuelSummary.totalCost), note: dateFrom || dateTo ? "nel periodo selezionato" : "tutti i periodi", tone: "blue" },
           { label: "Litri approvati", value: `${fuelSummary.totalLiters.toLocaleString("it-IT", { maximumFractionDigits: 1 })} L`, note: "rifornimenti validati", tone: "emerald" },
           { label: "Prezzo medio", value: fuelSummary.averagePrice != null ? `EUR ${fuelSummary.averagePrice.toLocaleString("it-IT", { minimumFractionDigits: 3, maximumFractionDigits: 3 })}/L` : "-", note: "costo / litri", tone: "violet" },
         ].map((item) => (
@@ -892,22 +896,24 @@ export default function FleetFuelPage() {
           ) : null}
           {truncated && !loading ? (
             <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-              Mostrati solo i 250 rifornimenti più recenti: i totali qui sopra non sono completi. Restringi il periodo con il filtro date.
+              L&apos;elenco mostra solo i 250 rifornimenti più recenti (i totali qui sopra invece sono completi). Per vedere quelli più vecchi restringi il periodo con il filtro date.
             </p>
           ) : null}
           {loading ? (
             <p className="text-sm text-slate-400">Caricamento...</p>
           ) : visibleRecords.length === 0 ? (
-            <p className="text-sm text-slate-400">Nessun rifornimento trovato per il filtro corrente.</p>
+            statusFilter === "pending" && !onlyCashToReimburse && !searchQuery.trim()
+              ? <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">✓ Nessun rifornimento da approvare.</p>
+              : <p className="text-sm text-slate-400">Nessun rifornimento trovato per il filtro corrente.</p>
           ) : (
             <>
             {/* Sotto ~1040 px di riquadro la tabella scorre in orizzontale invece di tagliare Stato e dettaglio. */}
-            <div className="hidden overflow-x-auto rounded-lg border border-slate-200 lg:block"><div className="min-w-[980px]">
-              <div className="grid grid-cols-[90px_minmax(170px,1.5fr)_minmax(130px,1fr)_64px_95px_56px_72px_minmax(90px,1fr)_90px_20px] items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
+            <div className="hidden overflow-x-auto rounded-lg border border-slate-200 lg:block"><div className="min-w-[960px]">
+              <div className="grid grid-cols-[84px_minmax(170px,1.5fr)_minmax(120px,1fr)_64px_95px_56px_68px_minmax(90px,1fr)_90px_20px] items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[10px] font-bold uppercase text-slate-500">
                 <span>Data</span><span>Mezzo / autista</span><span>Distributore / Fornitore</span><span>Litri</span><span>Costo</span><span>EUR/L</span><span>Km</span><span>Documento</span><span>Stato</span><span />
               </div>
               {paginatedRecords.map((record) => (
-                <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[90px_minmax(170px,1.5fr)_minmax(130px,1fr)_64px_95px_56px_72px_minmax(90px,1fr)_90px_20px] items-center gap-2 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
+                <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[84px_minmax(170px,1.5fr)_minmax(120px,1fr)_64px_95px_56px_68px_minmax(90px,1fr)_90px_20px] items-center gap-2 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span><span className={`block truncate ${record.driver_name ? "text-slate-700" : "italic text-slate-400"}`}>{record.driver_name ?? "Autista non indicato"}</span></span>
                   <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className={`block text-[11px] font-semibold ${record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "text-emerald-700" : "text-amber-700") : "text-blue-700"}`}>{record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti · rimborsato" : "Contanti · da rimborsare") : fuelPaymentLabel(record.invoice_supplier)}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
