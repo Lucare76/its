@@ -37,3 +37,12 @@ export function getRequestAppUrl(headers: Headers): string {
 
   return "http://127.0.0.1:3010";
 }
+
+/**
+ * Indirizzo da mettere nei QR stampati (es. scheda mezzo): l'URL pubblico
+ * configurato (NEXT_PUBLIC_APP_URL). Solo se manca si usa l'origine corrente.
+ * Non usa VERCEL_URL: è l'indirizzo del singolo deploy, protetto da login.
+ */
+export function vehicleQrBaseUrl(currentOrigin: string): string {
+  return normalizeAppUrl(process.env.NEXT_PUBLIC_APP_URL) ?? normalizeAppUrl(currentOrigin) ?? "";
+}
