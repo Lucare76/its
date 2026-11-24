@@ -6,6 +6,7 @@
  *   body.action = "km_end"          → fine turno (aggiorna log con km finale)
  *   body.action = "fuel"            → rifornimento rapido
  */
+import { isFuelPaymentMethod } from "@/lib/fuel-payment";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -559,7 +560,8 @@ export async function POST(
     if (!validFuelTypes.has(fuelType)) return fail("Tipo carburante non valido.");
     if (liters !== null && (!Number.isFinite(liters) || liters <= 0 || liters > 600)) return fail("Litri non validi.");
     if (cost !== null && (!Number.isFinite(cost) || cost < 0 || cost > 5000)) return fail("Costo non valido.");
-    if (supplier !== "ENI" && supplier !== "UTA") return fail("Seleziona il fornitore ENI o UTA.");
+    if (!isFuelPaymentMethod(supplier)) return fail("Indica come hai pagato: carta ENI, UTA, Q8 o contanti.");
+    if (supplier === "CONTANTI" && (cost === null || cost <= 0)) return fail("Pagamento in contanti: inserisci l'importo pagato, serve per il rimborso.");
     if (kmAtFuel !== null && (!Number.isInteger(kmAtFuel) || kmAtFuel < 0)) return fail("Km al rifornimento non validi.");
     if (station && station.length > 160) return fail("Nome distributore troppo lungo.");
     if (!driverName) return fail("Nome autista obbligatorio.");

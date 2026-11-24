@@ -255,6 +255,21 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     expect(fake.tables.vehicle_fuel[1]).toMatchObject({ invoice_supplier: "ENI", cost: 50, gross_cost: null, submitted_via_qr: true, driver_name: "Luigi Bianchi" });
   });
 
+  it("QR: accetta carta Q8 e contanti; contanti richiede l'importo; rifiuta pagamenti sconosciuti", async () => {
+    const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
+    mocks.createClient.mockReturnValue(fake.admin);
+    const q8 = await callPost({ action: "fuel", liters: 30, cost: 60, invoice_supplier: "Q8", driver_name: "Mario Rossi" });
+    const cash = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "contanti", driver_name: "Mario Rossi" });
+    expect([q8.status, cash.status]).toEqual([200, 200]);
+    // Contanti: nessuna conversione netto UTA, l'importo è quello da rimborsare.
+    expect(fake.tables.vehicle_fuel[1]).toMatchObject({ invoice_supplier: "CONTANTI", cost: 40, gross_cost: null });
+    const noCost = await callPost({ action: "fuel", liters: 20, invoice_supplier: "CONTANTI", driver_name: "Mario Rossi" });
+    const unknown = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "SHELL", driver_name: "Mario Rossi" });
+    expect([noCost.status, unknown.status]).toEqual([400, 400]);
+    expect(await noCost.json()).toEqual({ error: "Pagamento in contanti: inserisci l'importo pagato, serve per il rimborso." });
+    expect(fake.tables.vehicle_fuel).toHaveLength(2);
+  });
+
   it("rifiuta il rifornimento QR senza nome autista (assente o solo spazi)", async () => {
     const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
     mocks.createClient.mockReturnValue(fake.admin);

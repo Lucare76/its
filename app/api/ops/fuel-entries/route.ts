@@ -1,3 +1,4 @@
+import { FUEL_PAYMENT_METHODS } from "@/lib/fuel-payment";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -20,7 +21,7 @@ const createFuelSchema = z.object({
   km_at_fuel: z.number().int().min(0).nullable().optional(),
   fuel_type: z.string().max(40).nullable().optional(),
   station: z.string().max(160).nullable().optional(),
-  invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
+  invoice_supplier: z.enum(FUEL_PAYMENT_METHODS).nullable().optional(),
   driver_name: driverNameSchema,
   notes: z.string().max(1000).nullable().optional(),
   submitted_via_qr: z.boolean().optional(),
@@ -42,7 +43,7 @@ const editFuelSchema = z.object({
   km_at_fuel:   z.number().int().min(0).nullable().optional(),
   fuel_type:    z.string().max(40).nullable().optional(),
   station:      z.string().max(160).nullable().optional(),
-  invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
+  invoice_supplier: z.enum(FUEL_PAYMENT_METHODS).nullable().optional(),
   cost_input: z.enum(["net", "gross"]).optional(),
   driver_name:  driverNameSchema,
   notes:        z.string().max(1000).nullable().optional(),
@@ -58,7 +59,8 @@ function lockedStatus(message: string) {
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)));
 
 const deleteFuelSchema = z.object({ id: z.string().uuid() });
-const assignSupplierSchema = z.object({ id: z.string().uuid(), invoice_supplier: z.enum(["ENI", "UTA"]) });
+const assignSupplierSchema = z.object({ id: z.string().uuid(), invoice_supplier: z.enum(FUEL_PAYMENT_METHODS) });
+const reimburseSchema = z.object({ id: z.string().uuid(), note: z.string().trim().max(500).optional() });
 
 export async function GET(request: NextRequest) {
   const auth = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -66,6 +68,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
+  const onlyCashToReimburse = searchParams.get("reimbursement") === "pending";
   const vehicleId = searchParams.get("vehicle_id");
   const rawFrom = searchParams.get("date_from");
   const rawTo = searchParams.get("date_to");
@@ -80,7 +83,7 @@ export async function GET(request: NextRequest) {
 
   let query = auth.admin
     .from("vehicle_fuel")
-    .select("id, vehicle_id, fuel_date, liters, cost, gross_cost, km_at_fuel, fuel_type, station, invoice_supplier, driver_name, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
+    .select("id, vehicle_id, fuel_date, liters, cost, gross_cost, km_at_fuel, fuel_type, station, invoice_supplier, driver_name, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at, reimbursed_at, reimbursed_by, reimbursement_note")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("fuel_date", { ascending: false })
     .order("created_at", { ascending: false })
@@ -91,6 +94,9 @@ export async function GET(request: NextRequest) {
   if (vehicleId) query = query.eq("vehicle_id", vehicleId);
   if (dateFrom?.success) query = query.gte("fuel_date", dateFrom.data);
   if (dateTo?.success) query = query.lte("fuel_date", dateTo.data);
+  if (onlyCashToReimburse) {
+    query = query.eq("invoice_supplier", "CONTANTI").is("reimbursed_at", null).neq("approval_status", "rejected");
+  }
 
   const countQuery = (approvalStatus: "pending" | "approved" | "rejected") => {
     let nextQuery = auth.admin
@@ -112,6 +118,7 @@ export async function GET(request: NextRequest) {
     { count: approvedCount, error: approvedCountError },
     { count: rejectedCount, error: rejectedCountError },
     { data: drivers },
+    { data: cashToReimburse, error: cashError },
   ] = await Promise.all([
     query,
     auth.admin.from("vehicles").select("id, label, plate, license_number").eq("tenant_id", auth.membership.tenant_id),
@@ -120,9 +127,13 @@ export async function GET(request: NextRequest) {
     countQuery("rejected"),
     auth.admin.from("driver_profiles").select("id, full_name")
       .eq("tenant_id", auth.membership.tenant_id).eq("active", true).order("full_name"),
+    // Contanti ancora da rimborsare: indipendente dai filtri, è una lista di cose da fare.
+    auth.admin.from("vehicle_fuel").select("cost, driver_name")
+      .eq("tenant_id", auth.membership.tenant_id).eq("invoice_supplier", "CONTANTI")
+      .is("reimbursed_at", null).neq("approval_status", "rejected").limit(2000),
   ]);
 
-  if (error || vehiclesError || pendingCountError || approvedCountError || rejectedCountError) {
+  if (error || vehiclesError || pendingCountError || approvedCountError || rejectedCountError || cashError) {
     return NextResponse.json({
       error:
         error?.message
@@ -130,6 +141,7 @@ export async function GET(request: NextRequest) {
         ?? pendingCountError?.message
         ?? approvedCountError?.message
         ?? rejectedCountError?.message
+        ?? cashError?.message
         ?? "Errore caricamento rifornimenti.",
     }, { status: 500 });
   }
@@ -141,9 +153,29 @@ export async function GET(request: NextRequest) {
     vehicle: vehicleMap.get(record.vehicle_id) ?? null,
   }));
 
+  // Somme in centesimi per non accumulare errori di virgola mobile.
+  const byDriver = new Map<string, { count: number; cents: number }>();
+  let cashCents = 0; let cashMissingAmount = 0;
+  for (const row of cashToReimburse ?? []) {
+    const key = (row.driver_name ?? "").trim() || "Autista non indicato";
+    const entry = byDriver.get(key) ?? { count: 0, cents: 0 };
+    entry.count += 1;
+    if (row.cost == null) cashMissingAmount += 1;
+    else { const cents = Math.round(Number(row.cost) * 100); entry.cents += cents; cashCents += cents; }
+    byDriver.set(key, entry);
+  }
+
   return NextResponse.json({
     ok: true,
     records: enriched,
+    cash_to_reimburse: {
+      count: (cashToReimburse ?? []).length,
+      total: cashCents / 100,
+      missing_amount: cashMissingAmount,
+      by_driver: [...byDriver.entries()]
+        .map(([driver_name, entry]) => ({ driver_name, count: entry.count, total: entry.cents / 100 }))
+        .sort((a, b) => b.total - a.total),
+    },
     vehicles: vehicles ?? [],
     drivers: drivers ?? [],
     truncated,
@@ -167,10 +199,46 @@ export async function POST(request: NextRequest) {
     | { action: "edit"; data: z.infer<typeof editFuelSchema> }
     | { action: "assign_supplier"; data: z.infer<typeof assignSupplierSchema> }
     | { action: "delete"; data: z.infer<typeof deleteFuelSchema> }
+    | { action: "reimburse" | "unreimburse"; data: z.infer<typeof reimburseSchema> }
     | null;
 
   if (!body?.action || !body.data) {
     return NextResponse.json({ error: "action e data richiesti." }, { status: 400 });
+  }
+
+  if (body.action === "reimburse" || body.action === "unreimburse") {
+    const parsed = reimburseSchema.safeParse(body.data);
+    if (!parsed.success) return NextResponse.json({ error: "Richiesta di rimborso non valida." }, { status: 400 });
+    const { data: record, error: readError } = await auth.admin.from("vehicle_fuel")
+      .select("id, invoice_supplier, cost, approval_status, reimbursed_at")
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.data.id).maybeSingle();
+    if (readError) return NextResponse.json({ error: readError.message }, { status: 500 });
+    if (!record) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
+    if (record.invoice_supplier !== "CONTANTI") return NextResponse.json({ error: "Si rimborsano solo i rifornimenti pagati in contanti." }, { status: 409 });
+
+    if (body.action === "unreimburse") {
+      if (auth.membership.role !== "admin") return NextResponse.json({ error: "Solo admin può annullare un rimborso." }, { status: 403 });
+      const { data: changed, error } = await auth.admin.from("vehicle_fuel")
+        .update({ reimbursed_at: null, reimbursed_by: null, reimbursement_note: null, last_edited_by: auth.user.id })
+        .eq("tenant_id", auth.membership.tenant_id).eq("id", record.id).not("reimbursed_at", "is", null)
+        .select("id").maybeSingle();
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (!changed) return NextResponse.json({ error: "Il rifornimento non risulta rimborsato." }, { status: 409 });
+      return NextResponse.json({ ok: true });
+    }
+
+    if (auth.membership.role !== "admin" && auth.membership.role !== "operator")
+      return NextResponse.json({ error: "Solo admin e operatori possono registrare un rimborso." }, { status: 403 });
+    if (record.approval_status === "rejected") return NextResponse.json({ error: "Rifornimento respinto: non si rimborsa." }, { status: 409 });
+    if (record.cost == null || Number(record.cost) <= 0) return NextResponse.json({ error: "Inserisci prima l'importo pagato: serve per il rimborso." }, { status: 409 });
+    const { data: changed, error } = await auth.admin.from("vehicle_fuel")
+      .update({ reimbursed_at: new Date().toISOString(), reimbursed_by: auth.user.id,
+        reimbursement_note: parsed.data.note || null, last_edited_by: auth.user.id })
+      .eq("tenant_id", auth.membership.tenant_id).eq("id", record.id).is("reimbursed_at", null)
+      .select("id").maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!changed) return NextResponse.json({ error: "Rifornimento già rimborsato." }, { status: 409 });
+    return NextResponse.json({ ok: true });
   }
 
   if (body.action === "create") {
@@ -203,10 +271,12 @@ export async function POST(request: NextRequest) {
   if (body.action === "edit") {
     const parsed = editFuelSchema.parse(body.data);
     const { data: original, error: originalError } = await auth.admin.from("vehicle_fuel")
-      .select("id, submitted_via_qr")
+      .select("id, submitted_via_qr, invoice_supplier, reimbursed_at")
       .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.id).maybeSingle();
     if (originalError) return NextResponse.json({ error: originalError.message }, { status: 500 });
     if (!original) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
+    if (original.reimbursed_at && parsed.invoice_supplier !== "CONTANTI")
+      return NextResponse.json({ error: "Rifornimento in contanti già rimborsato: un admin deve prima annullare il rimborso." }, { status: 409 });
     if (parsed.cost_input === "gross" && (!original.submitted_via_qr || parsed.invoice_supplier !== "UTA"))
       return NextResponse.json({ error: "Importo lordo consentito solo per un rifornimento QR UTA." }, { status: 400 });
     const { data: vehicle } = await auth.admin.from("vehicles").select("id")
@@ -248,7 +318,7 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "assign_supplier") {
     const parsed = assignSupplierSchema.safeParse(body.data);
-    if (!parsed.success) return NextResponse.json({ error: "Seleziona ENI o UTA." }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: "Seleziona come è stato pagato: carta ENI, UTA, Q8 o contanti." }, { status: 400 });
     const { id, invoice_supplier } = parsed.data;
     const { data: original, error: readError } = await auth.admin.from("vehicle_fuel")
       .select("id, cost, submitted_via_qr, invoice_supplier")
