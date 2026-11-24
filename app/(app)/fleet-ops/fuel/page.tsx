@@ -80,6 +80,22 @@ const EMPTY_FORM = {
 const PLACEHOLDER_FISCAL_DOCUMENT_HOSTS = new Set(["example.com", "example.org", "example.net"]);
 const PAGE_SIZE = 10;
 
+function isoDay(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Intervalli rapidi calcolati sulla data locale (Europe/Rome), non UTC.
+function datePreset(preset: "this_month" | "last_month" | "this_year") {
+  const today = new Date();
+  if (preset === "this_month") return { from: isoDay(new Date(today.getFullYear(), today.getMonth(), 1)), to: isoDay(today) };
+  if (preset === "last_month") return {
+    from: isoDay(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+    to: isoDay(new Date(today.getFullYear(), today.getMonth(), 0)),
+  };
+  return { from: isoDay(new Date(today.getFullYear(), 0, 1)), to: isoDay(today) };
+}
+
 function fmtMoney(value: number | null | undefined) {
   return value != null ? `EUR ${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "-";
 }
@@ -136,6 +152,9 @@ export default function FleetFuelPage() {
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
   const [searchQuery, setSearchQuery] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [truncated, setTruncated] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -167,7 +186,11 @@ export default function FleetFuelPage() {
       return;
     }
     setLoading(true);
-    const query = statusFilter === "all" ? "" : `?status=${statusFilter}`;
+    const params = new URLSearchParams();
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
     const res = await fetch(`/api/ops/fuel-entries${query}`, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${token}` },
@@ -178,6 +201,7 @@ export default function FleetFuelPage() {
       records?: FuelRecord[];
       vehicles?: VehicleOption[];
       drivers?: DriverOption[];
+      truncated?: boolean;
       counts?: { pending?: number; approved?: number; rejected?: number };
       current_role?: FuelRole;
     } | null;
@@ -189,6 +213,7 @@ export default function FleetFuelPage() {
     setRecords(json.records ?? []);
     setVehicles(json.vehicles ?? []);
     setDrivers(json.drivers ?? []);
+    setTruncated(Boolean(json.truncated));
     setCounts({
       pending: json.counts?.pending ?? 0,
       approved: json.counts?.approved ?? 0,
@@ -196,7 +221,7 @@ export default function FleetFuelPage() {
     });
     setCurrentRole(json.current_role ?? "operator");
     setLoading(false);
-  }, [showToast, statusFilter]);
+  }, [dateFrom, dateTo, showToast, statusFilter]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -743,7 +768,7 @@ export default function FleetFuelPage() {
       <div>
         <SectionCard
           title="Coda rifornimenti"
-          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}`}
+          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
           actions={(
             <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <input
@@ -752,6 +777,41 @@ export default function FleetFuelPage() {
                 onChange={(event) => { setSearchQuery(event.target.value); setCurrentPage(1); }}
                 placeholder="Cerca mezzo, targa, distributore o fornitore"
               />
+              <div className="flex basis-full flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1 text-xs font-semibold text-slate-500">
+                  Dal
+                  <DateInput className="input-saas h-10 w-36 text-xs" value={dateFrom} max={dateTo || undefined}
+                    title="Data iniziale (gg/mm/aaaa)"
+                    onChange={(iso) => { setDateFrom(iso); setCurrentPage(1); }} />
+                </label>
+                <label className="flex items-center gap-1 text-xs font-semibold text-slate-500">
+                  Al
+                  <DateInput className="input-saas h-10 w-36 text-xs" value={dateTo} min={dateFrom || undefined}
+                    title="Data finale (gg/mm/aaaa)"
+                    onChange={(iso) => { setDateTo(iso); setCurrentPage(1); }} />
+                </label>
+                {([
+                  ["this_month", "Questo mese"],
+                  ["last_month", "Mese scorso"],
+                  ["this_year", "Quest'anno"],
+                ] as const).map(([preset, label]) => {
+                  const range = datePreset(preset);
+                  const active = dateFrom === range.from && dateTo === range.to;
+                  return (
+                    <button key={preset} type="button"
+                      onClick={() => { setDateFrom(range.from); setDateTo(range.to); setCurrentPage(1); }}
+                      className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold ${active ? "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      {label}
+                    </button>
+                  );
+                })}
+                {dateFrom || dateTo ? (
+                  <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); setCurrentPage(1); }}
+                    className="min-h-10 rounded-lg px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50">
+                    Azzera date
+                  </button>
+                ) : null}
+              </div>
               {([
                 ["pending", `Da approvare (${counts.pending})`],
                 ["approved", `Approvati (${counts.approved})`],
@@ -770,6 +830,11 @@ export default function FleetFuelPage() {
             </div>
           )}
         >
+          {truncated && !loading ? (
+            <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+              Mostrati solo i 250 rifornimenti più recenti: i totali qui sopra non sono completi. Restringi il periodo con il filtro date.
+            </p>
+          ) : null}
           {loading ? (
             <p className="text-sm text-slate-400">Caricamento...</p>
           ) : visibleRecords.length === 0 ? (
