@@ -8,6 +8,10 @@ import { utaNetFromGross } from "@/lib/fuel-cost";
 
 export const runtime = "nodejs";
 
+// Stringa vuota o solo spazi = nessun autista indicato.
+const driverNameSchema = z.string().trim().max(120)
+  .transform((value) => value || null).nullable().optional();
+
 const createFuelSchema = z.object({
   vehicle_id: z.string().uuid(),
   fuel_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -17,6 +21,7 @@ const createFuelSchema = z.object({
   fuel_type: z.string().max(40).nullable().optional(),
   station: z.string().max(160).nullable().optional(),
   invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
+  driver_name: driverNameSchema,
   notes: z.string().max(1000).nullable().optional(),
   submitted_via_qr: z.boolean().optional(),
 });
@@ -39,6 +44,7 @@ const editFuelSchema = z.object({
   station:      z.string().max(160).nullable().optional(),
   invoice_supplier: z.enum(["ENI", "UTA"]).nullable().optional(),
   cost_input: z.enum(["net", "gross"]).optional(),
+  driver_name:  driverNameSchema,
   notes:        z.string().max(1000).nullable().optional(),
 });
 
@@ -55,7 +61,7 @@ export async function GET(request: NextRequest) {
 
   let query = auth.admin
     .from("vehicle_fuel")
-    .select("id, vehicle_id, fuel_date, liters, cost, gross_cost, km_at_fuel, fuel_type, station, invoice_supplier, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
+    .select("id, vehicle_id, fuel_date, liters, cost, gross_cost, km_at_fuel, fuel_type, station, invoice_supplier, driver_name, notes, approval_status, fiscal_document_url, fiscal_document_name, submitted_via_qr, approved_at, created_at")
     .eq("tenant_id", auth.membership.tenant_id)
     .order("fuel_date", { ascending: false })
     .limit(250);
@@ -80,12 +86,15 @@ export async function GET(request: NextRequest) {
     { count: pendingCount, error: pendingCountError },
     { count: approvedCount, error: approvedCountError },
     { count: rejectedCount, error: rejectedCountError },
+    { data: drivers },
   ] = await Promise.all([
     query,
     auth.admin.from("vehicles").select("id, label, plate, license_number").eq("tenant_id", auth.membership.tenant_id),
     countQuery("pending"),
     countQuery("approved"),
     countQuery("rejected"),
+    auth.admin.from("driver_profiles").select("id, full_name")
+      .eq("tenant_id", auth.membership.tenant_id).eq("active", true).order("full_name"),
   ]);
 
   if (error || vehiclesError || pendingCountError || approvedCountError || rejectedCountError) {
@@ -110,6 +119,7 @@ export async function GET(request: NextRequest) {
     ok: true,
     records: enriched,
     vehicles: vehicles ?? [],
+    drivers: drivers ?? [],
     counts: {
       pending: pendingCount ?? 0,
       approved: approvedCount ?? 0,
@@ -151,6 +161,7 @@ export async function POST(request: NextRequest) {
       fuel_type: parsed.fuel_type ?? null,
       station: parsed.station ?? null,
       invoice_supplier: parsed.invoice_supplier ?? null,
+      driver_name: parsed.driver_name ?? null,
       notes: parsed.notes ?? null,
       approval_status: "approved",
       approved_at: new Date().toISOString(),
@@ -197,6 +208,7 @@ export async function POST(request: NextRequest) {
         fuel_type:  parsed.fuel_type ?? null,
         station:    parsed.station ?? null,
         invoice_supplier: parsed.invoice_supplier ?? null,
+        driver_name: parsed.driver_name ?? null,
         last_edited_by: auth.user.id,
         notes:      parsed.notes ?? null,
       })

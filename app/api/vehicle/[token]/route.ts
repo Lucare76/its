@@ -553,6 +553,7 @@ export async function POST(
     const kmAtFuel = body.km_at_fuel ? Number(body.km_at_fuel) : null;
     const fuelType = typeof body.fuel_type === "string" ? body.fuel_type : "diesel";
     const station  = (body.station as string)?.trim() || null;
+    const driverName = typeof body.driver_name === "string" ? body.driver_name.trim() : "";
     const validFuelTypes = new Set(["diesel", "benzina", "gas", "elettrico"]);
 
     if (!validFuelTypes.has(fuelType)) return fail("Tipo carburante non valido.");
@@ -561,6 +562,8 @@ export async function POST(
     if (supplier !== "ENI" && supplier !== "UTA") return fail("Seleziona il fornitore ENI o UTA.");
     if (kmAtFuel !== null && (!Number.isInteger(kmAtFuel) || kmAtFuel < 0)) return fail("Km al rifornimento non validi.");
     if (station && station.length > 160) return fail("Nome distributore troppo lungo.");
+    if (!driverName) return fail("Nome autista obbligatorio.");
+    if (driverName.length > 120) return fail("Nome autista troppo lungo.");
 
     // tenant_id richiesto — lo ricaviamo dal veicolo
     const { data: veh } = await admin.from("vehicles").select("tenant_id").eq("id", vehicle.id).single();
@@ -576,6 +579,7 @@ export async function POST(
       km_at_fuel: kmAtFuel,
       fuel_type:  fuelType,
       station,
+      driver_name: driverName,
       approval_status: "pending",
       submitted_via_qr: true,
     });

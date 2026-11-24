@@ -10084,6 +10084,7 @@ export type Database = {
           cost: number | null
           created_at: string
           created_by: string | null
+          driver_name: string | null
           fiscal_document_name: string | null
           fiscal_document_url: string | null
           fuel_date: string
@@ -10107,6 +10108,7 @@ export type Database = {
           cost?: number | null
           created_at?: string
           created_by?: string | null
+          driver_name?: string | null
           fiscal_document_name?: string | null
           fiscal_document_url?: string | null
           fuel_date: string
@@ -10130,6 +10132,7 @@ export type Database = {
           cost?: number | null
           created_at?: string
           created_by?: string | null
+          driver_name?: string | null
           fiscal_document_name?: string | null
           fiscal_document_url?: string | null
           fuel_date?: string
