@@ -38,6 +38,10 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Menu Impostazioni su telefono: chiuso di default anche dentro una pagina di
+  // Impostazioni (prima era forzato aperto e occupava ~600 px prima del contenuto).
+  // Legato al percorso: cambiando pagina si richiude da solo.
+  const [mobileSettingsPath, setMobileSettingsPath] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState<boolean | null>(null);
   const [agenzieOpen, setAgenzieOpen] = useState(false);
   const [operativoOpen, setOperativoOpen] = useState(false);
@@ -133,6 +137,7 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
     [pathname, settingsGroups]
   );
   const isSettingsExpanded = settingsPathActive || settingsOpen;
+  const mobileSettingsOpen = mobileSettingsPath === pathname;
 
   const redirectByRole = (role: UserRole | null) => {
     if (!role) return "/login";
@@ -1671,14 +1676,15 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
             {settingsGroups.length > 0 ? (
               <button
                 type="button"
-                onClick={() => setSettingsOpen((prev) => !prev)}
-                className={isSettingsExpanded ? "btn-primary px-3 py-1.5 text-xs" : "btn-secondary px-3 py-1.5 text-xs"}
+                onClick={() => setMobileSettingsPath((current) => (current === pathname ? null : pathname))}
+                aria-expanded={mobileSettingsOpen}
+                className={settingsPathActive || mobileSettingsOpen ? "btn-primary px-3 py-1.5 text-xs" : "btn-secondary px-3 py-1.5 text-xs"}
               >
-                Impostazioni
+                Impostazioni {mobileSettingsOpen ? "▴" : "▾"}
               </button>
             ) : null}
           </div>
-          {isSettingsExpanded && settingsGroups.length > 0 ? (
+          {mobileSettingsOpen && settingsGroups.length > 0 ? (
             <div className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:hidden">
               {settingsGroups.map((group) => (
                 <div key={`mobile-${group.title}`} className="space-y-2">
