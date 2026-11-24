@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fuelCanLink, parseFuelInvoiceRows, proposeFuelMatch, selectExactAutoLinks } from "@/lib/server/fuel-invoice-reconciliation";
+import { fuelCanLink, fuelStationsLikelySame, parseFuelInvoiceRows, proposeFuelMatch, selectExactAutoLinks } from "@/lib/server/fuel-invoice-reconciliation";
 
 describe("fuel invoice reconciliation", () => {
   it("parses ENI purchases but excludes invoice fees and totals", () => {
@@ -91,5 +91,24 @@ describe("collegamento automatico solo per corrispondenze esatte", () => {
     const other = { id: "L2", date: "2026-10-19", station: "DUE CARRARE", liters: 216.9, amount: 475.01, reference: "00914931" };
     const otherFuel = { id: "F2", fuel_date: "2026-10-19", station: "San pelagico Eni ovest", liters: 216.9, cost: 475, invoice_supplier: "ENI", approval_status: "approved" };
     expect(selectExactAutoLinks([line, other], [fuel, otherFuel], "ENI")).toEqual([{ line_id: "L1", fuel_id: "F1" }]);
+  });
+});
+
+describe("stesso distributore scritto in modo diverso", () => {
+  it.each([
+    ["SAN NICOLA LA STRADA", "Eni san nicola est caserta", true],
+    ["ANAGNI", "ANAGNI", true],
+    ["Q8 Teano ovest", "TEANO", true],
+    ["DUE CARRARE", "San pelagico Eni ovest", false],
+    ["SAN GIORGIO", "Eni san marco est", false],
+    ["ENI NORD", "Q8 nord", false],
+  ])("%s ↔ %s → %s", (invoice, registry, expected) => {
+    expect(fuelStationsLikelySame(registry, invoice)).toBe(expected);
+  });
+
+  it("collega in automatico il caso San Nicola dello screenshot", () => {
+    const line = { id: "L1", date: "2026-10-24", station: "SAN NICOLA LA STRADA", liters: 192.71, amount: 422.03, reference: "00907929" };
+    const fuel = { id: "F1", fuel_date: "2026-10-24", station: "Eni san nicola est caserta", liters: 192.71, cost: 422.03, invoice_supplier: "ENI", approval_status: "approved" };
+    expect(selectExactAutoLinks([line], [fuel], "ENI")).toEqual([{ line_id: "L1", fuel_id: "F1" }]);
   });
 });
