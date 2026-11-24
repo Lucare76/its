@@ -229,7 +229,8 @@ export async function POST(request: NextRequest) {
         fuel_type:  parsed.fuel_type ?? null,
         station:    parsed.station ?? null,
         invoice_supplier: parsed.invoice_supplier ?? null,
-        driver_name: parsed.driver_name ?? null,
+        // Assente = invariato (es. "Correggi" dal confronto fatture); vuoto = rimosso.
+        ...(parsed.driver_name !== undefined ? { driver_name: parsed.driver_name } : {}),
         last_edited_by: auth.user.id,
         notes:      parsed.notes ?? null,
       })
