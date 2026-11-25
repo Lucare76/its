@@ -258,24 +258,39 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
   it("QR: accetta carta Q8 e contanti; contanti richiede l'importo; rifiuta pagamenti sconosciuti", async () => {
     const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
     mocks.createClient.mockReturnValue(fake.admin);
-    const q8 = await callPost({ action: "fuel", liters: 30, cost: 60, invoice_supplier: "Q8", driver_name: "Mario Rossi" });
-    const cash = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "contanti", driver_name: "Mario Rossi" });
+    const q8 = await callPost({ action: "fuel", liters: 30, cost: 60, invoice_supplier: "Q8", station: "Forio", driver_name: "Mario Rossi" });
+    const cash = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "contanti", station: "Forio", driver_name: "Mario Rossi" });
     expect([q8.status, cash.status]).toEqual([200, 200]);
     // Contanti: nessuna conversione netto UTA, l'importo è quello da rimborsare.
     expect(fake.tables.vehicle_fuel[1]).toMatchObject({ invoice_supplier: "CONTANTI", cost: 40, gross_cost: null });
-    const noCost = await callPost({ action: "fuel", liters: 20, invoice_supplier: "CONTANTI", driver_name: "Mario Rossi" });
-    const unknown = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "SHELL", driver_name: "Mario Rossi" });
+    const noCost = await callPost({ action: "fuel", liters: 20, invoice_supplier: "CONTANTI", station: "Forio", driver_name: "Mario Rossi" });
+    const unknown = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "SHELL", station: "Forio", driver_name: "Mario Rossi" });
     expect([noCost.status, unknown.status]).toEqual([400, 400]);
     expect(await noCost.json()).toEqual({ error: "Pagamento in contanti: inserisci l'importo pagato, serve per il rimborso." });
     expect(fake.tables.vehicle_fuel).toHaveLength(2);
   });
 
+  it("QR: località del distributore obbligatoria (assente, vuota o di un carattere)", async () => {
+    const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
+    mocks.createClient.mockReturnValue(fake.admin);
+    const base = { action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", driver_name: "Mario Rossi" };
+    const results = await Promise.all([
+      callPost(base), callPost({ ...base, station: "   " }), callPost({ ...base, station: "F" }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual([400, 400, 400]);
+    expect(await results[0].json()).toEqual({ error: "Indica la località del distributore (es. Forio)." });
+    expect(fake.tables.vehicle_fuel).toHaveLength(0);
+    const ok = await callPost({ ...base, station: "  Forio  " });
+    expect(ok.status).toBe(200);
+    expect(fake.tables.vehicle_fuel[0]).toMatchObject({ station: "Forio" });
+  });
+
   it("rifiuta il rifornimento QR senza nome autista (assente o solo spazi)", async () => {
     const fake = createFakeAdmin({ vehicles: [baseVehicle()] });
     mocks.createClient.mockReturnValue(fake.admin);
-    const missing = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI" });
-    const blank = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", driver_name: "   " });
-    const tooLong = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", driver_name: "x".repeat(121) });
+    const missing = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", station: "Forio" });
+    const blank = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", station: "Forio", driver_name: "   " });
+    const tooLong = await callPost({ action: "fuel", liters: 25, cost: 50, invoice_supplier: "ENI", station: "Forio", driver_name: "x".repeat(121) });
     expect([missing.status, blank.status, tooLong.status]).toEqual([400, 400, 400]);
     expect(await missing.json()).toEqual({ error: "Nome autista obbligatorio." });
     expect(fake.tables.vehicle_fuel).toHaveLength(0);
@@ -443,7 +458,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    expect((await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", driver_name: "Mario Rossi" })).status).toBe(500);
+    expect((await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", station: "Forio", driver_name: "Mario Rossi" })).status).toBe(500);
   });
 
   it("13. fallback generico corretto per ciascun ramo", async () => {
@@ -465,7 +480,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    const bodyFuel = await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", driver_name: "Mario Rossi" })).json();
+    const bodyFuel = await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", station: "Forio", driver_name: "Mario Rossi" })).json();
     expect(bodyFuel).toEqual({ error: "Impossibile registrare il rifornimento." });
   });
 
@@ -486,7 +501,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const fakeFuel = createFakeAdmin({ vehicles: [baseVehicle()] });
     fakeFuel.setError("vehicle_fuel", "insert", { message: DISTINCTIVE_FUEL_ERROR });
     mocks.createClient.mockReturnValue(fakeFuel.admin);
-    assertNoForbiddenFields(await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", driver_name: "Mario Rossi" })).json());
+    assertNoForbiddenFields(await (await callPost({ action: "fuel", liters: 40, invoice_supplier: "ENI", station: "Forio", driver_name: "Mario Rossi" })).json());
   });
 
   it("15. nessun oggetto error serializzato: body.error è sempre una stringa", async () => {

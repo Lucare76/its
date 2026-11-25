@@ -772,8 +772,17 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
                 <p style={{ color: "#34d399", fontSize: 13 }}>Costo netto registrato: €{utaNetFromGross(Number(fuelCost)).toFixed(4)} (€{Number(fuelCost).toFixed(2)} / 1,22)</p>
               )}
               <div>
-                <label style={labelStyle}>Distributore (opzionale)</label>
-                <input value={fuelStation} onChange={(e) => setFuelStation(e.target.value)} placeholder="Es. Q8 Forio" style={inputStyle} />
+                <label style={labelStyle}>Località del distributore *</label>
+                <input value={fuelStation} onChange={(e) => setFuelStation(e.target.value)} required minLength={2} maxLength={160}
+                  list="fuel-station-options" autoComplete="off" placeholder="Es. Forio, Casamicciola, San Nicola la Strada" style={inputStyle} />
+                {/* Località già usate con questo mezzo: aiutano a scriverle sempre allo stesso modo. */}
+                <datalist id="fuel-station-options">
+                  {[...new Set(fuel.map((f) => (f.station ?? "").trim()).filter(Boolean))].slice(0, 30)
+                    .map((station) => <option key={station} value={station} />)}
+                </datalist>
+                <p style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                  Il paese o la zona, come compare sullo scontrino: serve per trovare il rifornimento in fattura.
+                </p>
               </div>
               <div style={{ display: "flex", gap: 10 }}>
                 <button type="button" onClick={() => setShowFuel(false)} style={cancelBtnStyle}>Annulla</button>
