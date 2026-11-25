@@ -349,7 +349,7 @@ export default function FleetFuelPage() {
   }
 
   async function unreimburse(record: FuelRecord) {
-    if (!window.confirm("Annullare il rimborso registrato? Il rifornimento tornerà tra i contanti da rimborsare.")) return;
+    if (!window.confirm("Annullare il rimborso registrato? Il rifornimento tornerà tra quelli da rimborsare.")) return;
     await postReimbursement(record, "unreimburse");
   }
 
@@ -673,7 +673,7 @@ export default function FleetFuelPage() {
             <h2 className="text-base font-bold text-slate-900">Come è stato pagato?</h2>
             <p className="mt-2 text-sm text-slate-600">{supplierRecord.vehicle?.label ?? "Veicolo"} · {fmtDate(supplierRecord.fuel_date)} · {supplierRecord.station ?? "Distributore non indicato"}</p>
             <label className="mt-5 block text-xs font-semibold text-slate-600">
-              Carta usata (non la marca del distributore) o contanti
+              Carta aziendale usata (non la marca del distributore) o pagato dall&apos;autista
               <select className="input-saas mt-2 w-full" value={supplierChoice} onChange={e => setSupplierChoice(e.target.value as FuelPaymentMethod | "")}>
                 <option value="">Seleziona</option>{PAYMENT_OPTIONS}
               </select>
@@ -817,7 +817,7 @@ export default function FleetFuelPage() {
       <div>
         <SectionCard
           title="Coda rifornimenti"
-          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${onlyCashToReimburse ? " · solo contanti da rimborsare" : dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
+          subtitle={`${visibleRecords.length} registrazioni visibili su ${records.length}${onlyCashToReimburse ? " · solo pagati dagli autisti da rimborsare" : dateFrom || dateTo ? ` · periodo ${dateFrom ? fmtDate(dateFrom) : "inizio"} – ${dateTo ? fmtDate(dateTo) : "oggi"}` : ""}`}
           actions={(
             <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <input
@@ -883,7 +883,7 @@ export default function FleetFuelPage() {
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="font-semibold">
-                  Contanti da rimborsare agli autisti: {cashToReimburse.count} · {fmtMoney(cashToReimburse.total)}
+                  Pagati dagli autisti da rimborsare (contanti / carta di credito): {cashToReimburse.count} · {fmtMoney(cashToReimburse.total)}
                   {cashToReimburse.missing_amount > 0 ? ` (${cashToReimburse.missing_amount} senza importo)` : ""}
                 </p>
                 <button type="button" onClick={() => { setOnlyCashToReimburse((value) => !value); setCurrentPage(1); }}
@@ -891,7 +891,7 @@ export default function FleetFuelPage() {
                   {onlyCashToReimburse ? "Mostra tutti" : "Mostra solo da rimborsare"}
                 </button>
               </div>
-              {onlyCashToReimburse ? <p className="mt-1 font-medium">Vista contanti da rimborsare: stato e periodo non si applicano.</p> : null}
+              {onlyCashToReimburse ? <p className="mt-1 font-medium">Vista rimborsi autisti: stato e periodo non si applicano.</p> : null}
               <p className="mt-1">{cashToReimburse.by_driver.map((row) => `${row.driver_name}: ${fmtMoney(row.total)} (${row.count})`).join(" · ")}</p>
             </div>
           ) : null}
@@ -917,7 +917,7 @@ export default function FleetFuelPage() {
                 <div key={record.id} role="button" tabIndex={0} aria-label={`Dettaglio rifornimento ${record.vehicle?.label ?? "veicolo"} del ${fmtDate(record.fuel_date)}`} onClick={() => setSelectedRecord(record)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelectedRecord(record); } }} className="grid w-full cursor-pointer grid-cols-[84px_minmax(170px,1.5fr)_minmax(120px,1fr)_64px_95px_56px_68px_minmax(90px,1fr)_90px_20px] items-center gap-2 border-b border-slate-100 bg-white px-4 py-3 text-left text-xs last:border-b-0 hover:bg-violet-50/40">
                   <span className="text-slate-600">{fmtDate(record.fuel_date)}</span>
                   <span className="min-w-0"><strong className="block truncate text-slate-900">{record.vehicle?.label ?? "Veicolo"}</strong><span className="text-slate-500">{record.vehicle?.plate ?? "Targa non indicata"}</span><span className={`block truncate ${record.driver_name ? "text-slate-700" : "italic text-slate-400"}`}>{record.driver_name ?? "Autista non indicato"}</span></span>
-                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className={`block text-[11px] font-semibold ${record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "text-emerald-700" : "text-amber-700") : "text-blue-700"}`}>{record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti · rimborsato" : "Contanti · da rimborsare") : fuelPaymentLabel(record.invoice_supplier)}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
+                  <span className="min-w-0"><span className="block truncate text-slate-600">{record.station ?? "Non indicato"}</span>{record.invoice_supplier ? <span className={`block text-[11px] font-semibold ${record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "text-emerald-700" : "text-amber-700") : "text-blue-700"}`}>{record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti/carta · rimborsato" : "Contanti/carta · da rimborsare") : fuelPaymentLabel(record.invoice_supplier)}</span> : <button type="button" onClick={e => { e.stopPropagation(); openSupplierModal(record); }} className="block text-left text-[11px] font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-900">Fornitore da associare</button>}</span>
                   <span className="font-semibold text-slate-700">{record.liters != null ? fmtLiters(record.liters) : "-"}</span>
                   <span className="font-semibold text-slate-900" title={record.gross_cost != null ? `Pagato dall'autista: €${record.gross_cost.toFixed(2)}` : undefined}>{fmtFuelCost(record)}{record.invoice_supplier === "UTA" ? <span className="block text-[10px] font-normal text-slate-500">netto IVA</span> : null}</span>
                   <span className="text-slate-600">{fmtUnitPrice(record)}</span>
@@ -937,7 +937,7 @@ export default function FleetFuelPage() {
                         {record.vehicle?.label ?? "Veicolo"} {record.vehicle?.plate ? `- ${record.vehicle.plate}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti · rimborsato" : "Contanti · da rimborsare") : record.invoice_supplier ? fuelPaymentLabel(record.invoice_supplier) : "Pagamento da associare"}
+                        {new Date(record.fuel_date).toLocaleDateString("it-IT")} - {record.station ?? "Distributore non indicato"} - {record.fuel_type ?? "tipo non indicato"} · {record.invoice_supplier === "CONTANTI" ? (record.reimbursed_at ? "Contanti/carta · rimborsato" : "Contanti/carta · da rimborsare") : record.invoice_supplier ? fuelPaymentLabel(record.invoice_supplier) : "Pagamento da associare"}
                       </p>
                       {!record.invoice_supplier && <button type="button" onClick={() => openSupplierModal(record)} className="mt-2 text-left text-xs font-semibold text-blue-700 underline underline-offset-2">Associa fornitore</button>}
                       <p className="mt-1 text-xs text-slate-400">

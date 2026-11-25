@@ -14,7 +14,7 @@ export const FUEL_PAYMENT_LABELS: Record<FuelPaymentMethod, string> = {
   ENI: "Carta ENI",
   UTA: "Carta UTA",
   Q8: "Carta Q8",
-  CONTANTI: "Contanti (da rimborsare)",
+  CONTANTI: "Contanti / carta di credito personale (da rimborsare)",
 };
 
 export function isFuelPaymentMethod(value: unknown): value is FuelPaymentMethod {

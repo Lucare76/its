@@ -266,7 +266,7 @@ describe("SEC-06 — sanitizzazione errori su vehicle/[token]", () => {
     const noCost = await callPost({ action: "fuel", liters: 20, invoice_supplier: "CONTANTI", station: "Forio", driver_name: "Mario Rossi" });
     const unknown = await callPost({ action: "fuel", liters: 20, cost: 40, invoice_supplier: "SHELL", station: "Forio", driver_name: "Mario Rossi" });
     expect([noCost.status, unknown.status]).toEqual([400, 400]);
-    expect(await noCost.json()).toEqual({ error: "Pagamento in contanti: inserisci l'importo pagato, serve per il rimborso." });
+    expect(await noCost.json()).toEqual({ error: "Pagato di tasca tua: inserisci l'importo pagato, serve per il rimborso." });
     expect(fake.tables.vehicle_fuel).toHaveLength(2);
   });
 

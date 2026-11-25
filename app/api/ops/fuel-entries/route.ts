@@ -307,7 +307,7 @@ export async function POST(request: NextRequest) {
     if (originalError) return NextResponse.json({ error: originalError.message }, { status: 500 });
     if (!original) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
     if (original.reimbursed_at && parsed.invoice_supplier !== "CONTANTI")
-      return NextResponse.json({ error: "Rifornimento in contanti già rimborsato: un admin deve prima annullare il rimborso." }, { status: 409 });
+      return NextResponse.json({ error: "Rifornimento pagato dall'autista già rimborsato: un admin deve prima annullare il rimborso." }, { status: 409 });
     if (parsed.cost_input === "gross" && parsed.invoice_supplier !== "UTA")
       return NextResponse.json({ error: "Importo IVA inclusa consentito solo per la carta UTA." }, { status: 400 });
     const { data: vehicle } = await auth.admin.from("vehicles").select("id")
@@ -349,7 +349,7 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "assign_supplier") {
     const parsed = assignSupplierSchema.safeParse(body.data);
-    if (!parsed.success) return NextResponse.json({ error: "Seleziona come è stato pagato: carta ENI, UTA, Q8 o contanti." }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: "Seleziona come è stato pagato: carta ENI, UTA, Q8 o contanti / carta di credito personale." }, { status: 400 });
     const { id, invoice_supplier } = parsed.data;
     const { data: original, error: readError } = await auth.admin.from("vehicle_fuel")
       .select("id, cost, gross_cost, submitted_via_qr, invoice_supplier")
