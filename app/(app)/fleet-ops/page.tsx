@@ -29,7 +29,13 @@ type Vehicle = {
   qr_token?: string | null;
   km?: number | null;
   telaio?: string | null;
+  decommissioned_at?: string | null;
+  decommission_reason?: "sold" | "scrapped" | "other" | null;
+  decommission_note?: string | null;
 };
+
+const DECOMMISSION_LABELS = { sold: "Venduto", scrapped: "Rottamato", other: "Dismesso" } as const;
+const isDecommissioned = (vehicle: Vehicle) => Boolean(vehicle.decommissioned_at);
 
 type Driver = {
   id: string;
@@ -179,6 +185,7 @@ export default function FleetOpsPage() {
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const [sizeFilter, setSizeFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [decommissionForm, setDecommissionForm] = useState<{ date: string; reason: "sold" | "scrapped" | "other"; note: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isNewVehicle, setIsNewVehicle] = useState(false);
   const [driverFormOpen, setDriverFormOpen] = useState(false);
@@ -301,7 +308,8 @@ export default function FleetOpsPage() {
 
   const fleetStats = useMemo(() => ({
     active: vehicles.filter((vehicle) => vehicle.active).length,
-    inactive: vehicles.filter((vehicle) => !vehicle.active).length,
+    inactive: vehicles.filter((vehicle) => !vehicle.active && !isDecommissioned(vehicle)).length,
+    decommissioned: vehicles.filter(isDecommissioned).length,
     blocked: vehicles.filter((vehicle) => vehicle.is_blocked_manual || vehicle.blocked_until).length,
     anomalies: anomalies.filter((anomaly) => anomaly.active).length,
     gpsMissing: vehicles.filter((vehicle) => !vehicle.radius_vehicle_id).length,
@@ -327,6 +335,9 @@ export default function FleetOpsPage() {
       const haystack = `${vehicle.label} ${vehicle.plate ?? ""} ${vehicle.license_number ?? ""} ${driverNameById.get(vehicle.habitual_driver_profile_id ?? "") ?? ""} ${vehicle.default_zone ?? ""}`.toLowerCase();
       const matchesSearch = !searchQuery.trim() || haystack.includes(searchQuery.trim().toLowerCase());
       const docSummary = getVehicleDocumentSummary(vehicle);
+      // I dismessi compaiono solo nel filtro "Dismessi": lo storico resta, la lista operativa no.
+      if (statusFilter === "dismissed") return isDecommissioned(vehicle) && matchesSize && matchesSearch;
+      if (isDecommissioned(vehicle)) return false;
       const matchesStatus = statusFilter === "all"
         || (statusFilter === "blocked" && Boolean(vehicle.is_blocked_manual || vehicle.blocked_until))
         || (statusFilter === "attention" && (docSummary.worst === "expired" || docSummary.worst === "soon" || anomalies.some((anomaly) => anomaly.vehicle_id === vehicle.id && anomaly.active)))
@@ -449,6 +460,7 @@ export default function FleetOpsPage() {
               ["anomalies", "Anomalie"],
               ["docs", "Documenti"],
               ["gpsless", "Senza GPS"],
+              ["dismissed", `Dismessi${fleetStats.decommissioned ? ` (${fleetStats.decommissioned})` : ""}`],
             ].map(([value, label]) => (
               <button
                 key={value}
@@ -496,7 +508,7 @@ export default function FleetOpsPage() {
                   return (
                     <tr
                       key={vehicle.id}
-                      onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); populateVehicleEditor(vehicle); }}
+                      onClick={() => { setSelectedVehicleId(vehicle.id); setIsNewVehicle(false); setDecommissionForm(null); populateVehicleEditor(vehicle); }}
                       className={`cursor-pointer transition-colors ${isSelected ? "bg-blue-50" : todayCommitment ? "bg-amber-50/40" : "hover:bg-slate-50"}`}
                     >
                       <td className="px-3 py-2">
@@ -561,7 +573,7 @@ export default function FleetOpsPage() {
                           }`}
                         >
                           <span className={`h-1.5 w-1.5 rounded-full ${vehicle.active && !isBlocked ? "bg-emerald-500" : isBlocked ? "bg-rose-500" : "bg-slate-300"}`} />
-                          {isBlocked ? "Bloccato" : vehicle.active ? "Attivo" : "Inattivo"}
+                          {isDecommissioned(vehicle) ? DECOMMISSION_LABELS[vehicle.decommission_reason ?? "other"] : isBlocked ? "Bloccato" : vehicle.active ? "Attivo" : "Inattivo"}
                         </button>
                       </td>
                     </tr>
@@ -770,7 +782,7 @@ export default function FleetOpsPage() {
                       disabled={saving}
                       className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
                       onClick={async () => {
-                        if (!confirm(`Eliminare definitivamente "${selectedVehicle.label}"?`)) return;
+                        if (!confirm(`Eliminare definitivamente "${selectedVehicle.label}"?\n\nSi può solo se il mezzo non ha storico (creato per errore). Per vendita o rottamazione usa "Dismetti mezzo": lo storico resta.`)) return;
                         const ok = await post({ action: "delete_vehicle", id: selectedVehicle.id });
                         if (ok) setSelectedVehicleId("");
                       }}
@@ -779,6 +791,75 @@ export default function FleetOpsPage() {
                     </button>
                   ) : null}
                 </div>
+
+                {!isNewVehicle && selectedVehicle ? (
+                  isDecommissioned(selectedVehicle) ? (
+                    <div className="rounded-xl border border-slate-300 bg-slate-100 px-4 py-3 text-sm text-slate-700">
+                      <p className="font-semibold">
+                        {DECOMMISSION_LABELS[selectedVehicle.decommission_reason ?? "other"]} il {new Date(`${selectedVehicle.decommissioned_at}T00:00:00`).toLocaleDateString("it-IT")}
+                      </p>
+                      {selectedVehicle.decommission_note ? <p className="mt-1 text-xs">{selectedVehicle.decommission_note}</p> : null}
+                      <p className="mt-1 text-xs text-slate-500">Fuori dalle liste operative e QR disattivato. Rifornimenti, manutenzioni e documenti restano nello storico.</p>
+                      <button type="button" disabled={saving}
+                        className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                        onClick={async () => {
+                          if (!confirm(`Annullare la dismissione di "${selectedVehicle.label}"?\nIl mezzo resta inattivo finché non lo riattivi, e riceve un nuovo QR (quello vecchio non funziona più).`)) return;
+                          await post({ action: "restore_vehicle", id: selectedVehicle.id });
+                        }}>
+                        Annulla dismissione (solo admin)
+                      </button>
+                    </div>
+                  ) : decommissionForm ? (
+                    <div className="grid gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-amber-900">Dismetti {selectedVehicle.label}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="text-xs font-semibold text-slate-600">
+                          Data
+                          <DateInput className="input-saas mt-1 w-full" value={decommissionForm.date}
+                            onChange={(iso) => setDecommissionForm((f) => f ? { ...f, date: iso } : f)} />
+                        </label>
+                        <label className="text-xs font-semibold text-slate-600">
+                          Motivo
+                          <select className="input-saas mt-1 w-full" value={decommissionForm.reason}
+                            onChange={(e) => setDecommissionForm((f) => f ? { ...f, reason: e.target.value as "sold" | "scrapped" | "other" } : f)}>
+                            <option value="sold">Vendita</option>
+                            <option value="scrapped">Rottamazione</option>
+                            <option value="other">Altro</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label className="text-xs font-semibold text-slate-600">
+                        Nota{decommissionForm.reason === "other" ? " (obbligatoria)" : ""}
+                        <input className="input-saas mt-1 w-full" maxLength={1000} value={decommissionForm.note}
+                          placeholder="Es. venduto a …, pratica di rottamazione n. …"
+                          onChange={(e) => setDecommissionForm((f) => f ? { ...f, note: e.target.value } : f)} />
+                      </label>
+                      <p className="text-xs text-amber-800">Il mezzo esce dalle liste operative e il suo QR smette di funzionare. Lo storico resta.</p>
+                      <div className="flex gap-2">
+                        <button type="button" disabled={saving || !decommissionForm.date || (decommissionForm.reason === "other" && !decommissionForm.note.trim())}
+                          className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                          onClick={async () => {
+                            const ok = await post({ action: "decommission_vehicle", id: selectedVehicle.id,
+                              decommissioned_at: decommissionForm.date, reason: decommissionForm.reason, note: decommissionForm.note.trim() || null });
+                            if (ok) setDecommissionForm(null);
+                          }}>
+                          Conferma dismissione
+                        </button>
+                        <button type="button" className="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-600" onClick={() => setDecommissionForm(null)}>Annulla</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" disabled={saving}
+                      className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      onClick={() => {
+                        const now = new Date();
+                        const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+                        setDecommissionForm({ date: localToday, reason: "sold", note: "" });
+                      }}>
+                      Dismetti mezzo (vendita / rottamazione)
+                    </button>
+                  )
+                ) : null}
 
                 {/* Documenti, blocco e anomalie solo in modifica */}
                 {!isNewVehicle && selectedVehicle ? (

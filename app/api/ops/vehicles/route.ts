@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
@@ -41,6 +42,36 @@ const vehicleBlockSchema = z.object({
   blocked_until: z.string().datetime().nullable().optional(),
   is_blocked_manual: z.boolean(),
 });
+
+const decommissionSchema = z.object({
+  id: z.string().uuid(),
+  decommissioned_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reason: z.enum(["sold", "scrapped", "other"]),
+  note: z.string().trim().max(1000).optional().nullable(),
+});
+
+/** Tabelle con lo storico di un mezzo: se ce n'è, il mezzo si dismette, non si elimina. */
+const VEHICLE_HISTORY_TABLES: Array<[table: string, label: string]> = [
+  ["vehicle_fuel", "rifornimenti"],
+  ["vehicle_maintenance", "manutenzioni"],
+  ["vehicle_km_logs", "chilometri dei turni"],
+  ["vehicle_qr_reports", "segnalazioni QR"],
+  ["vehicle_anomalies", "anomalie"],
+  ["vehicle_documents", "documenti"],
+  ["vehicle_insurances", "assicurazioni"],
+  ["vehicle_inspections", "revisioni"],
+  ["vehicle_compliance_costs", "costi scadenze"],
+  ["vehicle_tachographs", "tachigrafi"],
+  ["vehicle_extinguishers", "estintori"],
+  ["vehicle_km_corrections", "correzioni km"],
+];
+
+/** Il vincolo nel DB impedisce di riattivare un mezzo dismesso: messaggio leggibile. */
+function decommissionErrorMessage(message: string): string | null {
+  return message.includes("vehicles_decommissioned_inactive_check")
+    ? "Mezzo dismesso: non può tornare operativo. Un admin deve prima annullare la dismissione."
+    : null;
+}
 
 const vehicleDocumentsSchema = z.object({
   id: z.string().uuid(),
@@ -125,7 +156,57 @@ export async function POST(request: NextRequest) {
       const { error } = await (parsed.id
         ? auth.admin.from("vehicles").update(payload).eq("tenant_id", tenantId).eq("id", parsed.id)
         : auth.admin.from("vehicles").insert(payload));
+      if (error) {
+        const friendly = decommissionErrorMessage(error.message);
+        if (friendly) return NextResponse.json({ ok: false, error: friendly }, { status: 409 });
+        throw new Error(error.message);
+      }
+    }
+
+    if (action === "decommission_vehicle") {
+      if (!["admin", "operator"].includes(auth.membership.role)) {
+        return NextResponse.json({ ok: false, error: "Ruolo non autorizzato." }, { status: 403 });
+      }
+      const parsed = decommissionSchema.safeParse(body);
+      if (!parsed.success) return NextResponse.json({ ok: false, error: "Indica data e motivo della dismissione." }, { status: 400 });
+      const note = parsed.data.note?.trim() || null;
+      if (parsed.data.reason === "other" && !note) {
+        return NextResponse.json({ ok: false, error: "Motivo \"altro\": scrivi una nota." }, { status: 400 });
+      }
+      const { data: changed, error } = await auth.admin.from("vehicles")
+        .update({
+          active: false,
+          // Il QR stampato sul mezzo venduto/rottamato smette di funzionare.
+          qr_token: null,
+          decommissioned_at: parsed.data.decommissioned_at,
+          decommission_reason: parsed.data.reason,
+          decommission_note: note,
+          decommissioned_by: auth.user.id,
+          decommission_recorded_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", tenantId).eq("id", parsed.data.id).is("decommissioned_at", null)
+        .select("id").maybeSingle();
       if (error) throw new Error(error.message);
+      if (!changed) return NextResponse.json({ ok: false, error: "Mezzo non trovato o già dismesso." }, { status: 409 });
+    }
+
+    if (action === "restore_vehicle") {
+      if (auth.membership.role !== "admin") {
+        return NextResponse.json({ ok: false, error: "Solo admin può annullare una dismissione." }, { status: 403 });
+      }
+      const vehicleId = String(body?.id ?? "");
+      if (!z.string().uuid().safeParse(vehicleId).success) return NextResponse.json({ ok: false, error: "ID mancante." }, { status: 400 });
+      const { data: changed, error } = await auth.admin.from("vehicles")
+        .update({
+          decommissioned_at: null, decommission_reason: null, decommission_note: null,
+          decommissioned_by: null, decommission_recorded_at: null,
+          // Nuovo QR: quello vecchio potrebbe essere rimasto sul mezzo venduto.
+          qr_token: randomBytes(16).toString("hex"),
+        })
+        .eq("tenant_id", tenantId).eq("id", vehicleId).not("decommissioned_at", "is", null)
+        .select("id").maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!changed) return NextResponse.json({ ok: false, error: "Mezzo non trovato o non dismesso." }, { status: 409 });
     }
 
     if (action === "toggle_vehicle_active") {
@@ -138,7 +219,11 @@ export async function POST(request: NextRequest) {
         .update({ active: parsed.active })
         .eq("tenant_id", tenantId)
         .eq("id", parsed.id);
-      if (error) throw new Error(error.message);
+      if (error) {
+        const friendly = decommissionErrorMessage(error.message);
+        if (friendly) return NextResponse.json({ ok: false, error: friendly }, { status: 409 });
+        throw new Error(error.message);
+      }
     }
 
     if (action === "set_vehicle_block") {
@@ -209,6 +294,28 @@ export async function POST(request: NextRequest) {
       }
       const vehicleId = String(body?.id ?? "");
       if (!vehicleId) return NextResponse.json({ ok: false, error: "ID mancante." }, { status: 400 });
+      // Eliminazione definitiva solo per mezzi senza storico (es. creati per errore):
+      // la cascata cancellerebbe rifornimenti, manutenzioni, km, documenti...
+      const { data: ownVehicle, error: ownError } = await auth.admin.from("vehicles").select("id")
+        .eq("tenant_id", tenantId).eq("id", vehicleId).maybeSingle();
+      if (ownError) throw new Error(ownError.message);
+      if (!ownVehicle) return NextResponse.json({ ok: false, error: "Mezzo non trovato." }, { status: 404 });
+      const counts = await Promise.all(VEHICLE_HISTORY_TABLES.map(async ([table, label]) => {
+        let countQuery = auth.admin.from(table).select("id", { count: "exact", head: true }).eq("vehicle_id", vehicleId);
+        // vehicle_km_logs non ha tenant_id: il mezzo è già verificato come del tenant.
+        if (table !== "vehicle_km_logs") countQuery = countQuery.eq("tenant_id", tenantId);
+        const { count, error: countError } = await countQuery;
+        if (countError) throw new Error(countError.message);
+        return [label, count ?? 0] as const;
+      }));
+      const history = counts.filter(([, count]) => count > 0);
+      if (history.length > 0) {
+        return NextResponse.json({
+          ok: false,
+          error: `Il mezzo ha uno storico (${history.map(([label, count]) => `${count} ${label}`).join(", ")}): eliminandolo andrebbe perso. Usa "Dismetti mezzo".`,
+          history: Object.fromEntries(history),
+        }, { status: 409 });
+      }
       const { error } = await auth.admin.from("vehicles").delete().eq("tenant_id", tenantId).eq("id", vehicleId);
       if (error) throw new Error(error.message);
     }

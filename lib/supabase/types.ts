@@ -10841,6 +10841,11 @@ export type Database = {
           consumption_max_l_per_100km: number | null
           consumption_min_l_per_100km: number | null
           created_at: string
+          decommission_note: string | null
+          decommission_reason: string | null
+          decommission_recorded_at: string | null
+          decommissioned_at: string | null
+          decommissioned_by: string | null
           default_zone: string | null
           extinguisher_enabled: boolean
           habitual_driver_profile_id: string | null
@@ -10879,6 +10884,11 @@ export type Database = {
           consumption_max_l_per_100km?: number | null
           consumption_min_l_per_100km?: number | null
           created_at?: string
+          decommission_note?: string | null
+          decommission_reason?: string | null
+          decommission_recorded_at?: string | null
+          decommissioned_at?: string | null
+          decommissioned_by?: string | null
           default_zone?: string | null
           extinguisher_enabled?: boolean
           habitual_driver_profile_id?: string | null
@@ -10917,6 +10927,11 @@ export type Database = {
           consumption_max_l_per_100km?: number | null
           consumption_min_l_per_100km?: number | null
           created_at?: string
+          decommission_note?: string | null
+          decommission_reason?: string | null
+          decommission_recorded_at?: string | null
+          decommissioned_at?: string | null
+          decommissioned_by?: string | null
           default_zone?: string | null
           extinguisher_enabled?: boolean
           habitual_driver_profile_id?: string | null
