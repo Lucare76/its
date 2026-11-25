@@ -563,7 +563,8 @@ export async function POST(
     if (!isFuelPaymentMethod(supplier)) return fail("Indica come hai pagato: carta ENI, UTA, Q8 o contanti.");
     if (supplier === "CONTANTI" && (cost === null || cost <= 0)) return fail("Pagamento in contanti: inserisci l'importo pagato, serve per il rimborso.");
     if (kmAtFuel !== null && (!Number.isInteger(kmAtFuel) || kmAtFuel < 0)) return fail("Km al rifornimento non validi.");
-    if (station && station.length > 160) return fail("Nome distributore troppo lungo.");
+    if (!station || station.length < 2) return fail("Indica la località del distributore (es. Forio).");
+    if (station.length > 160) return fail("Nome della località troppo lungo.");
     if (!driverName) return fail("Nome autista obbligatorio.");
     if (driverName.length > 120) return fail("Nome autista troppo lungo.");
 
