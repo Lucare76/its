@@ -311,6 +311,7 @@ export default function FleetFuelPage() {
           driver_name: form.driver_name.trim() || null,
           notes: form.notes || null,
           submitted_via_qr: false,
+          cost_input: form.invoice_supplier === "UTA" ? "gross" : "net",
         },
       }),
     });
@@ -677,7 +678,7 @@ export default function FleetFuelPage() {
                 <option value="">Seleziona</option>{PAYMENT_OPTIONS}
               </select>
             </label>
-            {supplierChoice === "UTA" && supplierRecord.submitted_via_qr && supplierRecord.cost != null ? (
+            {supplierChoice === "UTA" && supplierRecord.cost != null && supplierRecord.gross_cost == null ? (
               <p className="mt-3 text-xs text-emerald-700">Importo pagato: {fmtMoney(supplierRecord.cost)}. Costo netto registrato: €{utaNetFromGross(supplierRecord.cost).toFixed(4)}.</p>
             ) : null}
             <div className="mt-6 flex justify-end gap-2">
@@ -757,8 +758,8 @@ export default function FleetFuelPage() {
                   onChange={e => setEditModal(m => {
                     if (!m) return null;
                     const nextSupplier = e.target.value;
-                    const grossInput = m.record.submitted_via_qr && nextSupplier === "UTA" && m.form.invoice_supplier !== "UTA";
-                    const leavingUta = m.record.submitted_via_qr && m.form.invoice_supplier === "UTA" && nextSupplier !== "UTA" && m.form.cost_basis === "net";
+                    const grossInput = nextSupplier === "UTA" && m.form.invoice_supplier !== "UTA";
+                    const leavingUta = m.form.invoice_supplier === "UTA" && nextSupplier !== "UTA" && m.form.cost_basis === "net";
                     return { ...m, form: { ...m.form, invoice_supplier: nextSupplier,
                       cost_basis: grossInput ? "gross" : "net",
                       cost: grossInput && m.record.gross_cost != null ? String(m.record.gross_cost)
@@ -1086,8 +1087,11 @@ export default function FleetFuelPage() {
                 <input className="input-saas mt-1 w-full" type="number" min="0" step="0.01" value={form.liters} onChange={(event) => setForm((current) => ({ ...current, liters: event.target.value }))} />
               </label>
               <label className="text-xs font-semibold text-slate-500">
-                Costo (€; per UTA inserisci il netto)
-                <input className="input-saas mt-1 w-full" type="number" min="0" step="0.0001" value={form.cost} onChange={(event) => setForm((current) => ({ ...current, cost: event.target.value }))} />
+                {form.invoice_supplier === "UTA" ? "Importo pagato (IVA inclusa)" : "Costo (€)"}
+                <input className="input-saas mt-1 w-full" type="number" min="0" step={form.invoice_supplier === "UTA" ? "0.01" : "0.0001"} value={form.cost} onChange={(event) => setForm((current) => ({ ...current, cost: event.target.value }))} />
+                {form.invoice_supplier === "UTA" && form.cost && Number.isFinite(Number(form.cost)) ? (
+                  <span className="mt-1 block font-normal text-emerald-700">Netto UTA calcolato: €{utaNetFromGross(Number(form.cost)).toFixed(4)}</span>
+                ) : null}
               </label>
               <label className="text-xs font-semibold text-slate-500">
                 Km al rifornimento

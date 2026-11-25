@@ -244,3 +244,35 @@ describe("fuel-entries — totali approvati dal server", () => {
     expect(totalsCalls).not.toContainEqual({ table: "vehicle_fuel", method: "eq", args: ["approval_status", "pending"] });
   });
 });
+
+describe("fuel-entries — UTA dall'ufficio come dal QR", () => {
+  it("in creazione scorpora l'IVA dall'importo pagato e salva il lordo", async () => {
+    const res = await post({ action: "create", data: { vehicle_id: VEHICLE_ID, fuel_date: "2026-11-25", invoice_supplier: "UTA", cost: 100, cost_input: "gross" } });
+    expect(res.status).toBe(200);
+    expect(written("insert")).toMatchObject({ cost: 81.9672, gross_cost: 100, invoice_supplier: "UTA" });
+  });
+
+  it("senza cost_input il costo resta quello inserito", async () => {
+    await post({ action: "create", data: { vehicle_id: VEHICLE_ID, fuel_date: "2026-11-25", invoice_supplier: "ENI", cost: 100 } });
+    expect(written("insert")).toMatchObject({ cost: 100, gross_cost: null });
+  });
+
+  it("rifiuta l'importo IVA inclusa per pagamenti diversi da UTA", async () => {
+    const res = await post({ action: "create", data: { vehicle_id: VEHICLE_ID, fuel_date: "2026-11-25", invoice_supplier: "ENI", cost: 100, cost_input: "gross" } });
+    expect(res.status).toBe(400);
+  });
+
+  it("in modifica accetta l'importo pagato UTA anche per un inserimento ufficio", async () => {
+    rows.vehicle_fuel = { id: FUEL_ID, submitted_via_qr: false, invoice_supplier: null };
+    const res = await post({ action: "edit", data: { id: FUEL_ID, vehicle_id: VEHICLE_ID, fuel_date: "2026-11-25", invoice_supplier: "UTA", cost: 100, cost_input: "gross" } });
+    expect(res.status).toBe(200);
+    expect(written("update")).toMatchObject({ cost: 81.9672, gross_cost: 100 });
+  });
+
+  it("assegnando UTA a un inserimento ufficio scorpora l'IVA", async () => {
+    rows.vehicle_fuel = { id: FUEL_ID, invoice_supplier: null, cost: 100, gross_cost: null, submitted_via_qr: false };
+    const res = await post({ action: "assign_supplier", data: { id: FUEL_ID, invoice_supplier: "UTA" } });
+    expect(res.status).toBe(200);
+    expect(written("update")).toMatchObject({ invoice_supplier: "UTA", cost: 81.9672, gross_cost: 100 });
+  });
+});

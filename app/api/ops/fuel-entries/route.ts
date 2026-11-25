@@ -25,6 +25,8 @@ const createFuelSchema = z.object({
   driver_name: driverNameSchema,
   notes: z.string().max(1000).nullable().optional(),
   submitted_via_qr: z.boolean().optional(),
+  // "gross" = importo pagato IVA inclusa (solo UTA): il netto si calcola qui, come dal QR.
+  cost_input: z.enum(["net", "gross"]).optional(),
 });
 
 const updateFuelDocumentSchema = fuelApprovalSchema.pick({
@@ -271,12 +273,16 @@ export async function POST(request: NextRequest) {
     const { data: vehicle } = await auth.admin.from("vehicles").select("id")
       .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.vehicle_id).maybeSingle();
     if (!vehicle) return NextResponse.json({ error: "Mezzo non disponibile per questo tenant." }, { status: 404 });
+    if (parsed.cost_input === "gross" && parsed.invoice_supplier !== "UTA")
+      return NextResponse.json({ error: "Importo IVA inclusa consentito solo per la carta UTA." }, { status: 400 });
+    const grossInput = parsed.cost_input === "gross" && parsed.cost != null;
     const { error } = await auth.admin.from("vehicle_fuel").insert({
       tenant_id: auth.membership.tenant_id,
       vehicle_id: parsed.vehicle_id,
       fuel_date: parsed.fuel_date,
       liters: parsed.liters ?? null,
-      cost: parsed.cost ?? null,
+      cost: grossInput ? utaNetFromGross(parsed.cost as number) : parsed.cost ?? null,
+      gross_cost: grossInput ? parsed.cost : null,
       km_at_fuel: parsed.km_at_fuel ?? null,
       fuel_type: parsed.fuel_type ?? null,
       station: parsed.station ?? null,
@@ -302,8 +308,8 @@ export async function POST(request: NextRequest) {
     if (!original) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
     if (original.reimbursed_at && parsed.invoice_supplier !== "CONTANTI")
       return NextResponse.json({ error: "Rifornimento in contanti già rimborsato: un admin deve prima annullare il rimborso." }, { status: 409 });
-    if (parsed.cost_input === "gross" && (!original.submitted_via_qr || parsed.invoice_supplier !== "UTA"))
-      return NextResponse.json({ error: "Importo lordo consentito solo per un rifornimento QR UTA." }, { status: 400 });
+    if (parsed.cost_input === "gross" && parsed.invoice_supplier !== "UTA")
+      return NextResponse.json({ error: "Importo IVA inclusa consentito solo per la carta UTA." }, { status: 400 });
     const { data: vehicle } = await auth.admin.from("vehicles").select("id")
       .eq("tenant_id", auth.membership.tenant_id).eq("id", parsed.vehicle_id).maybeSingle();
     if (!vehicle) return NextResponse.json({ error: "Mezzo non disponibile per questo tenant." }, { status: 404 });
@@ -346,7 +352,7 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return NextResponse.json({ error: "Seleziona come è stato pagato: carta ENI, UTA, Q8 o contanti." }, { status: 400 });
     const { id, invoice_supplier } = parsed.data;
     const { data: original, error: readError } = await auth.admin.from("vehicle_fuel")
-      .select("id, cost, submitted_via_qr, invoice_supplier")
+      .select("id, cost, gross_cost, submitted_via_qr, invoice_supplier")
       .eq("tenant_id", auth.membership.tenant_id).eq("id", id).maybeSingle();
     if (readError) return NextResponse.json({ error: readError.message }, { status: 500 });
     if (!original) return NextResponse.json({ error: "Rifornimento non trovato." }, { status: 404 });
@@ -355,7 +361,8 @@ export async function POST(request: NextRequest) {
       .select("id").eq("tenant_id", auth.membership.tenant_id).eq("matched_fuel_id", id).maybeSingle();
     if (linkError) return NextResponse.json({ error: linkError.message }, { status: 500 });
     if (existingLink) return NextResponse.json({ error: "Scollega prima la fattura per cambiare fornitore." }, { status: 409 });
-    const isUtaQr = invoice_supplier === "UTA" && original.submitted_via_qr && original.cost != null;
+    // Senza fornitore il costo inserito (QR o ufficio) è l'importo pagato: per UTA si scorpora l'IVA.
+    const isUtaQr = invoice_supplier === "UTA" && original.cost != null && original.gross_cost == null;
     const { data: updated, error } = await auth.admin.from("vehicle_fuel")
       .update({
         invoice_supplier,
