@@ -10543,6 +10543,10 @@ export type Database = {
           description: string
           execution_mode: string
           id: string
+          invoice_document_name: string | null
+          invoice_document_path: string | null
+          invoice_uploaded_at: string | null
+          invoice_uploaded_by: string | null
           km_at_service: number | null
           maintenance_date: string
           maintenance_kind: string
@@ -10559,6 +10563,10 @@ export type Database = {
           description: string
           execution_mode?: string
           id?: string
+          invoice_document_name?: string | null
+          invoice_document_path?: string | null
+          invoice_uploaded_at?: string | null
+          invoice_uploaded_by?: string | null
           km_at_service?: number | null
           maintenance_date: string
           maintenance_kind?: string
@@ -10575,6 +10583,10 @@ export type Database = {
           description?: string
           execution_mode?: string
           id?: string
+          invoice_document_name?: string | null
+          invoice_document_path?: string | null
+          invoice_uploaded_at?: string | null
+          invoice_uploaded_by?: string | null
           km_at_service?: number | null
           maintenance_date?: string
           maintenance_kind?: string
