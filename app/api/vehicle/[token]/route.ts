@@ -560,8 +560,8 @@ export async function POST(
     if (!validFuelTypes.has(fuelType)) return fail("Tipo carburante non valido.");
     if (liters !== null && (!Number.isFinite(liters) || liters <= 0 || liters > 600)) return fail("Litri non validi.");
     if (cost !== null && (!Number.isFinite(cost) || cost < 0 || cost > 5000)) return fail("Costo non valido.");
-    if (!isFuelPaymentMethod(supplier)) return fail("Indica come hai pagato: carta ENI, UTA, Q8 o contanti.");
-    if (supplier === "CONTANTI" && (cost === null || cost <= 0)) return fail("Pagamento in contanti: inserisci l'importo pagato, serve per il rimborso.");
+    if (!isFuelPaymentMethod(supplier)) return fail("Indica come hai pagato: carta ENI, UTA, Q8 o pagato di tasca tua (contanti / carta di credito).");
+    if (supplier === "CONTANTI" && (cost === null || cost <= 0)) return fail("Pagato di tasca tua: inserisci l'importo pagato, serve per il rimborso.");
     if (kmAtFuel !== null && (!Number.isInteger(kmAtFuel) || kmAtFuel < 0)) return fail("Km al rifornimento non validi.");
     if (!station || station.length < 2) return fail("Indica la località del distributore (es. Forio).");
     if (station.length > 160) return fail("Nome della località troppo lungo.");

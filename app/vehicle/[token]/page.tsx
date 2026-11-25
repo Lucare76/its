@@ -733,7 +733,7 @@ export default function VehicleQRPage({ params }: { params: Promise<{ token: str
                 <select required value={fuelSupplier} onChange={(e) => setFuelSupplier(e.target.value)} style={inputStyle}>
                   <option value="">Seleziona</option>
                   {FUEL_PAYMENT_METHODS.map((method) => <option key={method} value={method}>
-                    {method === "CONTANTI" ? "Contanti — ho pagato io" : FUEL_PAYMENT_LABELS[method]}
+                    {method === "CONTANTI" ? "Contanti o carta di credito mia — ho pagato io" : FUEL_PAYMENT_LABELS[method]}
                   </option>)}
                 </select>
                 <p style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
