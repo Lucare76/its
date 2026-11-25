@@ -17,8 +17,14 @@ type MaintenanceRecord = {
   maintenance_kind: "ordinary" | "extraordinary";
   execution_mode: "single" | "multiple";
   replaced_parts: string[];
+  invoice_document_name?: string | null;
+  invoice_uploaded_at?: string | null;
   vehicle?: VehicleOption | null;
 };
+
+const INVOICE_ACCEPT = "application/pdf,image/jpeg,image/png,image/webp";
+const INVOICE_MAX_BYTES = 10 * 1024 * 1024;
+const euro = (value: number) => new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
 
 async function accessToken() {
   if (!hasSupabaseEnv || !supabase) return null;
@@ -47,6 +53,13 @@ export default function FleetMaintenancePage() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [vehicleFilter, setVehicleFilter] = useState("");
+  const [yearFilter, setYearFilter] = useState("");
+  const [years, setYears] = useState<number[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [busyInvoiceId, setBusyInvoiceId] = useState<string | null>(null);
+  const [newInvoiceFile, setNewInvoiceFile] = useState<File | null>(null);
+  const [formKey, setFormKey] = useState(0);
 
   const showToast = useCallback((text: string, ok: boolean) => {
     setToast({ text, ok });
@@ -60,9 +73,15 @@ export default function FleetMaintenancePage() {
       return;
     }
     setLoading(true);
-    const query = kindFilter === "all" ? "" : `?kind=${kindFilter}`;
+    const params = new URLSearchParams();
+    if (kindFilter !== "all") params.set("kind", kindFilter);
+    if (vehicleFilter) params.set("vehicle_id", vehicleFilter);
+    if (yearFilter) params.set("year", yearFilter);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
     const res = await fetch(`/api/ops/maintenance-register${query}`, { headers: { Authorization: `Bearer ${token}` } });
-    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string; records?: MaintenanceRecord[]; vehicles?: VehicleOption[] } | null;
+    const json = await res.json().catch(() => null) as {
+      ok?: boolean; error?: string; records?: MaintenanceRecord[]; vehicles?: VehicleOption[]; years?: number[]; truncated?: boolean;
+    } | null;
     if (!res.ok || !json?.ok) {
       showToast(json?.error ?? "Errore caricamento manutenzioni.", false);
       setLoading(false);
@@ -70,8 +89,69 @@ export default function FleetMaintenancePage() {
     }
     setRecords(json.records ?? []);
     setVehicles(json.vehicles ?? []);
+    setYears(json.years ?? []);
+    setTruncated(Boolean(json.truncated));
     setLoading(false);
-  }, [kindFilter, showToast]);
+  }, [kindFilter, showToast, vehicleFilter, yearFilter]);
+
+  const vehiclesByPlate = useMemo(() => [...vehicles].sort((a, b) =>
+    (a.plate ?? a.label).localeCompare(b.plate ?? b.label, "it")), [vehicles]);
+
+  async function postAction(payload: Record<string, unknown>) {
+    const token = await accessToken();
+    if (!token) return null;
+    const res = await fetch("/api/ops/maintenance-register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string; [key: string]: unknown } | null;
+    return { ok: res.ok && Boolean(json?.ok), json };
+  }
+
+  /** Il server firma un caricamento nella cartella dell'intervento; il file va
+   *  direttamente allo storage (niente limite di 4,5 MB delle funzioni Vercel). */
+  async function uploadInvoice(maintenanceId: string, file: File): Promise<boolean> {
+    if (!supabase) return false;
+    if (file.size > INVOICE_MAX_BYTES) { showToast("File troppo grande (massimo 10 MB).", false); return false; }
+    setBusyInvoiceId(maintenanceId);
+    try {
+      const signed = await postAction({ action: "invoice_upload_url",
+        data: { id: maintenanceId, file_name: file.name, content_type: file.type || "application/octet-stream", size: file.size } });
+      if (!signed?.ok) { showToast(String(signed?.json?.error ?? "Caricamento non disponibile."), false); return false; }
+      const path = String(signed.json?.path); const uploadToken = String(signed.json?.token);
+      const { error: uploadError } = await supabase.storage.from("vehicle-documents")
+        .uploadToSignedUrl(path, uploadToken, file, { contentType: file.type });
+      if (uploadError) { showToast(`Caricamento fallito: ${uploadError.message}`, false); return false; }
+      const attached = await postAction({ action: "invoice_attach", data: { id: maintenanceId, path, file_name: file.name } });
+      if (!attached?.ok) { showToast(String(attached?.json?.error ?? "Allegato non salvato."), false); return false; }
+      showToast("Fattura allegata.", true);
+      return true;
+    } finally {
+      setBusyInvoiceId(null);
+    }
+  }
+
+  async function openInvoice(maintenanceId: string) {
+    // La finestra si apre subito (click dell'utente) per non essere bloccata come popup.
+    const tab = window.open("", "_blank");
+    const result = await postAction({ action: "invoice_open", id: maintenanceId });
+    if (!result?.ok || typeof result.json?.url !== "string") {
+      tab?.close();
+      showToast(String(result?.json?.error ?? "Fattura non disponibile."), false);
+      return;
+    }
+    if (tab) tab.location.href = result.json.url; else window.location.href = result.json.url;
+  }
+
+  async function removeInvoice(record: MaintenanceRecord) {
+    if (!window.confirm(`Rimuovere la fattura "${record.invoice_document_name}"? Il file verrà eliminato.`)) return;
+    setBusyInvoiceId(record.id);
+    const result = await postAction({ action: "invoice_remove", id: record.id });
+    setBusyInvoiceId(null);
+    showToast(result?.ok ? "Fattura rimossa." : String(result?.json?.error ?? "Rimozione non riuscita."), Boolean(result?.ok));
+    if (result?.ok) void load();
+  }
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -109,14 +189,20 @@ export default function FleetMaintenancePage() {
         },
       }),
     });
-    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
-    setSaving(false);
+    const json = await res.json().catch(() => null) as { ok?: boolean; error?: string; id?: string | null } | null;
     if (!res.ok || !json?.ok) {
+      setSaving(false);
       showToast(json?.error ?? "Salvataggio manutenzione fallito.", false);
       return;
     }
+    let invoiceOk = true;
+    if (newInvoiceFile && json.id) invoiceOk = await uploadInvoice(json.id, newInvoiceFile);
+    setSaving(false);
     setForm(EMPTY_FORM);
-    showToast("Manutenzione registrata.", true);
+    setNewInvoiceFile(null);
+    setFormKey((key) => key + 1);
+    if (invoiceOk) showToast(newInvoiceFile ? "Manutenzione registrata con fattura." : "Manutenzione registrata.", true);
+    else showToast("Manutenzione registrata, ma la fattura non è stata allegata: riprova dalla scheda dell'intervento.", false);
     void load();
   }
 
@@ -154,9 +240,23 @@ export default function FleetMaintenancePage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <SectionCard
           title="Registro interventi"
-          subtitle={`${records.length} interventi visibili · costo totale €${totals.totalCost.toFixed(2)}`}
+          subtitle={`${records.length} interventi · costo totale ${euro(totals.totalCost)}${truncated ? " (solo i 250 più recenti: restringi con targa o anno)" : ""}`}
           actions={(
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select aria-label="Filtra per targa" className="input-saas h-9 w-auto min-w-[170px] text-xs" value={vehicleFilter}
+                onChange={(event) => setVehicleFilter(event.target.value)}>
+                <option value="">Tutte le targhe</option>
+                {vehiclesByPlate.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate ?? "senza targa"} · {vehicle.label}</option>)}
+              </select>
+              <select aria-label="Filtra per anno" className="input-saas h-9 w-auto text-xs" value={yearFilter}
+                onChange={(event) => setYearFilter(event.target.value)}>
+                <option value="">Tutti gli anni</option>
+                {years.map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+              {vehicleFilter || yearFilter ? (
+                <button type="button" onClick={() => { setVehicleFilter(""); setYearFilter(""); }}
+                  className="rounded-full px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50">Azzera</button>
+              ) : null}
               {([
                 ["all", "Tutti"],
                 ["ordinary", `Ordinarie (${totals.ordinary})`],
@@ -177,7 +277,7 @@ export default function FleetMaintenancePage() {
           {loading ? (
             <p className="text-sm text-slate-400">Caricamento...</p>
           ) : records.length === 0 ? (
-            <p className="text-sm text-slate-400">Nessun intervento trovato.</p>
+            <p className="text-sm text-slate-400">{vehicleFilter || yearFilter ? "Nessun intervento per questa targa o anno." : "Nessun intervento trovato."}</p>
           ) : (
             <div className="space-y-3">
               {records.map((record) => (
@@ -200,7 +300,7 @@ export default function FleetMaintenancePage() {
                   <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Costo</p>
-                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? `€${record.cost.toFixed(2)}` : "—"}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700">{record.cost != null ? euro(Number(record.cost)) : "—"}</p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <p className="text-[11px] uppercase tracking-wide text-slate-400">Km</p>
@@ -219,6 +319,35 @@ export default function FleetMaintenancePage() {
                     </div>
                   ) : null}
                   {record.notes ? <p className="mt-3 text-sm text-slate-500">{record.notes}</p> : null}
+                  <div className={`mt-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${record.invoice_document_name ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+                    {record.invoice_document_name ? (
+                      <>
+                        <span className="font-semibold text-emerald-800">📄 Fattura: {record.invoice_document_name}</span>
+                        <button type="button" disabled={busyInvoiceId === record.id} onClick={() => void openInvoice(record.id)}
+                          className="rounded-lg border border-emerald-300 bg-white px-2 py-1 font-semibold text-emerald-800 disabled:opacity-50">Apri</button>
+                        <label className={`cursor-pointer rounded-lg border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-700 ${busyInvoiceId === record.id ? "pointer-events-none opacity-50" : ""}`}>
+                          Sostituisci
+                          <input type="file" accept={INVOICE_ACCEPT} className="hidden" onChange={(event) => {
+                            const file = event.target.files?.[0]; event.target.value = "";
+                            if (file) void uploadInvoice(record.id, file).then((ok) => { if (ok) void load(); });
+                          }} />
+                        </label>
+                        <button type="button" disabled={busyInvoiceId === record.id} onClick={() => void removeInvoice(record)}
+                          className="rounded-lg px-2 py-1 font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50">Rimuovi</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-semibold text-amber-800">Fattura non allegata</span>
+                        <label className={`cursor-pointer rounded-lg border border-amber-300 bg-white px-2 py-1 font-semibold text-amber-800 ${busyInvoiceId === record.id ? "pointer-events-none opacity-50" : ""}`}>
+                          {busyInvoiceId === record.id ? "Caricamento..." : "Allega fattura (PDF o foto)"}
+                          <input type="file" accept={INVOICE_ACCEPT} className="hidden" onChange={(event) => {
+                            const file = event.target.files?.[0]; event.target.value = "";
+                            if (file) void uploadInvoice(record.id, file).then((ok) => { if (ok) void load(); });
+                          }} />
+                        </label>
+                      </>
+                    )}
+                  </div>
                   <div className="mt-3">
                     <button type="button" onClick={() => void deleteMaintenance(record.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100">
                       Elimina
@@ -282,6 +411,11 @@ export default function FleetMaintenancePage() {
             <label className="text-xs font-semibold text-slate-500">
               Note
               <textarea className="input-saas mt-1 w-full resize-none" rows={3} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} />
+            </label>
+            <label className="text-xs font-semibold text-slate-500">
+              Fattura (facoltativa, PDF o foto, max 10 MB)
+              <input key={formKey} className="input-saas mt-1 w-full" type="file" accept={INVOICE_ACCEPT}
+                onChange={(event) => setNewInvoiceFile(event.target.files?.[0] ?? null)} />
             </label>
             <button type="button" disabled={saving || !form.vehicle_id || !form.description.trim()} onClick={() => void createMaintenance()} className="btn-primary py-2 text-sm disabled:opacity-50">
               {saving ? "Salvataggio..." : "Salva manutenzione"}
