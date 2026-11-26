@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import {
@@ -64,6 +65,8 @@ const VEHICLE_HISTORY_TABLES: Array<[table: string, label: string]> = [
   ["vehicle_tachographs", "tachigrafi"],
   ["vehicle_extinguishers", "estintori"],
   ["vehicle_km_corrections", "correzioni km"],
+  ["vehicle_telepass_devices", "Telepass"],
+  ["vehicle_telepass_invoices", "fatture Telepass"],
 ];
 
 /** Il vincolo nel DB impedisce di riattivare un mezzo dismesso: messaggio leggibile. */
@@ -188,6 +191,17 @@ export async function POST(request: NextRequest) {
         .select("id").maybeSingle();
       if (error) throw new Error(error.message);
       if (!changed) return NextResponse.json({ ok: false, error: "Mezzo non trovato o già dismesso." }, { status: 409 });
+      // Il mezzo venduto/rottamato non ha più Telepass né carte: si chiudono
+      // gli abbinamenti (lo storico resta). Errori qui non annullano la dismissione.
+      const db = auth.admin as unknown as SupabaseClient;
+      await db.from("vehicle_telepass_devices").update({ removed_on: parsed.data.decommissioned_at })
+        .eq("tenant_id", tenantId).eq("vehicle_id", parsed.data.id).is("removed_on", null)
+        .lte("assigned_on", parsed.data.decommissioned_at);
+      const { data: vehicleCards } = await db.from("fuel_cards").select("id")
+        .eq("tenant_id", tenantId).eq("assigned_vehicle_id", parsed.data.id);
+      for (const card of vehicleCards ?? []) {
+        await db.rpc("assign_fuel_card_vehicle", { p_tenant_id: tenantId, p_card_id: card.id, p_vehicle_id: null, p_actor_id: auth.user.id });
+      }
     }
 
     if (action === "restore_vehicle") {

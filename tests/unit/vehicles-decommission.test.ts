@@ -22,10 +22,11 @@ function admin() {
     from(table: string) {
       const ops: string[] = [];
       const query: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "is", "not", "order", "gte", "update", "insert", "delete"]) {
+      for (const method of ["select", "eq", "is", "not", "order", "gte", "lte", "update", "insert", "delete"]) {
         query[method] = (...args: unknown[]) => { calls.push({ table, method, args }); ops.push(method); return query; };
       }
       const result = () => {
+        if (table === "fuel_cards") return { data: [{ id: "card-1" }], error: null };
         if (table !== "vehicles") return { data: null, error: null, count: state.counts[table] ?? 0 };
         if (ops.includes("update")) {
           if (state.updateError) return { data: null, error: { message: state.updateError } };
@@ -41,6 +42,7 @@ function admin() {
       query.then = (ok: (value: unknown) => unknown) => Promise.resolve(result()).then(ok);
       return query;
     },
+    rpc: (...args: unknown[]) => { calls.push({ table: "rpc", method: String(args[0]), args }); return Promise.resolve({ error: null }); },
   };
 }
 
@@ -68,6 +70,15 @@ describe("dismissione mezzo", () => {
     });
     expect(calls).toContainEqual({ table: "vehicles", method: "eq", args: ["tenant_id", TENANT] });
     expect(calls).toContainEqual({ table: "vehicles", method: "is", args: ["decommissioned_at", null] });
+  });
+
+  it("chiude i Telepass attivi e libera le carte del mezzo dismesso", async () => {
+    expect((await post(body)).status).toBe(200);
+    const telepass = calls.find((c) => c.table === "vehicle_telepass_devices" && c.method === "update");
+    expect(telepass?.args[0]).toEqual({ removed_on: "2026-11-25" });
+    expect(calls).toContainEqual({ table: "vehicle_telepass_devices", method: "eq", args: ["tenant_id", TENANT] });
+    expect(calls).toContainEqual({ table: "rpc", method: "assign_fuel_card_vehicle",
+      args: ["assign_fuel_card_vehicle", { p_tenant_id: TENANT, p_card_id: "card-1", p_vehicle_id: null, p_actor_id: "user-1" }] });
   });
 
   it("motivo 'altro' senza nota: 400", async () => {

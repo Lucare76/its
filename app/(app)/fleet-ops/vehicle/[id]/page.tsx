@@ -5,6 +5,7 @@ import { supabase, getToken } from "@/lib/supabase/client";
 import { getClientSessionContext } from "@/lib/supabase/client-session";
 import Link from "next/link";
 import { DateInput } from "@/components/ui";
+import { VehicleTelepassCards } from "@/components/vehicle-telepass-cards";
 
 /* ─── Tipi ───────────────────────────────────────────────────────────────── */
 
@@ -88,7 +89,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
 
   const [userRole, setUserRole] = useState<string | null>(null);
   const [vehicleLabel, setVehicleLabel] = useState<string>("");
-  const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti" | "costi">("maintenance");
+  const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti" | "costi" | "telepass">("maintenance");
   const [records, setRecords]   = useState<(Maintenance | Fuel | SparePart)[]>([]);
   const [loading, setLoading]   = useState(false);
   const [saving,  setSaving]    = useState(false);
@@ -184,6 +185,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
   const load = useCallback(async () => {
     if (tab === "documenti") { void loadDocs(); return; }
     if (tab === "costi") { void loadCosts(); return; }
+    if (tab === "telepass") return;
     setLoading(true);
     if (tab === "km_logs") {
       // Km logs vengono dall'API pubblica del veicolo tramite qr_token
@@ -509,6 +511,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
     { key: "km_logs",     label: "🛣 Km turni" },
     { key: "documenti",   label: "📄 Documenti" },
     { key: "costi",       label: "💶 Costi" },
+    { key: "telepass",    label: "📡 Telepass e carte" },
   ] as const;
 
   return (
@@ -829,7 +832,9 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       )}
 
       {/* Add form */}
-      {tab !== "documenti" && tab !== "costi" && showForm ? (
+      {tab === "telepass" && <VehicleTelepassCards vehicleId={vehicleId} onMessage={showMsg} />}
+
+      {tab !== "documenti" && tab !== "costi" && tab !== "telepass" && showForm ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 mb-5">
           <h3 className="text-sm font-bold text-slate-700 mb-4">
             {tab === "maintenance" ? "Nuova manutenzione" : tab === "fuel" ? "Nuovo rifornimento" : "Nuovo ricambio"}
@@ -952,7 +957,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
             </button>
           </div>
         </div>
-      ) : tab !== "km_logs" && tab !== "documenti" && tab !== "costi" ? (
+      ) : tab !== "km_logs" && tab !== "documenti" && tab !== "costi" && tab !== "telepass" ? (
         <button
           type="button"
           onClick={() => setShowForm(true)}
@@ -963,7 +968,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       ) : null}
 
       {/* Lista record */}
-      {tab !== "documenti" && tab !== "costi" && (loading ? (
+      {tab !== "documenti" && tab !== "costi" && tab !== "telepass" && (loading ? (
         <div className="text-sm text-slate-400 py-8 text-center">Caricamento...</div>
       ) : records.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-400 text-sm">
