@@ -1515,30 +1515,30 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
       </aside>
 
       <div className="min-w-0 space-y-4">
-        {pathname !== "/services" && pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/arrivals" && pathname !== "/departures" && pathname !== "/mappa-live" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm md:px-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Vista operativa</p>
-            <h2 className="mt-0.5 line-clamp-1 text-xl font-extrabold tracking-tight text-slate-950 md:text-2xl">{title}</h2>
+        {pathname !== "/services" && pathname !== "/services/new" && pathname !== "/inbox" && pathname !== "/arrivals" && pathname !== "/departures" && pathname !== "/mappa-live" ? <header className="relative z-30 overflow-hidden rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm sm:px-4 sm:py-3 md:px-5">
+          <div className="flex items-center justify-between gap-2 sm:flex-wrap sm:gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400 sm:block">Vista operativa</p>
+            <h2 className="line-clamp-1 text-base font-extrabold tracking-tight text-slate-950 sm:mt-0.5 sm:text-xl md:text-2xl">{title}</h2>
           </div>
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+          <div className="flex shrink-0 items-center justify-end gap-1.5 sm:flex-wrap sm:gap-2">
             {!isHomePage ? (
               <Link
                 href={homeHref}
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 sm:px-3 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
                 title="Torna al cruscotto"
                 aria-label="Torna al cruscotto"
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
                   <path d="m2.5 7.5 5.5-4.5 5.5 4.5M4 6.5v6h8v-6M6.5 12.5v-4h3v4" />
                 </svg>
-                <span>Cruscotto</span>
+                <span className="hidden sm:inline">Cruscotto</span>
               </Link>
             ) : null}
             {canSeeTopbarNotifications ? (
               <Link
                 href="/notifications"
-                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition ${
+                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-2.5 text-xs font-semibold transition sm:px-3 ${
                   topbarNotificationCount > 0
                     ? "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -1560,11 +1560,11 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 <span className="hidden sm:inline">Notifiche</span>
               </Link>
             ) : null}
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex items-center justify-end gap-1.5 sm:flex-wrap sm:gap-2">
               <button
                 type="button"
                 onClick={toggleTheme}
-                className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                className="hidden h-9 items-center rounded-lg border border-slate-200 bg-white px-2.5 sm:inline-flex sm:px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
                 title={isDark ? "Passa alla modalità chiara" : "Passa alla modalità scura"}
               >
                 <span className="inline-flex items-center gap-2">
@@ -1574,14 +1574,14 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                       : <><circle cx="8" cy="8" r="2.5" /><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14M3.8 3.8l1 1M11.2 11.2l1 1M11.2 3.8l-1 1M4.8 11.2l-1 1" /></>}
                   </svg>
                   <span className="hidden lg:inline">{isDark ? "Modalità chiara" : "Modalità scura"}</span>
-                  <span className="lg:hidden">Tema</span>
+                  <span className="hidden sm:inline lg:hidden">Tema</span>
                 </span>
               </button>
               {authRole !== "agency" && (
               <button
                 type="button"
                 onClick={toggleInboxSound}
-                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition ${
+                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-2.5 text-xs font-semibold transition sm:px-3 ${
                   inboxSoundEnabled
                     ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -1592,71 +1592,71 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                   <path d="M3.5 6h2l3-3v10l-3-3h-2zM10.5 6.5a2.5 2.5 0 0 1 0 3" />
                 </svg>
                 <span className="hidden lg:inline">Suono inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
-                <span className="lg:hidden">Inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
+                <span className="hidden sm:inline lg:hidden">Inbox {inboxSoundEnabled ? "ON" : "OFF"}</span>
               </button>
               )}
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition hover:bg-rose-100"
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 sm:px-3 text-xs font-semibold text-rose-600 transition hover:bg-rose-100"
                 title="Esci"
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-4 w-4 shrink-0" aria-hidden="true">
                   <path d="M10.5 5.5 13 8l-2.5 2.5M13 8H6M7 3.5H3.5v9H7" />
                 </svg>
-                <span>Esci</span>
+                <span className="hidden sm:inline">Esci</span>
               </button>
               {authRole === "admin" && (authName?.toLowerCase().includes("leonardo") || authEmail?.toLowerCase().includes("leonardo")) ? (
                 <Image
                   src="/bowser-avatar.png"
                   alt="Leonardo"
                   width={56} height={56}
-                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
+                  className="hidden h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm sm:block"
                 />
               ) : authRole === "admin" && authName?.toLowerCase().includes("mario") ? (
                 <Image
                   src="/mario-avatar.png"
                   alt="Mario"
                   width={56} height={56}
-                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
+                  className="hidden h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm sm:block"
                 />
               ) : authRole === "admin" && (authName?.toLowerCase().includes("karmen") || authName?.toLowerCase().includes("peach")) ? (
                 <Image
                   src="/karmen-avatar.png"
                   alt="Karmen"
                   width={56} height={56}
-                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
+                  className="hidden h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm sm:block"
                 />
               ) : authRole === "operator" && authGender === "female" ? (
                 <Image
                   src="/toadette-avatar.png"
                   alt="Operatrice"
                   width={56} height={56}
-                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
+                  className="hidden h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm sm:block"
                 />
               ) : authRole === "operator" && authGender === "male" ? (
                 <Image
                   src="/bowser-avatar.png"
                   alt="Operatore"
                   width={56} height={56}
-                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm"
+                  className="hidden h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-contain p-1 shadow-sm sm:block"
                 />
               ) : authRole === "supervisor" ? (
                 <Image
                   src="/luca-avatar.png"
                   alt="Luca"
                   width={56} height={56}
-                  className="h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-cover p-1 shadow-sm"
+                  className="hidden h-14 w-14 rounded-xl border border-slate-100 bg-slate-50 object-cover p-1 shadow-sm sm:block"
                 />
               ) : (
-                <div className="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm">
+                <div className="hidden h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm sm:inline-flex">
                   {(authRole ?? "U").slice(0, 2).toUpperCase()}
                 </div>
               )}
             </div>
           </div>
           </div>
-          <div className="mt-3 mobile-nav-strip">
+          <div className="mt-2 mobile-nav-strip sm:mt-3">
             {dailyNav.map((item) => {
               const active = pathname.startsWith(item.href);
               return (
@@ -1683,6 +1683,9 @@ export default function AppShellLayout({ children }: Readonly<{ children: React.
                 Impostazioni {mobileSettingsOpen ? "▴" : "▾"}
               </button>
             ) : null}
+            <button type="button" onClick={toggleTheme} className="btn-secondary px-3 py-1.5 text-xs sm:hidden">
+              {isDark ? "Tema chiaro" : "Tema scuro"}
+            </button>
           </div>
           {mobileSettingsOpen && settingsGroups.length > 0 ? (
             <div className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:hidden">
