@@ -33,7 +33,7 @@ function basePayload(overrides: Record<string, unknown> = {}) {
     arrival_time: "10:00",
     departure_date: "2026-08-28",
     departure_time: "16:00",
-    notes: "",
+    notes: "Nota operativa di test",
     trip_leg: "outbound_only",
     ...overrides,
   };
