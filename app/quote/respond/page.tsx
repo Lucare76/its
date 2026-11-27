@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 /* ------------------------------------------------------------------ types */
@@ -99,6 +99,16 @@ function RespondContent() {
     );
   }
 
+  if (error === "expired") {
+    return (
+      <div className="text-center py-4">
+        <div className="text-5xl mb-4">⏳</div>
+        <h1 className="text-xl font-bold text-slate-800 mb-2">Preventivo scaduto</h1>
+        <p className="text-sm text-slate-500">La validità di questo preventivo è terminata. Contatta Ischia Transfer Service per un nuovo preventivo.</p>
+      </div>
+    );
+  }
+
   if (error === "notfound" || (!token && !success && !error)) {
     return (
       <div className="text-center py-4">
@@ -116,15 +126,36 @@ function RespondContent() {
 /* ================================================================ QUOTE FORM */
 
 function QuoteResponseForm({ token }: { token: string }) {
-  const params = useSearchParams();
-  const action = params.get("action");
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+  const [failure, setFailure] = React.useState<string | null>(null);
 
-  /* When action is present, the response is handled server-side (redirect) so we just
-     show the loading state briefly before the page reloads. This component is mainly
-     shown when the user lands on the page without action param — they see the quote
-     and click Accept/Reject. */
-
-  const respondUrl = `/api/ops/quotes/respond?token=${encodeURIComponent(token)}`;
+  async function respond(action: "accepted" | "rejected") {
+    const question = action === "accepted" ? "Confermi di voler ACCETTARE il preventivo?" : "Confermi di voler RIFIUTARE il preventivo?";
+    if (!window.confirm(question)) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const res = await fetch("/api/ops/quotes/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; status?: string; route?: string };
+      if (body.ok) {
+        router.replace(`/quote/respond?success=${action}&route=${encodeURIComponent(body.route ?? "")}`);
+        return;
+      }
+      if (body.error === "alreadyresponded" || body.error === "expired" || body.error === "notfound") {
+        router.replace(`/quote/respond?error=${body.error}&status=${encodeURIComponent(body.status ?? "")}`);
+        return;
+      }
+      setFailure("Non è stato possibile registrare la risposta. Riprova tra poco o contatta Ischia Transfer Service.");
+    } catch {
+      setFailure("Connessione non riuscita. Riprova.");
+    }
+    setBusy(false);
+  }
 
   return (
     <div className="space-y-5">
@@ -137,20 +168,26 @@ function QuoteResponseForm({ token }: { token: string }) {
       {/* Quote details fetched client-side */}
       <QuoteDetails token={token} />
 
+      {failure ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-center text-sm text-rose-700">{failure}</p> : null}
+
       {/* CTA buttons */}
       <div className="flex flex-col gap-3 pt-2">
-        <a
-          href={`${respondUrl}&action=accepted`}
-          style={{ display: "block", background: "#166534", color: "#fff", textDecoration: "none", textAlign: "center", padding: "14px 24px", borderRadius: "12px", fontWeight: 700, fontSize: "15px" }}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void respond("accepted")}
+          style={{ display: "block", background: "#166534", color: "#fff", textAlign: "center", padding: "14px 24px", borderRadius: "12px", fontWeight: 700, fontSize: "15px", opacity: busy ? 0.6 : 1 }}
         >
           ✅ Accetta preventivo
-        </a>
-        <a
-          href={`${respondUrl}&action=rejected`}
-          style={{ display: "block", background: "#fff", color: "#991b1b", textDecoration: "none", textAlign: "center", padding: "14px 24px", borderRadius: "12px", fontWeight: 700, fontSize: "15px", border: "2px solid #fecaca" }}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void respond("rejected")}
+          style={{ display: "block", background: "#fff", color: "#991b1b", textAlign: "center", padding: "14px 24px", borderRadius: "12px", fontWeight: 700, fontSize: "15px", border: "2px solid #fecaca", opacity: busy ? 0.6 : 1 }}
         >
           ❌ Rifiuta
-        </a>
+        </button>
       </div>
 
       <p style={{ fontSize: "11px", color: "#94a3b8", textAlign: "center" }}>
