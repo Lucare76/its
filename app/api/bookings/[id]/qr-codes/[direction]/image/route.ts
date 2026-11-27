@@ -5,7 +5,7 @@ import { getBusQrImageResponse, parseBusQrDirection } from "@/lib/server/bus-boo
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string; direction: string }> }
 ) {
   try {
@@ -16,8 +16,9 @@ export async function GET(
     }
 
     const admin = createAdminClient();
-    return await getBusQrImageResponse(admin, id, parsedDirection);
-  } catch (error) {
-    return new NextResponse(error instanceof Error ? error.message : "QR image error", { status: 500 });
+    const token = new URL(request.url).searchParams.get("t")?.trim() ?? "";
+    return await getBusQrImageResponse(admin, id, parsedDirection, token);
+  } catch {
+    return new NextResponse("QR image error", { status: 500 });
   }
 }
