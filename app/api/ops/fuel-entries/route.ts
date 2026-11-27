@@ -349,7 +349,7 @@ export async function POST(request: NextRequest) {
 
   if (body.action === "assign_supplier") {
     const parsed = assignSupplierSchema.safeParse(body.data);
-    if (!parsed.success) return NextResponse.json({ error: "Seleziona come è stato pagato: carta ENI, UTA, Q8 o contanti / carta di credito personale." }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: "Seleziona come è stato pagato: carta ENI, UTA, Q8 o contanti / carta di credito." }, { status: 400 });
     const { id, invoice_supplier } = parsed.data;
     const { data: original, error: readError } = await auth.admin.from("vehicle_fuel")
       .select("id, cost, gross_cost, submitted_via_qr, invoice_supplier")
