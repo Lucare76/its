@@ -406,6 +406,7 @@ describe("POST /api/ops/new-booking — Formula SNAV/MEDMAR usa ferry_pickup_rul
       arrival_date: "2026-08-25",
       arrival_time: "10:00",
       departure_time: "07:10",
+      notes: "Nota operativa di test",
     })));
 
     // transfer_port_hotel: il vessel di default ("Transfer porto") non nomina

@@ -126,6 +126,7 @@ describe("POST /api/ops/new-booking — notes non contiene testo Formula/pax bre
       medmar_infant_count: 1,
       medmar_child_count: 0,
       medmar_adult_count: 3,
+      pax: 4,
     })));
 
     expect(serviceInserts.length).toBe(1);
@@ -144,6 +145,7 @@ describe("POST /api/ops/new-booking — notes non contiene testo Formula/pax bre
       medmar_infant_count: 0,
       medmar_child_count: 2,
       medmar_adult_count: 2,
+      pax: 4,
     })));
 
     const notes = String(serviceInserts[0]!.notes ?? "");
@@ -176,6 +178,7 @@ describe("POST /api/ops/new-booking — notes non contiene testo Formula/pax bre
       medmar_infant_count: 0,
       medmar_child_count: 0,
       medmar_adult_count: 2,
+      pax: 2,
     })));
 
     expect(serviceInserts[0]!.notes).toBe("Cliente su sedia a rotelle, avvisare autista");
