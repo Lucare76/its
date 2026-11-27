@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase, getToken } from "@/lib/supabase/client";
 import { DateInput } from "@/components/ui";
 
-type Device = { id: string; device_code: string; contract_ref: string | null; assigned_on: string; removed_on: string | null; note: string | null };
+type Device = { id: string; device_code: string; contract_ref: string | null; assigned_on: string; removed_on: string | null; note: string | null; shared_vehicle_ids?: string[] };
 type Invoice = {
   id: string; device_id: string | null; invoice_number: string; invoice_date: string;
   period_from: string | null; period_to: string | null; amount: number | null; note: string | null;
@@ -175,6 +175,7 @@ export function VehicleTelepassCards({ vehicleId, onMessage }: { vehicleId: stri
       {/* Telepass */}
       <div className={box}>
         <h3 className="text-sm font-bold text-slate-700">Telepass</h3>
+        <p className="mt-1 text-xs text-slate-500">Un apparato può essere abbinato al massimo a due targhe.</p>
         {activeDevices.length === 0 ? <p className="mt-2 text-sm text-slate-500">Nessun Telepass attivo su questo mezzo.</p> : (
           <ul className="mt-3 divide-y divide-slate-100">
             {activeDevices.map((d) => (
@@ -182,6 +183,9 @@ export function VehicleTelepassCards({ vehicleId, onMessage }: { vehicleId: stri
                 <div>
                   <p className="font-mono text-sm font-semibold text-slate-900">{d.device_code}</p>
                   <p className="text-xs text-slate-500">Dal {fmtDate(d.assigned_on)}{d.contract_ref ? ` · contratto ${d.contract_ref}` : ""}{d.note ? ` · ${d.note}` : ""}</p>
+                  {d.shared_vehicle_ids && d.shared_vehicle_ids.length > 0 ? (
+                    <p className="text-xs font-medium text-blue-700">Abbinato anche a: {d.shared_vehicle_ids.map((id) => vehicleName(id)).join(", ")}</p>
+                  ) : null}
                 </div>
                 <button type="button" disabled={busy} onClick={() => void removeDevice(d)} className={`${btn} border border-slate-200 text-slate-600 hover:bg-slate-50`}>Togli dal mezzo</button>
               </li>
