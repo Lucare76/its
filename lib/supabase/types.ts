@@ -3261,9 +3261,62 @@ export type Database = {
           },
         ]
       }
+      fuel_card_vehicle_assignments: {
+        Row: {
+          assigned_at: string
+          card_id: string
+          changed_by: string | null
+          id: string
+          returned_at: string | null
+          tenant_id: string
+          vehicle_id: string
+        }
+        Insert: {
+          assigned_at?: string
+          card_id: string
+          changed_by?: string | null
+          id?: string
+          returned_at?: string | null
+          tenant_id: string
+          vehicle_id: string
+        }
+        Update: {
+          assigned_at?: string
+          card_id?: string
+          changed_by?: string | null
+          id?: string
+          returned_at?: string | null
+          tenant_id?: string
+          vehicle_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fuel_card_vehicle_assignments_card_id_fkey"
+            columns: ["card_id"]
+            isOneToOne: false
+            referencedRelation: "fuel_cards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fuel_card_vehicle_assignments_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fuel_card_vehicle_assignments_vehicle_id_fkey"
+            columns: ["vehicle_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       fuel_cards: {
         Row: {
           assigned_driver_id: string | null
+          assigned_vehicle_id: string | null
           created_at: string
           id: string
           label: string
@@ -3273,6 +3326,7 @@ export type Database = {
         }
         Insert: {
           assigned_driver_id?: string | null
+          assigned_vehicle_id?: string | null
           created_at?: string
           id?: string
           label: string
@@ -3282,6 +3336,7 @@ export type Database = {
         }
         Update: {
           assigned_driver_id?: string | null
+          assigned_vehicle_id?: string | null
           created_at?: string
           id?: string
           label?: string
@@ -3295,6 +3350,13 @@ export type Database = {
             columns: ["assigned_driver_id"]
             isOneToOne: false
             referencedRelation: "driver_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fuel_cards_assigned_vehicle_id_fkey"
+            columns: ["assigned_vehicle_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
             referencedColumns: ["id"]
           },
           {
@@ -10777,6 +10839,136 @@ export type Database = {
           },
         ]
       }
+      vehicle_telepass_devices: {
+        Row: {
+          assigned_on: string
+          contract_ref: string | null
+          created_at: string
+          created_by: string | null
+          device_code: string
+          id: string
+          note: string | null
+          removed_on: string | null
+          tenant_id: string
+          vehicle_id: string
+        }
+        Insert: {
+          assigned_on?: string
+          contract_ref?: string | null
+          created_at?: string
+          created_by?: string | null
+          device_code: string
+          id?: string
+          note?: string | null
+          removed_on?: string | null
+          tenant_id: string
+          vehicle_id: string
+        }
+        Update: {
+          assigned_on?: string
+          contract_ref?: string | null
+          created_at?: string
+          created_by?: string | null
+          device_code?: string
+          id?: string
+          note?: string | null
+          removed_on?: string | null
+          tenant_id?: string
+          vehicle_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vehicle_telepass_devices_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vehicle_telepass_devices_vehicle_id_fkey"
+            columns: ["vehicle_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vehicle_telepass_invoices: {
+        Row: {
+          amount: number | null
+          created_at: string
+          created_by: string | null
+          device_id: string | null
+          document_name: string | null
+          document_path: string | null
+          document_uploaded_at: string | null
+          id: string
+          invoice_date: string
+          invoice_number: string
+          note: string | null
+          period_from: string | null
+          period_to: string | null
+          tenant_id: string
+          vehicle_id: string
+        }
+        Insert: {
+          amount?: number | null
+          created_at?: string
+          created_by?: string | null
+          device_id?: string | null
+          document_name?: string | null
+          document_path?: string | null
+          document_uploaded_at?: string | null
+          id?: string
+          invoice_date: string
+          invoice_number: string
+          note?: string | null
+          period_from?: string | null
+          period_to?: string | null
+          tenant_id: string
+          vehicle_id: string
+        }
+        Update: {
+          amount?: number | null
+          created_at?: string
+          created_by?: string | null
+          device_id?: string | null
+          document_name?: string | null
+          document_path?: string | null
+          document_uploaded_at?: string | null
+          id?: string
+          invoice_date?: string
+          invoice_number?: string
+          note?: string | null
+          period_from?: string | null
+          period_to?: string | null
+          tenant_id?: string
+          vehicle_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vehicle_telepass_invoices_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "vehicle_telepass_devices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vehicle_telepass_invoices_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vehicle_telepass_invoices_vehicle_id_fkey"
+            columns: ["vehicle_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       vehicle_time_blocks: {
         Row: {
           block_from: string
@@ -11977,6 +12169,15 @@ export type Database = {
           p_card_id: string
           p_driver_id: string
           p_tenant_id: string
+        }
+        Returns: undefined
+      }
+      assign_fuel_card_vehicle: {
+        Args: {
+          p_actor_id: string
+          p_card_id: string
+          p_tenant_id: string
+          p_vehicle_id: string
         }
         Returns: undefined
       }
