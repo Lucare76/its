@@ -71,7 +71,7 @@
     "react-leaflet-cluster": "^2.1.0",
     "recharts": "^3.8.1",
     "web-push": "^3.6.7",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.24.1"
   },
   "devDependencies": {
