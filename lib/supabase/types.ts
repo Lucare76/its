@@ -9904,6 +9904,54 @@ export type Database = {
         }
         Relationships: []
       }
+      vehicle_compliance_alerts_sent: {
+        Row: {
+          doc_type: string
+          due_date: string
+          id: string
+          sent_at: string
+          stage: string
+          subject_key: string
+          tenant_id: string
+          vehicle_id: string | null
+        }
+        Insert: {
+          doc_type: string
+          due_date: string
+          id?: string
+          sent_at?: string
+          stage: string
+          subject_key: string
+          tenant_id: string
+          vehicle_id?: string | null
+        }
+        Update: {
+          doc_type?: string
+          due_date?: string
+          id?: string
+          sent_at?: string
+          stage?: string
+          subject_key?: string
+          tenant_id?: string
+          vehicle_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vehicle_compliance_alerts_sent_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vehicle_compliance_alerts_sent_vehicle_id_fkey"
+            columns: ["vehicle_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       vehicle_compliance_costs: {
         Row: {
           amount_cents: number
@@ -10439,9 +10487,12 @@ export type Database = {
           expiry_date: string
           id: string
           is_current: boolean
+          installment_amount_cents: number | null
           notes: string | null
+          payment_frequency: string
           policy_number: string | null
           reactivated_on: string | null
+          second_installment_date: string | null
           suspended_from: string | null
           suspended_until: string | null
           tenant_id: string
@@ -10456,9 +10507,12 @@ export type Database = {
           expiry_date: string
           id?: string
           is_current?: boolean
+          installment_amount_cents?: number | null
           notes?: string | null
+          payment_frequency?: string
           policy_number?: string | null
           reactivated_on?: string | null
+          second_installment_date?: string | null
           suspended_from?: string | null
           suspended_until?: string | null
           tenant_id: string
@@ -10473,9 +10527,12 @@ export type Database = {
           expiry_date?: string
           id?: string
           is_current?: boolean
+          installment_amount_cents?: number | null
           notes?: string | null
+          payment_frequency?: string
           policy_number?: string | null
           reactivated_on?: string | null
+          second_installment_date?: string | null
           suspended_from?: string | null
           suspended_until?: string | null
           tenant_id?: string

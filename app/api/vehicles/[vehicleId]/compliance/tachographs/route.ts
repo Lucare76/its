@@ -104,7 +104,7 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
       expiry_date,
       center: center ?? null,
       certificate_number: certificate_number ?? null,
-      document_path: document_path ?? null,
+      ...(document_path !== undefined ? { document_path } : {}),
       notes: notes ?? null,
     })
     .eq("id", id)

@@ -125,7 +125,7 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
       inspection_center: inspection_center ?? null,
       outcome: outcome ?? null,
       outcome_notes: outcome_notes ?? null,
-      document_path: document_path ?? null,
+      ...(document_path !== undefined ? { document_path } : {}),
       notes: notes ?? null,
     })
     .eq("id", id)

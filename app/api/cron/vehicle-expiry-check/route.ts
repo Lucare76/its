@@ -5,216 +5,60 @@
  * per i test manuali e accetta nel body `today` (YYYY-MM-DD) e `dry_run`.
  * Entrambi richiedono `Authorization: Bearer <CRON_SECRET>`.
  *
- * Controlla ogni giorno i veicoli con scadenza assicurazione, bollo, collaudo,
- * estintori e carta tachigrafo autisti. Finestra avviso: 60 giorni.
- *
- * Regola business assicurazione:
- * - la data inserita e' la scadenza nominale della polizza
- * - il promemoria usa la scadenza effettiva includendo la proroga configurata
- * - esempio: polizza 2026-10-01 -> copertura fino al 2026-10-15 inclusa
- * - primo alert il 2026-10-07
+ * Una email per ogni scadenza (non più il riepilogo giornaliero):
+ *  - assicurazione: 7 giorni prima della scadenza inserita e il giorno stesso
+ *  - seconda rata assicurazione (pagamento semestrale): 7 giorni prima e il giorno
+ *  - collaudo, bollo, estintori, carta tachigrafo autista, taratura tachigrafo:
+ *    15 giorni prima e il giorno stesso
+ * Ogni avviso parte una sola volta: vedi lib/server/vehicle-expiry-alerts.ts.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { sendEmail as sendEmailBase } from "@/lib/server/send-email";
-import { getLogoDataUri } from "@/lib/server/logo";
+import { sendEmail } from "@/lib/server/send-email";
+import { emailButton, emailDataTable, emailHighlightBox, emailHtml, fmtDate } from "@/lib/server/email-layout";
+import { insuranceSuspensionStatus } from "@/lib/vehicle-compliance";
 import {
-  diffDays,
-  getEffectiveExpiry,
-  getWarnWindowDays,
-  buildStatusLabel,
-  INSURANCE_GRACE_DAYS,
-  WARN_DAYS,
-  insuranceSuspensionStatus,
-} from "@/lib/vehicle-compliance";
+  ALERT_DOC_LABEL, alertKey, alertSubject, planAlerts,
+  type AlertCandidate, type PlannedAlert,
+} from "@/lib/server/vehicle-expiry-alerts";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const NOTIFY_EMAILS = ["info@ischiatransferservice.it", "luca_renna@hotmail.com"];
-
-type WarningItem = {
-  label: string;
-  plate: string | null;
-  docType: string;
-  expiryDate: string;
-  effectiveExpiryDate: string;
-  daysLeft: number;
-  insuranceGraceDays?: number;
-  note?: string;
-};
-
-function formatDate(iso: string): string {
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
-}
+/** Limite di email per esecuzione: il resto parte il giorno dopo (niente raffiche). */
+const MAX_ALERTS_PER_RUN = 40;
+const APP_URL = "https://ischia-transfer.vercel.app";
 
 function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-async function sendEmail(subject: string, html: string) {
-  const result = await sendEmailBase({ to: NOTIFY_EMAILS, subject, html });
-  if (!result.ok && !result.skipped) {
-    return { ok: false, error: result.error ?? "Errore invio" } as const;
-  }
-  return { ok: true } as const;
+function addDays(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
-function buildEmailHtml(warnings: WarningItem[]): string {
-  const logoDataUri = getLogoDataUri();
-  const expiredCount = warnings.filter((item) => item.daysLeft < 0).length;
-  const dueTodayCount = warnings.filter((item) => item.daysLeft === 0).length;
-  const upcomingCount = warnings.filter((item) => item.daysLeft > 0).length;
-
-  const rows = warnings
-    .map((warning, index) => {
-      const rowBg = index % 2 === 0 ? "#ffffff" : "#f8fafc";
-      const badgeBg =
-        warning.docType === "Assicurazione"
-          ? "#dbeafe"
-          : warning.docType === "Collaudo"
-            ? "#fee2e2"
-            : "#fef3c7";
-      const badgeColor =
-        warning.docType === "Assicurazione"
-          ? "#1d4ed8"
-          : warning.docType === "Collaudo"
-            ? "#b91c1c"
-            : "#92400e";
-      const statusColor = warning.daysLeft < 0 ? "#dc2626" : warning.daysLeft <= 3 ? "#d97706" : "#0f766e";
-
-      return `
-        <tr>
-          <td style="padding:12px 14px;border-bottom:1px solid #e2e8f0;background:${rowBg};font-size:14px;font-weight:700;color:#0f172a">${warning.label}</td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e2e8f0;background:${rowBg};font-size:13px;color:#475569;font-family:Consolas,'Courier New',monospace">${warning.plate ?? "-"}</td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e2e8f0;background:${rowBg}">
-            <span style="display:inline-block;background:${badgeBg};color:${badgeColor};padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700">${warning.docType}</span>
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e2e8f0;background:${rowBg};font-size:14px;font-weight:700;color:${statusColor}">
-            ${buildStatusLabel(warning.daysLeft)}
-          </td>
-          <td style="padding:12px 14px;border-bottom:1px solid #e2e8f0;background:${rowBg};font-size:14px;color:#0f172a;font-weight:700">
-            ${formatDate(warning.effectiveExpiryDate)}
-            ${warning.note ? `<div style="padding-top:4px;font-size:11px;line-height:1.5;color:#64748b;font-weight:400">${warning.note}</div>` : ""}
-          </td>
-        </tr>
-      `;
-    })
-    .join("");
-
-  return `<!DOCTYPE html>
-<html lang="it">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Promemoria documenti flotta</title>
-</head>
-<body style="margin:0;padding:0;background:#eef4fb;font-family:Arial,'Segoe UI',sans-serif;color:#1e293b">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eef4fb">
-    <tr>
-      <td align="center" style="padding:32px 16px">
-        <table role="presentation" width="760" cellpadding="0" cellspacing="0" border="0" style="width:760px;max-width:760px;background:#ffffff;border:1px solid #dbe3ee;border-radius:28px;overflow:hidden;box-shadow:0 18px 48px rgba(15,23,42,0.10)">
-          <tr>
-            <td bgcolor="#173f6b" style="background-color:#173f6b;background:#173f6b;padding:34px 34px 28px">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td valign="middle" style="width:260px;padding-right:24px">
-                    ${
-                      logoDataUri
-                        ? `<div style="display:inline-block;padding:0;margin:0"><img src="${logoDataUri}" alt="Ischia Transfer Service" width="184" style="display:block;width:184px;max-width:184px;height:auto;border:0;outline:none;text-decoration:none" /></div>`
-                        : `<div style="display:inline-block;background:#ffffff;color:#133b67;font-size:18px;font-weight:800;line-height:44px;padding:0 16px;border-radius:12px">ITS</div>`
-                    }
-                  </td>
-                  <td valign="middle" align="right">
-                    <div style="display:inline-block;background:rgba(255,255,255,0.14);color:#e7f0f7;padding:8px 14px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid rgba(255,255,255,0.18)">
-                      ${warnings.length} scadenz${warnings.length === 1 ? "a" : "e"} nella finestra di attenzione
-                    </div>
-                  </td>
-                </tr>
-                <tr>
-                  <td colspan="2" style="padding-top:22px">
-                    <div style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#bfd7ea;font-weight:700">Fleet Alert</div>
-                    <div style="padding-top:8px;font-size:34px;line-height:1.04;color:#ffffff;font-weight:800">Promemoria documenti flotta</div>
-                    <div style="padding-top:14px;font-size:15px;line-height:1.7;color:#e7f0f7;max-width:610px">
-                      Monitoraggio automatico delle scadenze dei mezzi Ischia Transfer Service. Per l'assicurazione la data mostrata considera sempre la proroga configurata per il tenant.
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:26px 26px 12px">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="33.33%" style="padding:0 7px 14px 0">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff5f5;border:1px solid #fecaca;border-radius:22px">
-                      <tr><td style="padding:14px 16px">
-                        <div style="font-size:11px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#b91c1c">Scaduti</div>
-                        <div style="padding-top:8px;font-size:34px;font-weight:800;color:#991b1b">${expiredCount}</div>
-                      </td></tr>
-                    </table>
-                  </td>
-                  <td width="33.33%" style="padding:0 7px 14px 7px">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:22px">
-                      <tr><td style="padding:14px 16px">
-                        <div style="font-size:11px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#c2410c">Oggi</div>
-                        <div style="padding-top:8px;font-size:34px;font-weight:800;color:#9a3412">${dueTodayCount}</div>
-                      </td></tr>
-                    </table>
-                  </td>
-                  <td width="33.33%" style="padding:0 0 14px 7px">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:22px">
-                      <tr><td style="padding:14px 16px">
-                        <div style="font-size:11px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#1d4ed8">Prossime</div>
-                        <div style="padding-top:8px;font-size:34px;font-weight:800;color:#1d4ed8">${upcomingCount}</div>
-                      </td></tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:0 26px 26px">
-              <div style="font-size:12px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:#64748b">Dettaglio mezzi</div>
-              <div style="padding-top:8px;padding-bottom:16px;font-size:14px;line-height:1.7;color:#475569">
-                Qui trovi l'elenco completo dei mezzi che risultano gia scaduti oppure nella finestra di attenzione, senza escludere i casi storici piu vecchi.
-              </div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:22px;overflow:hidden">
-                <tr style="background:#f8fafc">
-                  <td style="padding:12px 14px;font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0">Veicolo</td>
-                  <td style="padding:12px 14px;font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0">Targa</td>
-                  <td style="padding:12px 14px;font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0">Documento</td>
-                  <td style="padding:12px 14px;font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0">Stato</td>
-                  <td style="padding:12px 14px;font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0">Scadenza effettiva</td>
-                </tr>
-                ${rows}
-              </table>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;background:#f8fafc;border-radius:22px">
-                <tr>
-                  <td style="padding:16px 18px">
-                    <div style="font-size:12px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:#64748b">Nota assicurazione</div>
-                    <div style="padding-top:8px;font-size:13px;line-height:1.7;color:#475569">
-                      La data mostrata per l'assicurazione e' la scadenza effettiva, comprensiva della proroga configurata per il tenant.
-                    </div>
-                  </td>
-                </tr>
-              </table>
-              <div style="padding-top:20px;font-size:12px;line-height:1.7;color:#64748b">
-                Gestisci e aggiorna le scadenze su
-                <a href="https://ischia-transfer.vercel.app/fleet-ops" style="color:#1d4ed8;font-weight:700;text-decoration:none">Ischia Transfer PMS -> Flotta</a>
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
+function buildAlertHtml(alert: PlannedAlert): string {
+  const what = ALERT_DOC_LABEL[alert.docType];
+  const status = alert.daysLeft > 0
+    ? `scade tra <strong>${alert.daysLeft} ${alert.daysLeft === 1 ? "giorno" : "giorni"}</strong>`
+    : alert.daysLeft === 0 ? "<strong>scade oggi</strong>" : `<strong>è scaduta da ${-alert.daysLeft} giorni</strong>`;
+  const link = alert.vehicleId ? `${APP_URL}/fleet-ops/vehicle/${alert.vehicleId}` : `${APP_URL}/fleet-ops/scadenze`;
+  return emailHtml(`
+    <p>${what} del mezzo <strong>${alert.vehicleLabel}</strong>${alert.plate ? ` (${alert.plate})` : ""}: ${status}.</p>
+    ${emailDataTable([
+      ["Mezzo", alert.vehicleLabel],
+      ["Targa", alert.plate ?? "—"],
+      ["Documento", what],
+      ["Scadenza", fmtDate(alert.dueDate)],
+      ...(alert.detail ? [["Dettaglio", alert.detail] as [string, string]] : []),
+    ])}
+    ${alert.stage === "due" ? emailHighlightBox("Se è già stata rinnovata, aggiorna la scadenza nel gestionale.", "#fff7ed", "#fed7aa") : ""}
+    ${emailButton("Apri le scadenze del mezzo", link)}
+  `, { title: alertSubject(alert), preheader: `${what} · ${fmtDate(alert.dueDate)}` });
 }
 
 type CheckOptions = { today?: unknown; dry_run?: unknown };
@@ -237,176 +81,101 @@ async function runVehicleExpiryCheck(request: NextRequest, readOptions: () => Pr
   const today = isIsoDate(body.today) ? body.today : new Date().toISOString().slice(0, 10);
   const dryRun = body.dry_run === true;
 
-  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes, graceRes] = await Promise.all([
-    admin.from("vehicles").select("id, tenant_id, label, plate, habitual_driver_profile_id, insurance_expiry, road_tax_expiry, inspection_expiry").eq("active", true),
-    admin.from("vehicle_insurances").select("vehicle_id, expiry_date, suspended_from, suspended_until, reactivated_on").eq("is_current", true),
+  const [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes, driversRes, sentRes] = await Promise.all([
+    admin.from("vehicles").select("id, tenant_id, label, plate, habitual_driver_profile_id, insurance_expiry, road_tax_expiry, inspection_expiry, tachograph_enabled").eq("active", true),
+    admin.from("vehicle_insurances").select("vehicle_id, expiry_date, suspended_from, suspended_until, reactivated_on, payment_frequency, second_installment_date").eq("is_current", true),
     admin.from("vehicle_inspections").select("vehicle_id, expiry_date").eq("is_current", true),
-    admin.from("vehicle_extinguishers").select("vehicle_id, expiry_date, serial_number").eq("active", true),
+    admin.from("vehicle_extinguishers").select("id, vehicle_id, expiry_date, serial_number").eq("active", true),
+    admin.from("vehicle_tachographs").select("vehicle_id, expiry_date").eq("is_current", true),
     admin.from("driver_profiles").select("id, full_name, tachograph_card_expiry").eq("active", true).not("tachograph_card_expiry", "is", null),
-    admin.from("vehicle_compliance_grace_periods").select("tenant_id, compliance_type, grace_days").eq("compliance_type", "insurance"),
+    admin.from("vehicle_compliance_alerts_sent").select("tenant_id, subject_key, doc_type, due_date, stage").gte("due_date", addDays(today, -60)),
   ]);
 
-  const queryError = [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, driversRes, graceRes]
+  const queryError = [vehiclesRes, insurancesRes, inspectionsRes, extinguishersRes, tachographsRes, driversRes, sentRes]
     .find((result) => result.error)?.error;
   if (queryError) return NextResponse.json({ ok: false, error: queryError.message }, { status: 500 });
 
-  const vehicles = vehiclesRes.data ?? [];
-
-  // Build lookup maps for new compliance tables
-  const insuranceMap = new Map<string, NonNullable<typeof insurancesRes.data>[number]>();
-  for (const ins of insurancesRes.data ?? []) insuranceMap.set(ins.vehicle_id, ins);
-
+  type Insurance = { vehicle_id: string; expiry_date: string; suspended_from: string | null; suspended_until: string | null; reactivated_on: string | null; payment_frequency: string | null; second_installment_date: string | null };
+  const insuranceMap = new Map<string, Insurance>();
+  for (const row of (insurancesRes.data ?? []) as Insurance[]) insuranceMap.set(row.vehicle_id, row);
   const inspectionMap = new Map<string, string>();
-  for (const ins of inspectionsRes.data ?? []) inspectionMap.set(ins.vehicle_id, ins.expiry_date);
-
-  // Extinguishers: group by vehicle
-  const extMap = new Map<string, { expiry_date: string; serial_number: string | null }[]>();
-  for (const ext of extinguishersRes.data ?? []) {
-    const list = extMap.get(ext.vehicle_id) ?? [];
-    list.push({ expiry_date: ext.expiry_date, serial_number: ext.serial_number });
-    extMap.set(ext.vehicle_id, list);
+  for (const row of (inspectionsRes.data ?? []) as Array<{ vehicle_id: string; expiry_date: string }>) inspectionMap.set(row.vehicle_id, row.expiry_date);
+  const tachographMap = new Map<string, string>();
+  for (const row of (tachographsRes.data ?? []) as Array<{ vehicle_id: string; expiry_date: string }>) tachographMap.set(row.vehicle_id, row.expiry_date);
+  const extinguishers = (extinguishersRes.data ?? []) as Array<{ id: string; vehicle_id: string; expiry_date: string; serial_number: string | null }>;
+  const drivers = new Map<string, { name: string; expiry: string }>();
+  for (const row of (driversRes.data ?? []) as Array<{ id: string; full_name: string; tachograph_card_expiry: string | null }>) {
+    if (row.tachograph_card_expiry) drivers.set(row.id, { name: row.full_name, expiry: row.tachograph_card_expiry });
   }
+  const alreadySent = new Set(
+    ((sentRes.data ?? []) as Array<{ tenant_id: string; subject_key: string; doc_type: string; due_date: string; stage: "advance" | "due" }>)
+      .map((row) => alertKey({ tenantId: row.tenant_id, subjectKey: row.subject_key, docType: row.doc_type, dueDate: row.due_date }, row.stage)),
+  );
 
-  // Driver tachograph map
-  const driverTachMap = new Map<string, { name: string; expiry: string }>();
-  for (const d of driversRes.data ?? []) {
-    if (d.tachograph_card_expiry) driverTachMap.set(d.id, { name: d.full_name, expiry: d.tachograph_card_expiry });
-  }
-
-  const insuranceGraceMap = new Map<string, number>();
-  for (const row of graceRes.data ?? []) {
-    if (row.tenant_id) insuranceGraceMap.set(row.tenant_id, row.grace_days ?? INSURANCE_GRACE_DAYS);
-  }
-
-  const warnings: WarningItem[] = [];
-
-  for (const vehicle of vehicles) {
-    const insuranceGraceDays = insuranceGraceMap.get(vehicle.tenant_id as string) ?? INSURANCE_GRACE_DAYS;
-    // Insurance: prefer new table, fallback to legacy
+  const candidates: AlertCandidate[] = [];
+  const driverCardsSeen = new Set<string>();
+  type Vehicle = { id: string; tenant_id: string; label: string; plate: string | null; habitual_driver_profile_id: string | null; insurance_expiry: string | null; road_tax_expiry: string | null; inspection_expiry: string | null; tachograph_enabled: boolean | null };
+  for (const vehicle of (vehiclesRes.data ?? []) as Vehicle[]) {
+    const base = { tenantId: vehicle.tenant_id, vehicleId: vehicle.id, vehicleLabel: vehicle.label, plate: vehicle.plate };
     const policy = insuranceMap.get(vehicle.id);
-    const insuranceExpiry = policy?.expiry_date ?? (vehicle.insurance_expiry as string | null);
-    const suspension = insuranceSuspensionStatus(today, policy?.suspended_from, policy?.suspended_until, policy?.reactivated_on);
-    if (suspension === "suspended" && policy?.suspended_until) {
-      warnings.push({
-        label: vehicle.label, plate: vehicle.plate, docType: "Polizza sospesa",
-        expiryDate: policy.suspended_until, effectiveExpiryDate: policy.suspended_until,
-        daysLeft: diffDays(today, policy.suspended_until),
-        note: `Polizza sospesa dal ${formatDate(policy.suspended_from!)}. Riattivazione prevista ${formatDate(policy.suspended_until)}; verificare prima di usare il mezzo.`,
-      });
+    const suspended = insuranceSuspensionStatus(today, policy?.suspended_from, policy?.suspended_until, policy?.reactivated_on) === "suspended";
+    const insuranceExpiry = policy?.expiry_date ?? vehicle.insurance_expiry;
+    // Polizza sospesa (mezzo fermo): niente avvisi di scadenza finché non viene riattivata.
+    if (insuranceExpiry && !suspended) {
+      candidates.push({ ...base, subjectKey: vehicle.id, docType: "insurance", dueDate: insuranceExpiry });
     }
-    if (policy?.reactivated_on === today && policy.suspended_until && today < policy.suspended_until) {
-      warnings.push({
-        label: vehicle.label, plate: vehicle.plate, docType: "Riattivazione anticipata",
-        expiryDate: policy.suspended_until, effectiveExpiryDate: policy.suspended_until,
-        daysLeft: diffDays(today, policy.suspended_until),
-        note: `Polizza riattivata il ${formatDate(today)}, prima della data prevista ${formatDate(policy.suspended_until)}.`,
-      });
+    if (policy?.payment_frequency === "semiannual" && policy.second_installment_date && !suspended) {
+      candidates.push({ ...base, subjectKey: vehicle.id, docType: "insurance_installment", dueDate: policy.second_installment_date });
     }
-    // Inspection: prefer new table, fallback to legacy
-    const inspectionExpiry = inspectionMap.get(vehicle.id) ?? (vehicle.inspection_expiry as string | null);
-
-    const docs = [
-      { docType: "Assicurazione", expiry: insuranceExpiry },
-      { docType: "Bollo", expiry: vehicle.road_tax_expiry as string | null },
-      { docType: "Collaudo", expiry: inspectionExpiry },
-    ];
-
-    for (const { docType, expiry } of docs) {
-      if (!expiry) continue;
-      const effectiveExpiryDate = getEffectiveExpiry(docType, expiry, { insuranceGraceDays });
-      const daysLeft = diffDays(today, effectiveExpiryDate);
-
-      if (daysLeft <= getWarnWindowDays(docType)) {
-        warnings.push({
-          label: vehicle.label,
-          plate: vehicle.plate,
-          docType,
-          expiryDate: expiry,
-          effectiveExpiryDate,
-          daysLeft,
-          insuranceGraceDays: docType === "Assicurazione" ? insuranceGraceDays : undefined,
-          note:
-            docType === "Assicurazione"
-              ? `Polizza ${formatDate(expiry)} + proroga ${insuranceGraceDays} giorni => copertura fino al ${formatDate(effectiveExpiryDate)} inclusa`
-              : docType === "Collaudo"
-                ? `Scadenza nominale ${formatDate(expiry)} · regola valida fino al ${formatDate(effectiveExpiryDate)}`
-                : undefined,
-        });
-      }
+    const inspectionExpiry = inspectionMap.get(vehicle.id) ?? vehicle.inspection_expiry;
+    if (inspectionExpiry) candidates.push({ ...base, subjectKey: vehicle.id, docType: "inspection", dueDate: inspectionExpiry });
+    if (vehicle.road_tax_expiry) candidates.push({ ...base, subjectKey: vehicle.id, docType: "road_tax", dueDate: vehicle.road_tax_expiry });
+    const calibration = tachographMap.get(vehicle.id);
+    if (vehicle.tachograph_enabled && calibration) {
+      candidates.push({ ...base, subjectKey: vehicle.id, docType: "tachograph_calibration", dueDate: calibration });
     }
-
-    // Extinguishers
-    const extList = extMap.get(vehicle.id) ?? [];
-    for (const ext of extList) {
-      const daysLeft = diffDays(today, ext.expiry_date);
-      if (daysLeft <= WARN_DAYS) {
-        warnings.push({
-          label: vehicle.label,
-          plate: vehicle.plate,
-          docType: "Estintore",
-          expiryDate: ext.expiry_date,
-          effectiveExpiryDate: ext.expiry_date,
-          daysLeft,
-          note: ext.serial_number ? `Sn: ${ext.serial_number}` : undefined,
-        });
-      }
+    for (const ext of extinguishers.filter((row) => row.vehicle_id === vehicle.id)) {
+      candidates.push({ ...base, subjectKey: `ext:${ext.id}`, docType: "extinguisher", dueDate: ext.expiry_date, detail: ext.serial_number ? `Matricola ${ext.serial_number}` : undefined });
     }
-
-    // Tachograph of habitual driver
-    if (vehicle.habitual_driver_profile_id) {
-      const tacho = driverTachMap.get(vehicle.habitual_driver_profile_id);
-      if (tacho) {
-        const daysLeft = diffDays(today, tacho.expiry);
-        if (daysLeft <= WARN_DAYS) {
-          warnings.push({
-            label: `${vehicle.label} — Autista: ${tacho.name}`,
-            plate: vehicle.plate,
-            docType: "Tachigrafo",
-            expiryDate: tacho.expiry,
-            effectiveExpiryDate: tacho.expiry,
-            daysLeft,
-          });
-        }
-      }
+    const driver = vehicle.habitual_driver_profile_id ? drivers.get(vehicle.habitual_driver_profile_id) : undefined;
+    // La carta è dell'autista: un solo avviso anche se è abituale su più mezzi.
+    if (driver && vehicle.habitual_driver_profile_id && !driverCardsSeen.has(vehicle.habitual_driver_profile_id)) {
+      driverCardsSeen.add(vehicle.habitual_driver_profile_id);
+      candidates.push({ ...base, subjectKey: `driver:${vehicle.habitual_driver_profile_id}`, docType: "tachograph_card", dueDate: driver.expiry, detail: `Autista: ${driver.name}` });
     }
   }
 
-  if (warnings.length === 0) {
-    return NextResponse.json({ ok: true, sent: false, warnings: 0, today, dry_run: dryRun });
+  const planned = planAlerts(candidates, today, alreadySent);
+  const batch = planned.slice(0, MAX_ALERTS_PER_RUN);
+  const preview = batch.map((alert) => ({ subject: alertSubject(alert), docType: alert.docType, stage: alert.stage, dueDate: alert.dueDate, vehicle: alert.vehicleLabel, plate: alert.plate }));
+
+  if (dryRun || batch.length === 0) {
+    return NextResponse.json({ ok: true, dry_run: dryRun, today, alerts: batch.length, pending: planned.length - batch.length, sent: 0, preview });
   }
 
-  warnings.sort((left, right) => left.daysLeft - right.daysLeft);
-
-  const subject = `Avviso scadenze veicoli (${warnings.length}) - Ischia Transfer`;
-  let delivery: { ok: boolean; error?: string; responseText?: string } = { ok: true };
-
-  if (!dryRun) {
-    delivery = await sendEmail(subject, buildEmailHtml(warnings));
-    if (!delivery.ok) {
-      return NextResponse.json(
-        {
-          ok: false,
-          sent: false,
-          dry_run: false,
-          today,
-          warnings: warnings.length,
-          error: delivery.error,
-          preview: warnings,
-        },
-        { status: 502 }
-      );
+  let sent = 0;
+  const failures: string[] = [];
+  for (const alert of batch) {
+    const result = await sendEmail({ to: NOTIFY_EMAILS, subject: alertSubject(alert), html: buildAlertHtml(alert) });
+    if (!result.ok) {
+      failures.push(`${alertSubject(alert)}: ${result.error ?? "errore invio"}`);
+      continue;
     }
+    // Email non configurata (es. sviluppo): non si registra, così partirà davvero più avanti.
+    if (result.skipped) continue;
+    // Registrato solo se inviato: se l'invio fallisce, si riprova al prossimo giro.
+    const { error } = await admin.from("vehicle_compliance_alerts_sent").insert({
+      tenant_id: alert.tenantId, vehicle_id: alert.vehicleId, subject_key: alert.subjectKey,
+      doc_type: alert.docType, due_date: alert.dueDate, stage: alert.stage,
+    });
+    if (error && error.code !== "23505") failures.push(`${alertSubject(alert)}: inviata ma non registrata (${error.message})`);
+    sent += 1;
   }
 
-  return NextResponse.json({
-    ok: true,
-    sent: !dryRun,
-    dry_run: dryRun,
-    today,
-    warnings: warnings.length,
-    preview: warnings,
-    delivery: dryRun ? null : { ok: true },
-  });
+  return NextResponse.json(
+    { ok: failures.length === 0, dry_run: false, today, alerts: batch.length, pending: planned.length - batch.length, sent, failures, preview },
+    { status: failures.length > 0 && sent === 0 ? 502 : 200 },
+  );
 }
 
 export async function GET(request: NextRequest) {
