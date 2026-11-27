@@ -1,6 +1,6 @@
 /**
- * GET /api/ops/quotes/respond?token=xxx&action=accepted|rejected
- * Endpoint pubblico — il cliente clicca il link dall'email.
+ * POST /api/ops/quotes/respond  { token, action: "accepted" | "rejected" }
+ * Endpoint pubblico, autorizzato dal token del preventivo (pagina /quote/respond).
  */
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
@@ -117,34 +117,59 @@ async function createServicesFromAcceptedQuote(admin: ReturnType<typeof adminCli
   return { ok: true };
 }
 
+/**
+ * GET: i vecchi link portano alla pagina del preventivo, senza eseguire nulla.
+ * Accetta/rifiuta avviene solo con POST dalla pagina (un GET può essere aperto
+ * da anteprime link e antivirus della posta).
+ */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const token = searchParams.get("token");
-  const action = searchParams.get("action");
+  const token = new URL(request.url).searchParams.get("token") ?? "";
+  const target = new URL("/quote/respond", request.url);
+  if (token) target.searchParams.set("token", token);
+  return NextResponse.redirect(target);
+}
 
-  if (!token || !["accepted", "rejected"].includes(action ?? "")) {
-    return NextResponse.redirect(new URL("/quote/respond?error=invalid", request.url));
-  }
+function todayRome() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" }).format(new Date());
+}
+
+export async function POST(request: NextRequest) {
+  const body = (await request.json().catch(() => null)) as { token?: unknown; action?: unknown } | null;
+  const token = typeof body?.token === "string" ? body.token.trim() : "";
+  const action = body?.action === "accepted" || body?.action === "rejected" ? body.action : null;
+  if (!token || token.length > 200 || !action) return NextResponse.json({ ok: false, error: "invalid" }, { status: 400 });
 
   const admin = adminClient();
   const { data: quote } = await admin
     .from("quotes")
-    .select("id, tenant_id, status, quote_service_code, route_label, service_kind, price_cents, currency, passenger_count, arrival_date, departure_date, notes, client_name, client_email")
+    .select("id, tenant_id, status, valid_until, quote_service_code, route_label, service_kind, price_cents, currency, passenger_count, arrival_date, departure_date, notes, client_name, client_email")
     .eq("response_token", token)
     .maybeSingle();
 
-  if (!quote) return NextResponse.redirect(new URL("/quote/respond?error=notfound", request.url));
-  if (quote.status !== "sent") return NextResponse.redirect(new URL(`/quote/respond?error=alreadyresponded&status=${String(quote.status)}`, request.url));
+  if (!quote) return NextResponse.json({ ok: false, error: "notfound" }, { status: 404 });
+  if (quote.status !== "sent") return NextResponse.json({ ok: false, error: "alreadyresponded", status: String(quote.status) }, { status: 409 });
+  if (action === "accepted" && quote.valid_until && String(quote.valid_until) < todayRome()) {
+    return NextResponse.json({ ok: false, error: "expired" }, { status: 410 });
+  }
+
+  // Passaggio atomico sent -> risposta: un doppio click o due schede non creano i servizi due volte.
+  const { data: claimed, error: claimError } = await admin
+    .from("quotes")
+    .update({ status: action })
+    .eq("id", String(quote.id))
+    .eq("status", "sent")
+    .select("id")
+    .maybeSingle();
+  if (claimError) return NextResponse.json({ ok: false, error: "server" }, { status: 500 });
+  if (!claimed) return NextResponse.json({ ok: false, error: "alreadyresponded", status: action }, { status: 409 });
 
   if (action === "accepted") {
     const result = await createServicesFromAcceptedQuote(admin, quote as Record<string, unknown>);
     if (!result.ok) {
-      return NextResponse.redirect(new URL("/quote/respond?error=service_creation_failed", request.url));
+      await admin.from("quotes").update({ status: "sent" }).eq("id", String(quote.id)).eq("status", "accepted");
+      return NextResponse.json({ ok: false, error: "service_creation_failed" }, { status: 500 });
     }
   }
 
-  await admin.from("quotes").update({ status: action }).eq("id", String(quote.id));
-
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://ischiatransferservice.it";
-  return NextResponse.redirect(new URL(`/quote/respond?success=${action}&route=${encodeURIComponent(String(quote.route_label))}`, appUrl));
+  return NextResponse.json({ ok: true, action, route: String(quote.route_label ?? "") });
 }
