@@ -124,8 +124,9 @@ function toApiVerifyPath(bookingId: string, direction: BusQrDirection, token: st
   return `/api/qr/bus/${bookingId}/${direction}/${token}`;
 }
 
-function toImagePath(bookingId: string, direction: BusQrDirection) {
-  return `/api/bookings/${bookingId}/qr-codes/${direction}/image`;
+// Il token del QR è nell'URL: senza, l'immagine (che è il QR d'imbarco) non si scarica.
+function toImagePath(bookingId: string, direction: BusQrDirection, token: string) {
+  return `/api/bookings/${bookingId}/qr-codes/${direction}/image?t=${encodeURIComponent(token)}`;
 }
 
 function escapeHtml(value: string) {
@@ -209,7 +210,7 @@ async function upsertQrRecord(
 ) {
   const token = force || !existing ? qrToken() : existing.qr_token;
   const qrPayload = `${appUrl}${toVerifyPath(root.id, direction, token)}`;
-  const qrImageUrl = `${appUrl}${toImagePath(root.id, direction)}`;
+  const qrImageUrl = `${appUrl}${toImagePath(root.id, direction, token)}`;
   const png = await buildBusQrPng(qrPayload);
 
   let qrFilePath = existing?.qr_file_path ?? null;
@@ -280,7 +281,11 @@ export async function listBusBookingQrCodes(admin: SupabaseClient, tenantId: str
     busCityOrigin: root.bus_city_origin ?? null,
     outboundServiceDate: outboundService.arrival_date ?? outboundService.date,
     returnServiceDate: returnService?.departure_date ?? returnService?.date ?? root.departure_date ?? null,
-    codes: (data ?? []) as BookingQrRow[],
+    // URL immagine ricalcolato col token: i record creati prima ne hanno uno senza.
+    codes: ((data ?? []) as BookingQrRow[]).map((code) => ({
+      ...code,
+      qr_image_url: replaceImagePath(code.qr_image_url, root.id, code.direction, code.qr_token),
+    })),
   };
 }
 
@@ -449,16 +454,25 @@ export async function markBusBookingQrCodeUsed(
   return validateBusBookingQr(admin, bookingId, direction, token);
 }
 
+function replaceImagePath(url: string, bookingId: string, direction: BusQrDirection, token: string) {
+  const index = url.indexOf("/api/bookings/");
+  const origin = index >= 0 ? url.slice(0, index) : "";
+  return `${origin}${toImagePath(bookingId, direction, token)}`;
+}
+
 export async function getBusQrImageResponse(
   admin: SupabaseClient,
   bookingId: string,
-  direction: BusQrDirection
+  direction: BusQrDirection,
+  token: string
 ) {
+  if (!token) return new Response("QR non trovato", { status: 404 });
   const { data, error } = await admin
     .from("booking_qr_codes")
     .select("qr_payload, qr_file_path")
     .eq("booking_id", bookingId)
     .eq("direction", direction)
+    .eq("qr_token", token)
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!data?.qr_payload) {
@@ -650,7 +664,7 @@ export async function sendBusBookingQrWhatsApp(options: SendWhatsAppOptions): Pr
       if (!code) return null;
       const mediaLink = mediaKind === "document"
         ? `${options.appUrl}/api/bookings/${summary.bookingId}/qr-codes/pdf`
-        : `${options.appUrl}${toImagePath(summary.bookingId, direction)}`;
+        : `${options.appUrl}${toImagePath(summary.bookingId, direction, code.qr_token)}`;
       return buildWhatsAppTemplatePayload({
         phone,
         templateName,
