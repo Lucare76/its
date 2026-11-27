@@ -10486,8 +10486,8 @@ export type Database = {
           document_path: string | null
           expiry_date: string
           id: string
-          is_current: boolean
           installment_amount_cents: number | null
+          is_current: boolean
           notes: string | null
           payment_frequency: string
           policy_number: string | null
@@ -10506,8 +10506,8 @@ export type Database = {
           document_path?: string | null
           expiry_date: string
           id?: string
-          is_current?: boolean
           installment_amount_cents?: number | null
+          is_current?: boolean
           notes?: string | null
           payment_frequency?: string
           policy_number?: string | null
@@ -10526,8 +10526,8 @@ export type Database = {
           document_path?: string | null
           expiry_date?: string
           id?: string
-          is_current?: boolean
           installment_amount_cents?: number | null
+          is_current?: boolean
           notes?: string | null
           payment_frequency?: string
           policy_number?: string | null
