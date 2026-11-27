@@ -89,6 +89,7 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
 
   const [userRole, setUserRole] = useState<string | null>(null);
   const [vehicleLabel, setVehicleLabel] = useState<string>("");
+  const [vehiclePlate, setVehiclePlate] = useState<string>("");
   const [tab, setTab]     = useState<"maintenance" | "fuel" | "spare_parts" | "km_logs" | "documenti" | "costi" | "telepass">("maintenance");
   const [records, setRecords]   = useState<(Maintenance | Fuel | SparePart)[]>([]);
   const [loading, setLoading]   = useState(false);
@@ -249,9 +250,10 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
       fetch("/api/ops/vehicles", { headers: { Authorization: `Bearer ${token}` } })
         .then((r) => r.json())
         .then((d) => {
-          const v = (d.vehicles ?? []).find((x: { id: string; label: string; libretto_document_path?: string | null; libretto_uploaded_at?: string | null; libretto_document_path_back?: string | null; libretto_uploaded_at_back?: string | null; tachograph_enabled?: boolean; extinguisher_enabled?: boolean }) => x.id === vehicleId);
+          const v = (d.vehicles ?? []).find((x: { id: string; label: string; plate?: string | null; libretto_document_path?: string | null; libretto_uploaded_at?: string | null; libretto_document_path_back?: string | null; libretto_uploaded_at_back?: string | null; tachograph_enabled?: boolean; extinguisher_enabled?: boolean }) => x.id === vehicleId);
           if (v) {
             setVehicleLabel(v.label);
+            setVehiclePlate(v.plate ?? "");
             setLibrettoPath(v.libretto_document_path ?? null);
             setLibrettoUploadedAt(v.libretto_uploaded_at ?? null);
             setLibrettoBackPath(v.libretto_document_path_back ?? null);
@@ -521,7 +523,12 @@ export default function VehicleRecordsPage({ params }: { params: Promise<{ id: s
         <Link href="/fleet-ops" className="text-xs text-slate-400 hover:text-slate-600 mb-2 inline-block">
           ← Torna alla flotta
         </Link>
-        <h1 className="text-2xl font-bold text-slate-900">{vehicleLabel || "Scheda veicolo"}</h1>
+        <h1 className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xl font-bold text-slate-900">
+          <span>{vehicleLabel || "Scheda veicolo"}</span>
+          {vehiclePlate ? (
+            <span className="rounded-md border border-slate-300 bg-slate-50 px-2 py-0.5 font-mono text-lg font-semibold tracking-wider text-slate-700">{vehiclePlate}</span>
+          ) : null}
+        </h1>
         <p className="text-sm text-slate-500">Gestisci manutenzioni, rifornimenti e ricambi del mezzo</p>
       </div>
 
