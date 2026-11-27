@@ -90,7 +90,7 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
       serial_number: serial_number ?? null,
       last_revision_date: last_revision_date ?? null,
       expiry_date,
-      document_path: document_path ?? null,
+      ...(document_path !== undefined ? { document_path } : {}),
       notes: notes ?? null,
       ...(active !== undefined ? { active } : {}),
     })

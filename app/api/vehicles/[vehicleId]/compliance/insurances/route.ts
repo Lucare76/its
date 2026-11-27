@@ -18,6 +18,30 @@ function parseSuspension(body: unknown) {
   return { suspended_from: suspended_from ?? null, suspended_until: suspended_until ?? null, reactivated_on: reactivated_on ?? null };
 }
 
+const cents = z.number().int().min(0).max(100_000_000).nullable().optional();
+const installmentSchema = z.object({
+  payment_frequency: z.enum(["annual", "semiannual"]).optional(),
+  installment_amount_cents: cents,
+  second_installment_date: iso,
+  annual_amount_cents: cents,
+});
+/** Frazionamento del premio: con pagamento annuale rata e seconda rata restano vuote. */
+function parseInstallments(body: unknown) {
+  const parsed = installmentSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const frequency = parsed.data.payment_frequency ?? "annual";
+  if (frequency === "annual") {
+    return { payment_frequency: frequency, installment_amount_cents: null, second_installment_date: null, annual_amount_cents: parsed.data.annual_amount_cents ?? null };
+  }
+  const installment = parsed.data.installment_amount_cents ?? null;
+  return {
+    payment_frequency: frequency,
+    installment_amount_cents: installment,
+    second_installment_date: parsed.data.second_installment_date ?? null,
+    annual_amount_cents: parsed.data.annual_amount_cents ?? (installment != null ? installment * 2 : null),
+  };
+}
+
 export async function GET(request: NextRequest, { params }: Ctx) {
   const { vehicleId } = await params;
   const ctx = await authorizePricingRequest(request, ["admin", "operator", "supervisor"]);
@@ -44,7 +68,9 @@ export async function POST(request: NextRequest, { params }: Ctx) {
   const body = await request.json().catch(() => ({}));
   const suspension = parseSuspension(body);
   if (!suspension) return NextResponse.json({ error: "Date di sospensione o riattivazione non valide." }, { status: 400 });
-  const { company, policy_number, expiry_date, annual_amount_cents, document_path, notes } = body;
+  const installments = parseInstallments(body);
+  if (!installments) return NextResponse.json({ error: "Premio, rata o data seconda rata non validi." }, { status: 400 });
+  const { company, policy_number, expiry_date, document_path, notes } = body;
 
   if (!company || !expiry_date) {
     return NextResponse.json({ error: "company e expiry_date obbligatori" }, { status: 400 });
@@ -75,7 +101,7 @@ export async function POST(request: NextRequest, { params }: Ctx) {
       company,
       policy_number: policy_number ?? null,
       expiry_date,
-      annual_amount_cents: annual_amount_cents ?? null,
+      ...installments,
       document_path: document_path ?? null,
       notes: notes ?? null,
       ...suspension,
@@ -110,7 +136,9 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
   const body = await request.json().catch(() => ({}));
   const suspension = parseSuspension(body);
   if (!suspension) return NextResponse.json({ error: "Date di sospensione o riattivazione non valide." }, { status: 400 });
-  const { id, company, policy_number, expiry_date, annual_amount_cents, document_path, notes } = body;
+  const installments = parseInstallments(body);
+  if (!installments) return NextResponse.json({ error: "Premio, rata o data seconda rata non validi." }, { status: 400 });
+  const { id, company, policy_number, expiry_date, document_path, notes } = body;
 
   if (!id) return NextResponse.json({ error: "id obbligatorio" }, { status: 400 });
 
@@ -120,8 +148,9 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
       company,
       policy_number: policy_number ?? null,
       expiry_date,
-      annual_amount_cents: annual_amount_cents ?? null,
-      document_path: document_path ?? null,
+      ...installments,
+      // Il documento si tocca solo se la richiesta lo indica: prima ogni modifica lo cancellava.
+      ...(document_path !== undefined ? { document_path } : {}),
       notes: notes ?? null,
       ...suspension,
     })

@@ -166,11 +166,34 @@ const CALENDAR_TYPE_SHORT_LABEL: Record<string, string> = {
   tachograph: "Tachigrafo",
 };
 
+/** "1.200,50" / "1200,5" / "1200.50" -> centesimi; null se vuoto o non valido. */
+function euroToCents(raw: string): number | null {
+  const text = raw.trim().replace(/\s|€/g, "");
+  if (!text) return null;
+  const normalized = text.includes(",")
+    ? text.replace(/\./g, "").replace(",", ".")
+    : /^\d{1,3}(\.\d{3})+$/.test(text) ? text.replace(/\./g, "") : text;
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return null;
+  return Math.round(Number(normalized) * 100);
+}
+
+function centsToEuroInput(value: unknown): string {
+  if (value == null || value === "") return "";
+  return (Number(value) / 100).toFixed(2).replace(".", ",");
+}
+
+function formatEuroCents(value: unknown): string {
+  return (Number(value) / 100).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+}
+
 const EMPTY_INSURANCE = {
   company: "",
   policy_number: "",
   expiry_date: "",
   annual_amount_cents: "",
+  payment_frequency: "annual" as "annual" | "semiannual",
+  installment_amount: "",
+  second_installment_date: "",
   notes: "",
   suspended_from: "",
   suspended_until: "",
@@ -380,7 +403,8 @@ export default function ScadenzePage() {
   }, []);
 
   useEffect(() => {
-    if (!panel || !showForm) return;
+    // Si precompila solo in modifica: "Nuova polizza / rinnovo" parte da un form vuoto.
+    if (!panel || !showForm || formMode !== "update") return;
     const timeout = window.setTimeout(() => {
       const panelVehicle = items.find((item) => item.vehicle_id === panel.vehicleId) ?? null;
       const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
@@ -407,7 +431,10 @@ export default function ScadenzePage() {
           company: String(currentRecord.company ?? ""),
           policy_number: String(currentRecord.policy_number ?? ""),
           expiry_date: String(currentRecord.expiry_date ?? ""),
-          annual_amount_cents: currentRecord.annual_amount_cents != null ? String(Number(currentRecord.annual_amount_cents) / 100) : "",
+          annual_amount_cents: centsToEuroInput(currentRecord.annual_amount_cents),
+          payment_frequency: currentRecord.payment_frequency === "semiannual" ? "semiannual" : "annual",
+          installment_amount: centsToEuroInput(currentRecord.installment_amount_cents),
+          second_installment_date: String(currentRecord.second_installment_date ?? ""),
           notes: String(currentRecord.notes ?? ""),
           suspended_from: String(currentRecord.suspended_from ?? ""),
           suspended_until: String(currentRecord.suspended_until ?? ""),
@@ -442,7 +469,7 @@ export default function ScadenzePage() {
       setFormMode("update");
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [getCurrentRecordForTab, items, panel, panelRecords, panelTab, resetForms, showForm]);
+  }, [formMode, getCurrentRecordForTab, items, panel, panelRecords, panelTab, resetForms, showForm]);
 
   const handleOverride = useCallback(async (clear?: boolean) => {
     if (!panel) return;
@@ -479,6 +506,8 @@ export default function ScadenzePage() {
     let body: Record<string, unknown> = {};
     let method: "POST" | "PUT" = "POST";
     const currentRecord = getCurrentRecordForTab(panelTab, panelRecords);
+    // "Nuova polizza / rinnovo" crea sempre un record nuovo; solo "Modifica" aggiorna quello attuale.
+    const editingCurrent = formMode === "update" && currentRecord !== null;
 
     if (panelTab === "insurance") {
       if (!insuranceForm.company || !insuranceForm.expiry_date) {
@@ -486,16 +515,23 @@ export default function ScadenzePage() {
         setSaving(false);
         return;
       }
+      if ((insuranceForm.annual_amount_cents && euroToCents(insuranceForm.annual_amount_cents) === null)
+        || (insuranceForm.payment_frequency === "semiannual" && insuranceForm.installment_amount && euroToCents(insuranceForm.installment_amount) === null)) {
+        showToast("Importo non valido: usa solo numeri, es. 1200,50", false);
+        setSaving(false);
+        return;
+      }
       url = `/api/vehicles/${panel.vehicleId}/compliance/insurances`;
-      method = currentRecord ? "PUT" : "POST";
+      method = editingCurrent ? "PUT" : "POST";
       body = {
-        ...(currentRecord ? { id: currentRecord.id } : {}),
+        ...(editingCurrent ? { id: currentRecord.id } : {}),
         company: insuranceForm.company,
         policy_number: insuranceForm.policy_number || null,
         expiry_date: insuranceForm.expiry_date,
-        annual_amount_cents: insuranceForm.annual_amount_cents
-          ? Math.round(parseFloat(insuranceForm.annual_amount_cents) * 100)
-          : null,
+        annual_amount_cents: euroToCents(insuranceForm.annual_amount_cents),
+        payment_frequency: insuranceForm.payment_frequency,
+        installment_amount_cents: insuranceForm.payment_frequency === "semiannual" ? euroToCents(insuranceForm.installment_amount) : null,
+        second_installment_date: insuranceForm.payment_frequency === "semiannual" ? insuranceForm.second_installment_date || null : null,
         notes: insuranceForm.notes || null,
         suspended_from: insuranceForm.suspended_from || null,
         suspended_until: insuranceForm.suspended_until || null,
@@ -508,9 +544,9 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/inspections`;
-      method = currentRecord ? "PUT" : "POST";
+      method = editingCurrent ? "PUT" : "POST";
       body = {
-        ...(currentRecord ? { id: currentRecord.id } : {}),
+        ...(editingCurrent ? { id: currentRecord.id } : {}),
         inspection_date: inspectionForm.inspection_date,
         expiry_date: inspectionForm.expiry_date,
         inspection_center: inspectionForm.inspection_center || null,
@@ -537,9 +573,9 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/extinguishers`;
-      method = currentRecord ? "PUT" : "POST";
+      method = editingCurrent ? "PUT" : "POST";
       body = {
-        ...(currentRecord ? { id: currentRecord.id } : {}),
+        ...(editingCurrent ? { id: currentRecord.id } : {}),
         serial_number: extinguisherForm.serial_number || null,
         last_revision_date: extinguisherForm.last_revision_date || null,
         expiry_date: extinguisherForm.expiry_date,
@@ -553,9 +589,9 @@ export default function ScadenzePage() {
         return;
       }
       url = `/api/vehicles/${panel.vehicleId}/compliance/tachographs`;
-      method = currentRecord ? "PUT" : "POST";
+      method = editingCurrent ? "PUT" : "POST";
       body = {
-        ...(currentRecord ? { id: currentRecord.id } : {}),
+        ...(editingCurrent ? { id: currentRecord.id } : {}),
         calibration_date: tachographForm.calibration_date,
         expiry_date: tachographForm.expiry_date,
         center: tachographForm.center || null,
@@ -1680,7 +1716,7 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                       ) : (
                         <button
                           type="button"
-                          onClick={() => { setFormMode("insert"); setShowForm(true); }}
+                          onClick={() => { resetForms(); setFormMode("insert"); setShowForm(true); }}
                           className="btn-primary w-full"
                         >
                           + Inserisci scadenza
@@ -1725,10 +1761,39 @@ td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
                               <input type="date" className="input" value={insuranceForm.expiry_date} onChange={(e) => setInsuranceForm((f) => ({ ...f, expiry_date: e.target.value }))} />
                             </div>
                             <div>
-                              <label className="label">Premio annuo (€)</label>
-                              <input type="number" className="input" value={insuranceForm.annual_amount_cents} onChange={(e) => setInsuranceForm((f) => ({ ...f, annual_amount_cents: e.target.value }))} />
+                              <label className="label">Pagamento</label>
+                              <select className="input" value={insuranceForm.payment_frequency}
+                                onChange={(e) => setInsuranceForm((f) => ({ ...f, payment_frequency: e.target.value === "semiannual" ? "semiannual" : "annual" }))}>
+                                <option value="annual">Annuale (una rata)</option>
+                                <option value="semiannual">Semestrale (due rate)</option>
+                              </select>
                             </div>
                           </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <div>
+                              <label className="label">Premio annuo (€)</label>
+                              <input type="text" inputMode="decimal" placeholder="Es. 1200,50" className="input" value={insuranceForm.annual_amount_cents}
+                                onChange={(e) => setInsuranceForm((f) => ({ ...f, annual_amount_cents: e.target.value }))} />
+                            </div>
+                            {insuranceForm.payment_frequency === "semiannual" ? (
+                              <>
+                                <div>
+                                  <label className="label">Rata semestrale (€)</label>
+                                  <input type="text" inputMode="decimal" className="input" value={insuranceForm.installment_amount}
+                                    placeholder={euroToCents(insuranceForm.annual_amount_cents) != null ? centsToEuroInput(Math.round((euroToCents(insuranceForm.annual_amount_cents) ?? 0) / 2)) : "Es. 600"}
+                                    onChange={(e) => setInsuranceForm((f) => ({ ...f, installment_amount: e.target.value }))} />
+                                </div>
+                                <div>
+                                  <label className="label">Data seconda rata</label>
+                                  <input type="date" className="input" value={insuranceForm.second_installment_date}
+                                    onChange={(e) => setInsuranceForm((f) => ({ ...f, second_installment_date: e.target.value }))} />
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                          {insuranceForm.payment_frequency === "semiannual" ? (
+                            <p className="text-xs text-slate-500">Se lasci vuota la rata, il premio annuo vale il doppio della rata e viceversa. Per la seconda rata arriva un avviso 7 giorni prima.</p>
+                          ) : null}
                           <div>
                             <label className="label">Note</label>
                             <input className="input" value={insuranceForm.notes} onChange={(e) => setInsuranceForm((f) => ({ ...f, notes: e.target.value }))} />
@@ -1954,6 +2019,19 @@ function RecordList({ tab, records, roadTaxEntry }: RecordListProps) {
             </div>
             {tab === "insurance" && !!row.policy_number && (
               <div className="mt-1 text-xs text-slate-400">Polizza: {row.policy_number as string}</div>
+            )}
+            {tab === "insurance" && row.annual_amount_cents != null && (
+              <div className="mt-1 text-xs text-slate-500">
+                Premio annuo {formatEuroCents(row.annual_amount_cents)}
+                {row.payment_frequency === "semiannual"
+                  ? ` · semestrale${row.installment_amount_cents != null ? `, rata ${formatEuroCents(row.installment_amount_cents)}` : ""}${row.second_installment_date ? ` · 2ª rata il ${formatDate(String(row.second_installment_date))}` : ""}`
+                  : ""}
+              </div>
+            )}
+            {tab === "tachograph" && (!!row.center || !!row.certificate_number) && (
+              <div className="mt-1 text-xs text-slate-500">
+                {row.center ? `Centro: ${row.center as string}` : ""}{row.center && row.certificate_number ? " · " : ""}{row.certificate_number ? `Certificato: ${row.certificate_number as string}` : ""}
+              </div>
             )}
             {tab === "insurance" && !!row.suspended_from && !!row.suspended_until && (
               <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
