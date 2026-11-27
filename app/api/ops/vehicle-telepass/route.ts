@@ -4,7 +4,7 @@ import { z } from "zod";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import {
   TELEPASS_INVOICE_BUCKET, TELEPASS_INVOICE_MAX_BYTES, isAllowedInvoiceType,
-  isTelepassInvoicePathOf, telepassInvoiceFolder, telepassInvoicePath,
+  isTelepassInvoicePathOf, normalizeTelepassCode, telepassInvoiceFolder, telepassInvoicePath,
 } from "@/lib/server/telepass-invoice";
 
 export const runtime = "nodejs";
@@ -78,9 +78,23 @@ export async function GET(request: NextRequest) {
   ]);
   const error = devices.error ?? invoices.error ?? cards.error ?? cardHistory.error ?? vehicles.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Un apparato può stare su due targhe: per quelli attivi qui, l'altra targa.
+  const deviceRows = (devices.data ?? []) as Array<{ id: string; device_code: string; removed_on: string | null }>;
+  const activeCodes = new Set(deviceRows.filter((d) => !d.removed_on).map((d) => normalizeTelepassCode(d.device_code)));
+  const sharedWith: Record<string, string[]> = {};
+  if (activeCodes.size > 0) {
+    const { data: others, error: othersError } = await db.from("vehicle_telepass_devices")
+      .select("device_code, vehicle_id").eq("tenant_id", tenantId).is("removed_on", null).neq("vehicle_id", vehicleId);
+    if (othersError) return NextResponse.json({ error: othersError.message }, { status: 500 });
+    for (const other of (others ?? []) as Array<{ device_code: string; vehicle_id: string }>) {
+      const code = normalizeTelepassCode(other.device_code);
+      if (activeCodes.has(code)) (sharedWith[code] ??= []).push(other.vehicle_id);
+    }
+  }
   return NextResponse.json({
     decommissioned: Boolean(vehicle.decommissioned_at),
-    devices: devices.data ?? [],
+    devices: deviceRows.map((d) => ({ ...d, shared_vehicle_ids: d.removed_on ? [] : sharedWith[normalizeTelepassCode(d.device_code)] ?? [] })),
     invoices: invoices.data ?? [],
     cards: cards.data ?? [],
     card_history: cardHistory.data ?? [],
@@ -120,7 +134,10 @@ export async function POST(request: NextRequest) {
       tenant_id: tenantId, vehicle_id: vehicle.id, device_code: String(data.device_code).replace(/\s+/g, " "),
       contract_ref: data.contract_ref, assigned_on: data.assigned_on, note: data.note, created_by: auth.user.id,
     });
-    if (isUniqueViolation(error)) return NextResponse.json({ error: "Questo Telepass è già attivo su un mezzo: toglilo prima da lì." }, { status: 409 });
+    if (isUniqueViolation(error)) return NextResponse.json({ error: "Questo Telepass è già attivo su questo mezzo." }, { status: 409 });
+    if (error?.message?.includes("telepass_max_two_plates")) {
+      return NextResponse.json({ error: "Questo Telepass è già abbinato a due targhe: toglilo da una delle due prima." }, { status: 409 });
+    }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });
   }

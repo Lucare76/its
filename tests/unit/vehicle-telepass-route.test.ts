@@ -29,7 +29,7 @@ beforeEach(() => {
   const admin = {
     from(table: string) {
       const query: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "is", "lte", "order", "limit", "insert", "update", "delete"]) {
+      for (const method of ["select", "eq", "is", "neq", "lte", "order", "limit", "insert", "update", "delete"]) {
         query[method] = (...args: unknown[]) => { calls.push({ table, method, args }); return query; };
       }
       const result = () => ({ data: rows[table] ?? null, error: errors[table] ?? null });
@@ -89,7 +89,14 @@ describe("vehicle-telepass API", () => {
     errors.vehicle_telepass_devices = { code: "23505", message: "duplicate" };
     const res = await post("device_add", { vehicle_id: VEHICLE, device_code: "12345678", assigned_on: "2026-11-01" });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toMatch(/già attivo/);
+    expect((await res.json()).error).toMatch(/già attivo su questo mezzo/);
+  });
+
+  it("terza targa sullo stesso apparato: messaggio chiaro", async () => {
+    errors.vehicle_telepass_devices = { code: "P0001", message: "telepass_max_two_plates" };
+    const res = await post("device_add", { vehicle_id: VEHICLE, device_code: "12345678", assigned_on: "2026-11-01" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/due targhe/);
   });
 
   it("niente nuovi Telepass su un mezzo dismesso", async () => {
