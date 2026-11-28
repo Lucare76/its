@@ -8,6 +8,7 @@
  * scrittura parallela vedrebbe uno stato non ancora aggiornato dalle scritture
  * sorelle e potrebbe mancare un overlap reale tra due item dello stesso batch.
  */
+import { loadCollectiveConvocations } from "@/lib/server/collective-convocations";
 import { NextRequest, NextResponse } from "next/server";
 import { authorizePricingRequest } from "@/lib/server/pricing-auth";
 import { listDriverRegistry } from "@/lib/server/driver-registry";
@@ -32,13 +33,20 @@ export async function POST(request: NextRequest) {
 
   const { data: plan, error: planError } = await auth.admin
     .from("assignment_plans")
-    .select("id")
+    .select("id, generated_at")
     .eq("tenant_id", tenantId)
     .eq("plan_date", date)
     .maybeSingle();
   if (planError) return NextResponse.json({ ok: false, error: planError.message }, { status: 500 });
   if (!plan) return NextResponse.json({ ok: false, error: "Nessun piano generato per questa data." }, { status: 404 });
 
+  try {
+    const configs = await loadCollectiveConvocations(auth.admin, tenantId, date);
+    if (configs.some((event) => Date.parse(event.updated_at ?? "") > Date.parse(plan.generated_at)))
+      return NextResponse.json({ ok: false, error: "Convocazione TUTTI modificata: ricalcola il piano prima di confermare." }, { status: 409 });
+  } catch {
+    return NextResponse.json({ ok: false, error: "Impossibile verificare le convocazioni TUTTI" }, { status: 503 });
+  }
   const { data: items, error: itemsError } = await auth.admin
     .from("assignment_plan_items")
     .select("id, service_id, proposed_driver_id, proposed_driver_name, proposed_vehicle_label, score, confirmed_at")

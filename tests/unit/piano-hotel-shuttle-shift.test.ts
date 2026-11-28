@@ -43,7 +43,8 @@ function createAutoAssignSupabase(
   seed: Partial<Record<
     | "services" | "hotels" | "vehicles" | "assignments" | "trip_groups"
     | "hotel_vehicle_limits" | "driver_daily_availability" | "vehicle_daily_availability"
-    | "vehicle_time_blocks" | "daily_availability_confirmations" | "status_events",
+    | "vehicle_time_blocks" | "daily_availability_confirmations" | "status_events"
+    | "collective_ferry_convocations",
     Row[]
   >> = {}
 ) {
@@ -59,6 +60,8 @@ function createAutoAssignSupabase(
     vehicle_time_blocks: [...(seed.vehicle_time_blocks ?? [])],
     daily_availability_confirmations: [...(seed.daily_availability_confirmations ?? [])],
     status_events: [...(seed.status_events ?? [])],
+    // Convocazioni TUTTI (#61): vuote = nessuna convocazione attiva.
+    collective_ferry_convocations: [...(seed.collective_ferry_convocations ?? [])],
   };
 
   const calls = {

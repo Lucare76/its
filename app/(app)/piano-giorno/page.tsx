@@ -11,6 +11,7 @@ import { hotelGeoQuality, inferZoneFromText } from "@/lib/hotel-geocoding";
 import { buildResolutionPreview, resolutionConfirmationLabel, type ResolutionPreview } from "@/lib/piano-conflict-resolution-preview";
 import type { PianoDisplayUnit, PianoBookingGroupUnit } from "@/lib/piano-booking-group-display";
 import { deriveControlliStatus } from "@/lib/piano-controlli-status";
+import { CollectiveConvocationSettings } from "@/components/piano-giorno/collective-convocation-settings";
 import { buildArrivalConvocations } from "@/lib/piano-arrival-convocations";
 import { todayIsoDate } from "@/lib/utils";
 
@@ -2158,6 +2159,8 @@ export default function PianoGiornoPage() {
   const [pendingAutoMode, setPendingAutoMode] = useState<"unassigned_only" | "regenerate_all" | null>(null);
   const [viewMode, setViewMode] = useState<"plan" | "manual" | "convocation">("plan");
   const [convocationId, setConvocationId] = useState("");
+  const [collectiveEvent, setCollectiveEvent] = useState<{ key: string; active: boolean } | null>(null);
+  const onCollectiveLoaded = useCallback((key: string, active: boolean) => setCollectiveEvent({ key, active }), []);
   const [planFilter, setPlanFilter] = useState<"all" | "issues" | "missing_driver" | "departures" | "arrivals">("all");
   const [planSearch, setPlanSearch] = useState("");
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
@@ -3627,6 +3630,8 @@ export default function PianoGiornoPage() {
         {data && viewMode === "convocation" && (() => {
           const convocations = buildArrivalConvocations(data.services, hotelMap);
           const selected = convocations.find((entry) => entry.id === convocationId);
+          const collectiveKnown = collectiveEvent?.key === `${date}:${convocationId}`;
+          const collectiveActive = collectiveKnown && collectiveEvent?.active;
           return (
             <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.8fr)]">
               <section className="card p-4">
@@ -3642,6 +3647,7 @@ export default function PianoGiornoPage() {
                   <select className="input-saas mt-1 w-full" value={selected?.id ?? ""}
                     onChange={(event) => {
                       setConvocationId(event.target.value);
+                      setCollectiveEvent(null);
                       setSelectedIds(new Set());
                     }}>
                     <option value="">Seleziona una fascia</option>
@@ -3654,6 +3660,9 @@ export default function PianoGiornoPage() {
                 </label>
                 {selected && (
                   <div className="mt-4">
+                    <CollectiveConvocationSettings key={`${date}:${selected.id}`} token={token!} date={date}
+                      eventKey={selected.id} arrival={selected.time}
+                      onLoaded={onCollectiveLoaded} />
                     <p className="text-sm font-semibold">{selected.pax} passeggeri · {selected.loads.length} destinazioni</p>
                     {selected.loads.map((load) => {
                       const pending = load.serviceIds.filter((id) => !assignmentMap.has(id));
@@ -3665,7 +3674,7 @@ export default function PianoGiornoPage() {
                             <p className="text-muted">{load.pax} pax · {pendingPax ? `${pendingPax} posti da abbinare` : "Assegnato"}</p>
                           </div>
                           <button type="button" className="btn-secondary text-xs"
-                            disabled={!pending.length}
+                            disabled={!pending.length || !collectiveKnown || Boolean(collectiveActive)}
                             onClick={() => setSelectedIds(new Set(pending))}>
                             Prepara giro
                           </button>
@@ -3679,7 +3688,11 @@ export default function PianoGiornoPage() {
                 {selectedIds.size > 0 && <p className="mb-3 text-xs text-slate-600">
                   Per usare più mezzi, togli da questo giro le prenotazioni da caricare sul prossimo. Dopo aver confermato, riapri la destinazione per preparare il giro con i posti rimasti.
                 </p>}
-                <TripBuilder key={date} convocation selectedIds={selectedIds} services={serviceMap} hotels={hotelMap}
+                {collectiveActive ? <div className="rounded-lg bg-blue-50 p-4 text-sm">
+                  <p className="font-bold">TUTTI — abbinamenti effettuati da Mario al porto</p>
+                  <p className="mt-2">Non serve registrare qui la distribuzione dei passeggeri. Auris userà la convocazione nel prossimo ricalcolo degli altri servizi.</p>
+                  <a className="btn-primary mt-3 inline-block" href={`/piano-giorno/assegnazione-intelligente?date=${date}`}>Apri Assegnazione Intelligente</a>
+                </div> : collectiveKnown && <TripBuilder key={date} convocation selectedIds={selectedIds} services={serviceMap} hotels={hotelMap}
                   drivers={driverEntries} vehicles={data.vehicles} tripGroups={data.trip_groups}
                   assignments={assignmentMap} token={token!} date={date} onRemove={(id) => {
                     const bookingGroupId = serviceMap.get(id)?.booking_group_id;
@@ -3687,7 +3700,7 @@ export default function PianoGiornoPage() {
                       selectedId !== id && (!bookingGroupId || serviceMap.get(selectedId)?.booking_group_id !== bookingGroupId)
                     )));
                   }}
-                  onClear={() => setSelectedIds(new Set())} onDone={reload} />
+                  onClear={() => setSelectedIds(new Set())} onDone={reload} />}
               </section>
             </div>
           );

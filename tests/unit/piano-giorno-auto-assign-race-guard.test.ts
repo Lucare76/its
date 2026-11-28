@@ -40,7 +40,8 @@ function createAutoAssignSupabase(
   seed: Partial<Record<
     | "services" | "hotels" | "vehicles" | "assignments" | "trip_groups"
     | "hotel_vehicle_limits" | "driver_daily_availability" | "vehicle_daily_availability"
-    | "vehicle_time_blocks" | "daily_availability_confirmations" | "status_events",
+    | "vehicle_time_blocks" | "daily_availability_confirmations" | "status_events"
+    | "collective_ferry_convocations",
     Row[]
   >> = {},
   options: { assignmentsSelectOverrides?: Array<SelectResult | undefined> } = {}
@@ -57,6 +58,8 @@ function createAutoAssignSupabase(
     vehicle_time_blocks: [...(seed.vehicle_time_blocks ?? [])],
     daily_availability_confirmations: [...(seed.daily_availability_confirmations ?? [])],
     status_events: [...(seed.status_events ?? [])],
+    // Convocazioni TUTTI (#61): vuote = nessuna convocazione attiva.
+    collective_ferry_convocations: [...(seed.collective_ferry_convocations ?? [])],
   };
 
   const assignmentsSelectOverrides = options.assignmentsSelectOverrides ?? [];
@@ -326,6 +329,28 @@ describe("CONC-06 — rivalidazione lock in auto-assign", () => {
     expect(fake.calls.assignmentsUpserted).toHaveLength(1);
     expect(fake.calls.servicesStatusUpdated).toContain(SERVICE_ARRIVAL);
     expect(fake.calls.statusEventsInserted).toHaveLength(1);
+  });
+
+  it("convocazione TUTTI attiva quel giorno: 409, zero scritture (#61)", async () => {
+    const fake = baseSeed({ collective_ferry_convocations: [
+      { tenant_id: TENANT_A, date: TEST_DATE, event_key: "medmar-15:40", active: true, last_departure: "16:10:00",
+        margin_min: 25, margin_max: 35, updated_at: "2026-08-09T10:00:00Z" },
+    ] });
+    authorizeAs(fake);
+    const res = await callPost();
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/TUTTI/);
+    expect(fake.calls.tripGroupsInserted).toHaveLength(0);
+    expect(fake.calls.assignmentsUpserted).toHaveLength(0);
+  });
+
+  it("convocazione TUTTI disattivata o di un altro tenant: nessun blocco (#61)", async () => {
+    const fake = baseSeed({ collective_ferry_convocations: [
+      { tenant_id: TENANT_A, date: TEST_DATE, event_key: "a", active: false, last_departure: "16:10:00", margin_min: 25, margin_max: 35, updated_at: "x" },
+      { tenant_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", date: TEST_DATE, event_key: "b", active: true, last_departure: "16:10:00", margin_min: 25, margin_max: 35, updated_at: "x" },
+    ] });
+    authorizeAs(fake);
+    expect((await callPost()).status).toBe(200);
   });
 
   it("2. 409 quando la rivalidazione rileva un lock sopravvenuto, zero scritture", async () => {

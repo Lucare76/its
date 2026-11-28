@@ -18,7 +18,7 @@ type PlanItem = {
   proposed_vehicle_label: string | null;
   score: number | null;
   confidence: number | null;
-  reason: { summary?: string[] } | null;
+  reason: { summary?: string[]; details?: { collective?: boolean } } | null;
   alternatives: Array<{ driver_id: string; driver_name: string; vehicle_id: string | null; vehicle_label: string | null; score: number; reason: string[] }> | null;
   warnings: string[] | null;
   suggested_fix: { description: string } | null;
@@ -53,6 +53,10 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 export default function AssegnazioneIntelligentePage() {
   const [date, setDate] = useState(todayIso());
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("date");
+    if (requested && /^\d{4}-\d{2}-\d{2}$/.test(requested)) setDate(requested);
+  }, []);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [items, setItems] = useState<PlanItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -214,6 +218,12 @@ export default function AssegnazioneIntelligentePage() {
         </SectionCard>
       ) : null}
 
+      {items.some((item) => item.reason?.details?.collective) && (
+        <SectionCard title="TUTTI — smistamento al porto">
+          <p className="text-sm">{items.filter((item) => item.reason?.details?.collective).length} prenotazioni in convocazione collettiva. Mario distribuisce autisti e passeggeri sul posto; nessun abbinamento individuale è stato salvato.</p>
+          {[...new Set(items.filter((item) => item.reason?.details?.collective).flatMap((item) => item.reason?.summary ?? []))].map((label) => <p className="mt-2 text-sm" key={label}>{label}</p>)}
+        </SectionCard>
+      )}
       <SectionCard
         title="Eccezioni"
         actions={
@@ -232,7 +242,7 @@ export default function AssegnazioneIntelligentePage() {
             <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-text">Servizio {item.service_id.slice(0, 8)}</p>
-                <p className="truncate text-xs text-muted">{(item.reason?.summary ?? []).join(" · ") || "Nessun motivo registrato"}</p>
+                <p className="truncate text-xs text-muted">{[...(item.reason?.summary ?? []), ...(item.warnings ?? [])].join(" · ") || "Nessun motivo registrato"}</p>
                 {item.suggested_fix?.description ? <p className="mt-1 text-xs text-accent">{item.suggested_fix.description}</p> : null}
               </div>
               <button type="button" className="btn-secondary px-3 py-1 text-sm" onClick={() => setSelectedItem(item)}>
@@ -262,6 +272,7 @@ export default function AssegnazioneIntelligentePage() {
                 ))}
               </ul>
             </div>
+            {(selectedItem.warnings ?? []).map((warning) => <p key={warning} className="rounded-lg bg-amber-50 p-2 text-amber-900">{warning}</p>)}
             {selectedItem.proposed_driver_name ? (
               <div>
                 <p className="font-medium text-text">Proposta</p>

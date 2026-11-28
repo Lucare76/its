@@ -24,6 +24,7 @@
  * pool live di autisti/mezzi).
  */
 import type { AutoAssignPreviewResult, AutoAssignPreviewServiceRow } from "@/lib/piano-assignable-preview";
+import type { CollectiveReservation } from "@/lib/piano-collective-convocations";
 import type { PlannerResult } from "@/lib/piano-auto-assign-planner";
 
 export type PlanItemStatus = "auto_safe" | "review" | "unresolved" | "locked" | "manual";
@@ -77,6 +78,7 @@ export const AUTO_SAFE_SCORE_THRESHOLD = 80;
 export const AUTO_SAFE_CONFIDENCE_THRESHOLD = 80;
 
 export type ClassifyPlanArgs = {
+  collectiveReservations?: CollectiveReservation[];
   preview: AutoAssignPreviewResult;
   planning: PlannerResult;
   assignmentByServiceId: Map<string, PlanItemAssignmentInfo>;
@@ -153,6 +155,20 @@ export function classifyPlanItems(args: ClassifyPlanArgs): PlanItemDraft[] {
 
   for (const row of args.preview.services) {
     const serviceId = row.service_id;
+    const collective = args.collectiveReservations?.find((event) => event.serviceIds.includes(serviceId));
+    if (collective && !args.assignmentByServiceId.has(serviceId)) {
+      items.push({ ...unresolvedItem(row, `TUTTI — ${collective.label}. Smistamento manuale al porto da Mario`, null),
+        status: "manual", reason: { summary: [`TUTTI — ${collective.label}. Smistamento manuale al porto da Mario`],
+          details: { collective: true, event_key: collective.event_key, last_departure: collective.last_departure,
+            margin_min: collective.margin_min, margin_max: collective.margin_max } } });
+      continue;
+    }
+    const collectiveConflict = conflictByServiceId.get(serviceId);
+    if (collectiveConflict?.conflict_type === "collective_convocation" && !args.assignmentByServiceId.has(serviceId) &&
+        !args.previousItemsByServiceId?.get(serviceId)?.locked) {
+      items.push({ ...unresolvedItem(row, collectiveConflict.reason, "collective_convocation"), status: "review" });
+      continue;
+    }
 
     // Caso 8/14: un item bloccato esplicitamente in precedenza (its.lock_assignment)
     // resta identico, indipendentemente da cosa proporrebbe ora il planner.
